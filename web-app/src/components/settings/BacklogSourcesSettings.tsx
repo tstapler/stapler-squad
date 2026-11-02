@@ -459,7 +459,7 @@ export function BacklogSourcesSettings() {
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Add a Source</h3>
         <div className={styles.form}>
-          <select className={styles.select} value={pluginId} onChange={(e) => handlePluginChange(e.target.value)}>
+          <select aria-label="Source type" className={styles.select} value={pluginId} onChange={(e) => handlePluginChange(e.target.value)}>
             {PLUGIN_SCHEMAS.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label}
