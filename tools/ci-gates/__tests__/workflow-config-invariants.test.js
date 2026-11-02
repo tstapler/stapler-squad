@@ -31,6 +31,15 @@ test('uxAnalysis_AxeStep_should_NotHaveContinueOnError_When_ParsedFromRealYAML',
   assert.notEqual(step['continue-on-error'], true);
 });
 
+test('build_E2eBunRunSteps_should_UseBash_InPlaywrightContainer', () => {
+  const job = loadWorkflow('build.yml').jobs['e2e-bun'];
+  assert.ok(job.container);
+  assert.equal(job.defaults?.run?.shell, 'bash');
+  for (const step of job.steps.filter((step) => step.run)) {
+    assert.equal(step.shell ?? job.defaults.run.shell, 'bash', step.name);
+  }
+});
+
 test('build_CheckNewRPCsHaveTestsStep_should_NotHaveContinueOnError_When_ParsedFromRealYAML', () => {
   // Moved from the `test` job to `test-affected` (registry-validation.yml's
   // removal, folded its exact-match divergence check into this step) -- see
