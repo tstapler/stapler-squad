@@ -362,3 +362,70 @@ Findings: (a) the plan's `diff -r bazel-bin/web-app/gen web-app/src/gen` path is
 ### Verdict
 
 `S1-ts`: **Pass**, path `buf-generate+protoc-gen-es-from-bun-install`, cost S. All five checks true; no explained deltas.
+
+
+## S13: commit or ignore `MODULE.bazel.lock` (Tasks 0.10b and 0.10d)
+
+### Driver text (Task 0.10b, fetched 2026-11-01)
+
+Source: https://bazel.build/external/lockfile#automatic-resolution (rendered page drops code blocks; the exact text is from the page's Markdown source, https://raw.githubusercontent.com/bazelbuild/bazel/9.0.0/site/en/external/lockfile.md, lines 254-274). Verbatim:
+
+```gitattributes
+# A custom merge driver for the Bazel lockfile.
+# https://bazel.build/external/lockfile#automatic-resolution
+MODULE.bazel.lock merge=bazel-lockfile-merge
+```
+
+```bash
+jq_script=$(curl https://raw.githubusercontent.com/bazelbuild/bazel/master/scripts/bazel-lockfile-merge.jq)
+git config --global merge.bazel-lockfile-merge.name   "Merge driver for the Bazel lockfile (MODULE.bazel.lock)"
+git config --global merge.bazel-lockfile-merge.driver "jq -s '${jq_script}' -- %O %A %B > %A.jq_tmp && mv %A.jq_tmp %A"
+```
+
+The driver name is `bazel-lockfile-merge` (not the plan's provisional `bazel-lock`). jq 1.8.2 is installed here (needs 1.5+). The jq program is vendored at `tools/bzl/bazel-lockfile-merge.jq` from tag 9.3.1 (identical to master on 2026-11-01); `scripts/git-merge-bazel-lock.sh` runs it with the docs' argument shape (`jq -s -f script -- %O %A %B`); `.gitattributes` has the line; `make setup-git` registers the repo-local `git config` (per clone, shared by worktrees of that clone, not by a fresh clone).
+
+### Replay (Task 0.10d), scratch clone of this tree, Bazel 9.3.1, 20 pairs from a pool of 12 BCR modules, each pair adds two different `bazel_dep` lines at separated positions of `MODULE.bazel`
+
+Harness: `run.sh`/`repair.sh` (not kept in the repo). Baseline `bazel mod deps --lockfile_mode=error` on the unmodified lock: exit 0, 3.1 s.
+
+| # | pair | ARM1 no driver: text conflict | ARM1 driver: conflict / error-mode rc | ARM1 driver + `mod deps` regen: error-mode rc | ARM2 (no lock): conflict / error-mode rc |
+|---|---|---|---|---|---|
+| 1 | rules_pkg+rules_license | no | no / 0 | 0 | no / 37 |
+| 2 | rules_pkg+abseil-cpp | yes | no / 2 | 0 | no / 37 |
+| 3 | rules_pkg+jq.bzl | yes | no / 2 | 0 | no / 37 |
+| 4 | rules_pkg+rules_perl | yes | no / 2 | 0 | no / 37 |
+| 5 | rules_license+googletest | no | no / 0 | 0 | no / 37 |
+| 6 | rules_license+bazel_features | yes | no / 2 | 0 | no / 37 |
+| 7 | rules_license+rules_python | yes | no / 2 | 0 | no / 37 |
+| 8 | rules_proto+googletest | no | no / 0 | 0 | no / 37 |
+| 9 | rules_proto+bazel_features | yes | no / 2 | 0 | no / 37 |
+| 10 | rules_proto+rules_python | yes | no / 2 | 0 | no / 37 |
+| 11 | googletest+abseil-cpp | yes | no / 2 | 0 | no / 37 |
+| 12 | googletest+jq.bzl | yes | no / 2 | 0 | no / 37 |
+| 13 | googletest+rules_perl | yes | no / 2 | 0 | no / 37 |
+| 14 | abseil-cpp+bazel_features | yes | no / 2 | 0 | no / 37 |
+| 15 | abseil-cpp+rules_python | yes | no / 2 | 0 | no / 37 |
+| 16 | zlib+bazel_features | yes | no / 0 | 0 | no / 37 |
+| 17 | zlib+rules_python | yes | no / 0 | 0 | no / 37 |
+| 18 | bazel_features+jq.bzl | yes | no / 0 | 0 | no / 37 |
+| 19 | bazel_features+rules_perl | yes | no / 2 | 0 | no / 37 |
+| 20 | jq.bzl+rules_python | yes | no / 0 | 0 | no / 37 |
+
+Totals over 20 pairs:
+
+| Arm | Textual conflicts | `--lockfile_mode=error` failures on merged tree |
+|---|---|---|
+| ARM1 control, lock committed, no driver | **17 of 20** (all in `MODULE.bazel.lock`; the 3 clean pairs had no lock change on one side) | not run |
+| ARM1, lock committed + documented driver | 0 | **13 of 20** (exit 2: "MODULE.bazel.lock is no longer up-to-date ... usages of the extension ... have changed", e.g. `pybind11_bazel`) |
+| ARM1 + driver + one `bazel mod deps` regen (repair run; lock rewritten in 20 of 20) | 0 | 0 (regen 3-4 s each on a warm server) |
+| ARM2, lock not committed | 0 | 20 of 20 exit 37 (by design: `error` mode needs a lock); 0 failures if CI uses `update` (20 of 20 exit 0, 3.2-4.4 s, the cost of re-resolving each run) or `off` (not run) |
+
+Finding: the documented driver removes the textual conflict but does NOT by itself produce a lock that passes `--lockfile_mode=error` in 13 of 20 merges (it merges per-extension entries but not the `usagesDigest` that depends on the merged module graph). The committed-lock option is only conflict-free AND error-clean with a regenerate step after the merge (the plan's custom `bazel mod deps` fallback, Task 7.8 autofix), so the zero-failure check holds for "driver + regen", not the driver alone. Caveat: the pool deps share one `MODULE.bazel` and BCR-resolved versions; real PRs also touch `go.mod`-driven extension state. Scratch repos were removed after the run.
+
+### GitHub-side check (UNEVALUATED, owner-gated)
+
+Not run: it needs branches and PRs on a real or throwaway GitHub repo. Supporting evidence only (a community answer, not GitHub docs; I found no GitHub docs statement): https://stackoverflow.com/questions/65309426 says GitHub does not support custom merge drivers because the driver command lives in local git config, not in the repository. Procedure for the owner: in a throwaway repo, commit a lock plus `.gitattributes` with the `merge=bazel-lockfile-merge` line; open PR A and PR B, each changing a different line region of `MODULE.bazel` and regenerating the lock; merge A; then check PR B's mergeability page and merge/update-branch. If GitHub reports a conflict in `MODULE.bazel.lock` that the local driver resolves cleanly (`git merge` locally with the driver configured), the inference holds.
+
+### Verdict
+
+`S13`: **Fail**, path `owner-gated: GitHub-side merge check pending` (an unevaluable check is `Fail` per the verdict rule). Recommendation, with numbers: commit the lock AND run the merge driver AND an automatic regenerate (Task 7.8b autofix / main-repair), because driver-only still left 13 of 20 merges failing `error` mode, while driver + regen gave 0 of 20 conflicts and 0 of 20 error failures (versus 17 of 20 conflicts with no driver). Not committing the lock gives 0 conflicts but loses `error`-mode reproducibility and costs about 3.5 s per resolution; it needs owner approval (amends ADR-001). If GitHub-side merges ignore drivers (likely), the regenerate step must run in CI on the PR, not only locally.
