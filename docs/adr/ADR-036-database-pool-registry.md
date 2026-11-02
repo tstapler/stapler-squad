@@ -265,3 +265,7 @@ updated in the same PR as the move, as must `database_service` backup/merge/insp
    contention tests; before/after numbers on a `/tmp` copy.
 3. PR 3: runtime pool actuator, `/actuator/db` per-DB rows, dashboard panels (additive, stable uids, Tempo links), docs, CLAUDE.md row.
 4. Later waves: Backlog (after the edge removal), Workflow, Wake, Credentials, Errors, each with its own hot-query plan test.
+
+## Amendment: `ListAnalyticsBySessionID` read the wrong database
+
+`session.EntRepository.ListAnalyticsBySessionID` selected `AnalyticsEvent` through the `sessions.db` client, whose `analytics_events` table is empty, so every session diagnostic bundle had an empty analytics section. The read now lives in `server/analytics.ListBySessionID` on the `analytics.db` client and reaches the bundle service through `analytics.BundleStorage`. The `nowrongdbentity` exception that marked it a known bug is gone; the analyzer still ratchets the other entities.
