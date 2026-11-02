@@ -19,3 +19,11 @@
   verdict: Pass
   path: direct
   cost: S
+- spike: S3
+  verdict: Pass
+  path: copy_directory+embedsrcs
+  cost: S
+- spike: S4
+  verdict: Pass
+  path: repo-rule+no-sandbox
+  cost: M+M+S+S

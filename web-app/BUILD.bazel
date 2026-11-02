@@ -1,0 +1,106 @@
+load("//tools/bzl/bun:bun.bzl", "bun_dist", "bun_jest_test")
+
+
+package(default_visibility = ["//visibility:public"])
+exports_files(
+    ["package.json", "bun.lock", "bunfig.toml"] + glob([
+        "eslint-plugin-analytics/**",
+        "eslint-plugin-rpc-lifecycle/**",
+        "patches/**",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "public_allowlist",
+    srcs = ["//server/middleware/testdata:public-allowlist.json"],
+    outs = ["public-allowlist.json"],
+    cmd = "cp $< $@",
+)
+
+filegroup(
+    name = "dist_srcs",
+    srcs = glob(
+        [
+            "index.html",
+            "bunfig.toml",
+            "package.json",
+            "bun.lock",
+            "tsconfig*.json",
+            "build/**",
+            "patches/**",
+            "scripts/verify-eval-patch.mjs",
+            "src/**",
+            "public/**",
+        ],
+        exclude = ["build/__tests__/**"],
+    ),
+)
+
+bun_dist(
+    name = "dist",
+    srcs = [":dist_srcs"],
+    allowlist = ":public_allowlist",
+    bun = "@bun_linux_x64//:bun-linux-x64/bun",
+    node = "@node_linux_x64//:bin/node",
+    node_modules = "@web_node_modules//:node_modules",
+)
+
+# S4 comparison target: same action, tagged no-sandbox (plan: recorded cost if the sandboxed action exceeds 1.5x).
+bun_dist(
+    name = "dist_nosandbox",
+    srcs = [":dist_srcs"],
+    allowlist = ":public_allowlist",
+    bun = "@bun_linux_x64//:bun-linux-x64/bun",
+    exec_tags = ["no-sandbox"],
+    node = "@node_linux_x64//:bin/node",
+    node_modules = "@web_node_modules//:node_modules",
+)
+
+# Task 0.6b probe: the same action under strace (log at bazel-bin/web-app/dist_trace.strace).
+bun_dist(
+    name = "dist_trace",
+    srcs = [":dist_srcs"],
+    allowlist = ":public_allowlist",
+    bun = "@bun_linux_x64//:bun-linux-x64/bun",
+    node = "@node_linux_x64//:bin/node",
+    node_modules = "@web_node_modules//:node_modules",
+    trace = True,
+)
+
+# Jest inputs: everything jest.config.js's web-app project reads.
+filegroup(
+    name = "jest_srcs",
+    srcs = [":dist_srcs"] + glob(["jest.config.js", "jest.setup.js", "eslint-plugin-analytics/**"]),
+)
+
+# Task 0.6c: 20 test suites (231 test cases) chosen from pure-logic suites under src/lib.
+bun_jest_test(
+    name = "jest_subset",
+    srcs = [":jest_srcs"],
+    bun = "@bun_linux_x64//:bun-linux-x64/bun",
+    node = "@node_linux_x64//:bin/node",
+    node_modules = "@web_node_modules//:node_modules",
+    tests = [
+        "src/lib/backlog/bulkActions.test.ts",
+        "src/lib/backlog/composeQuestionAnswerFeedback.test.ts",
+        "src/lib/backlog/currentWorkSession.test.ts",
+        "src/lib/backlog/dependencies.test.ts",
+        "src/lib/backlog/formatReworkCapOverride.test.ts",
+        "src/lib/backlog/itemActions.test.ts",
+        "src/lib/backlog/julesDispatchGate.test.ts",
+        "src/lib/backlog/jumpToSession.test.ts",
+        "src/lib/backlog/pipelineModeDisplay.test.ts",
+        "src/lib/backlog/planReviewStatus.test.ts",
+        "src/lib/backlog/sessionKind.test.ts",
+        "src/lib/backlog/sortGroup.test.ts",
+        "src/lib/board/columns.test.ts",
+        "src/lib/board/compositeId.test.ts",
+        "src/lib/board/statusForColumnMove.test.ts",
+        "src/lib/board/transitions.test.ts",
+        "src/lib/cron/buildCronFromSimple.test.ts",
+        "src/lib/cron/explainCron.test.ts",
+        "src/lib/cron/validateCron.test.ts",
+        "src/lib/constants/modelFuzzyMatch.test.ts",
+    ],
+)
