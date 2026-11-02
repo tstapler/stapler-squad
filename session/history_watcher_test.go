@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,8 +277,12 @@ func TestHistoryFileWatcher_should_KeepAcceptingEvents_When_CallbackIsSlow(t *te
 	event := func(name string) fsnotify.Event {
 		return fsnotify.Event{Name: filepath.Join("/proj", name+".jsonl"), Op: fsnotify.Write}
 	}
-	w.handleEvent(event("stuck"))
-	<-entered // the single worker is now blocked inside the callback
+	go w.handleEvent(event("stuck")) // off the test goroutine so an inline callback fails by timeout
+	select {
+	case <-entered: // the single worker is now blocked inside the callback
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback never started")
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -303,8 +308,47 @@ func TestHistoryFileWatcher_should_KeepAcceptingEvents_When_CallbackIsSlow(t *te
 	}, 5*time.Second, time.Millisecond)
 }
 
-// Stop must end the run loop and queue workers even while a callback is blocked.
-func TestHistoryFileWatcher_should_StopPromptly_When_CallbackIsBlocked(t *testing.T) {
+// Stopped (and so HistoryLinker.Wait) must not fire until an in-flight callback
+// finishes, and no callback may start after shutdown begins.
+func TestHistoryFileWatcher_should_WaitForInFlightCallback_When_Stopping(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	var calls atomic.Int32
+	w := NewHistoryFileWatcher(dir, func(string) {
+		calls.Add(1)
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	require.NoError(t, w.Start(context.Background()))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0600))
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback never started")
+	}
+	w.Stop()
+	w.queue.Enqueue(filepath.Join(dir, "b.jsonl")) // racing the cancel
+
+	select {
+	case <-w.Stopped():
+		t.Fatal("Stopped fired while a callback was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-w.Stopped():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stopped never fired after the callback finished")
+	}
+	w.runCallback(filepath.Join(dir, "c.jsonl"))
+	assert.EqualValues(t, 1, calls.Load(), "no callback may run after shutdown began")
+}
+
+func TestHistoryFileWatcher_should_GiveUpWaiting_When_CallbackExceedsDrainTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	release := make(chan struct{})
@@ -314,15 +358,15 @@ func TestHistoryFileWatcher_should_StopPromptly_When_CallbackIsBlocked(t *testin
 		enterOnce.Do(func() { close(entered) })
 		<-release
 	})
+	w.drainTimeout = 10 * time.Millisecond
 	require.NoError(t, w.Start(context.Background()))
 	t.Cleanup(func() { close(release) })
-
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0600))
 	<-entered
 	w.Stop()
 	select {
 	case <-w.Stopped():
 	case <-time.After(5 * time.Second):
-		t.Fatal("watcher run loop did not exit while a callback was blocked")
+		t.Fatal("drain timeout did not bound the wait")
 	}
 }

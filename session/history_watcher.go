@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
@@ -25,7 +27,19 @@ type HistoryFileWatcher struct {
 	stopped  chan struct{}
 	queue    *scanqueue.Queue
 	cancel   context.CancelFunc
+
+	// mu guards the callback accounting that lets shutdown wait for an
+	// in-flight callback and refuse to start another one after it.
+	mu           sync.Mutex
+	closed       bool
+	running      int
+	drained      chan struct{} // closed once closed && running == 0
+	drainOnce    sync.Once
+	drainTimeout time.Duration
 }
+
+// defaultHistoryDrainTimeout bounds how long shutdown waits for a running callback.
+const defaultHistoryDrainTimeout = 30 * time.Second
 
 // NewHistoryFileWatcher creates a watcher for the given directory.
 // If watchDir is empty, defaults to ~/.claude/projects/.
@@ -40,13 +54,54 @@ func NewHistoryFileWatcher(watchDir string, callback func(filePath string)) *His
 		watchDir: watchDir,
 		callback: callback,
 		stopped:  make(chan struct{}),
+		drained:  make(chan struct{}),
+
+		drainTimeout: defaultHistoryDrainTimeout,
 	}
-	w.queue = scanqueue.New(scanqueue.Config{Workers: 1}, func(path string) {
-		if w.callback != nil {
-			w.callback(path)
-		}
-	})
+	w.queue = scanqueue.New(scanqueue.Config{Workers: 1}, w.runCallback)
 	return w
+}
+
+// runCallback invokes the callback unless shutdown has begun, and tracks it so
+// run can wait for it. A callback is never interrupted (it takes no ctx).
+func (w *HistoryFileWatcher) runCallback(path string) {
+	w.mu.Lock()
+	if w.closed || w.callback == nil {
+		w.mu.Unlock()
+		return
+	}
+	w.running++
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.running--
+		done := w.closed && w.running == 0
+		w.mu.Unlock()
+		if done {
+			w.drainOnce.Do(func() { close(w.drained) })
+		}
+	}()
+	w.callback(path)
+}
+
+// closeAndDrain stops new callbacks, then waits up to drainTimeout for a running
+// one, so HistoryLinker.Wait returns only after its writes are done.
+func (w *HistoryFileWatcher) closeAndDrain() {
+	w.mu.Lock()
+	w.closed = true
+	idle := w.running == 0
+	w.mu.Unlock()
+	if idle {
+		w.drainOnce.Do(func() { close(w.drained) })
+		return
+	}
+	t := time.NewTimer(w.drainTimeout)
+	defer t.Stop()
+	select {
+	case <-w.drained:
+	case <-t.C:
+		log.Warn("history file watcher: callback still running at shutdown", "timeout", w.drainTimeout)
+	}
 }
 
 // Start begins watching the directory. It returns without error even if the
@@ -90,14 +145,16 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stopped returns a channel that is closed when the watcher goroutine has exited.
+// Stopped returns a channel that is closed when the watcher goroutine has exited
+// and any in-flight callback has finished (or drainTimeout elapsed).
 func (w *HistoryFileWatcher) Stopped() <-chan struct{} {
 	return w.stopped
 }
 
 func (w *HistoryFileWatcher) run(ctx context.Context) {
-	defer close(w.stopped)
-	defer w.cancel() // stops the queue workers; a callback already running finishes
+	defer close(w.stopped) // runs last: Stopped() means no callback is running
+	defer w.closeAndDrain()
+	defer w.cancel() // stops the queue workers
 	defer func() {
 		if w.watcher != nil {
 			_ = w.watcher.Close()
