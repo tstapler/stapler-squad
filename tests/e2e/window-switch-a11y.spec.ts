@@ -60,7 +60,8 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
 
   test('activeTab_should_ExposeAriaSelectedAndNoAriaCurrent_When_WindowSelected', async ({ page }) => {
     await seedThreeWindows(page);
-    await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveCount(1);
+    // Scoped to the window switcher: the notification tray has its own tablist with its own selected tab.
+    await expect(page.getByRole('tablist', { name: 'Window switcher' }).locator('[role="tab"][aria-selected="true"]')).toHaveCount(1);
     await expect(page.locator('[role="tablist"] [aria-current]')).toHaveCount(0);
   });
 
@@ -100,7 +101,8 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
     expect(await activeElementIsTab(page, 'api')).toBe(true);
     await page.keyboard.press('Space');
     expect(await activeElementIsTab(page, 'api')).toBe(true);
-    await page.keyboard.press('Tab');
+    // Roving tabindex: Tab leaves the tablist (first to the strip's New window button, then on into the panel).
+    for (let i = 0; i < 4 && !(await activeElementInsidePanel(page)); i++) await page.keyboard.press('Tab');
     expect(await activeElementInsidePanel(page)).toBe(true);
   });
 
