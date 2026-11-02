@@ -38,6 +38,16 @@ func NewConsentGate(classify func(string) Result, consent map[string]bool, persi
 }
 
 func (g *ConsentGate) Ready(path string) bool {
+	return g.ReadyDependency(Dependency{Path: path, EnrichmentKey: path})
+}
+
+type Dependency struct {
+	Path          string
+	EnrichmentKey string
+}
+
+func (g *ConsentGate) ReadyDependency(dependency Dependency) bool {
+	path := dependency.Path
 	result := g.classify(path)
 	if !result.Protected {
 		return true
@@ -50,13 +60,13 @@ func (g *ConsentGate) Ready(path string) bool {
 	root.ID, root.Root, root.Service, root.Consented = id, result.Root, result.Service, g.consent[id]
 	found := false
 	for _, p := range root.Paths {
-		if p == path {
+		if p == dependency.EnrichmentKey {
 			found = true
 			break
 		}
 	}
 	if !found {
-		root.Paths = append(root.Paths, path)
+		root.Paths = append(root.Paths, dependency.EnrichmentKey)
 	}
 	g.roots[id] = root
 	return root.Consented
@@ -80,9 +90,13 @@ func (g *ConsentGate) Roots() []ConsentRoot {
 func (g *ConsentGate) Continue(id string) ([]string, error) {
 	g.mu.Lock()
 	_, known := g.roots[id]
+	alreadyConsented := g.consent[id]
 	g.mu.Unlock()
 	if !known {
 		return nil, ErrUnknownRoot
+	}
+	if alreadyConsented {
+		return nil, nil
 	}
 	if g.persist != nil {
 		if err := g.persist(id); err != nil {
@@ -91,6 +105,9 @@ func (g *ConsentGate) Continue(id string) ([]string, error) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.consent[id] {
+		return nil, nil
+	}
 	g.consent[id] = true
 	root := g.roots[id]
 	root.Consented = true

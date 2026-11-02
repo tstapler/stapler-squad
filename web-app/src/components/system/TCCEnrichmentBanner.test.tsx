@@ -1,6 +1,6 @@
 // @feature ui:tcc-enrichment-consent
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TCCEnrichmentBanner } from "./TCCEnrichmentBanner";
 
 const mockStatus = jest.fn();
@@ -40,6 +40,33 @@ it("labels a slow result without asserting an OS prompt", async () => {
  mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "unresolved/slow" }] });
  render(<TCCEnrichmentBanner />);
  expect(await screen.findByText(/unresolved\/slow/)).toBeInTheDocument();
+ expect(screen.queryByRole("button", { name: "Continue to macOS permission request" })).not.toBeInTheDocument();
+});
+
+it("keeps mandatory text unclamped with long names at narrow widths", async () => {
+ mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, sessionTitles: ["Long session name ".repeat(30)] }] });
+ render(<div style={{ width: 320 }}><TCCEnrichmentBanner /></div>);
+ const message = await screen.findByText(/git metadata/);
+ expect(message.className).not.toContain("textClamp");
+ expect(message.textContent).toContain("app consent is not an OS grant");
+});
+
+it("keeps a save error scoped to its root", async () => {
+ mockStatus.mockResolvedValue({ enabled: true, roots: [root, { ...root, id: "other", root: "/other" }] });
+ mockContinue.mockRejectedValue(new Error("disk full"));
+ render(<TCCEnrichmentBanner />);
+ const banners = await screen.findAllByTestId("tcc-enrichment-banner");
+ fireEvent.click(within(banners[0]).getByRole("button", { name: "Continue to macOS permission request" }));
+ expect(await within(banners[0]).findByText(/disk full/)).toBeInTheDocument();
+ expect(within(banners[1]).queryByText(/disk full/)).not.toBeInTheDocument();
+});
+
+it("reports refresh failure after successful consent without offering consent again", async () => {
+ mockStatus.mockResolvedValueOnce({ enabled: true, roots: [root] }).mockRejectedValue(new Error("offline"));
+ render(<TCCEnrichmentBanner />);
+ fireEvent.click(await screen.findByRole("button", { name: "Continue to macOS permission request" }));
+ expect(await screen.findByText(/Consent saved; enrichment may already be running/)).toBeInTheDocument();
+ expect(screen.queryByText(/Could not continue/)).not.toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "Continue to macOS permission request" })).not.toBeInTheDocument();
 });
 

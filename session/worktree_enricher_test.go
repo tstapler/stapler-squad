@@ -274,6 +274,19 @@ func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
 	require.EqualValues(t, 1, e.Stats().TimedOut)
 }
 
+func TestWorktreeEnricher_StopWhileReadyPreventsProbe(t *testing.T) {
+	t.Parallel()
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	e := NewWorktreeEnricher(WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
+	go func() { defer close(returned); _, _ = e.safeProbe("/protected") }()
+	<-entered
+	e.Stop()
+	close(release)
+	<-returned
+	require.Zero(t, probes.Load())
+}
+
 func TestWorktreeEnricher_UnparkDuringReadiness(t *testing.T) {
 	t.Parallel()
 	checked, release := make(chan struct{}), make(chan struct{})

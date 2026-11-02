@@ -238,6 +238,9 @@ func (e *WorktreeEnricher) safeProbe(path string) (info *WorktreeInfo, err error
 	if e.cfg.Ready != nil && !e.cfg.Ready(path) {
 		return nil, errEnrichmentParked
 	}
+	if e.stopped.Load() {
+		return nil, errEnrichmentParked
+	}
 	return e.cfg.Probe(path)
 }
 

@@ -714,7 +714,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
 	// path, so instance loading consults this enricher's cache instead of probing
 	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
-	gate := tcc.NewConsentGate(tcc.Classify, cfg.TCCEnrichmentConsent, func(id string) error {
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		home = "/__unresolved_home__"
+	}
+	gate := tcc.NewConsentGate(tcc.LexicalPolicy(home), cfg.TCCEnrichmentConsent, func(id string) error {
 		return config.UpdateConfig(func(c *config.Config) error {
 			if c.TCCEnrichmentConsent == nil {
 				c.TCCEnrichmentConsent = map[string]bool{}
@@ -726,6 +730,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	enricherConfig := session.WorktreeEnricherConfig{}
 	if cfg.TCCEnrichmentConsentEnabled() {
 		enricherConfig.Ready = gate.Ready
+		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
 	}
 	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
 	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
