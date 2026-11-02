@@ -115,10 +115,9 @@ unary RPC has nowhere left to go.
 
 ## Browser tracing (web-app)
 
-`web-app/next.config.ts` sets `output: "export"` — the Next.js app is a fully
-static bundle embedded into the Go binary (`server/web/dist`), so there is no
-Next.js/Node server to run [Next.js's own `instrumentation.ts`
-guide](https://nextjs.org/docs/app/guides/open-telemetry) in. Instead, the
+The web app is a fully static bundle embedded into the Go binary
+(`server/web/dist`), so there is no Node server to run server-side
+instrumentation in. Instead, the
 browser runs the OpenTelemetry **Web** SDK directly
 (`web-app/src/lib/telemetry/otel-init.ts`), instrumenting page loads and
 `fetch` calls (including the app's own ConnectRPC traffic), and exports spans
@@ -128,14 +127,14 @@ keeping the collector off the public network.
 Disabled by default, gated the same way as the server:
 
 ```bash
-# Next mode (removed in PR 9) builds; WEB_BUILD=bun reads the same variables. Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
-# time (static export, no server-side env reads), so this must be set before
-# `make web-build` / `bun run build`, not at runtime like the server's vars.
+# Enable browser tracing. NEXT_PUBLIC_* vars (the name is a leftover convention) are inlined by
+# web-app/build/build.ts at build time (static bundle, no server-side env reads), so this must be
+# set before `make web-build` / `bun run build`, not at runtime like the server's vars.
 NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 
 # Override the export endpoint (default: same-origin "/api/otel/v1/traces",
 # proxied by the Go server — see below). Only needed for local dev, where
-# `next dev` (Next mode (removed in PR 9)) runs on a different origin (:3001) than the Go server (:8543).
+# `bun run dev` runs on a different origin (:3001) than the Go server (:8543).
 NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8543/api/otel/v1/traces NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 ```
 

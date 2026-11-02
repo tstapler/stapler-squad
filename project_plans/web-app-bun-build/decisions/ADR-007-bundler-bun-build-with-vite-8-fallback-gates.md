@@ -1,6 +1,6 @@
 # ADR-007: Bundler is `Bun.build` + Bun dev server, with explicit gates that fall back to Vite 8
 
-Status: Accepted by owner (Bun.build); fallback gates proposed (flagged choice F7). Date: 2026-10-19
+Status: Accepted (Bun.build; flagged choice F7). Date: 2026-10-19
 Evidence: `docs/explanation/bun-migration-feasibility.md` §2-4, §9; `research/build-vs-buy.md` §1; `research/pitfalls.md` §3.
 
 ## Context
