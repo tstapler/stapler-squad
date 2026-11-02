@@ -253,6 +253,9 @@ func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
 	return fromInstanceData(data, true)
 }
 
+// startupWorktreeDetectTimeout bounds per-session worktree detection while loading.
+var startupWorktreeDetectTimeout = 5 * time.Second
+
 // fromInstanceData is the shared implementation. When deferStart is true, the
 // Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
@@ -465,7 +468,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Auto-detect worktree info for migration (existing sessions without this info)
 	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
-		if err := instance.DetectAndPopulateWorktreeInfo(); err != nil {
+		if err := instance.DetectAndPopulateWorktreeInfoBounded(startupWorktreeDetectTimeout); err != nil {
 			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
 			// Non-fatal - session can still work without this info
 		} else if instance.GitHubOwner != "" {

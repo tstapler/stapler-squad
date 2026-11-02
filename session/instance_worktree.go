@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -792,6 +793,17 @@ func (i *Instance) GetWorkingDirectory() string {
 // - gitWorktree.GetWorktreePath() is the actual worktree (e.g., ~/.stapler-squad/worktrees/...)
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
+	return i.detectAndPopulateWorktreeInfo(0)
+}
+
+// DetectAndPopulateWorktreeInfoBounded is DetectAndPopulateWorktreeInfo with a
+// deadline, for startup paths where one unreadable repo (e.g. a TCC- or
+// iCloud-protected directory whose open() blocks) must not stall every session.
+func (i *Instance) DetectAndPopulateWorktreeInfoBounded(timeout time.Duration) error {
+	return i.detectAndPopulateWorktreeInfo(timeout)
+}
+
+func (i *Instance) detectAndPopulateWorktreeInfo(timeout time.Duration) error {
 	// Determine the path to use for detection
 	// For worktree sessions, use the worktree path; otherwise use i.Path.
 	// Deliberately raw, not GetPath(): a session-creation/retry caller sets
@@ -811,7 +823,7 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 		return nil
 	}
 
-	info, err := DetectWorktree(detectPath)
+	info, err := detectWorktreeBounded(detectPath, timeout)
 	if err != nil {
 		return err
 	}
@@ -820,4 +832,53 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 		applyWorktreeDetectionLocked(s, info)
 		return nil
 	})
+}
+
+// detectWorktreeFn is the detection seam; tests replace it with a blocking func.
+var detectWorktreeFn = DetectWorktree
+
+// stuckWorktreeDetections holds paths whose detection goroutine timed out and
+// has not returned yet, so repeated loads skip them instead of leaking one
+// goroutine per attempt.
+var stuckWorktreeDetections sync.Map
+
+// detectWorktreeBounded runs detectWorktreeFn, giving up after timeout (<=0
+// means unbounded). On timeout the goroutine stays blocked in the kernel until
+// the open() returns; at most one such goroutine exists per path.
+func detectWorktreeBounded(path string, timeout time.Duration) (*WorktreeInfo, error) {
+	if timeout <= 0 {
+		return detectWorktreeFn(path)
+	}
+	if _, stuck := stuckWorktreeDetections.Load(path); stuck {
+		return nil, fmt.Errorf("worktree detection for %q still blocked from an earlier attempt", path)
+	}
+	type result struct {
+		info *WorktreeInfo
+		err  error
+	}
+	ch := make(chan result, 1) // buffered so a late finisher never blocks
+	var timedOut atomic.Bool
+	go func() {
+		info, err := detectWorktreeFn(path)
+		ch <- result{info, err}
+		if timedOut.Load() {
+			stuckWorktreeDetections.Delete(path)
+		}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.info, r.err
+	case <-timer.C:
+		stuckWorktreeDetections.Store(path, struct{}{})
+		timedOut.Store(true)
+		// Finisher may have raced past its check before timedOut was set.
+		select {
+		case <-ch:
+			stuckWorktreeDetections.Delete(path)
+		default:
+		}
+		return nil, fmt.Errorf("worktree detection for %q timed out after %s", path, timeout)
+	}
 }
