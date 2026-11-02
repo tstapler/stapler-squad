@@ -2,6 +2,7 @@ package gogit
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,13 +62,41 @@ func TestReadEnrichment_RejectsIncludesAndUnsupported(t *testing.T) {
 }
 
 func TestReadEnrichment_LocalConfigOnly(t *testing.T) {
- t.Parallel()
+	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = local-only\n"), 0600))
 	info, err := ReadEnrichment(root, func(path string) error { require.NotContains(t, path, "must-not-open"); return nil })
 	require.NoError(t, err)
 	require.Equal(t, "local-only", info.Origin)
+}
+
+func TestReadEnrichment_DeniedSymlinkTargets(t *testing.T) {
+	t.Parallel()
+	for _, parent := range []bool{false, true} {
+		t.Run(fmt.Sprint(parent), func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			work, target := filepath.Join(root, "work"), filepath.Join(root, "target")
+			require.NoError(t, os.Mkdir(work, 0700))
+			require.NoError(t, os.Mkdir(target, 0700))
+			require.NoError(t, os.WriteFile(filepath.Join(target, "config"), []byte("[remote \"origin\"]\nurl=secret\n"), 0600))
+			if parent {
+				require.NoError(t, os.Symlink(target, filepath.Join(work, ".git")))
+			} else {
+				require.NoError(t, os.Mkdir(filepath.Join(work, ".git"), 0700))
+				require.NoError(t, os.Symlink(filepath.Join(target, "config"), filepath.Join(work, ".git", "config")))
+			}
+			denied := errors.New("denied before target access")
+			_, err = ReadEnrichment(work, func(path string) error {
+				if path == target || strings.HasPrefix(path, target+"/") {
+					return denied
+				}
+				return nil
+			})
+			require.ErrorIs(t, err, denied)
+		})
+	}
 }
 
 func TestReadEnrichment_RejectsCyclesAndOversizedPointers(t *testing.T) {

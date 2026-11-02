@@ -325,7 +325,7 @@ var knownFeatureFlags = []struct {
 	{
 		name:         config.TCCEnrichmentConsentFlag,
 		description:  "Explain protected-root metadata access and require app consent before background worktree enrichment on macOS. Does not gate other filesystem access or represent OS grants. Default: on on Darwin, no-op elsewhere. Restart required.",
-		defaultValue: true,
+		defaultValue: config.DefaultTCCEnrichmentConsent,
 	},
 	{
 		name:        worktreeChangeDetectionFlagName,

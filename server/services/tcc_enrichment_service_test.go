@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
@@ -72,7 +73,17 @@ func TestTCCEnrichmentRPC_UnparksOnlyConsentedRoots(t *testing.T) {
 	writeCtx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
 	_, err := svc.ContinueTCCEnrichment(writeCtx, connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: id}))
 	require.NoError(t, err)
-	got := []string{<-probes, <-probes}
+	waitProbe := func() string {
+		t.Helper()
+		select {
+		case path := <-probes:
+			return path
+		case <-time.After(time.Second):
+			t.Fatal("consented path was not unparked")
+			return ""
+		}
+	}
+	got := []string{waitProbe(), waitProbe()}
 	require.ElementsMatch(t, []string{"/first/a", "/first/b"}, got)
 	require.False(t, gate.Ready("/other/c"))
 	require.Empty(t, probes)

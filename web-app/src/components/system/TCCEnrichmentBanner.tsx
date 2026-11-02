@@ -1,7 +1,7 @@
 "use client";
 // +feature: ui:tcc-enrichment-consent
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { SessionService, type TCCEnrichmentRoot } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -9,6 +9,8 @@ import { SystemBanner } from "@/components/ui/SystemBanner";
 
 function useTCCEnrichment() {
   const client = useMemo(() => createClient(SessionService, getConnectTransport()), []);
+  const acknowledged = useRef(new Set<string>());
+ const mergeRoots = (incoming: TCCEnrichmentRoot[]) => incoming.map((root) => acknowledged.current.has(root.id) ? { ...root, appConsented: true } : root);
   const [roots, setRoots] = useState<TCCEnrichmentRoot[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -18,7 +20,7 @@ function useTCCEnrichment() {
     const refresh = async () => {
       try {
         const result = await client.getTCCEnrichmentStatus({});
-        if (mounted) setRoots(result.enabled ? result.roots : []);
+        if (mounted) setRoots(result.enabled ? mergeRoots(result.roots) : []);
       } catch {
         // Retain the last explanation on transient transport failures.
       }
@@ -38,10 +40,11 @@ function useTCCEnrichment() {
       setBusy(null);
       return;
     }
+    acknowledged.current.add(id);
     setRoots((current) => current.map((root) => root.id === id ? { ...root, appConsented: true } : root));
     try {
       const result = await client.getTCCEnrichmentStatus({});
-      setRoots(result.enabled ? result.roots : []);
+      setRoots(result.enabled ? mergeRoots(result.roots) : []);
     } catch (e) {
       setErrors((current) => ({ ...current, [id]: `Consent saved; enrichment may already be running. Status refresh failed: ${String(e)}` }));
     } finally {

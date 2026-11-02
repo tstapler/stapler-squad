@@ -1,6 +1,6 @@
 // @feature ui:tcc-enrichment-consent
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, act, render, screen, waitFor, within } from "@testing-library/react";
 import { TCCEnrichmentBanner } from "./TCCEnrichmentBanner";
 
 const mockStatus = jest.fn();
@@ -68,6 +68,22 @@ it("reports refresh failure after successful consent without offering consent ag
  expect(await screen.findByText(/Consent saved; enrichment may already be running/)).toBeInTheDocument();
  expect(screen.queryByText(/Could not continue/)).not.toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "Continue to macOS permission request" })).not.toBeInTheDocument();
+});
+
+it("keeps acknowledged consent when an older poll resolves afterward", async () => {
+ let resolveOld!: (value: unknown) => void;
+ const old = new Promise((resolve) => { resolveOld = resolve; });
+ mockStatus.mockResolvedValueOnce({ enabled: true, roots: [root] }).mockReturnValueOnce(old).mockRejectedValue(new Error("offline"));
+ const interval = jest.spyOn(global, "setInterval");
+ render(<TCCEnrichmentBanner />);
+ await screen.findByRole("button", { name: "Continue to macOS permission request" });
+ await act(async () => { (interval.mock.calls[0][0] as () => void)(); });
+ fireEvent.click(screen.getByRole("button", { name: "Continue to macOS permission request" }));
+ await screen.findByText(/Consent saved; enrichment may already be running/);
+ await act(async () => { resolveOld({ enabled: true, roots: [root] }); });
+ expect(screen.queryByRole("button", { name: "Continue to macOS permission request" })).not.toBeInTheDocument();
+ expect(screen.getByText(/Consent saved; enrichment may already be running/)).toBeInTheDocument();
+ interval.mockRestore();
 });
 
 it("does not render on other platforms or when disabled", async () => {

@@ -21,7 +21,10 @@ func ConsentEnrichmentProbe(gate *tcc.ConsentGate) func(string) (*WorktreeInfo, 
 		}
 		owner, repo, host := parseGitHubRemoteURL(metadata.Origin)
 		linked := metadata.GitDir != metadata.CommonDir
-		root := filepath.Dir(metadata.CommonDir)
+		root := metadata.CommonDir
+		if filepath.Base(root) == ".git" {
+			root = filepath.Dir(root)
+		}
 		if !linked {
 			root = path
 		}
