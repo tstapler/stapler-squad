@@ -264,7 +264,6 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const onPhone = !viewport.isInnerScreen;
   const topOffset = useSyncExternalStore(subscribeStackTopOffset, getStackTopOffset, () => null);
   const deckRef = useRef<HTMLDivElement>(null);
-  const hasTerminal = topOffset !== null;
   const hasContent = visible.length > 0 || overflow > 0 || movedToTray !== null;
   const desktopAnchor = useDesktopDeckAnchor(!onPhone && hasContent, deckRef);
   // A page with no terminal floats the entry above the bottom nav (the dock's own placement), but
