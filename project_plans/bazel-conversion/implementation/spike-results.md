@@ -511,3 +511,71 @@ Measured (VERIFIED by command):
 3. `bazel test --config=agent` on `//pkg/events:events_test //session/ent/schema:schema_test //session/scanbuf:scanbuf_test //session/scanstate:scanstate_test //tools/lint/norawdb:norawdb_test`: 5 of 5 pass (4 executed, 1 cached). These import the generated ent tree. No sandbox failures seen in this subset; the tmux/git/port-binding tests were deliberately not run.
 
 Result: the ent and proto importer closure of `//session/... //server/...` builds in full, so S2's importer check is now satisfied. S2's verdict row stays `FallbackWorkaround` (its path is a workaround), S11 stays `Pass`; no verdict changes. Not covered: tests of `//session` and `//server/...` (they spawn tmux, git servers and bind ports; Epic 4 sandbox classes).
+
+## S8/S9 sandbox census and unix-socket path (Story 0.9, Tasks 0.9a and 0.9b)
+
+Run 2026-11-01/02 in worktree `bazel-epic0-s89-census` (branch `sdd/bazel-epic0-s89-census`, based on `sdd/bazel-epic0`), Bazel 9.3.1 through `tools/bazel`. Gazelle was run (`bazel run //:gazelle`, exit 0, it also rewrote 23 committed BUILD files, which were not committed). Verdicts: **S8 Pass, S9 Pass (with the caveat under S9)**.
+
+### Isolation and harness (VERIFIED)
+
+Every run: `--test_env=HOME=~/.cache/stapler-squad-census/home --test_env=TMUX_TMPDIR=.../tmux --test_env=STAPLER_SQUAD_INSTANCE=census --test_env=GO_TEST_WRAP_TESTV=1 --sandbox_writable_path=~/.cache/stapler-squad-census --sandbox_default_allow_network=false --test_timeout=300 --local_test_jobs=1 --jobs=4 --local_resources=memory=3000 --sandbox_debug --test_output=errors --keep_going --nocache_test_results`. Without `GO_TEST_WRAP_TESTV=1` rules_go writes an empty `<testsuites>` for passing tests, so no pass counts. The default tmux socket (`/tmp/tmux-1000/default`, inode 40, mtime 2026-11-01 17:32:06) was unchanged after every package: no HOST_STATE_ESCAPE. One unisolated rerun (see below) also left it unchanged. Scratch peak 12 MB under `~/.cache/stapler-squad-census` (deleted at the end).
+
+### Task 0.9a result (census.json, `python3 tools/bzl/spike/census-check.py` exit 0)
+
+`python3 -m unittest tools/bzl/spike/census-check_test.py`: 7 tests OK. `census-check.py` re-parses every `test.xml` (incl. `shard_*_of_*/test.xml`) and printed `{"failures": 484, "by_class": {"cwd": 211, "exec-host-binary": 62, "home": 21, "shard-timeout": 190}, "problems": 0}` (211+62+21+190 = 484).
+
+| Package (target) | passed | failed | skipped | cwd | exec-host-binary | home | shard-timeout |
+|---|---|---|---|---|---|---|---|
+| pkg/events | 20 | 0 | 0 | | | | |
+| config | 308 | 0 | 0 | | | | |
+| github | 317 | 8 | 0 | 8 | | | |
+| session/vc | 127 | 4 | 23 | | | 4 | |
+| session/mux (repair run) | 36 | 0 | 2 | | | | |
+| session/tymux | 363 | 1 | 3 | 1 | | | |
+| session/tmux (repair run) | 492 | 0 | 16 | | | | |
+| tuitest/integration/claude_squad | 0 | 2 | 0 | | 2 | | |
+| session | 4520 | 104 | 37 | 61 | 26 | 17 | |
+| server/services | 4326 | 365 | 12 | 141 | 34 | | 190 |
+
+`tuitest` has no `go_test` at its root; the only test target is `//tuitest/integration/claude_squad`. Failure counts include failing subtests and their parents (parents inherit the first classified subtest's class). The 190 `shard-timeout` rows are one cause: shard 2 of `server/services` aborted at `-test.timeout` (`panic: test timed out`, running test `TestStreamViaHub_should_SendHubStartFailedError_...`) and the 190 tests that never finished have `No pass/skip/fail event found`; the hung test itself is `exec-host-binary` (see below), the other 189 are collateral. Classes `runtime-caller`, `tmpdir-socket`, `network` and `LOAD_FLAKE`: 0 each. `other`/unclassified: 0 at the end (see how it got there below).
+
+Evidence per class (regex or hand override, recorded per row in `census.json`): `cwd` = relative `testdata/`, `../../...` fixtures, `scripts/ssq-*` and source files (`open host_registry.go: no such file`) not present in the sandbox cwd, plus source-scanning guards that find zero files; `home` = `Author identity unknown`/`no git author identity` (the private HOME has no `~/.gitconfig`, which is a property of the isolation) and `TestTildeExpansionInNewInstance`/`TestMigrationOfCorruptedPaths` expecting `$HOME` where the code reads the passwd home; `exec-host-binary` = `exec: "tmux"`/`"go"`/`gh` not on the test PATH (Bazel's test PATH is `/usr/bin:/bin`; tmux here lives in `/home/linuxbrew/.linuxbrew/bin`) and `env: 'tmux'` on the remote-exec fake.
+
+Noise control: the 6 timeout-looking `server/services` tests were rerun alone (`--test_filter`, load 3.4): all 6 failed again (not LOAD_FLAKE); with `--test_env=PATH=/usr/bin:/bin:/home/linuxbrew/.linuxbrew/bin` 5 of the 6 passed (including the hung test), the sixth (`TestGetSessionTurnTimeline_...`) opens `../../session/tokens/testdata/...` and is `cwd`. The `--test_timeout=900` rerun of the whole target hung at the same test for 15 min, so it is not a 300 s cap artefact.
+
+go test sanity (not a gate; `gen/` and `session/ent/*` are absent in this worktree so only 2 packages compile): `config` go test 308 PASS / 0 FAIL equals Bazel 308/0; `session/vc` go test with the same private HOME 150 PASS / 4 FAIL (the same 4 git-identity tests that Bazel reports), so the `home` class there comes from the private HOME, not from Bazel. `pkg/events` go test: setup failed (needs `session/ent`, not generated here). Pass counts differ in definition between the two harnesses (go test counted PASS lines incl. subtests).
+
+### Deviations and repairs (cap: one repair per task, exceeded once, stated)
+
+1. First `session/mux` (3 fails) and `session/tmux` (4 fails: `TestPrependSocket`, `TestResolveSocket` + subtests) runs with `STAPLER_SQUAD_TMUX_SOCKET=ssq-census-...` failed because those tests assert the socket name `test-isolated-N`; with the variable omitted (repair run, `TMUX_TMPDIR` still private) both packages pass. Not a Bazel class; this contradicts Task 4.1b's `--test_env=STAPLER_SQUAD_TMUX_SOCKET=ssq-bazel-$(uniq)`. `session` and `server/services` were therefore run without the variable from the start.
+2. `server/services` ran three times (initial 300 s, 900 s, then 300 s again so `bazel-testlogs` matches `census.json` after the filtered reruns overwrote it).
+3. One filtered `server/services` run was started without the isolation flags by mistake (bare `bazel test //session:session_test` for diagnosing a missing `test.xml`); it ran in the sandbox with Bazel's default test env (HOME unset) and left the default tmux socket unchanged.
+4. `census.py --parse-only` overwrote the per-package `load_start/load_end/status` in `census.json`; real-run loads were: pkg/events 11.4 to 14.3, config 14.3 to 14.0, github 14.0, session/vc 13.0, session/mux 13.0, tymux 13.3, tuitest 13.3, tmux 12.6 to 10.3 (10.1 to 9.0 repair), session 6.8 to 7.9, server/services 7.5 to 3.7 (later runs 3.9 to 3.3). Host load at start was about 30 (see plan), at run time 3 to 20; available memory stayed at or above 9 GB (never below the 8 GB gate).
+
+### Task 0.9b / S9: socket path probe
+
+`tools/bzl/spike/sock_test.go` binds `os.TempDir()+"/ssq-1234.sock"`; `sock_long_test.go` (tag `manual`) binds under `TEST_TMPDIR`.
+
+| Case | socket path | `wc -c` (path+NUL) | result |
+|---|---|---|---|
+| `//tools/bzl/spike:sock_test`, default (and with `--test_env=TMPDIR=/tmp`) | `/tmp/ssq-1234.sock` | 19 | PASS |
+| `//tools/bzl/spike:sock_long_test` (under `$TEST_TMPDIR`, `.../sandbox/linux-sandbox/19/execroot/_main/_tmp/<hash>/ssq-1234.sock`) | long | 169 | FAIL (`bind: invalid argument`, limit 108) |
+| `--test_env=TMPDIR=<146-byte dir>` | still `/tmp/...` | 19 | PASS: the override is ignored |
+| `--spawn_strategy=local` | `/tmp/...` (the host's shared RAM-backed `/tmp`) | 19 | PASS |
+
+Mechanism found (VERIFIED from the `linux-sandbox` command line printed by `--sandbox_debug`: `-M .../sandbox/linux-sandbox/N/_hermetic_tmp -m /tmp`, and the test env `TMPDIR=/tmp`): Bazel 9.3.1 mounts a private per-action `/tmp` and forces `TMPDIR=/tmp` for tests with no flag at all, so tests that use `os.TempDir()`/`t.TempDir()` get short socket paths for free; `--test_env=TMPDIR=...` cannot change it. The failing arm is a test that binds under `TEST_TMPDIR`/the cwd (execroot is 120+ bytes under `~/.cache/bazel/_bazel_tstapler/<hash>/`). `session/mux` (36 pass) and `session/tymux` (363 pass, 1 `cwd` fail) socket tests pass in the census. Census `tmpdir-socket` count: 0. Caveat for the verdict: the "without it" arm could not be produced by switching the mechanism off (no flag does), so it is shown by the TEST_TMPDIR bind; `--incompatible_sandbox_hermetic_tmp` is absent: `bazel help build --long | grep -c incompatible_sandbox_hermetic_tmp` prints `0`. Flags confirmed in `bazel help build --long`: `--sandbox_base` (line 440), `--sandbox_tmpfs_path` (458), `--sandbox_add_mount_pair` (1511), `--sandbox_writable_path` (1527), `--test_tmpdir` (1994); `--experimental_use_hermetic_linux_sandbox` is not in the help output. Verify line: `bazel test --test_env=TMPDIR=/tmp //tools/bzl/spike:sock_test` exit 0.
+
+Local-strategy caveat: a `no-sandbox`/`local` test (S4's repo-rule targets) sees the host `/tmp` (RAM-backed tmpfs), not a private one.
+
+### False or unsafe plan assumptions
+
+1. Task 4.1b: `STAPLER_SQUAD_TMUX_SOCKET=ssq-bazel-$(uniq)` as a global `--test_env` breaks tests that assert their own isolated socket name (3 in `session/mux`, 4 in `session/tmux` here). Set it per test only where a test needs it, or not at all with `TMUX_TMPDIR` private.
+2. Story 0.9 says a short `TMPDIR` is what the spike must find; on 9.3.1 it is already the default, and `--test_env=TMPDIR` is overridden. Task 4.1b's `--test_env=TMPDIR=/tmp` is a no-op.
+3. A private HOME (needed for isolation) makes every git-committing test fail with `Author identity unknown` (21 here): Epic 4's `home` sweep needs a test HOME fixture with a gitconfig or `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env, not just a writable HOME.
+4. Bazel's test PATH is `/usr/bin:/bin`, so Linuxbrew tools (tmux, gh) are invisible (62 `exec-host-binary` failures, plus 190 `shard-timeout` rows from the shard abort one of them caused): one hung test (a WebSocket read with no deadline) turned into 190 `No pass/skip/fail` results.
+5. `testdata`, `../../web-app/...` fixtures and `scripts/` are not in the test runfiles because Gazelle `exclude **/testdata` and no `data`/`embedsrcs` are generated: 211 `cwd` failures are mostly one fix (declare data).
+6. The 49-of-154 "sandbox-hostile packages" figure is not re-derived here (only 10 packages were run): 6 of 10 failed after the repair runs (github, session/vc, session/tymux, tuitest/integration/claude_squad, session, server/services); pkg/events, config, session/mux and session/tmux passed (the last two only after dropping the socket env var).
+
+### Owner actions
+
+None required. Epic 4 inputs: (a) decide a test HOME fixture (gitconfig), (b) put the tmux/gh directory in the Bazel test PATH or make tests skip, (c) generate `data` for `testdata/`, `scripts/` and the web fixtures, (d) drop the global `STAPLER_SQUAD_TMUX_SOCKET` and `TMPDIR` test env from Task 4.1b.

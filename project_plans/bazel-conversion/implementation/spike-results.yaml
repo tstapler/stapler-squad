@@ -39,3 +39,11 @@
   verdict: Pass
   path: gazelle-directives+map_kind (no extension)
   cost: M
+- spike: S8
+  verdict: Pass
+  path: census.py+census-check.py over 10 packages (484 failing test cases, each in exactly 1 class, script-checked); env needs private HOME with gitconfig, tmux on test PATH and no STAPLER_SQUAD_TMUX_SOCKET override (see spike-results.md S8/S9)
+  cost: M
+- spike: S9
+  verdict: Pass
+  path: Bazel 9.3.1 default hermetic /tmp (linux-sandbox -M _hermetic_tmp -m /tmp, TMPDIR forced to /tmp); no flag needed; the without-arm is a bind under the long TEST_TMPDIR (cannot be switched off)
+  cost: S
