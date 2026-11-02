@@ -39,3 +39,7 @@
   verdict: Pass
   path: gazelle-directives+map_kind (no extension)
   cost: M
+- spike: S12
+  verdict: FallbackWorkaround
+  path: nogo with norawgitcli recompiled against root x/tools (isolated @lint_x_tools copy collides at link); make lint-custom stays whole-suite path; Story 8.4 needs per-analyzer twin libs
+  cost: M

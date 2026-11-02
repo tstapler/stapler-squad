@@ -497,3 +497,41 @@ Directives-only path, no extension: actual cost S for the run plus M for diagnos
 
 - Decide whether Epic 1 deletes the S1 `go_proto_library` attempts (frees resolve lines) before running Task 1.1a.
 - Wire the TypeScript proto output (Task 0.6e) before expecting `//server:server` and `//server/web:*` to build.
+
+## S12 (Story 0.13 / Task 0.13a): custom analyzer as nogo
+
+Run 2026-11-01, Bazel 9.3.1, rules_go 0.65.0, host load average 11 to 29 during the timings (shared with other workers).
+
+### Verdict
+
+`S12`: **FallbackWorkaround**. Path: nogo with `norawgitcli` recompiled against the ROOT `x/tools` universe (a second `go_library` over the same `analyzer.go`, see "False assumption 1"); `make lint-custom` stays the whole-suite path of record. Cost: M (plus S per extra analyzer, see below). Story 8.4 is NOT skipped but its design changes (below). A plain `Pass` is not allowed: the plan's assumed path (register `//tools/lint/norawgitcli` directly as nogo dep) fails; the workaround is not pre-approved in `allowed-deltas.txt`.
+
+### Checks (VERIFIED, run in this worktree)
+
+1. Plan path (a) as written: `nogo(deps=["//tools/lint/norawgitcli"])` + `go_sdk.nogo(nogo=...)`, `bazel build //tools/bzl/spike-nogo:clean` -> **FAIL** at `GoLink nogo_actual`: `package conflict error: golang.org/x/tools/go/analysis: multiple copies of package passed to linker: @@gazelle++go_deps+org_golang_x_tools//go/analysis, @@gazelle++_go_deps+++lint_go_deps+org_golang_x_tools//go/analysis`.
+2. Repair (the one allowed repair run): `tools/bzl/spike-nogo/BUILD.bazel` `norawgitcli_rootdeps` = `srcs = ["//tools/lint/norawgitcli:analyzer.go"]` (new `exports_files`) with `deps = @org_golang_x_tools//...` (root universe, v0.51). `bazel build //tools/bzl/spike-nogo:clean` exit 0 (clean code passes).
+3. `bazel build //tools/bzl/spike-nogo:seed` (seeded `exec.Command("git","status")`) exit 1 with `nogo: errors found by nogo during build-time code analysis: tools/bzl/spike-nogo/seed/seed.go:7:37: exec.Command invokes the git CLI directly — route it through session/git/backend (...) (norawgitcli)`. `grep -c norawgitcli` on that output is at least 1.
+4. Agreement with `make lint-custom`'s linter (`go -C tools/lint build ./cmd/linter`, run as `linter ./tools/bzl/spike-nogo/...`): same message at the same position `seed.go:7:37`. The linter additionally reports `norawexec` on both files (a different analyzer; not registered in this spike), and nothing from `norawgitcli` on `clean.go`. Agreement on the norawgitcli finding: yes.
+5. Cross-module dependency: `//tools/lint/norawgitcli` (in `@lint_x_tools`) cannot be a nogo dep (check 1), `local_path_override` is not needed (the module is in-repo, same label space; the obstacle is the dual `x/tools`, not the module boundary). Consequence: every analyzer used as nogo needs a root-universe twin target (S per analyzer, same srcs, `x/tools` deps swapped), and the root `go.mod`'s `x/tools` (v0.51.0) must stay API-compatible with what analyzers use. All 17 share `internal/nolintcomment`, which needs a twin too.
+6. `analysistest` made to execute under Bazel for `norawgitcli_test`: before, `--test_arg=-test.v` shows `analysistest.go:402: skipping because go tool not available` and `--- SKIP: TestAnalyzer`. After adding `data = glob(["testdata/**"]) + ["@rules_go//go"]` and `gotool.Setup(t)` (new `tools/lint/internal/gotool`: finds the SDK in runfiles, then re-execs the test binary once with `GOROOT`, `PATH`, `GOCACHE`, `GOFLAGS=-mod=mod`), it shows `--- PASS: TestAnalyzer (2.24s)`. Assertions bite: changing one `// want` in `testdata/src/a/a.go` to a wrong regexp fails the target with `analysistest.go:713: a/a.go:23: no diagnostic was reported matching \`NOT-THE-MESSAGE\``; fixture restored (git status clean for it). Why the re-exec: testenv requires `go env GOROOT == runtime.GOROOT()`, and in a Bazel-built binary `runtime.GOROOT()` is the literal `GOROOT` and ignores a `Setenv` made after start, so the env must be set before the process starts (a `go_test(env=...)` cannot name the SDK path). Cost to apply to the other 14 analyzer tests: S each (one `data` line in BUILD, one `gotool.Setup(t)` call, one import); a shared `TestMain` or a rules_go-provided wrapper would be cleaner (Epic 4). Only `norawgitcli` was converted here. `bazel test //tools/lint/...`: 16 tests pass after the change.
+7. Timing, `bazel clean` + `--disk_cache=` (disabled) + `-k`, target set `//proto/session/v1/... //tools/scanner/... //tools/lint/... //session/ent/schema/... //tools/bzl/ent/... //tools/bzl/spike-nogo:clean` (130 top-level targets; `//session/...` cannot be built because the main module has no BUILD files before Epic 1, so this is a stand-in, norawgitcli ran on every non-external Go target in it): without nogo **86.9 s** wall, 1332 processes (load average 11 at start, 28 at end); with nogo **76.8 s** wall, 1747 processes (load 27 at start, 29 at end). Both runs: 128 of 130 targets built, the same 2 pre-existing analysis failures (`//session/ent/schema:schema_test` needs `//session`). Wall delta is inside the noise of a loaded host (nogo faster by 10 s is not a speedup); the reliable signal is +415 actions (+31%), including one-time nogo binary link. One measurement each; no repetition.
+
+### False plan assumptions
+
+1. "Register `//tools/lint/norawgitcli:norawgitcli` as nogo dep" (Task 0.13a): false; link-time duplicate `x/tools` (check 1).
+2. Task 0.13a's verify path `//tools/bzl/spike/nogo_seed:all`: the spike lives at `tools/bzl/spike-nogo` (the `tools/bzl/spike/` dir is a Python/script dir); the seed target is tagged `manual` so `bazel build //...` stays green.
+3. Plan fallback matrix "Keep `make lint-custom` wrapped (zero)": still true and still needed; nogo covers analyzers in the Bazel build path only, and 14 of 15 analyzer tests still skip.
+4. `go_sdk.nogo` registers ONE nogo for the whole repo, so the spike left it commented out in `MODULE.bazel` (enabling it lints every Go target; scope with `exclude_files`/`only_files` in `nogo_config.json`).
+
+### Files
+
+`tools/bzl/spike-nogo/{BUILD.bazel,nogo_config.json,seed/seed.go,clean/clean.go}`, `tools/lint/internal/gotool/{gotool.go,BUILD.bazel}`, `tools/lint/norawgitcli/{BUILD.bazel,analyzer_test.go}` (exports_files, data, gotool), `MODULE.bazel` (commented registration line).
+
+### Implication for Story 8.4
+
+Feasible but not free: per analyzer a root-universe twin library, `internal/nolintcomment` twin, one `nogo` target listing the twins, `go_sdk.nogo` in `MODULE.bazel`, and a `nogo_config.json` scope. Analyzers that need `go/packages` at runtime were not examined. Decision for the owner: pay that (and keep two build paths) or leave `make lint-custom` as the only path; both are consistent with the evidence.
+
+### Owner actions
+
+- Decide 8.4: nogo with root-universe twins (M plus S per analyzer) versus keep `make lint-custom` only.
+- Enabling nogo repo-wide is a `MODULE.bazel` one-line change; do not enable before Epic 1 provides BUILD files and the 57-site/ratchet baselines are known.
