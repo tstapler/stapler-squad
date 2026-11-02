@@ -76,9 +76,7 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
 
   test('windowSwitch_should_AnnounceOnceInSingleLiveRegion_When_NoPathnameChange', async ({ page }) => {
     const strip = await seedThreeWindows(page);
-    // RouteAnnouncer only exists in the react-router build (WEB_BUILD=bun); the Next build has no polite route announcer.
     const region = page.getByTestId('route-announcer');
-    test.skip((await region.count()) === 0, 'RouteAnnouncer is not mounted in the Next build');
     await strip.switchToTab('api');
     await expect(region).toHaveText('Window 2 of 3: api');
     await expect(page.getByTestId('route-announcer')).toHaveCount(1);

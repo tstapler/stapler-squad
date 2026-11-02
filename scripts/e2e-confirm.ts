@@ -3,7 +3,7 @@
 // script (1) selects the tests the comparator would fail, (2) reruns only those with one worker, and
 // (3) folds the rerun results back into the Bun report, so only a test that fails again in isolation gates.
 //
-//   select --baseline B --expected-diff E --next-report N --bun-report R --out sel.json [--max 40]
+//   select --baseline B --expected-diff E [--next-report N] --bun-report R --out sel.json [--max 40]
 //   run    --selection sel.json --out-dir DIR [--budget-ms 1080000]       (spawns Playwright in tests/e2e)
 //   merge  --bun-report R --selection sel.json --rerun-dir DIR --out confirmed.json   (summary on stdout)
 import * as fs from "fs";
@@ -164,12 +164,9 @@ const readJson = <T>(p: string): T => JSON.parse(fs.readFileSync(p, "utf8")) as 
 
 function cmdSelect(argv: string[]): void {
   const bunReport = readJson<PwReport>(arg(argv, "bun-report"));
+  const nextPath = argv.includes("--next-report") ? arg(argv, "next-report") : undefined;
   let nextReport: PwReport | null = null;
-  try {
-    nextReport = readJson<PwReport>(arg(argv, "next-report"));
-  } catch {
-    nextReport = null;
-  }
+  if (nextPath && fs.existsSync(nextPath)) nextReport = readJson<PwReport>(nextPath);
   const { findings } = compare({
     baseline: readJson<Baseline>(arg(argv, "baseline")),
     expectedDiff: readJson<ExpectedDiff>(arg(argv, "expected-diff")),

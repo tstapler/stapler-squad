@@ -20,7 +20,8 @@ function fx(name: string): string {
 interface RunOpts {
   baseline: string;
   expectedDiff: string;
-  nextReport: string;
+  /** Omitted in the CI shape: there is no Next control run any more. */
+  nextReport?: string;
   bunReports: string[];
 }
 
@@ -33,8 +34,7 @@ function run(opts: RunOpts): { exitCode: number; stdout: string } {
     fx(opts.baseline),
     "--expected-diff",
     fx(opts.expectedDiff),
-    "--next-report",
-    fx(opts.nextReport),
+    ...(opts.nextReport ? ["--next-report", fx(opts.nextReport)] : []),
     "--bun-reports",
     ...opts.bunReports.map(fx),
   ];
@@ -71,9 +71,15 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     expect(r.exitCode).not.toBe(0);
   });
 
-  test("F4: a missing e2e-next report -- the comparator never skips this check", () => {
-    const r = run({ baseline: "f4-baseline.json", expectedDiff: "f4-expected-diff.json", nextReport: "__does-not-exist__.json", bunReports: ["f4-bun-report-1.json"] });
+  test("F4: no Next control report (the CI shape) -- a baseline-pass spec failing on Bun is still a gate failure", () => {
+    const r = run({ baseline: "f1-baseline.json", expectedDiff: "f1-expected-diff.json", bunReports: ["f1-bun-report-1.json", "f1-bun-report-2.json", "f1-bun-report-3.json"] });
     expect(r.exitCode).not.toBe(0);
+    expect(r.stdout).toContain("[FAIL]");
+  });
+
+  test("F4b: no Next control report -- a clean Bun run passes", () => {
+    const r = run({ baseline: "z1-baseline.json", expectedDiff: "z1-expected-diff.json", bunReports: ["z1-bun-report-1.json", "z1-bun-report-2.json", "z1-bun-report-3.json"] });
+    expect(r.exitCode).toBe(0);
   });
 
   test("F5: a bun-expected-diff.json entry with no linked issue URL", () => {
@@ -117,12 +123,7 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  test("Z6: a baseline-pass spec that Bun deliberately skips (test.skip(isBunBuild())) is not a failure, exit 0", () => {
-    const r = run({ baseline: "z6-baseline.json", expectedDiff: "z6-expected-diff.json", nextReport: "z6-next-report.json", bunReports: ["z6-bun-report-1.json"] });
-    expect(r.exitCode).toBe(0);
-  });
-
-  test("F8: a baseline-pass spec that skips on Bun outside the deliberate-skip allowlist is a failure, not a clean pass", () => {
+  test("F8: a baseline-pass spec that skips on Bun is a failure, not a clean pass", () => {
     const r = run({ baseline: "f8-baseline.json", expectedDiff: "f8-expected-diff.json", nextReport: "f8-next-report.json", bunReports: ["f8-bun-report-1.json"] });
     expect(r.exitCode).not.toBe(0);
   });
@@ -201,10 +202,17 @@ describe("scripts/e2e-baseline-compare.ts", () => {
       expect(fails(r).map((f) => f.title).sort()).toEqual(["mobile-victim", "root"]);
     });
 
-    test("R7: login-static-assets' Next-baseline block deliberately skips on Bun (Story 7.13b) -- not a failure", () => {
-      const file = "login-static-assets.spec.ts";
-      const bun = { "every static asset /login needs loads 2xx": t([{ retry: 0, status: "skipped" }]) };
-      expect(gate([bun], allPass(bun), {}, file).exitCode).toBe(0);
+    test("R7: with no control run, a baseline test the Bun run never reported is reported, not failed", () => {
+      const bun = { gone: t(PASS), kept: t(PASS) };
+      const r = compare({ baseline: base(bun), expectedDiff: { entries: [] }, nextReport: null, bunReports: [rep({ kept: t(PASS) })] });
+      expect(r.exitCode).toBe(0);
+      expect(r.findings.some((f) => f.severity === "report" && f.title === "gone")).toBe(true);
+    });
+
+    test("R8: with no control run, a baseline-pass test hard-failing on Bun is a gate failure", () => {
+      const bun = { broken: t(HARD) };
+      const r = compare({ baseline: base(bun), expectedDiff: { entries: [] }, nextReport: null, bunReports: [rep(bun)] });
+      expect(fails(r).map((f) => f.title)).toEqual(["broken"]);
     });
   });
 
