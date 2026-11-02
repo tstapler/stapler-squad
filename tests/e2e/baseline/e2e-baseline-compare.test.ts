@@ -123,6 +123,21 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     expect(r.exitCode).toBe(0);
   });
 
+  describe("test.fail() known gaps", () => {
+    const gap = (status: string): PwReport => ({
+      suites: [{ specs: [{ file: "gap.spec.ts", title: "known gap", tests: [{ projectName: "chromium", expectedStatus: "failed", results: [{ retry: 0, status }] }] }] }],
+    });
+    const gate = (status: string) => compare({ baseline: { specs: [] }, expectedDiff: { entries: [] }, bunReports: [gap(status)] });
+
+    test("a test.fail() spec absent from the baseline that fails as annotated is not a gate failure", () => {
+      expect(gate("failed").exitCode).toBe(0);
+    });
+
+    test("a test.fail() spec that unexpectedly passes is a gate failure", () => {
+      expect(gate("passed").exitCode).toBe(1);
+    });
+  });
+
   test("F8: a baseline-pass spec that skips on Bun is a failure, not a clean pass", () => {
     const r = run({ baseline: "f8-baseline.json", expectedDiff: "f8-expected-diff.json", nextReport: "f8-next-report.json", bunReports: ["f8-bun-report-1.json"] });
     expect(r.exitCode).not.toBe(0);

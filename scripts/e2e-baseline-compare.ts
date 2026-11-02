@@ -43,6 +43,8 @@ export interface PwTestResult {
 
 export interface PwTest {
   projectName: string;
+  /** 'failed' for a test annotated test.fail(): its failing result is the expected outcome. */
+  expectedStatus?: string;
   results: PwTestResult[];
 }
 
@@ -73,6 +75,18 @@ export function keyString(k: SpecKey): string {
   return `${k.spec} :: ${k.project} :: ${k.title}`;
 }
 
+const FAILING_STATUSES = new Set(["failed", "timedOut"]);
+
+/**
+ * A test.fail() test (a documented known gap) fails as designed, so its failing result is a pass and an unexpected
+ * pass is the failure; reading raw result statuses would gate on the gap the annotation already tracks.
+ */
+function effectiveStatus(t: PwTest, status: string): string {
+  if (t.expectedStatus !== "failed") return status;
+  if (FAILING_STATUSES.has(status)) return "passed";
+  return status === "passed" ? "failed" : status;
+}
+
 /** One entry per (spec file, project, title) found anywhere in the report, with that test's attempts. */
 export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; attempts: Attempt[] }> {
   const out = new Map<string, { key: SpecKey; attempts: Attempt[] }>();
@@ -82,7 +96,7 @@ export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; a
         const key: SpecKey = { spec: spec.file, project: t.projectName, title: [...titles, spec.title].join(" > ") };
         out.set(keyString(key), {
           key,
-          attempts: (t.results ?? []).map((r) => ({ retry: r.retry, status: r.status })),
+          attempts: (t.results ?? []).map((r) => ({ retry: r.retry, status: effectiveStatus(t, r.status) })),
         });
       }
     }
@@ -381,7 +395,7 @@ function missingSpecBothFailFinding(ks: string): Finding {
 
 function missingSpecBunOnlyFailFinding(ks: string, failCount: number, total: number): Finding {
   const { spec, project, title } = keyParts(ks);
-  return { severity: "fail", spec, project, title, message: `Spec absent from the baseline, fails on Bun (${failCount}/${total} runs) but passes on e2e-next -- gate failure.` };
+  return { severity: "fail", spec, project, title, message: `Spec absent from the baseline, failed or needed a retry on Bun (${failCount}/${total} runs) -- gate failure.` };
 }
 
 /** The expected-diff list may only shrink: every entry must still reproduce, or be removed. */
