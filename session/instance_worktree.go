@@ -855,6 +855,10 @@ func (i *Instance) populateWorktreeInfoOnLoad() {
 		log.Debug("worktree detection failed (cached)", "session", i.Title, "err", err)
 		return
 	}
+	if info.isEmptyDetection() {
+		// "No .git here" can be stale (a recreated worktree) and would flip a persisted IsWorktree.
+		return
+	}
 	if err := i.applyWorktreeInfo(info); err != nil {
 		log.Warn("failed to apply cached worktree info", "session", i.Title, "err", err)
 	} else if i.GitHubOwner != "" {

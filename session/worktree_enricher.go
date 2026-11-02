@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,8 +37,12 @@ type WorktreeEnricher struct {
 	cancel  context.CancelFunc
 	stopped atomic.Bool
 
-	running                      atomic.Int64
-	timedOut, completed, errored atomic.Uint64
+	// retrySlots bounds how many workers retries of already-stuck paths may hold
+	// at once (half the pool), so a few blocked paths cannot starve the rest.
+	retrySlots chan struct{}
+
+	running                                       atomic.Int64
+	timedOut, completed, errored, retriesDeferred atomic.Uint64
 }
 
 // WorktreeEnricherConfig tunes a WorktreeEnricher; zero values pick defaults.
@@ -47,6 +52,7 @@ type WorktreeEnricherConfig struct {
 	BackoffMin time.Duration // first retry delay for a stuck path; default 5s
 	BackoffMax time.Duration // retry delay ceiling; default 5m
 	ResultTTL  time.Duration // how long a result is served from cache; default 5m
+	MaxResults int           // cached-result cap; oldest evicted beyond it; default 1024
 
 	// Ready gates a path before probing (extension point for a TCC consent gate).
 	// Returning false parks the path: nothing runs until Unpark(path). Nil means
@@ -90,6 +96,9 @@ func NewWorktreeEnricher(cfg WorktreeEnricherConfig) *WorktreeEnricher {
 	if cfg.ResultTTL <= 0 {
 		cfg.ResultTTL = 5 * time.Minute
 	}
+	if cfg.MaxResults <= 0 {
+		cfg.MaxResults = 1024
+	}
 	if cfg.Probe == nil {
 		cfg.Probe = DetectWorktree
 	}
@@ -100,6 +109,7 @@ func NewWorktreeEnricher(cfg WorktreeEnricherConfig) *WorktreeEnricher {
 		cfg.Now = time.Now
 	}
 	e := &WorktreeEnricher{cfg: cfg, results: map[string]worktreeResult{}, stuck: map[string]*stuckPath{}}
+	e.retrySlots = make(chan struct{}, max(1, cfg.Workers/2))
 	e.queue = scanqueue.New(scanqueue.Config{Workers: cfg.Workers}, e.handle)
 	return e
 }
@@ -110,8 +120,8 @@ func (e *WorktreeEnricher) Start(ctx context.Context) {
 	e.queue.Start(ctx)
 }
 
-// Stop halts the workers and cancels pending retries. In-flight probes blocked in
-// the kernel cannot be interrupted and are abandoned.
+// Stop halts the workers; pending retry timers fire as no-ops. In-flight probes
+// blocked in the kernel cannot be interrupted and are abandoned.
 func (e *WorktreeEnricher) Stop() {
 	e.stopped.Store(true)
 	if e.cancel != nil {
@@ -160,19 +170,31 @@ func (e *WorktreeEnricher) handle(path string) {
 		return
 	}
 	e.mu.Lock()
-	if sp := e.stuck[path]; sp != nil && e.cfg.Now().Before(sp.nextTry) {
+	sp := e.stuck[path]
+	if sp != nil && e.cfg.Now().Before(sp.nextTry) {
 		e.mu.Unlock() // backing off; the scheduled retry will come back
 		return
 	}
 	e.mu.Unlock()
 
+	start := e.cfg.Now()
+	if sp != nil {
+		select {
+		case e.retrySlots <- struct{}{}:
+			defer func() { <-e.retrySlots }()
+		default:
+			// Too many workers already wait on stuck paths: back off without waiting.
+			e.retriesDeferred.Add(1)
+			e.markStuck(path, start)
+			return
+		}
+	}
 	e.running.Add(1)
 	defer e.running.Add(-1)
-	start := e.cfg.Now()
 	// The result is cached by the flight itself, so it lands even when this
 	// handler already gave up on a stuck call.
 	ch := e.group.DoChan(path, func() (any, error) {
-		info, err := e.cfg.Probe(path)
+		info, err := e.safeProbe(path)
 		e.finish(path, worktreeResult{info: info, err: err}, e.cfg.Now().Sub(start))
 		return nil, nil
 	})
@@ -183,6 +205,17 @@ func (e *WorktreeEnricher) handle(path string) {
 	case <-timer.C:
 		e.markStuck(path, start)
 	}
+}
+
+// safeProbe converts a panic in the probe into an error result, so a panicking
+// probe cannot crash the process from a detached singleflight goroutine.
+func (e *WorktreeEnricher) safeProbe(path string) (info *WorktreeInfo, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			info, err = nil, fmt.Errorf("worktree probe panicked: %v", r)
+		}
+	}()
+	return e.cfg.Probe(path)
 }
 
 func (e *WorktreeEnricher) markStuck(path string, attemptStart time.Time) {
@@ -231,6 +264,7 @@ func (e *WorktreeEnricher) finish(path string, res worktreeResult, took time.Dur
 		delete(e.stuck, path)
 	}
 	e.results[path] = res
+	e.evictLocked(res.at)
 	e.mu.Unlock()
 
 	result := "ok"
@@ -251,11 +285,33 @@ func (e *WorktreeEnricher) finish(path string, res worktreeResult, took time.Dur
 }
 
 // WorktreeEnricherStats reports completed and timed-out probe counts.
-type WorktreeEnricherStats struct{ Completed, TimedOut, Errors uint64 }
+type WorktreeEnricherStats struct{ Completed, TimedOut, Errors, RetriesDeferred uint64 }
 
 // Stats returns probe counters since creation.
 func (e *WorktreeEnricher) Stats() WorktreeEnricherStats {
-	return WorktreeEnricherStats{Completed: e.completed.Load(), TimedOut: e.timedOut.Load(), Errors: e.errored.Load()}
+	return WorktreeEnricherStats{Completed: e.completed.Load(), TimedOut: e.timedOut.Load(), Errors: e.errored.Load(), RetriesDeferred: e.retriesDeferred.Load()}
+}
+
+// evictLocked drops expired results, then the oldest ones beyond MaxResults.
+func (e *WorktreeEnricher) evictLocked(now time.Time) {
+	if len(e.results) <= e.cfg.MaxResults {
+		return
+	}
+	for p, r := range e.results {
+		if now.Sub(r.at) > e.cfg.ResultTTL {
+			delete(e.results, p)
+		}
+	}
+	for len(e.results) > e.cfg.MaxResults {
+		var oldest string
+		var oldestAt time.Time
+		for p, r := range e.results {
+			if oldest == "" || r.at.Before(oldestAt) {
+				oldest, oldestAt = p, r.at
+			}
+		}
+		delete(e.results, oldest)
+	}
 }
 
 // StuckPaths is the number of paths currently past their deadline and unresolved.

@@ -2161,18 +2161,20 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 	return items
 }
 
-// deferToReconcile reports whether Step 6 must leave inst for Step 6b.
-// Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
-// cleanup kills the session's live tmux/tymux session before 6b can adopt it.
 // installWorktreeEnricher starts and registers the process-wide worktree enricher
-// that instance loading consults (stopped by session.StopWorktreeEnricher).
+// that instance loading consults (stopped by session.StopWorktreeEnricher). Any
+// previously registered enricher is stopped first.
 func installWorktreeEnricher(ctx context.Context) *session.WorktreeEnricher {
+	session.StopWorktreeEnricher()
 	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{})
 	e.Start(ctx)
 	session.SetWorktreeEnricher(e)
 	return e
 }
 
+// deferToReconcile reports whether Step 6 must leave inst for Step 6b.
+// Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
+// cleanup kills the session's live tmux/tymux session before 6b can adopt it.
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
 	case session.PermanentlyFailed, session.Failed:

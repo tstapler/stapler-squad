@@ -318,3 +318,83 @@ func TestLoad_CachedErrorResultLeavesInstanceUntouched(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, ghOwner(inst))
 }
+
+// A cached "no .git" result must not be applied: a recreated worktree within the
+// TTL would otherwise flip a persisted IsWorktree to false.
+func TestLoad_CachedEmptyDetectionIsNotApplied(t *testing.T) {
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Probe: func(string) (*WorktreeInfo, error) { return &WorktreeInfo{}, nil },
+	}, true)
+	e.Request("/gone")
+	enrichWaitUntil(t, func() bool { _, _, ok := e.Result("/gone"); return ok })
+	data := loadData("wt", "/gone", Paused, "")
+	data.IsWorktree = true
+	inst, err := FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+	require.True(t, inst.IsWorktree, "empty cached result must not overwrite IsWorktree")
+}
+
+func TestWorktreeEnricher_EvictsOldestBeyondCap(t *testing.T) {
+	clock := &enrichClock{}
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Workers: 1, MaxResults: 2, Now: clock.Now,
+		Probe: func(string) (*WorktreeInfo, error) { return okInfo(), nil },
+	}, false)
+	for _, p := range []string{"/1", "/2", "/3"} {
+		e.Request(p)
+		enrichWaitUntil(t, func() bool { _, _, ok := e.Result(p); return ok })
+		clock.Advance(time.Second)
+	}
+	_, _, ok1 := e.Result("/1")
+	_, _, ok3 := e.Result("/3")
+	require.False(t, ok1, "oldest result evicted")
+	require.True(t, ok3)
+	e.mu.Lock()
+	n := len(e.results)
+	e.mu.Unlock()
+	require.Equal(t, 2, n)
+}
+
+func TestWorktreeEnricher_PanickingProbeBecomesErrorResult(t *testing.T) {
+	var calls atomic.Int32
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Probe: func(path string) (*WorktreeInfo, error) {
+			if path == "/boom" {
+				panic("bad probe")
+			}
+			calls.Add(1)
+			return okInfo(), nil
+		},
+	}, false)
+	e.Request("/boom")
+	enrichWaitUntil(t, func() bool { return e.Stats().Errors == 1 })
+	_, err, ready := e.Result("/boom")
+	require.True(t, ready)
+	require.ErrorContains(t, err, "panicked")
+	e.Request("/fine")
+	enrichWaitUntil(t, func() bool { _, _, ok := e.Result("/fine"); return ok })
+}
+
+// Retries of already-stuck paths may hold at most half the workers; the rest go
+// straight back to backoff.
+func TestWorktreeEnricher_RetriesOfStuckPathsAreCapped(t *testing.T) {
+	release := make(chan struct{})
+	clock := &enrichClock{}
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Workers: 4, Deadline: 100 * time.Millisecond, BackoffMin: time.Second, Now: clock.Now,
+		AfterFunc: func(time.Duration, func()) {},
+		Probe:     func(string) (*WorktreeInfo, error) { <-release; return okInfo(), nil },
+	}, false)
+	t.Cleanup(func() { close(release) })
+	paths := []string{"/s1", "/s2", "/s3", "/s4"}
+	for _, p := range paths {
+		e.Request(p)
+	}
+	enrichWaitUntil(t, func() bool { return e.Stats().TimedOut == 4 })
+	clock.Advance(time.Hour)
+	for _, p := range paths {
+		e.Request(p)
+	}
+	enrichWaitUntil(t, func() bool { return e.Stats().TimedOut == 8 })
+	require.GreaterOrEqual(t, e.Stats().RetriesDeferred, uint64(1), "retries beyond the slot cap are deferred")
+}
