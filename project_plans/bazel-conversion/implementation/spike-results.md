@@ -110,3 +110,48 @@ Host onyx, Bazel 9.3.1, 2026-11-01. Targets: `//proto/session/v1:{sessionv1_go_p
 
 ### Verdict
 `S1`: **FallbackWorkaround** (path: `buf generate` as a genrule with local pinned plugins; cost M). The primary `go_proto_library` path fails the diff check; every PASS check holds for the workaround. Epic 2 inherits: `buf.gen.bazel.yaml`, `gen_go`, `compare-proto.sh`. The TypeScript half stays S1-ts (Task 0.6e).
+||||||| 6b786209d
+
+## S2 ent generation as a Bazel action (Stories 0.4 / Tasks 0.4a-0.4c)
+
+Host onyx, Bazel 9.3.1 via `tools/bazel`, Go 1.26.6 (rules_go SDK from go.mod), `entgo.io/ent` v0.14.5, branch `sdd/bazel-epic0-s2-ent`. Code: `tools/bzl/ent.bzl`, `tools/bzl/ent/{BUILD.bazel,ent_flags.txt,packages.bzl}`, `tools/bzl/ent/entc/{main.go,schemas.go,BUILD.bazel}`, `session/ent/schema/BUILD.bazel` (Gazelle-generated plus a `schema_srcs` filegroup), root `BUILD.bazel` directives, `Makefile` `ent-gen` reads `ent_flags.txt`.
+
+**Verdict: `FallbackWorkaround`, path = declared-output rule, cost M.** Not `Pass` because (a) the stock route needed a workaround and (b) the importer check below was run on a subset (decision for the owner: re-run it after S1 and Story 0.11 and downgrade to `Fail` if it breaks).
+
+### Mechanism (what was built, in the order tried)
+
+1. Reference: copied `go.mod`, `go.sum` and the non-test schema files to `/tmp/s2ref` and ran the required `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`. `go list ./session/ent/...` there = 53 packages: 52 generated + the hand-written `schema`. 333 generated `.go` files (379 incl. 46 schema files).
+2. `entc` (a `go_binary`) links `//session/ent/schema` as an ordinary dependency, calls `load.MarshalSchema` per schema (46, list in `schemas.go`, drift-checked against the sources by AST) and runs `entc/gen` with the flags from `ent_flags.txt`. Output is byte-identical to the reference: `diff -r bazel-bin/tools/bzl/ent /tmp/s2ref/session/ent -x schema` empty.
+3. `ent_gen` is a custom rule with `attr.output_list` (333 declared outputs from `packages.bzl`), not a tree artifact: rules_go needs file srcs, so no `GoSource` rule or fork was necessary. `ent_packages` instantiates one `go_library` per directory with explicit `importpath` and deps taken from the listing.
+4. The generator verifies the generated tree against `packages.bzl` (`-expect`) and fails with `Run: bazel run //tools/bzl/ent:update_packages` (tested: a doctored listing produces exactly that message; `update_packages` is idempotent, `git status` clean after it).
+5. goimports (run by ent's formatter) shells out to `go env`. Failure without it: `format file .../claudemetadata_delete.go: err: go command required, not found: exec: "go": executable file not found in $PATH`. The action therefore gets the rules_go SDK (`go.sdk.go`, libs, srcs, tools) as inputs plus `PATH`/`GOROOT`; `entc` makes them absolute (`cannot run executable found relative to current directory` otherwise) and sets a temp `GOCACHE`. No module cache, no network, no `-mod=mod` needed.
+
+### Checks (PASS iff list)
+
+| Check | Result | Evidence |
+|---|---|---|
+| Every package from `go list ./session/ent/...` is a `go_library` with its own importpath | true (52 generated + schema = 53) | `bazel query 'kind(go_library, //tools/bzl/ent:all)' \| wc -l` = 52 = `go list ./session/ent/... \| grep -vc /schema`; `//session/ent/schema:schema` is the 53rd |
+| Built from a clean clone, action network disabled | true for actions; repository fetch used the local repository cache, so "no network at all" is not proven | `git clone` to `/tmp/s2c` (only `session/ent/schema` present), `bazel --output_base=/tmp/s2obC build --config=agent --disk_cache= --sandbox_default_allow_network=false -- //session/ent/... //tools/bzl/ent/... //session/scanstate:scanstate -//session/ent/schema:schema_test`: exit 0, 264 actions |
+| `sql/upsert` effective | true | 46 `func (...) OnConflict` builders in `bazel-bin/tools/bzl/ent`; same generator with an empty flags file: 0 |
+| Two clean builds hash-equal | true | output bases `/tmp/s2obA`, `/tmp/s2obB`, `--disk_cache=` empty (action really ran, 111 actions each), 333 files, `sha256sum` listings identical (`db075ee09c8c5197...`) |
+| Importers resolve | **subset only** | see below |
+
+Importer check, exactly what was run: Gazelle on `session/scanbuf session/scanstate pkg/events server/analytics/escapedb session/contexthistory server server/analytics server/handlers server/services server/workflows session tools/lint/norawdb` (the 12 directories that import `session/ent*`; BUILD files not committed). The 84 generated BUILD files reference 49 distinct `//tools/bzl/ent...` labels; `bazel query 'set(<49 labels>)'` returns 49 (all exist). The 50th distinct import path in source is my own `entc/schemas.go`. `bazel build //session/scanstate:scanstate` (importer of `ent` plus `transcriptscanstate`, with the synced ent tree present on disk) builds, also in the clean clone. NOT built: `//session/... //server/...`: every other importer's closure contains `gen/proto/go/session/v1` (S1) and needs the whole-repo Gazelle run (Story 0.11); only `scanstate` and `tools/lint/norawdb` are proto-free (`go list -e -deps` counts of `gen/` imports: scanstate 0, norawdb 0, the other ten 1-2).
+
+### Task 0.4c / Gazelle (S11 interplay)
+
+- Resolve lines needed: **2** (`gazelle:resolve go .../session/ent //tools/bzl/ent:ent` and one `resolve_regexp go ^.../session/ent/(.+)$ //tools/bzl/ent:$1`), no per-entity line, so below the S11 threshold (more than 8 lines or any per-entity line); `$1` substitution confirmed live. `schema` is an alias in `//tools/bzl/ent` so the one regexp covers it.
+- The provisional exclusion `session/ent/[!s]*` is wrong when the synced tree exists: with generated files present Gazelle created BUILD files in `session/ent/` and seven `s*` entity directories (`session`, `sessiongoal`, `sessionsummary`, `shell`, `sourcesyncevent`, `stagelivenessdefinition`, `stagetransition`). Adding `# gazelle:exclude session/ent/s[!c]*` fixed it (re-run: only `session/ent/schema/BUILD.bazel` exists). Brittle by construction (schema is the only `sc` name); Task 0.11b should keep or replace it.
+
+### Cost and fallback
+
+Workaround measured as M (`ent.bzl` 83 lines, over the 40-line cap Task 2.3 names for the productionised file; `entc` 334 lines of Go in two files, plus a 52-entry generated listing and a 46-entry schema list). Fork (rules_go directory `srcs`) not needed, not costed further. Both lists need `bazel run //tools/bzl/ent:update_packages` / `schemas.go` edit on a schema change; the first is enforced by the action, the second by an AST check in the same action.
+
+### False or unsafe plan assumptions
+
+1. "`UpsertRule`-style symbols": no generated symbol is named `UpsertRule`; the real evidence of `sql/upsert` is `OnConflict*` builders (46 vs 0 without the flag).
+2. "Checked-in `packages.txt` read by the macro": Starlark cannot read files at load time; the listing is `packages.bzl` (generated).
+3. "53 `go_library`" and "`bazel build //session/ent/...`": 53 includes the hand-written schema; the 52 generated libraries live in `//tools/bzl/ent`, so the `//session/ent/...` pattern does not build them, and it also matches `//session/ent/schema:schema_test`, which fails analysis until `//session` has a BUILD file.
+4. "ent needs only module data": the formatter needs a `go` binary on PATH (rules_go SDK works; no module cache or network).
+5. Task 0.4a's "schema as a normal dependency" works, but adds an unplanned third list (schema type names, `schemas.go`) because `entc/load` discovers them by AST and `go run`, which this approach avoids.
+6. `session/ent/generate.go` (CLAUDE.md): absent, as the plan already noted.

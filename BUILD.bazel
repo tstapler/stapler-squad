@@ -12,8 +12,14 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:exclude **/testdata
 # gazelle:exclude gen
 # gazelle:exclude web-app/src/gen
-# Provisional (finalised by Task 0.11b): spares the tracked session/ent/schema.
+# Keep Gazelle out of the generated ent tree (it may be present after `make sync`) but inside the
+# hand-kept session/ent/schema: everything in session/ent not starting with "s", plus s* not
+# starting "sc" (schema is the only "sc" name).
 # gazelle:exclude session/ent/[!s]*
+# gazelle:exclude session/ent/s[!c]*
+# Generated ent packages live in //tools/bzl/ent (2 lines cover all 52; the schema alias is there too).
+# gazelle:resolve go github.com/tstapler/stapler-squad/session/ent //tools/bzl/ent:ent
+# gazelle:resolve_regexp go ^github.com/tstapler/stapler-squad/session/ent/(.+)$ //tools/bzl/ent:$1
 
 gazelle(name = "gazelle")
 

@@ -1,0 +1,30 @@
+load("//tools/bzl:ent.bzl", "ent_packages")
+load("//tools/bzl/ent:packages.bzl", "ENT_PACKAGES")
+
+exports_files([
+    "ent_flags.txt",
+    "packages.bzl",
+])
+
+# The schema package is hand-written and Gazelle-managed; the alias lets one resolve_regexp
+# line map every session/ent/<pkg> import to //tools/bzl/ent:<pkg>.
+alias(
+    name = "schema",
+    actual = "//session/ent/schema",
+    visibility = ["//visibility:public"],
+)
+
+ent_packages(
+    name = "ent_gen",
+    entc = "//tools/bzl/ent/entc",
+    flags = "ent_flags.txt",
+    packages = ENT_PACKAGES,
+    packages_file = "packages.bzl",
+    schema_srcs = ["//session/ent/schema:schema_srcs"],
+)
+
+# bazel run //tools/bzl/ent:update_packages after a schema change (ent_gen fails and says so).
+alias(
+    name = "update_packages",
+    actual = "//tools/bzl/ent/entc:update_packages",
+)
