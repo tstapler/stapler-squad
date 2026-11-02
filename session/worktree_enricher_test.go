@@ -563,7 +563,7 @@ func TestWorktreeEnricher_RecheckDiscardsStaleInFlightProbe(t *testing.T) {
 	}
 	close(h.release) // old probe now returns EPERM
 	// Join the generation-0 flight: it completes only after the old probe's finish ran.
-	<-h.e.group.DoChan("/p\x000", func() (any, error) { return nil, nil })
+	<-h.e.group.DoChan("/p\x000", func() (any, error) { return struct{}{}, nil })
 	select {
 	case err := <-h.observed:
 		t.Fatalf("stale probe reported a result: %v", err)
