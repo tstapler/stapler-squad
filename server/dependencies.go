@@ -716,6 +716,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, fmt.Errorf("load instances: %w", err)
 	}
 
+	// Worktree detection, GitHub owner/repo migration and the missing-worktree pause
+	// check no longer run inside LoadInstances (an unreadable session path blocked
+	// startup); they run here on a bounded pool, with Step 6 awaiting each instance's
+	// first attempt before starting it. See ADR-038.
+	worktreeEnricher := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{Persist: storage.UpdateInstance})
+	worktreeEnricher.Start(context.Background())
+	for _, inst := range instances {
+		worktreeEnricher.Enqueue(inst)
+	}
+
 	// Seed the delivery gate's visibility index synchronously, before any
 	// instance is wired or started, so restore-time producers (cold-restore,
 	// rate-limit callbacks) resolve hidden sessions. Flags are read once here;
@@ -1013,6 +1023,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
+			worktreeEnricher.Await(inst, worktreeEnrichAwaitMax)
 			if !inst.Started() && !deferToReconcile(inst) {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
@@ -2159,6 +2170,10 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.
 // Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
 // cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+// worktreeEnrichAwaitMax caps how long Step 6 waits for one instance's first
+// enrichment attempt; slightly above the enricher's per-probe deadline.
+const worktreeEnrichAwaitMax = 12 * time.Second
+
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
 	case session.PermanentlyFailed, session.Failed:

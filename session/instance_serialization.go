@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -253,9 +252,6 @@ func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
 	return fromInstanceData(data, true)
 }
 
-// startupWorktreeDetectTimeout bounds per-session worktree detection while loading.
-var startupWorktreeDetectTimeout = 5 * time.Second
-
 // fromInstanceData is the shared implementation. When deferStart is true, the
 // Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
@@ -465,41 +461,12 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		instance.claudeSession = &claudeSessionCopy
 	}
 
-	// Re-detects on every load for sessions without GitHub info (including repos
-	// with no GitHub remote), so it is bounded. This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
-	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
-		if err := instance.DetectAndPopulateWorktreeInfoBounded(startupWorktreeDetectTimeout); err != nil {
-			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
-			// Non-fatal - session can still work without this info
-		} else if instance.GitHubOwner != "" {
-			log.Info("auto-detected github info", "session", instance.Title, "owner", instance.GitHubOwner, "repo", instance.GitHubRepo, "worktree", instance.IsWorktree)
-		}
-	}
+	// No filesystem probing here: worktree detection, the GitHub owner/repo
+	// migration and the missing-worktree pause check run after start in
+	// WorktreeEnricher, so an unreadable session path can never block a load.
 
 	// Initialize session-specific logging
 	_ = log.GetSessionLoggers
-
-	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
-	// No mutex is needed here because the instance is not yet shared.
-	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
-		worktreePath := instance.gitManager.GetWorktreePath()
-		statErr, statTimedOut := statBounded(worktreePath, startupWorktreeDetectTimeout)
-		if statTimedOut {
-			log.Warn("worktree stat timed out, leaving session state unchanged", "session", instance.Title, "path", worktreePath)
-		} else if os.IsNotExist(statErr) {
-			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
-			level := worktreeMissingLevel(alreadyLogged)
-			logger := log.ForSession(instance.Title)
-			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
-			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
-			if err := instance.transitionTo(context.Background(), Paused); err != nil {
-				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
-				instance.loadStatus(Paused)
-			}
-		}
-	}
 
 	if instance.Paused() {
 		instance.started.Store(true)

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -793,137 +792,38 @@ func (i *Instance) GetWorkingDirectory() string {
 // - gitWorktree.GetWorktreePath() is the actual worktree (e.g., ~/.stapler-squad/worktrees/...)
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
-	return i.detectAndPopulateWorktreeInfo(0)
-}
-
-// DetectAndPopulateWorktreeInfoBounded is DetectAndPopulateWorktreeInfo with a
-// deadline, for startup paths where one unreadable repo (e.g. a TCC- or
-// iCloud-protected directory whose open() blocks) must not stall every session.
-// A timed-out result is never applied to the instance (it would race the load
-// goroutine); the abandoned call still fills detectWorktreeCache, so the next
-// load applies it instantly.
-func (i *Instance) DetectAndPopulateWorktreeInfoBounded(timeout time.Duration) error {
-	return i.detectAndPopulateWorktreeInfo(timeout)
-}
-
-func (i *Instance) detectAndPopulateWorktreeInfo(timeout time.Duration) error {
-	// Determine the path to use for detection
-	// For worktree sessions, use the worktree path; otherwise use i.Path.
-	// Deliberately raw, not GetPath(): a session-creation/retry caller sets
-	// i.Path raw without republishing the snapshot before this runs, so
-	// GetPath() observed stale data and regressed
-	// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
-	// TestTriggerTriage_* when tried.
-	detectPath := i.Path
-	if i.gitManager.HasWorktree() {
-		worktreePath := i.gitManager.GetWorktreePath()
-		if worktreePath != "" {
-			detectPath = worktreePath
-		}
-	}
-
+	detectPath := i.worktreeDetectPath()
 	if detectPath == "" {
 		return nil
 	}
 
-	apply := func(info *WorktreeInfo) error {
-		return i.sendSyncErr(func(s *instanceState) error {
-			applyWorktreeDetectionLocked(s, info)
-			return nil
-		})
-	}
-	info, err := detectWorktreeBounded(detectPath, timeout)
+	info, err := DetectWorktree(detectPath)
 	if err != nil {
 		return err
 	}
-	return apply(info)
+	return i.applyWorktreeInfo(info)
 }
 
-// detectWorktreeFn is the detection seam; tests replace it with a blocking func.
-var detectWorktreeFn = DetectWorktree
-
-// inflightWorktreeDetections maps path -> attempt token for bounded detections
-// that have started and not yet returned. A present entry after a timeout
-// means the call is stuck (e.g. in open() on a TCC-protected path).
-var inflightWorktreeDetections sync.Map
-
-// detectWorktreeBounded runs detectWorktreeFn, giving up after timeout (<=0
-// means unbounded, no goroutine). At most one bounded attempt per path is in
-// flight; a concurrent or later caller fails fast rather than spawning another.
-// If the attempt outlives timeout it keeps running (it cannot be cancelled out
-// of a blocked syscall); its result is only logged, and DetectWorktree's own
-// cache makes the next call for the path instant.
-func detectWorktreeBounded(path string, timeout time.Duration) (*WorktreeInfo, error) {
-	if timeout <= 0 {
-		return detectWorktreeFn(path)
-	}
-	token := new(struct{ _ byte }) // unique per attempt (non-zero size)
-	if _, loaded := inflightWorktreeDetections.LoadOrStore(path, token); loaded {
-		return nil, fmt.Errorf("worktree detection for %q already in flight (stuck?)", path)
-	}
-	type result struct {
-		info *WorktreeInfo
-		err  error
-	}
-	ch := make(chan result, 1) // buffered so a late finisher never blocks
-	var timedOut atomic.Bool
-	start := time.Now()
-	detect := detectWorktreeFn // read here, not in the goroutine, so a test swapping the seam can't race
-	go func() {
-		info, err := detect(path)
-		inflightWorktreeDetections.CompareAndDelete(path, token)
-		ch <- result{info, err}
-		if timedOut.Load() {
-			if err != nil {
-				log.Warn("worktree detection finished late with error", "path", path, "elapsed", time.Since(start), "err", err)
-			} else {
-				log.Info("worktree detection finished late (slow); result cached for next load", "path", path, "elapsed", time.Since(start), "github_owner", info.GitHubOwner)
-			}
+// worktreeDetectPath is the path worktree detection probes: the worktree for a
+// worktree session, otherwise i.Path.
+// Deliberately raw, not GetPath(): a session-creation/retry caller sets
+// i.Path raw without republishing the snapshot before this runs, so
+// GetPath() observed stale data and regressed
+// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
+// TestTriggerTriage_* when tried.
+func (i *Instance) worktreeDetectPath() string {
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" {
+			return worktreePath
 		}
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case r := <-ch:
-		return r.info, r.err
-	case <-timer.C:
-		timedOut.Store(true)
-		select { // finisher may have completed just before the flag was set
-		case r := <-ch:
-			return r.info, r.err
-		default:
-		}
-		return nil, fmt.Errorf("worktree detection for %q stuck: no result after %s", path, timeout)
 	}
+	return i.Path
 }
 
-// statFn is the os.Stat seam for statBounded.
-var statFn = os.Stat
-
-// inflightStats mirrors inflightWorktreeDetections for statBounded.
-var inflightStats sync.Map
-
-// statBounded is os.Stat with a deadline, single-flight per path. timedOut=true
-// means the path could not be examined (timeout, or an earlier stat is still
-// blocked) and the caller must treat existence as unknown.
-func statBounded(path string, timeout time.Duration) (err error, timedOut bool) {
-	token := new(struct{ _ byte })
-	if _, loaded := inflightStats.LoadOrStore(path, token); loaded {
-		return nil, true
-	}
-	stat := statFn
-	ch := make(chan error, 1)
-	go func() {
-		_, e := stat(path)
-		inflightStats.CompareAndDelete(path, token)
-		ch <- e
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case e := <-ch:
-		return e, false
-	case <-timer.C:
-		return nil, true
-	}
+// applyWorktreeInfo publishes a detection result through the instance actor.
+func (i *Instance) applyWorktreeInfo(info *WorktreeInfo) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		applyWorktreeDetectionLocked(s, info)
+		return nil
+	})
 }
