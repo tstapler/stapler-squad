@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from "react";
+import { lazy, type ComponentType, type ReactNode } from "react";
 import type { AppRoute, PageRoute } from "@/lib/nav/app-types";
 import type { RoutePath } from "@/lib/nav/paths";
 import { FeatureGuard } from "./FeatureGuard";
@@ -57,11 +57,26 @@ export const routeTable = {
   "/workflows": { load: () => import("./workflows/page") },
 } satisfies Record<RoutePath, RouteDef>;
 
+// Next applies `app/backlog/layout.tsx` (a shared watch stream) to every backlog route; this table loads pages only, so the
+// provider is added here. Without it each `useBacklogStream()` consumer opens its own stream and a late snapshot overwrites
+// fresher item state (e2e jump-to-session lost its injected sessions on Bun only). Lazy keeps the hook out of the entry chunk.
+const BacklogStreamLayout = lazy(() =>
+  import("@/components/backlog/BacklogStreamContext").then((m) => ({ default: m.BacklogStreamProvider })),
+);
+const LAYOUT_WRAP: Partial<Record<RoutePath, ComponentType<{ children: ReactNode }>>> = {
+  "/backlog": BacklogStreamLayout,
+  "/backlog/board": BacklogStreamLayout,
+};
+
 function guardFor(path: RoutePath): PageRoute["wrap"] {
   const flag = routeMetaFor(path)?.guard;
-  if (!flag) return undefined;
-  const Guarded = ({ children }: { children: ReactNode }) => <FeatureGuard flag={flag}>{children}</FeatureGuard>;
-  return Guarded;
+  const Layout = LAYOUT_WRAP[path];
+  if (!flag && !Layout) return undefined;
+  const Wrapped = ({ children }: { children: ReactNode }) => {
+    const inner = Layout ? <Layout>{children}</Layout> : children;
+    return flag ? <FeatureGuard flag={flag}>{inner}</FeatureGuard> : <>{inner}</>;
+  };
+  return Wrapped;
 }
 
 /** Titles and guards come from `RouteMeta`, so they cannot drift from the Next layouts the drift test checks. */
