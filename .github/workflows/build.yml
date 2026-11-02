@@ -94,7 +94,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^scripts/e2e-confirm\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -753,23 +753,41 @@ jobs:
         with:
           label: e2e-bun-shard-${{ matrix.shard }}
 
+  # Besides merging the shards and running the comparator, this job reruns the tests the comparator would fail
+  # (on main only) with one worker, so only a test that fails again in isolation gates -- see scripts/e2e-confirm.ts.
+  # Why: with E2E_WORKERS x shards a different handful of tests hard-fails on Bun every run (load flakiness). It runs
+  # in the Playwright image (not a separate job, so the per-PR check count in docs/reference/ci-job-budget.md is unchanged).
   e2e-bun:
     name: e2e (Bun build)
     runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-env, e2e-bun-shard, e2e-next]
+    needs: [detect-changes, e2e-env, e2e-binary-bun, e2e-bun-shard, e2e-next]
     # e2e-env failing leaves the shards skipped (no matrix); still run so this check goes red.
     if: >-
       always() && (needs.e2e-bun-shard.result != 'skipped' || needs.e2e-env.result == 'failure') &&
       (github.event_name == 'pull_request' ||
       (needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'))
-    timeout-minutes: 15
+    # Merge + comparator ~2 min; on main add container start, select, and up to 18 min of rerun.
+    timeout-minutes: 35
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.e2e-env.outputs.playwright-version }}-noble
+      options: --init --ipc=host
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github/actions
-            tests/e2e
-            scripts
+
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -824,17 +842,82 @@ jobs:
           path: /tmp/e2e-next-report
         continue-on-error: true
 
+      # Main only (the comparator is main only). Selects the tests the comparator would fail; ends there with no
+      # failures, and with more than 40 reruns nothing (that many failures is not load flakiness).
+      - name: Select the tests to confirm
+        id: select
+        if: always() && github.event_name != 'pull_request' && needs.e2e-bun-shard.result == 'success'
+        run: |
+          mkdir -p /tmp/e2e-bun-confirmation/reruns
+          bun scripts/e2e-confirm.ts select \
+            --baseline tests/e2e/baseline/next-e2e-baseline.json \
+            --expected-diff tests/e2e/baseline/bun-expected-diff.json \
+            --next-report /tmp/e2e-next-report/report.json \
+            --bun-report tests/e2e/playwright-report/report.json \
+            --out /tmp/e2e-bun-confirmation/selection.json | tee -a "$GITHUB_STEP_SUMMARY"
+        continue-on-error: true
+
+      - name: Download Bun binary
+        if: steps.select.outputs.status == 'rerun'
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-binary-bun
+
+      # The same binary, one worker, only the selected tests. An error here leaves the original failures in force.
+      - name: Rerun the failing tests with one worker
+        if: steps.select.outputs.status == 'rerun'
+        continue-on-error: true
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
+          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
+          WEB_BUILD: bun
+        run: |
+          chmod +x stapler-squad seed-demo seed-hidden e2e-sshd
+          # 18 of this job's 35 minutes; unreached tests keep their failure and are reported as not rerun.
+          bun scripts/e2e-confirm.ts run --selection /tmp/e2e-bun-confirmation/selection.json \
+            --out-dir /tmp/e2e-bun-confirmation/reruns --budget-ms 1080000
+
+      # Only tests that fail again in the isolated rerun keep gating. Without a selection the comparator reads
+      # the unconfirmed report, exactly as before.
+      - name: Fold the confirmation rerun into the Bun report
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          report=tests/e2e/playwright-report/report.json
+          confirmed=tests/e2e/playwright-report/report-confirmed.json
+          if [ -f /tmp/e2e-bun-confirmation/selection.json ] && [ -f "$report" ]; then
+            bun scripts/e2e-confirm.ts merge --bun-report "$report" \
+              --selection /tmp/e2e-bun-confirmation/selection.json \
+              --rerun-dir /tmp/e2e-bun-confirmation/reruns --out "$confirmed" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No confirmation selection; the comparator reads the unconfirmed Bun report." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload confirmation results
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bun-confirmation
+          path: |
+            /tmp/e2e-bun-confirmation
+            tests/e2e/playwright-report/report-confirmed.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run the baseline comparator
         if: always() && github.event_name != 'pull_request'
         # pipefail: without it, the step's exit status is tee's (always 0), masking a
         # comparator failure -- this job's result must be the comparator's verdict.
         run: |
           set -o pipefail
+          report=tests/e2e/playwright-report/report-confirmed.json
+          [ -f "$report" ] || report=tests/e2e/playwright-report/report.json
           bun scripts/e2e-baseline-compare.ts \
             --baseline tests/e2e/baseline/next-e2e-baseline.json \
             --expected-diff tests/e2e/baseline/bun-expected-diff.json \
             --next-report /tmp/e2e-next-report/report.json \
-            --bun-reports tests/e2e/playwright-report/report.json \
+            --bun-reports "$report" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────────────────────

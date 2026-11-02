@@ -181,6 +181,8 @@ export type FindingSeverity = "fail" | "warn" | "report";
 export interface Finding {
   severity: FindingSeverity;
   spec: string;
+  /** Set when the finding is about one (spec, project, title) test, so a confirmation rerun can target it. */
+  project?: string;
   title: string;
   message: string;
 }
@@ -258,9 +260,9 @@ function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
     const nextEntry = ctx.nextAttempts.get(ks);
     const nextClean = nextEntry !== undefined && !failedOrRetried(nextEntry.attempts, specOfKey(ks));
     if (nextClean && n >= MIN_RUNS_FOR_FLAKY_ESCALATION && flakyCount === n) {
-      return { severity: "fail", spec: b.spec, title: b.title, message: `Persistent Bun-only flake: baseline class 'pass' needed a retry in all ${n} Bun runs, e2e-next clean.` };
+      return { severity: "fail", spec: b.spec, project: b.project, title: b.title, message: `Persistent Bun-only flake: baseline class 'pass' needed a retry in all ${n} Bun runs, e2e-next clean.` };
     }
-    return { severity: "warn", spec: b.spec, title: b.title, message: `baseline class 'pass' needed a retry on Bun in ${flakyCount}/${n} runs (passed on retry): warning, not a gate failure.` };
+    return { severity: "warn", spec: b.spec, project: b.project, title: b.title, message: `baseline class 'pass' needed a retry on Bun in ${flakyCount}/${n} runs (passed on retry): warning, not a gate failure.` };
   }
 
   const diffEntry = ctx.expectedDiffKeys.get(`${b.spec} :: ${b.title}`);
@@ -269,12 +271,12 @@ function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   const sharedFlake = nextEntry ? failedOrRetried(nextEntry.attempts, specOfKey(ks)) : false;
 
   if (sharedFlake) {
-    return { severity: "report", spec: b.spec, title: b.title, message: `Shared flake: fails on both e2e-next and e2e-bun this run (${failCount}/${n} Bun runs).` };
+    return { severity: "report", spec: b.spec, project: b.project, title: b.title, message: `Shared flake: fails on both e2e-next and e2e-bun this run (${failCount}/${n} Bun runs).` };
   }
   if (diffEntry) {
-    return { severity: "report", spec: b.spec, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}) and still fails (${failCount}/${n} Bun runs).` };
+    return { severity: "report", spec: b.spec, project: b.project, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}) and still fails (${failCount}/${n} Bun runs).` };
   }
-  return { severity: "fail", spec: b.spec, title: b.title, message: `New Bun-only failure: baseline class 'pass', hard-failed (every attempt) in ${failCount}/${n} Bun runs, e2e-next clean, not listed in bun-expected-diff.json.` };
+  return { severity: "fail", spec: b.spec, project: b.project, title: b.title, message: `New Bun-only failure: baseline class 'pass', hard-failed (every attempt) in ${failCount}/${n} Bun runs, e2e-next clean, not listed in bun-expected-diff.json.` };
 }
 
 function evaluateBaselineFlakySpec(b: BaselineSpecEntry, ctx: GateContext): Finding | null {
@@ -291,15 +293,15 @@ function evaluateBaselineFlakySpec(b: BaselineSpecEntry, ctx: GateContext): Find
     // Same shared-failure rule as baseline 'pass' specs: a test that also finally fails on the same-run Next report is not Bun-specific.
     const nextEntry = ctx.nextAttempts.get(ks);
     if (nextEntry && FAILED_STATUSES.has(finalStatus(nextEntry.attempts))) {
-      return { severity: "report", spec: b.spec, title: b.title, message: `Shared failure: baseline 'flaky' also fails on e2e-next this run (${finalFailCount}/${n} Bun runs).` };
+      return { severity: "report", spec: b.spec, project: b.project, title: b.title, message: `Shared failure: baseline 'flaky' also fails on e2e-next this run (${finalFailCount}/${n} Bun runs).` };
     }
     if (diffEntry) {
-      return { severity: "report", spec: b.spec, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}); baseline 'flaky' now fails ${finalFailCount}/${n} on Bun.` };
+      return { severity: "report", spec: b.spec, project: b.project, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}); baseline 'flaky' now fails ${finalFailCount}/${n} on Bun.` };
     }
-    return { severity: "fail", spec: b.spec, title: b.title, message: `flaky -> fail: baseline class 'flaky' failed ${finalFailCount}/${n} Bun runs (>= 2/3), not listed.` };
+    return { severity: "fail", spec: b.spec, project: b.project, title: b.title, message: `flaky -> fail: baseline class 'flaky' failed ${finalFailCount}/${n} Bun runs (>= 2/3), not listed.` };
   }
   if (finalFailCount >= 1) {
-    return { severity: "warn", spec: b.spec, title: b.title, message: `baseline 'flaky' failed ${finalFailCount}/${n} Bun runs (< 2/3): warning, dispositioned in triage.` };
+    return { severity: "warn", spec: b.spec, project: b.project, title: b.title, message: `baseline 'flaky' failed ${finalFailCount}/${n} Bun runs (< 2/3): warning, dispositioned in triage.` };
   }
   return null;
 }
@@ -310,7 +312,7 @@ function evaluateBaselineFailSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   const n = runs.length;
   const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(ks))).length;
   if (n > 0 && failCount === 0) {
-    return { severity: "report", spec: b.spec, title: b.title, message: `baseline class 'fail' now passes cleanly on Bun (${n}/${n} runs) -- reported, not a gate requirement.` };
+    return { severity: "report", spec: b.spec, project: b.project, title: b.title, message: `baseline class 'fail' now passes cleanly on Bun (${n}/${n} runs) -- reported, not a gate requirement.` };
   }
   return null; // excluded from the gate otherwise: accepted masking (Story 0.1)
 }
@@ -357,8 +359,8 @@ function missingSpecBothFailFinding(ks: string): Finding {
 }
 
 function missingSpecBunOnlyFailFinding(ks: string, failCount: number, total: number): Finding {
-  const { spec, title } = keyParts(ks);
-  return { severity: "fail", spec, title, message: `Spec absent from the baseline, fails on Bun (${failCount}/${total} runs) but passes on e2e-next -- gate failure.` };
+  const { spec, project, title } = keyParts(ks);
+  return { severity: "fail", spec, project, title, message: `Spec absent from the baseline, fails on Bun (${failCount}/${total} runs) but passes on e2e-next -- gate failure.` };
 }
 
 /** The expected-diff list may only shrink: every entry must still reproduce, or be removed. */
