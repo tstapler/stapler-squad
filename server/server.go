@@ -699,7 +699,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc := services.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)

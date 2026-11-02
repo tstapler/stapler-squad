@@ -115,6 +115,9 @@ converting a legacy file). A crash or shutdown mid-way leaves a smaller table; t
 again and continues. A table that is empty on the next boot (ent recreates it) is dropped quietly,
 without a log line or metric.
 
+The ledger is read once at the start of a run, so do not run a second process or reset the ledger
+while a drop is in progress.
+
 To copy rows a `refused_uncopied` run found (catch-up), reset the ledger and restart; the copy
 resumes from the start, skips ids already present (`ON CONFLICT DO NOTHING`) and marks `done` again
 when the source count equals the rows scanned:
