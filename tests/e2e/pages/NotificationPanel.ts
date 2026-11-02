@@ -236,10 +236,16 @@ export class NotificationTray {
     await this.tray.getByTestId(`tray-menu-${item}`).click();
   }
 
-  /** Dismisses the one-time "What changed" card so it does not sit above the list in layout checks. */
+  /**
+   * Dismisses the one-time "What changed" card so it does not sit above the list in layout checks.
+   * A 390x844 peek sheet is all header (its scroll region is 0px tall), so the card is clipped and the
+   * bottom nav sits where Playwright aims the click; expand first.
+   */
   async dismissWhatChanged(): Promise<void> {
     const dismiss = this.tray.getByTestId('tray-what-changed-dismiss');
-    if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
+    if (!(await dismiss.isVisible().catch(() => false))) return;
+    await this.expandIfPeek();
+    await dismiss.click();
   }
 }
 
