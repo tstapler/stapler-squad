@@ -718,9 +718,15 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 
 // daemonConfirmsPaneGone double-checks a CapturePane NotFound with a
 // ListSessions round trip: true only when the daemon answered and no longer
-// lists paneID's session with that pane live. A failed list is not definitive.
+// lists paneID's session with that pane live, and the pane is not between
+// automatic restarts. A failed or interrupted list is not definitive. The call
+// is bounded by lifecycleRPCTimeout and cancelled by a deliberate Close().
 func (s *tymuxGRPCSession) daemonConfirmsPaneGone(sessionID, paneID string) bool {
-	resp, err := s.transport.ListSessions(context.Background(), connect.NewRequest(&v1.ListSessionsRequest{}))
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	ctx, timeoutCancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer timeoutCancel()
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return false
 	}
@@ -728,7 +734,8 @@ func (s *tymuxGRPCSession) daemonConfirmsPaneGone(sessionID, paneID string) bool
 		if sess.GetId() == sessionID {
 			p := firstPane(sess)
 			if p == nil || sess.GetLiveness() != v1.Liveness_LIVENESS_LIVE {
-				return true // session listed but dead: needs recovery
+				// Listed but dead: gone unless tymuxd is about to restart it.
+				return !s.restartPending(ctx, paneID)
 			}
 			if p.GetId() != paneID {
 				// Respawned pane inside a live session: follow it instead of replacing the session.

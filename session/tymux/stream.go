@@ -465,16 +465,23 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 
 	s.mu.Lock()
 	maxAttempts := s.reconnectMaxAttempts
+	if s.paneID != "" {
+		// The argument is the pane the reader started on; a follow since then
+		// repointed s.paneID, and redialling the old one would waste an attempt.
+		paneID = s.paneID
+	}
 	s.reconnecting = true
 	s.reconnectAttempt = 0
 	s.reconnectCause = cause
 	s.reconnectSince = time.Now()
 	s.mu.Unlock()
 
+	lastDialNotFound := false
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if s.closing.Load() {
 			break
 		}
+		lastDialNotFound = false
 		s.mu.Lock()
 		s.reconnectAttempt = attempt
 		s.mu.Unlock()
@@ -510,8 +517,12 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		}
 		if err != nil && connect.CodeOf(err) == connect.CodeNotFound {
 			if s.daemonConfirmsPaneGone(sessionID, paneID) {
+				if s.closing.Load() {
+					break // Close() landed during the confirmation round trip
+				}
 				return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
 			}
+			lastDialNotFound = true
 			// Unconfirmed, or the session respawned its pane: daemonConfirmsPaneGone
 			// repointed s.paneID, so redial that one.
 			s.mu.RLock()
@@ -558,7 +569,11 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
-	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	if lastDialNotFound {
+		s.deliverExit(fmt.Sprintf("reconnect failed: pane not found and not confirmed gone after %d attempts", maxAttempts))
+	} else {
+		s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	}
 	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }
 
