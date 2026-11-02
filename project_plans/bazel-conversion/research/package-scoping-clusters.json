@@ -1,0 +1,2154 @@
+{
+ "generated": "2026-11-02 from HEAD 14b02fd65 (main 33f46bb21)",
+ "method": "research/package-scoping.md",
+ "mechanical_satellites": {
+  "session": [
+   {
+    "pkg": "session/backlogplugin",
+    "files": 11,
+    "loc": 2749,
+    "tests": 8,
+    "test_loc": 3028,
+    "exported_decls": 32,
+    "ext_importer_pkgs": [
+     ".",
+     "server",
+     "server/auth",
+     "server/mcp",
+     "server/services"
+    ],
+    "ext_importer_files": 29,
+    "to_export": 3,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "backlog_crypto.go",
+     "backlog_plugin.go",
+     "backlog_plugin_github.go",
+     "backlog_plugin_github_prs.go",
+     "backlog_plugin_jira.go",
+     "backlog_plugin_jira_forward_sync.go",
+     "backlog_plugin_linear.go",
+     "backlog_plugin_linear_forward_sync.go",
+     "backlog_sync.go",
+     "feature_controller.go",
+     "host_advertiser.go"
+    ]
+   },
+   {
+    "pkg": "session/importer",
+    "files": 11,
+    "loc": 1493,
+    "tests": 9,
+    "test_loc": 1274,
+    "exported_decls": 56,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services"
+    ],
+    "ext_importer_files": 14,
+    "to_export": 2,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "create_managed_instance.go",
+     "import_cancel.go",
+     "import_candidate.go",
+     "import_collision.go",
+     "import_commit.go",
+     "import_correlate.go",
+     "import_kill.go",
+     "import_reconcile.go",
+     "process_suspend.go",
+     "registry.go",
+     "suspended_process_store.go"
+    ]
+   },
+   {
+    "pkg": "session/handoff",
+    "files": 7,
+    "loc": 1476,
+    "tests": 6,
+    "test_loc": 1857,
+    "exported_decls": 30,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services"
+    ],
+    "ext_importer_files": 10,
+    "to_export": 0,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "handoff_summary_excerpt.go",
+     "handoff_summary_service.go",
+     "session_summary_listener.go",
+     "session_summary_markdown.go",
+     "session_summary_service.go",
+     "session_summary_snapshot.go",
+     "session_summary_types.go"
+    ]
+   },
+   {
+    "pkg": "session/paneprompt",
+    "files": 7,
+    "loc": 1433,
+    "tests": 6,
+    "test_loc": 1194,
+    "exported_decls": 45,
+    "ext_importer_pkgs": [
+     "server/services",
+     "server/wakes"
+    ],
+    "ext_importer_files": 18,
+    "to_export": 3,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "dialog_presence.go",
+     "pane_reply.go",
+     "pane_reply_sequence.go",
+     "question_profile_claude.go",
+     "question_profile_row.go",
+     "question_tabbed.go",
+     "question_tabbed_plan.go"
+    ]
+   },
+   {
+    "pkg": "session/pipelinemode",
+    "files": 4,
+    "loc": 1008,
+    "tests": 5,
+    "test_loc": 852,
+    "exported_decls": 10,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services",
+     "server/workflows"
+    ],
+    "ext_importer_files": 14,
+    "to_export": 1,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "ent_pipeline_mode_repository.go",
+     "executor_program.go",
+     "pipeline_mode_seed.go",
+     "pipeline_mode_validation.go"
+    ]
+   },
+   {
+    "pkg": "session/sweeper",
+    "files": 3,
+    "loc": 651,
+    "tests": 2,
+    "test_loc": 588,
+    "exported_decls": 7,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services"
+    ],
+    "ext_importer_files": 5,
+    "to_export": 1,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "hibernation_sweeper.go",
+     "orphan_sweep.go",
+     "orphan_tmux_sweeper.go"
+    ]
+   },
+   {
+    "pkg": "session/prpoller",
+    "files": 3,
+    "loc": 1187,
+    "tests": 8,
+    "test_loc": 1525,
+    "exported_decls": 14,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services"
+    ],
+    "ext_importer_files": 6,
+    "to_export": 1,
+    "core_uses_cluster": 0,
+    "tests_straddling": 3,
+    "file_list": [
+     "poller_invalidation_adapter.go",
+     "pr_status_poller.go",
+     "worktree_pr_poller.go"
+    ]
+   },
+   {
+    "pkg": "session/external",
+    "files": 3,
+    "loc": 1215,
+    "tests": 1,
+    "test_loc": 108,
+    "exported_decls": 16,
+    "ext_importer_pkgs": [
+     "server",
+     "server/services"
+    ],
+    "ext_importer_files": 14,
+    "to_export": 2,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "external_approval.go",
+     "external_discovery.go",
+     "external_tmux_streamer.go"
+    ]
+   }
+  ],
+  "server/services": [
+   {
+    "pkg": "server/services/hookctx",
+    "files": 3,
+    "loc": 400,
+    "tests": 3,
+    "test_loc": 269,
+    "exported_decls": 10,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 1,
+    "to_export": 0,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "hook_classifier.go",
+     "hook_context_cache.go",
+     "hook_deduper.go"
+    ]
+   },
+   {
+    "pkg": "server/services/insights",
+    "files": 10,
+    "loc": 3557,
+    "tests": 11,
+    "test_loc": 4169,
+    "exported_decls": 24,
+    "ext_importer_pkgs": [
+     ".",
+     "server"
+    ],
+    "ext_importer_files": 4,
+    "to_export": 1,
+    "core_uses_cluster": 0,
+    "tests_straddling": 1,
+    "file_list": [
+     "insights_backfill.go",
+     "insights_service.go",
+     "insights_session_meta_cache.go",
+     "insights_summary_aggregate.go",
+     "insights_summary_cache.go",
+     "unfinished_work_service.go",
+     "webhook_auth_limiter.go",
+     "webhook_lifecycle_service.go",
+     "webhook_registration_handler.go",
+     "webhook_registration_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/wsbridge",
+    "files": 12,
+    "loc": 3315,
+    "tests": 10,
+    "test_loc": 2292,
+    "exported_decls": 34,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 7,
+    "to_export": 6,
+    "core_uses_cluster": 0,
+    "tests_straddling": 4,
+    "file_list": [
+     "ws_bridge_common.go",
+     "ws_stream_bridge.go",
+     "ws_terminal_mux_bridge.go",
+     "ws_terminal_mux_frame.go",
+     "ws_terminal_mux_metrics.go",
+     "ws_terminal_mux_stream.go",
+     "ws_unary_allowlist.go",
+     "ws_unary_batch.go",
+     "ws_unary_bridge.go",
+     "ws_unary_frame.go",
+     "ws_unary_metrics.go",
+     "ws_unary_writer.go"
+    ]
+   },
+   {
+    "pkg": "server/services/gatestats",
+    "files": 5,
+    "loc": 457,
+    "tests": 1,
+    "test_loc": 384,
+    "exported_decls": 13,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 1,
+    "to_export": 2,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "gatestats_liveness.go",
+     "gatestats_liveness_linux.go",
+     "gatestats_liveness_unix.go",
+     "gatestats_store.go",
+     "gatestats_writer.go"
+    ]
+   },
+   {
+    "pkg": "server/services/webhooks",
+    "files": 6,
+    "loc": 1456,
+    "tests": 5,
+    "test_loc": 1537,
+    "exported_decls": 9,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 2,
+    "to_export": 1,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "generic_webhook_handler.go",
+     "github_webhook_handler.go",
+     "github_webhook_pr_fix.go",
+     "github_webhook_provenance.go",
+     "webhook_signature.go",
+     "webhook_trigger_common.go"
+    ]
+   },
+   {
+    "pkg": "server/services/sessionbundle",
+    "files": 3,
+    "loc": 836,
+    "tests": 1,
+    "test_loc": 420,
+    "exported_decls": 7,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 2,
+    "to_export": 0,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "disk_space_unix.go",
+     "session_bundle_profiles.go",
+     "session_bundle_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/devtools",
+    "files": 3,
+    "loc": 486,
+    "tests": 3,
+    "test_loc": 306,
+    "exported_decls": 7,
+    "ext_importer_pkgs": [
+     "server"
+    ],
+    "ext_importer_files": 1,
+    "to_export": 0,
+    "core_uses_cluster": 0,
+    "tests_straddling": 0,
+    "file_list": [
+     "cdp_stream_handler.go",
+     "inspect_element_handler.go",
+     "vnc_proxy_handler.go"
+    ]
+   }
+  ]
+ },
+ "test_back_edge_files": {
+  "server/deliverygate": [
+   "crash_matrix_test.go",
+   "matrix_helpers_test.go",
+   "matrix_test.go"
+  ],
+  "server/services": [
+   "guidance_request_ownership_parity_test.go",
+   "watch_sessions_native_streaming_integration_test.go"
+  ],
+  "session": [
+   "claim_gossip_convergence_test.go",
+   "claim_two_host_integration_test.go",
+   "ent_repository_backlog_events_test.go",
+   "host_advertisement_convergence_test.go",
+   "storage_backlog_events_test.go"
+  ],
+  "session/git/backend": [
+   "routed_cli_test.go",
+   "shadow_gogit_broken_worktree_test.go",
+   "spawn_test.go"
+  ],
+  "session/gitprovider": [
+   "gitprovider_test.go"
+  ],
+  "session/scanstate": [
+   "store_test.go"
+  ]
+ },
+ "near_mechanical_peel_budget10": {
+  "session": [
+   {
+    "pkg": "session/p0",
+    "files": 32,
+    "loc": 14681,
+    "file_list": [
+     "backlog_attached_images.go",
+     "backlog_commands.go",
+     "backlog_context.go",
+     "backlog_lifecycle.go",
+     "backlog_lifecycle_archive.go",
+     "backlog_lifecycle_gates.go",
+     "backlog_lifecycle_noop.go",
+     "backlog_lifecycle_pr.go",
+     "backlog_lifecycle_review.go",
+     "backlog_lifecycle_stale.go",
+     "backlog_lifecycle_triage.go",
+     "backlog_review.go",
+     "backlog_triage.go",
+     "chain_firer.go",
+     "ci_flaky_rerun.go",
+     "ent_liveness_repository.go",
+     "gate_custom_check.go",
+     "graph_validator.go",
+     "liveness_cache.go",
+     "liveness_definition.go",
+     "liveness_engine.go",
+     "liveness_repository.go",
+     "pipeline_engine.go",
+     "review_gate.go",
+     "stage_config_repository.go",
+     "stuck_decisions.go",
+     "terminal_status.go",
+     "wake_prompt.go",
+     "workflow_engine.go",
+     "workflow_engine_shadow.go",
+     "workflow_stage_seed.go",
+     "workflow_system_edges.go"
+    ]
+   },
+   {
+    "pkg": "session/p1",
+    "files": 21,
+    "loc": 6903,
+    "file_list": [
+     "agy_adapter.go",
+     "claude_adapter.go",
+     "claude_command_builder.go",
+     "controller_manager.go",
+     "gemini_adapter.go",
+     "history_adapter.go",
+     "history_detector.go",
+     "history_linker.go",
+     "history_transfer.go",
+     "instance_status.go",
+     "opencode_adapter.go",
+     "pane_activity_gate.go",
+     "pi_adapter.go",
+     "pi_status_source.go",
+     "pty_discovery.go",
+     "review_queue_determiner.go",
+     "review_queue_options.go",
+     "review_queue_poller.go",
+     "review_queue_reason_table.go",
+     "review_queue_suppression.go",
+     "tmux_socket_querier.go"
+    ]
+   },
+   {
+    "pkg": "session/p2",
+    "files": 8,
+    "loc": 594,
+    "file_list": [
+     "backlog_item_legacy_import_external_backfill.go",
+     "backlog_item_repo_path_canonicalization_migration.go",
+     "backlog_item_updated_at_utc_migration.go",
+     "ent_repository_migrations.go",
+     "ent_repository_obsolete_indexes.go",
+     "github_pr_url_backfill.go",
+     "status_corruption_repair.go",
+     "workflow_updated_at_utc_migration.go"
+    ]
+   },
+   {
+    "pkg": "session/p3",
+    "files": 7,
+    "loc": 1442,
+    "file_list": [
+     "autonomous_driver.go",
+     "autonomous_stop_snapshot.go",
+     "claude_scroll_adapter.go",
+     "gesture_forward_strategy.go",
+     "scroll_adapter.go",
+     "scroll_forward_metrics.go",
+     "scroll_gate.go"
+    ]
+   },
+   {
+    "pkg": "session/p4",
+    "files": 5,
+    "loc": 1249,
+    "file_list": [
+     "backend_observability.go",
+     "backend_tymux.go",
+     "native_process_manager.go",
+     "native_process_manager_windows.go",
+     "tmux_backend.go"
+    ]
+   },
+   {
+    "pkg": "session/p5",
+    "files": 2,
+    "loc": 128,
+    "file_list": [
+     "backend_info_metric.go",
+     "backend_resolution.go"
+    ]
+   },
+   {
+    "pkg": "session/p6",
+    "files": 1,
+    "loc": 154,
+    "file_list": [
+     "nudge_gate.go"
+    ]
+   },
+   {
+    "pkg": "session/p7",
+    "files": 1,
+    "loc": 68,
+    "file_list": [
+     "ent_repository_seed.go"
+    ]
+   },
+   {
+    "pkg": "session/p8",
+    "files": 1,
+    "loc": 62,
+    "file_list": [
+     "workflow_engine_bypass.go"
+    ]
+   },
+   {
+    "pkg": "session/p9",
+    "files": 1,
+    "loc": 46,
+    "file_list": [
+     "status_mapping.go"
+    ]
+   },
+   {
+    "pkg": "session/p10",
+    "files": 1,
+    "loc": 44,
+    "file_list": [
+     "pi_exported.go"
+    ]
+   },
+   {
+    "pkg": "session/p11",
+    "files": 1,
+    "loc": 39,
+    "file_list": [
+     "worktree_type_mismatch_metrics.go"
+    ]
+   },
+   {
+    "pkg": "session/p12",
+    "files": 1,
+    "loc": 38,
+    "file_list": [
+     "ratelimit_lease_accessor.go"
+    ]
+   },
+   {
+    "pkg": "session/p13",
+    "files": 1,
+    "loc": 147,
+    "file_list": [
+     "stale_resume_detector.go"
+    ]
+   },
+   {
+    "pkg": "session/p14",
+    "files": 1,
+    "loc": 115,
+    "file_list": [
+     "workflow_enabled_field_migration.go"
+    ]
+   },
+   {
+    "pkg": "session/p15",
+    "files": 1,
+    "loc": 88,
+    "file_list": [
+     "instance_write_lease_metrics.go"
+    ]
+   },
+   {
+    "pkg": "session/p16",
+    "files": 1,
+    "loc": 117,
+    "file_list": [
+     "gate_structural.go"
+    ]
+   },
+   {
+    "pkg": "session/p17",
+    "files": 1,
+    "loc": 103,
+    "file_list": [
+     "state_machine.go"
+    ]
+   },
+   {
+    "pkg": "session/p18",
+    "files": 1,
+    "loc": 84,
+    "file_list": [
+     "tag_manager.go"
+    ]
+   }
+  ],
+  "session#groups": [
+   {
+    "first_file": "history_linker.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "jsonlStartTime"
+    ],
+    "uses_core_symbols": 28,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "ent_liveness_repository.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "livenessDefinitionFromRecord"
+    ],
+    "uses_core_symbols": 37,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "nudge_gate.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "VerifyPaneOwnershipBeforeWrite"
+    ],
+    "uses_core_symbols": 6,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "status_corruption_repair.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runStatusCorruptionRepair"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "claude_command_builder.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "isValidUUID"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backlog_item_repo_path_canonicalization_migration.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runBacklogItemRepoPathCanonicalizationBackfill"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "backend_info_metric.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "RecordBackendInfo"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "github_pr_url_backfill.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runGitHubPRURLBackfill"
+    ],
+    "uses_core_symbols": 9,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "backlog_item_legacy_import_external_backfill.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runBacklogItemLegacyImportExternalBackfill"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "backlog_item_updated_at_utc_migration.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runBacklogItemUpdatedAtUTCBackfill"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "ent_repository_seed.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "newSeededEntRepository"
+    ],
+    "uses_core_symbols": 6,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "gesture_forward_strategy.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "NewClaudeGestureForwardStrategy"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "workflow_engine_bypass.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "RecordEngineBypass"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "workflow_updated_at_utc_migration.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "runWorkflowUpdatedAtUTCBackfill"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "status_mapping.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "StatusFromDetected"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backend_resolution.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "ResolveSessionBackendForTitle"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "pi_exported.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "getPiExtensionHealthForgetter"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "worktree_type_mismatch_metrics.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "recordSessionCreationWorktreeTypeMismatch"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "ratelimit_lease_accessor.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "leasedSessionAccessor"
+    ],
+    "uses_core_symbols": 6,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "ent_repository_obsolete_indexes.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "dropObsoleteIndexes"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "native_process_manager.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "NativeProcessManager",
+     "NewNativeProcessManager"
+    ],
+    "uses_core_symbols": 6,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "opencode_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "CanHandle",
+     "NewOpencodeAdapter"
+    ],
+    "uses_core_symbols": 9,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "workflow_stage_seed.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "SeedFingerprint",
+     "builtInStageOrder"
+    ],
+    "uses_core_symbols": 21,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "agy_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "CanHandle",
+     "NewAgyAdapter"
+    ],
+    "uses_core_symbols": 8,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "graph_validator.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "StageDefinition",
+     "TransitionDefinition"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "claude_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "CanHandle",
+     "NewClaudeAdapter"
+    ],
+    "uses_core_symbols": 5,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "backlog_triage.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "BuildHeadlessTriagePrompt",
+     "extractTopLevelJSONObjects"
+    ],
+    "uses_core_symbols": 8,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "tmux_backend.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "NewTmuxBackend",
+     "TmuxBackend"
+    ],
+    "uses_core_symbols": 21,
+    "unexported_used": 9
+   },
+   {
+    "first_file": "gemini_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "CanHandle",
+     "NewGeminiAdapter"
+    ],
+    "uses_core_symbols": 8,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "history_transfer.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "ErrNoHistoryAdapter",
+     "PortSessionHistory"
+    ],
+    "uses_core_symbols": 16,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "stale_resume_detector.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "IsStaleResumeExit",
+     "resolveStaleResumeDetector"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "workflow_enabled_field_migration.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "runWorkflowEnabledFieldBackfill",
+     "workflowEnabledColumnPreexisted"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "backlog_attached_images.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "AttachedImagesSection",
+     "WriteDescriptionSection"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "instance_write_lease_metrics.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "normalizeLeaseWriter",
+     "recordLeaseBusy"
+    ],
+    "uses_core_symbols": 13,
+    "unexported_used": 5
+   },
+   {
+    "first_file": "terminal_status.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "IsTerminalStatus",
+     "TerminalStatusStrings"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "wake_prompt.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "taskProtocol",
+     "withWakeGuidance"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "pty_discovery.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "batchPaneActivity",
+     "listAllPanes",
+     "stopJoinTimeout"
+    ],
+    "uses_core_symbols": 14,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backlog_commands.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "CleanupBacklogContextFile",
+     "CleanupSlashCommands",
+     "buildDefaultSlashCommandSet"
+    ],
+    "uses_core_symbols": 9,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backend_tymux.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "NewTymuxBackend",
+     "TymuxBackend",
+     "TymuxManager"
+    ],
+    "uses_core_symbols": 12,
+    "unexported_used": 9
+   },
+   {
+    "first_file": "backend_observability.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "processManagerBackendLabel"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "gate_custom_check.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "CustomCheckCaller",
+     "InvokeCustomGateCheck",
+     "customCheckInvocationAge"
+    ],
+    "uses_core_symbols": 15,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "stage_config_repository.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "ListEnabledStages",
+     "ListEnabledTransitions",
+     "StageConfigRepository"
+    ],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "ent_repository_migrations.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "Name",
+     "Run",
+     "startupMigrations"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "claude_scroll_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "CanHandle",
+     "Capability",
+     "NewClaudeScrollAdapter"
+    ],
+    "uses_core_symbols": 7,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "review_queue_poller.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "ApprovalMetadataProvider",
+     "GetApprovalMetadataBySession",
+     "ReviewQueuePollerConfig",
+     "StalenessThreshold"
+    ],
+    "uses_core_symbols": 93,
+    "unexported_used": 22
+   },
+   {
+    "first_file": "tmux_socket_querier.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 2,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "review_queue_suppression.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "RuleOptions"
+    ],
+    "uses_core_symbols": 13,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "review_queue_determiner.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "effectiveCtx"
+    ],
+    "uses_core_symbols": 22,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "review_queue_reason_table.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "review_queue_options.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "autonomous_driver.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "HasUpdated",
+     "isIdleStatus",
+     "paneSettleChecker",
+     "waitForPaneSettle"
+    ],
+    "uses_core_symbols": 21,
+    "unexported_used": 5
+   },
+   {
+    "first_file": "autonomous_stop_snapshot.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 9,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "workflow_engine_shadow.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "CallerClass",
+     "ClassAgent",
+     "ClassOperator",
+     "ClassSystem"
+    ],
+    "uses_core_symbols": 38,
+    "unexported_used": 5
+   },
+   {
+    "first_file": "pane_activity_gate.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "driverPaneActivityGateEnabled",
+     "driverPaneSnapshot",
+     "driverPreview",
+     "newPaneActivityGate"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "gate_structural.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "ActionHint",
+     "Description",
+     "Satisfied",
+     "evaluateStructuralCheck"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "history_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "Export",
+     "Import",
+     "Name",
+     "resolveHistoryAdapter"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "pipeline_engine.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "InteractiveReviewPromptFor",
+     "PipelineEngine",
+     "PipelineMode",
+     "PipelineModeDefault",
+     "ResolvedModeLabel"
+    ],
+    "uses_core_symbols": 15,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backlog_context.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "BuildSessionInitialPrompt",
+     "parsePerCriterionVerdicts",
+     "sanitizeField",
+     "truncateField"
+    ],
+    "uses_core_symbols": 27,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "liveness_cache.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "Get",
+     "Invalidate",
+     "LivenessDefinition",
+     "Load",
+     "livenessCache"
+    ],
+    "uses_core_symbols": 7,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "liveness_repository.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "LivenessRepository"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "scroll_forward_metrics.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "recordScrollForwardAttempt",
+     "recordScrollForwardCaptureDuration",
+     "scrollForwardAdapterLabel",
+     "scrollForwardBlockedReasonLabel",
+     "scrollForwardOutcomeLabel"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "state_machine.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "After",
+     "Guard",
+     "canTransitionLocked",
+     "lookupTransition",
+     "transitionKey"
+    ],
+    "uses_core_symbols": 13,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "workflow_system_edges.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "From",
+     "IsSystemRequired",
+     "SystemEdge",
+     "To",
+     "systemRequiredTargets"
+    ],
+    "uses_core_symbols": 10,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "chain_firer.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "ChainFirer",
+     "Dispatch",
+     "NewChainFirer",
+     "ReconcileChains",
+     "TriggerChainReconciler",
+     "TriggerFirer"
+    ],
+    "uses_core_symbols": 18,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "scroll_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "CaptureVia",
+     "KeySequences",
+     "NativeScrollbackDelegateCapture",
+     "ScrollAdapter",
+     "ScrollUp",
+     "resolveScrollAdapter"
+    ],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "history_detector.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "ConversationUUID",
+     "Detect",
+     "DetectAllByPath",
+     "HistoryFileDetector",
+     "HistoryFileInfo",
+     "HistoryFilePath"
+    ],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "pi_status_source.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "CurrentStatus",
+     "NewPiStatusSource",
+     "PiStatusSource",
+     "SetOnSessionIDCallback",
+     "Start",
+     "StatusContext"
+    ],
+    "uses_core_symbols": 18,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "pi_adapter.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 12,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "workflow_engine.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "AllowedTransitions",
+     "CanTransition",
+     "DefaultWorkflowEngine",
+     "NewDefaultWorkflowEngine",
+     "PendingGates",
+     "ValidateGates"
+    ],
+    "uses_core_symbols": 13,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "controller_manager.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "ControllerManager",
+     "GetController",
+     "GetStatusManager",
+     "HasController",
+     "RegisterController",
+     "SetController"
+    ],
+    "uses_core_symbols": 5,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "instance_status.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "ClaudeStatus",
+     "GetStatus",
+     "InstanceStatusInfo",
+     "InstanceStatusManager",
+     "IsControllerActive",
+     "RegisterPiStatusSource"
+    ],
+    "uses_core_symbols": 18,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "tag_manager.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "Add",
+     "All",
+     "Has",
+     "NewTagManager",
+     "Remove",
+     "Set"
+    ],
+    "uses_core_symbols": 9,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backlog_lifecycle.go",
+    "files": 9,
+    "inbound_symbols_to_relocate": 9,
+    "inbound_sample": [
+     "AutoReopenAfterFailedReview",
+     "AutoReopenSpawner",
+     "Notifier",
+     "Notify",
+     "ReviewGateSpawner",
+     "SpawnReviewSession"
+    ],
+    "uses_core_symbols": 214,
+    "unexported_used": 24
+   },
+   {
+    "first_file": "review_gate.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 38,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "backlog_review.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 43,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "liveness_definition.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 0,
+    "inbound_sample": [],
+    "uses_core_symbols": 6,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "stuck_decisions.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "bounceMainBranch"
+    ],
+    "uses_core_symbols": 14,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "scroll_gate.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 9,
+    "inbound_sample": [
+     "AppScrollGate",
+     "ScrollGateFailure",
+     "ScrollGateNoActiveController",
+     "ScrollGateNoCapability",
+     "ScrollGateNotAltScreen",
+     "ScrollGateOK"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 0
+   }
+  ],
+  "server/services": [
+   {
+    "pkg": "server/services/p0",
+    "files": 28,
+    "loc": 15651,
+    "file_list": [
+     "backlog_service.go",
+     "backlog_service_chat.go",
+     "backlog_service_claim.go",
+     "backlog_service_engine_status.go",
+     "backlog_service_events.go",
+     "backlog_service_gates.go",
+     "backlog_service_intent.go",
+     "backlog_service_jules.go",
+     "backlog_service_lifecycle.go",
+     "backlog_service_liveness.go",
+     "backlog_service_pipeline_mode.go",
+     "backlog_service_pr_fix_steer.go",
+     "backlog_service_query.go",
+     "backlog_service_ship.go",
+     "backlog_service_ship_status.go",
+     "backlog_service_stages.go",
+     "backlog_service_stuck.go",
+     "backlog_service_sync.go",
+     "backlog_service_transitions.go",
+     "backlog_service_triage.go",
+     "backlog_service_triage_skip.go",
+     "backlog_service_trigger_triage.go",
+     "backlog_service_verdict_steer.go",
+     "backlog_sources_preview.go",
+     "backlog_transition_notify.go",
+     "github_user_actions.go",
+     "github_user_nudge.go",
+     "github_user_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p1",
+    "files": 7,
+    "loc": 1286,
+    "file_list": [
+     "backlog_notifier.go",
+     "guidance_answerer.go",
+     "guidance_peer_help.go",
+     "guidance_request_service.go",
+     "notification_action_lookups.go",
+     "wake_trigger_peer_help.go",
+     "wake_trigger_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p2",
+    "files": 6,
+    "loc": 5385,
+    "file_list": [
+     "connectrpc_websocket.go",
+     "connectrpc_websocket_shell.go",
+     "guidance_ack_detector.go",
+     "notification_quality_metrics.go",
+     "stream_hub_rollout_service.go",
+     "websocket_transport.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p3",
+    "files": 5,
+    "loc": 790,
+    "file_list": [
+     "file_atomic.go",
+     "file_backend.go",
+     "file_backend_osroot.go",
+     "file_write.go",
+     "file_writer.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p4",
+    "files": 2,
+    "loc": 910,
+    "file_list": [
+     "log_header_scan.go",
+     "utility_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p5",
+    "files": 2,
+    "loc": 616,
+    "file_list": [
+     "slack_config_service.go",
+     "slack_notifier.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p6",
+    "files": 2,
+    "loc": 260,
+    "file_list": [
+     "askuserquestion_parser.go",
+     "hook_reply.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p7",
+    "files": 2,
+    "loc": 945,
+    "file_list": [
+     "search_related_work.go",
+     "search_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p8",
+    "files": 1,
+    "loc": 199,
+    "file_list": [
+     "backlog_github_progress_sync.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p9",
+    "files": 1,
+    "loc": 482,
+    "file_list": [
+     "quota_gate.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p10",
+    "files": 1,
+    "loc": 214,
+    "file_list": [
+     "guidance_dialog_gone_sampler.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p11",
+    "files": 1,
+    "loc": 160,
+    "file_list": [
+     "update_check_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p12",
+    "files": 1,
+    "loc": 27,
+    "file_list": [
+     "feature_flag_spans.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p13",
+    "files": 1,
+    "loc": 47,
+    "file_list": [
+     "feature_flags_attention.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p14",
+    "files": 1,
+    "loc": 178,
+    "file_list": [
+     "terminal_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p15",
+    "files": 1,
+    "loc": 109,
+    "file_list": [
+     "gatestats_response.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p16",
+    "files": 1,
+    "loc": 219,
+    "file_list": [
+     "checkpoint_service.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p17",
+    "files": 1,
+    "loc": 152,
+    "file_list": [
+     "reply_idempotency.go"
+    ]
+   },
+   {
+    "pkg": "server/services/p18",
+    "files": 1,
+    "loc": 104,
+    "file_list": [
+     "notification_action_cache.go"
+    ]
+   }
+  ],
+  "server/services#groups": [
+   {
+    "first_file": "wake_trigger_peer_help.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "MetaPeerTitle"
+    ],
+    "uses_core_symbols": 8,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "log_header_scan.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "parseJSONLogHeader"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "backlog_github_progress_sync.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "githubIssueProgressCommentsFlagName"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "file_backend_osroot.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 1,
+    "inbound_sample": [
+     "osRootBackend"
+    ],
+    "uses_core_symbols": 8,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "quota_gate.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "QuotaGate",
+     "recordRateLimitEvent"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "guidance_dialog_gone_sampler.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "cancelReason",
+     "judgeRow"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "update_check_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "ChangelogFlagName",
+     "UpdateCheckFlagName"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "websocket_transport.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "BindSubscriber",
+     "NewWebSocketTransport"
+    ],
+    "uses_core_symbols": 5,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "notification_action_lookups.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "NewApprovalLookup",
+     "NewBacklogDecisionLookup",
+     "NewGuidanceLookup"
+    ],
+    "uses_core_symbols": 14,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "github_user_actions.go",
+    "files": 3,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "reasonNameChangesRequested",
+     "reasonNameFailingChecks",
+     "reasonNameMergeConflict",
+     "reasonNameUnresolvedThreads"
+    ],
+    "uses_core_symbols": 12,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "backlog_notifier.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "Bus",
+     "EventBusNotifier",
+     "Notify",
+     "NotifySession"
+    ],
+    "uses_core_symbols": 7,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "feature_flag_spans.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 4,
+    "inbound_sample": [
+     "flagPhaseApply",
+     "flagPhaseAudit",
+     "flagPhasePersist",
+     "flagSpan"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "connectrpc_websocket.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 5,
+    "inbound_sample": [
+     "capturePaneStreamParams",
+     "resizeExternalCapturePaneSession",
+     "sendInputToTmuxWithRetry",
+     "streamHubSessionKey",
+     "tmuxSessionNameForStreamPath"
+    ],
+    "uses_core_symbols": 24,
+    "unexported_used": 9
+   },
+   {
+    "first_file": "backlog_service.go",
+    "files": 25,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "AutonomousDriverStarter",
+     "BacklogService",
+     "SessionSteerer",
+     "WithTransitionCaller",
+     "crossHostClaimDedupFlagName",
+     "redactErrorDetail"
+    ],
+    "uses_core_symbols": 27,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "utility_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "CreateDebugSnapshot",
+     "FocusWindow",
+     "GetLogs",
+     "NewUtilityService",
+     "SetReviewQueuePoller",
+     "UtilityService"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "slack_config_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "GetSlackConfig",
+     "NewSlackConfigService",
+     "SlackConfigService",
+     "TestSlackWebhook",
+     "UpdateSlackConfig",
+     "slackNotifier"
+    ],
+    "uses_core_symbols": 6,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "slack_notifier.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 3,
+    "inbound_sample": [
+     "NewSlackNotifier",
+     "NotifyApprovalPending",
+     "SlackNotifier"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 2
+   },
+   {
+    "first_file": "stream_hub_rollout_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "CompleteStreamHubRollbackRehearsal",
+     "GetStreamHubRolloutStatus",
+     "NewStreamHubRolloutService",
+     "SetStreamHubGlobalOverride",
+     "SetStreamHubSessionOverride",
+     "StreamHubRolloutService"
+    ],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "hook_reply.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "HookReplier",
+     "Reply",
+     "acks",
+     "flags",
+     "hookReplyResolver",
+     "rows"
+    ],
+    "uses_core_symbols": 14,
+    "unexported_used": 3
+   },
+   {
+    "first_file": "feature_flags_attention.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 6,
+    "inbound_sample": [
+     "attentionAckBypassFixFlagName",
+     "attentionIdleClockOutputFlagName",
+     "attentionInboxConsolidationFlagName",
+     "attentionProseQuestionDetectionFlagName",
+     "attentionProseQuestionLLMTiebreakFlagName",
+     "sessionEventLogFlagName"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "file_write.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "FileWriter",
+     "NewFileWriter",
+     "StatusInvalidator",
+     "WriteFile",
+     "WriteGuard",
+     "archivedSessionRefusal"
+    ],
+    "uses_core_symbols": 41,
+    "unexported_used": 15
+   },
+   {
+    "first_file": "file_atomic.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 2,
+    "inbound_sample": [
+     "isAtomicTempName",
+     "withoutAtomicTemps"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "guidance_ack_detector.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "GuidanceAckDetector",
+     "NewGuidanceAckDetector",
+     "Receipt",
+     "Run",
+     "SetNotes",
+     "Unconfirmed"
+    ],
+    "uses_core_symbols": 11,
+    "unexported_used": 4
+   },
+   {
+    "first_file": "terminal_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "GetTerminalSnapshot",
+     "NewTerminalService",
+     "SetExternalDiscovery",
+     "SetGuardsFlag",
+     "SetPoller",
+     "TerminalService"
+    ],
+    "uses_core_symbols": 3,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "notification_quality_metrics.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "defaultReopenTracker",
+     "lookup",
+     "noteApplied",
+     "observeScheduleWakeup",
+     "reopenTracker",
+     "scheduleWakeupRoles"
+    ],
+    "uses_core_symbols": 4,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "gatestats_response.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "ExplicitOff",
+     "File",
+     "Series",
+     "Snapshot",
+     "buildGateStatsResponse",
+     "explicitOffScopes"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "file_backend.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 7,
+    "inbound_sample": [
+     "Close",
+     "FileBackend",
+     "FileHandle",
+     "FileRoot",
+     "Lstat",
+     "Open"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "search_related_work.go",
+    "files": 2,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "GetClaudeHistoryDetail",
+     "GetClaudeHistoryMessages",
+     "ListClaudeHistory",
+     "NewSearchService",
+     "SearchClaudeHistory",
+     "SearchService"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "guidance_answerer.go",
+    "files": 3,
+    "inbound_symbols_to_relocate": 8,
+    "inbound_sample": [
+     "AnswerGuidanceRequest",
+     "DeliveryProbes",
+     "GuidanceRequestService",
+     "SessionArchived",
+     "SessionEnded",
+     "SetDeliveryProbes"
+    ],
+    "uses_core_symbols": 0,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "checkpoint_service.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 9,
+    "inbound_sample": [
+     "CheckpointService",
+     "ClearConversationState",
+     "CreateCheckpoint",
+     "ListCheckpoints",
+     "NewCheckpointService",
+     "SetExternalDiscovery"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "reply_idempotency.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 9,
+    "inbound_sample": [
+     "begin",
+     "finish",
+     "hashReplyPayload",
+     "newReplyFlightTable",
+     "replyCached",
+     "replyFlightTable"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 1
+   },
+   {
+    "first_file": "notification_action_cache.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 9,
+    "inbound_sample": [
+     "actionCacheMax",
+     "actionIdempotency",
+     "begin",
+     "flightFollower",
+     "flightMismatch",
+     "forget"
+    ],
+    "uses_core_symbols": 1,
+    "unexported_used": 0
+   },
+   {
+    "first_file": "askuserquestion_parser.go",
+    "files": 1,
+    "inbound_symbols_to_relocate": 10,
+    "inbound_sample": [
+     "AskedQuestion",
+     "Header",
+     "Labels",
+     "ParseAskUserQuestion",
+     "Payload",
+     "Question"
+    ],
+    "uses_core_symbols": 2,
+    "unexported_used": 2
+   }
+  ]
+ }
+}

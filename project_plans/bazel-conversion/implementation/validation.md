@@ -7,7 +7,7 @@ This is a build-system migration, so the "tests" are verification gates: spike p
 ## Happy Path Scenario
 Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `third_party/tmux`, no `make proto-gen ent-gen`), when an agent runs `bazel build //...` and `bazel test //...` with a shared disk cache and then `bazel run //:sync-gen`, then the Bazel-built `//:stapler-squad` binary (embedding Bazel-built web dist, tmux and tymuxd) passes the same Playwright e2e pass count as the make-built binary and `bash tools/bzl/parity/run-all.sh` prints `PARITY: PASS`.
 
-## Requirement Index (39 requirements)
+## Requirement Index (40 requirements)
 
 | ID | Requirement (source: requirements.md section) |
 |---|---|
@@ -16,6 +16,7 @@ Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `thir
 | SM3 | Worktree cost: cold-build time and disk per new worktree measured before/after with shared disk (and remote) cache |
 | SM4 | Baselines measured in Phase 2 (targets set in Phase 3) |
 | SM5 | End state: Bazel is build of record; `bazel build //...`/`test //...` cover Go, proto, ent, tmux, web-app; Makefile thin wrappers; CI runs Bazel |
+| SM6 | Package scoping (owner request 2026-11-02, ADR-010): behaviour-preserving refactors make the largest packages smaller and more scoped; payoff measured by T9 and checked against the harness prediction |
 | C1 | Bzlmod only; no WORKSPACE |
 | C2 | Rule-repo forks allowed, pinned via `git_override`/`archive_override`, upstream preferred |
 | C3 | Gazelle wherever it applies; hand-write only what it cannot generate |
@@ -51,7 +52,7 @@ Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `thir
 | OQ1 | Open question: which lint gates become Bazel targets vs wrapped |
 | OQ2 | Open question: can aspect_rules_js consume `bun.lock` |
 
-(N4 has no testable behaviour; it is counted as covered-by-vacuity and excluded from the "N/N" ratio below, leaving 38 testable requirements plus N4.)
+(N4 has no testable behaviour; it is counted as covered-by-vacuity and excluded from the "N/N" ratio below, leaving 39 testable requirements plus N4.)
 
 ## Requirement -> Verification Mapping
 
@@ -222,7 +223,7 @@ Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `thir
 
 ## Requirement Coverage Review
 
-Every one of the 39 requirements has at least one verification above (38 testable plus N4, which has no testable behaviour). After Phase 4 all nine gaps are closed by plan tasks; the verification rows above now cite those tasks.
+Every one of the 40 requirements has at least one verification above (39 testable plus N4, which has no testable behaviour). After Phase 4 all nine gaps are closed by plan tasks; the verification rows above now cite those tasks.
 
 | Gap | Requirement | Closed at |
 |---|---|---|
@@ -333,6 +334,29 @@ Every one of the 39 requirements has at least one verification above (38 testabl
 | Other slow suites classified | 12.7a | slow_suites_should_be_classified | Static | `bash tools/bzl/e2e/check-slow-suites.sh` | exit 0 |
 | Shard planner balanced | 12.4b | shard_plan_should_be_within_125pct_of_mean | Static | `python3 -m unittest tools/ci/plan_e2e_shards_test.py` | exit 0 |
 
+## Package scoping additions (ADR-010, 2026-11-02)
+
+| Control | Plan task | Verification name | Type | Command | Expected |
+|---|---|---|---|---|---|
+| SM6: the model reproduces the real graph | 13.1a | rebuilt_package_graph_should_equal_go_list_graph | Static | `python3 tools/bzl/scoping/graph.py --identity-check \| jq -e '.diffs==0'` | exit 0 |
+| SM6: the model reproduces RA1 | 13.1b | replay_should_reproduce_ra1_merged_median | Perf | `python3 tools/bzl/scoping/replay.py --model merged --pr-sample tools/bzl/baseline/pr-sample.json --json \| jq -e '.go_touching_median>0.25 and .go_touching_median<0.28'` | exit 0 |
+| SM6: a test-only import does not enlarge dependents (target model) | 13.1a | test_edge_should_not_propagate_in_target_model | Static | `python3 -m unittest tools/bzl/scoping/graph_test.py` | exit 0 |
+| SM6: planner rejects cycles and over-budget relocations | 13.1c | planner_should_reject_cycle_and_over_budget_relocation | Static | `python3 -m unittest tools/bzl/scoping/plan_split_test.py` | exit 0 |
+| SM6: codemod is behaviour-preserving on a fixture | 13.1d | move_codemod_should_build_vet_and_test_after_move | Static | `bash tools/bzl/scoping/move_test.sh` | exit 0 |
+| SM6: conflicts with open work are found | 13.1e | conflict_check_should_report_open_branch_touching_cluster | Static | `bash tools/bzl/scoping/conflicts_test.sh` | exit 0 |
+| SM6: T9 collector | 13.1f, 13.7a | t9_should_hold_after_epic_13 | Perf | `bash tools/bzl/parity/scoping.sh \| grep -cE '^T9[a-e]: PASS$'` | `5` |
+| SM6: no test-only layering inversion | 13.2a-c | lower_layer_tests_should_not_import_higher_layers | Static | `bash tools/bzl/scoping/check-test-inversions.sh` | exit 0; exit 1 on the seeded fixture |
+| SM6: no test lost by the moves | 13.2a-b | test_function_count_should_be_unchanged | Static | `go test -list '.*' ./session/... ./server/... ./session/git/... \| grep -c '^Test'` (before and after) | equal |
+| SM6: Tier 0 payoff | 13.2b | test_loc_share_should_drop_after_test_moves | Perf | `python3 tools/bzl/scoping/replay.py --commits 500 --json \| jq -e '.t9a_test_loc_share_500<=0.46'` | exit 0 |
+| SM6: Tier A payoff | 13.3a-c | tier_a_should_shrink_the_two_largest_packages | Perf | `python3 tools/bzl/scoping/replay.py --commits 500 --json \| jq -e '.t9d_services_loc<=89000 and .t9d_session_loc<=91500 and .t9c_changes_with_lower_lib_loc>=0.11'` | exit 0 |
+| SM6: Tier B payoff | 13.4b-c, 13.5c-e | tier_b_should_hit_predicted_sizes | Perf | `python3 tools/bzl/scoping/replay.py --commits 500 --json \| jq -e '.t9d_services_loc<=73000 and .t9d_session_loc<=72000 and .t9c_mean_lib_loc_share<=0.395'` | exit 0 |
+| SM6: T1 stays narrow on the target model | every Story 13.x | target_model_share_should_stay_below_bound | Perf | `python3 tools/bzl/scoping/replay.py --commits 500 --json \| jq -e '.t9e_target_model_share<=0.30'` | exit 0 |
+| SM6: relocated declarations introduce no new abstraction | 13.4a, 13.5a | relocation_should_not_add_interfaces | Static | `python3 tools/bzl/scoping/plan-split.py --pkg session --map tools/bzl/scoping/clusters/session-backlog.json --json \| jq -e '.new_interfaces==0'` | exit 0 |
+| SM6: moved code respects Instance snapshot reads | 13.5c-d | moved_files_should_not_read_raw_instance_fields | Static | `go build ./session/... && make actor-field-guard` | exit 0 |
+| SM6: Gazelle clean after a split | 13.3, 13.4, 13.5 | gazelle_should_have_no_diff_after_split | Static | `bazel run //:gazelle && git diff --quiet -- '*.bazel'` (once Story 1.1 exists) | exit 0 |
+| SM6: packages do not regrow | 13.6a | package_budget_should_hold_and_fail_on_growth | Static | `bash tools/bzl/scoping/check_budget_test.sh` | exit 0 |
+| SM6: new packages are boundary-guarded | 13.6b | depguard_should_reject_seeded_forbidden_import | Static | `bash tools/bzl/scoping/depguard_seed_test.sh` | exit 0 |
+
 ## Test Stack
 - **Unit**: Go `testing` for helpers (`internal/reporoot`, `internal/testenv`, `tools/bzl/testsummary`), Python `unittest` for `check-spike-results.py` / `check-exclusions.py`, shell fixture tests (`affected-targets_test.sh`, `bazel-trend_test.sh`, `check-tymux-pin_test.sh`), Starlark `analysistest` (`ent_bzl_test`, `go_test_bzl_test`).
 - **Integration**: `bazel build/test` on real graph, parity scripts under `tools/bzl/parity/`, `actionlint`, `shellcheck`, `goreleaser check`.
@@ -351,4 +375,4 @@ Yes: `migration_should_be_reversible` (RC2 rows): flip PR revert restores `go bu
 | Go (helpers added by this project) | `go test ./internal/reporoot ./internal/testenv ./tools/bzl/testsummary -coverprofile=c.out && go tool cover -func=c.out` | >= 80% line |
 | Bazel test-set parity | `bash tools/bzl/parity/test-set-diff.sh <config>` | `missing_in_bazel: 0`, <= 10 excluded packages |
 | Python checkers | `python3 -m unittest discover tools/bzl` | all pass, includes rejected-input cases |
-| Requirements | this table | 39/39 mapped; gaps G1-G9 closed at the tasks listed above (verified at the Epic 0 gate, Task 0.14) |
+| Requirements | this table | 40/40 mapped; gaps G1-G9 closed at the tasks listed above (verified at the Epic 0 gate, Task 0.14) |
