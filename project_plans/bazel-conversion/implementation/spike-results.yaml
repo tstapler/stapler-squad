@@ -11,3 +11,7 @@
   verdict: FallbackWorkaround
   path: declared-output ent_gen rule + entc program (no GoSource rule, no fork); importer check run on a subset only (see spike-results.md S2)
   cost: M
+- spike: S5
+  verdict: Pass
+  path: rules_foreign_cc-0.17.0-configure_make
+  cost: M

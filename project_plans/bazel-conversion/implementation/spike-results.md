@@ -154,3 +154,65 @@ Workaround measured as M (`ent.bzl` 83 lines, over the 40-line cap Task 2.3 name
 4. "ent needs only module data": the formatter needs a `go` binary on PATH (rules_go SDK works; no module cache or network).
 5. Task 0.4a's "schema as a normal dependency" works, but adds an unplanned third list (schema type names, `schemas.go`) because `entc/load` discovers them by AST and `go run`, which this approach avoids.
 6. `session/ent/generate.go` (CLAUDE.md): absent, as the plan already noted.
+
+## S5 - tmux built hermetically by Bazel (Story 0.7)
+
+**Verdict: `Pass`, path = rules_foreign_cc 0.17.0 `configure_make` (Task 0.7a), cost M.** Task 0.7b (host-cc genrule) was not needed and not executed, so there is no hermeticity downgrade and no row for `hermetic-downgrades.txt`.
+
+### Mechanism
+
+`MODULE.bazel` adds `rules_foreign_cc` 0.17.0, BCR `libevent` 2.1.12-stable.bcr.0 and `ncurses` 6.4.20221231.bcr.15, and an `http_archive` `tmux_src` (release tarball `tmux-3.8.tar.gz`, which ships `configure`; `third_party/tmux` is never an input, and is empty in this worktree). `tools/bzl/tmux/BUILD.bazel` has `configure_make(tmux_build)` (`--disable-utf8proc`, `LIBEVENT_CORE_*`/`LIBTINFOW_*` env vars bypass pkg-config) and a `tmux_bin` genrule that copies the binary to `bazel-bin/tools/bzl/tmux/tmux`.
+
+### Checks (PASS iff list)
+
+| Check | Result | Evidence |
+|---|---|---|
+| `//tools/bzl/tmux:tmux_bin` builds from the `http_archive` tarball with `third_party/tmux` empty | true | `bazel build //tools/bzl/tmux:tmux_bin --config=agent` exit 0; `ls third_party/tmux \| wc -l` = 0; first build 80 s, 5294 actions (cold libevent, ncurses, m4, make, pkgconf toolchains) |
+| `tmux -V` prints exactly `tmux 3.8` | true | `bazel-bin/tools/bzl/tmux/tmux -V` -> `tmux 3.8` |
+| `git ls-files third_party/tmux` shows only the gitlink | true | prints `third_party/tmux` (mode 160000, `git ls-files -s`) |
+| `git check-ignore tools/bzl/tmux/BUILD.bazel` prints nothing | true | no output, exit 1 |
+| Action ran sandboxed | true | second build in a fresh output base with `--disk_cache= --spawn_strategy=linux-sandbox --sandbox_default_allow_network=false`: exit 0, "5294 processes: 3448 internal, 1846 linux-sandbox" (0 local). Repository fetches used the repository cache, so "no network at all" is not proven; actions had none |
+
+Extra: the binary is reproducible across two output bases (sha256 `d8fbb95a691e82d114bd66dc062b2b3523c6ac01afd50ba97823c4def329fb62` both). Functional test on a private socket (`tmux -L s5spike<pid> -f /dev/null`): `new-session -d`, `list-sessions`, `capture-pane` returned `hi`; `kill-server -L` only. Live tmux untouched.
+
+### Repair run (one allowed)
+
+First build exited 0 but the binary did not run: `error while loading shared libraries: /usr/lib/libncurses.so: file too short`. Cause: the foreign_cc dep dir holds both `.a` and `.so`, `-lncurses`/`-levent_core` picked `.so`, leaving `NEEDED libncurses.so` resolved against the host (Arch's `/usr/lib/libncurses.so` is a linker script). Fix: `-Wl,-Bstatic -l... -Wl,-Bdynamic` in the env vars. After: `readelf -d` NEEDED = libm, libresolv, libc only. A build that exits 0 is not evidence the binary is hermetic, so the Story 3.3 target needs this `readelf` check.
+
+### Comparison with the Make-built binary (embed seam)
+
+| | Make (`bin/tmux`, main checkout) | Bazel (`tmux_bin`) |
+|---|---|---|
+| size | 1608424 B | 2179824 B |
+| `ldd` | libncursesw.so.6, libevent_core-2.1.so.7 (host), libm, libresolv, libc | libm, libresolv, libc only (libevent and ncurses static) |
+| `-V` | `tmux 3.8` | `tmux 3.8` |
+
+Embed seam: `session/tmux/binary_embedded.go` embeds `embed/tmux` (path `session/tmux/embed/tmux`, gitignored by `session/tmux/embed/.gitignore`). A staging step `cp bazel-bin/tools/bzl/tmux/tmux session/tmux/embed/tmux` needs no Go change. I did not stage it or compile `-tags embed_tmux` (no tracked or embed file touched), so "embed build works" is UNVERIFIED; the file contents are the only difference. Note the Bazel binary is more portable than the Make one (no host libevent/ncurses dependency).
+
+### Pin table (Task 0.7c)
+
+| Source | Value |
+|---|---|
+| `tools/bzl/tmux/PIN` tag | `3.8` |
+| tarball sha256 (computed from download, equals `MODULE.bazel` `tmux_src`) | `e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e` |
+| `git ls-remote https://github.com/tmux/tmux.git '3.8*'` | `refs/tags/3.8` = `72c20dc2...` (tag object); `3.8^{}` = `7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53` |
+| submodule gitlink (`git ls-files -s third_party/tmux`) | `7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53` (equals PIN `commit`; consistent) |
+| `awk` non-empty `tag`, `sha256`, `commit` in `PIN` | true |
+| `bash tools/ci/check-tymux-pin.sh` | exit 0: "daemon v1.12.0 and client v0.1.1-0.20261031092300-04a5e941d697 are commit 04a5e941d697". This script checks the tymux daemon/client pin, NOT the tmux submodule vs `PIN`; the tmux pin comparison (gitlink == PIN commit, `MODULE.bazel` sha == PIN sha) is not implemented yet (the plan's "new pin test", Task 3.3b); I compared by hand above |
+
+tymuxd: `scripts/fetch-tymuxd.sh` + `scripts/tymuxd-checksums.txt` (v1.12.0 = Makefile `TYMUX_VERSION`) mapped to four `http_archive` repos in `MODULE.bazel` (`tymuxd_<target>`, each exports `tymuxd`). The release asset is a tarball containing `tymuxd` and `tymux`, so `http_archive` (extracting) is used instead of the plan's `http_file`. The linux-x86_64 sha256 recomputed from the download equals the checksums file; all four fetch and verify under Bazel (`--nobuild` for the other three). tymuxd was not executed.
+
+### Notes and risks
+
+- Compiler is the host `gcc` 15.2.1 via the auto-configured `rules_cc` toolchain, as for every other cc target; the `configure_make` toolchains (m4, make, pkgconf, ninja, meson) come from BCR. Host-cc drift is covered by the cc toolchain's own tracking, not by a tmux-specific mechanism; no D22 `no-cache` tag was added because no host-cc genrule exists.
+- BCR `ncurses` pulls a `local_terminfo` module extension that reads the host terminfo into a data target; the tmux link used `libncurses.a` only and ran with host terminfo, but this host read is a hermeticity leak to review in Story 3.3.
+- BCR `libevent` depends on `openssl` and `zlib` modules (only module-graph cost; not built for `event_core`).
+- `MODULE.bazel.lock` changed (rules_foreign_cc and its deps).
+
+### False or unsafe plan assumptions
+
+1. "`bazel-bin/tools/bzl/tmux/tmux -V`" from `configure_make(out_binaries)`: `configure_make` output lands in `tmux_build/bin/tmux` inside a directory output group; a wrapper genrule (`tmux_bin`) is needed to publish `bazel-bin/tools/bzl/tmux/tmux`.
+2. "static options per `docs/how-to/bundle-tmux.md`": that doc has no static options; the Make build is dynamically linked against host libevent/ncurses. Static linking had to be forced explicitly (see repair run).
+3. "tymuxd `http_file`": the asset is a tarball, so `http_archive` is needed.
+4. "`tools/ci/check-tymux-pin.sh` ... pass iff the gitlink commit equals the `PIN` commit": the existing script does not check the tmux submodule at all.
+5. `tools/bazel` cannot be invoked directly (needs `BAZEL_REAL`); it runs through `bazel`/`bazelisk`.
