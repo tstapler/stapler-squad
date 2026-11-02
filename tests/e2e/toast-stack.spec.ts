@@ -28,7 +28,8 @@ test.use(profiles.V1.use);
 
 interface HistoryRow {
   id: string;
-  sessionId: string;
+  // Proto JSON omits an empty string, so ambient server notifications with no session arrive without it.
+  sessionId?: string;
   isRead?: boolean;
   isPendingDecision?: boolean;
 }
@@ -39,7 +40,7 @@ async function historyFor(request: APIRequestContext, prefix: string): Promise<H
     data: { limit: 200 },
   });
   const body = (await response.json()) as { notifications?: HistoryRow[] };
-  return (body.notifications ?? []).filter((n) => n.sessionId.startsWith(prefix));
+  return (body.notifications ?? []).filter((n) => n.sessionId?.startsWith(prefix));
 }
 
 test.describe('toast stack (desktop)', () => {
