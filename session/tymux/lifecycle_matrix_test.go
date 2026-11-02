@@ -343,6 +343,23 @@ func TestLifecycleMatrix_IsAlive_DaemonFaults(t *testing.T) {
 		}
 		assert.True(t, sess.IsAlive(), "a blip must not turn a BACKOFF pane into dead")
 	})
+	t.Run("pane gone after a pending verdict is dead even when the daemon then goes unreachable", func(t *testing.T) {
+		dir := t.TempDir()
+		ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+		sess := startedMatrixSession(t, dir, ft)
+		require.True(t, sess.IsAlive())
+		ft.capturePaneFn = func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, notFound
+		}
+		ft.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{}), nil
+		}
+		require.False(t, sess.IsAlive())
+		ft.capturePaneFn = func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, unavailable
+		}
+		assert.False(t, sess.IsAlive(), "a confirmed-gone pane must not revive from the stale pending verdict")
+	})
 	t.Run("pane status call failing on a dead pane means plain exit", func(t *testing.T) {
 		dir := t.TempDir()
 		p := matrixStates[3] // BACKOFF
@@ -376,6 +393,35 @@ func TestLifecycleMatrix_IsAlive_CachesLifecycleCapability(t *testing.T) {
 			assert.LessOrEqual(t, atomic.LoadInt32(&ft.serverInfoCalls)-before, int32(1))
 		})
 	}
+}
+
+// The capability and status RPCs must carry a deadline, so a wedged daemon cannot stall IsAlive.
+func TestLifecycleMatrix_IsAlive_BoundsLifecycleRPCs(t *testing.T) {
+	dir := t.TempDir()
+	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+	var statusHadDeadline atomic.Bool
+	inner := ft.paneStatusFn
+	ft.paneStatusFn = func(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+		_, ok := ctx.Deadline()
+		statusHadDeadline.Store(ok)
+		return inner(ctx, req)
+	}
+	sess := startedMatrixSession(t, dir, ft)
+	require.True(t, sess.IsAlive())
+	assert.True(t, ft.lastServerInfoHadDeadline.Load(), "GetServerInfo ran unbounded")
+	assert.True(t, statusHadDeadline.Load(), "GetPaneStatus ran unbounded")
+}
+
+// A transient GetServerInfo failure must not be remembered as "daemon lacks pane.lifecycle".
+func TestLifecycleMatrix_IsAlive_TransientServerInfoErrorIsNotCached(t *testing.T) {
+	dir := t.TempDir()
+	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+	sess := startedMatrixSession(t, dir, ft)
+	blip := error(connect.NewError(connect.CodeUnavailable, errors.New("blip")))
+	ft.serverInfoErr.Store(&blip)
+	require.False(t, sess.IsAlive(), "state unknowable during the blip")
+	ft.serverInfoErr.Store(nil)
+	assert.True(t, sess.IsAlive(), "the blip was cached as an unsupported capability")
 }
 
 func TestLifecycleMatrix_Close(t *testing.T) {
