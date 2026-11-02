@@ -4,5 +4,6 @@ third_party/tmux
 project_plans
 website
 gen
-web-app/src/gen
+web-app/node_modules
+web-app/out
 build

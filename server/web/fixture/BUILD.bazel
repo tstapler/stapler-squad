@@ -1,0 +1,39 @@
+load("@bazel_lib//lib:copy_directory.bzl", "copy_directory")
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("//tools/bzl/bun:bun.bzl", "tree_fixture")
+
+# Acceptance fixture: dist/index.html and dist/assets/app.abc123.js produced by an action, staged
+# next to a byte-identical copy of the real server/web/embed.go.
+tree_fixture(name = "fixture_tree")
+
+copy_directory(
+    name = "dist_staged",
+    src = ":fixture_tree",
+    out = "dist",
+)
+
+copy_file(
+    name = "embed_go",
+    src = "//server/web:embed.go",
+    out = "embed.go",
+)
+
+copy_file(
+    name = "embed_test_go",
+    src = "//server/web:embed_spike_test.go",
+    out = "embed_spike_test.go",
+)
+
+go_library(
+    name = "web",
+    srcs = [":embed_go"],
+    embedsrcs = [":dist_staged"],
+    importpath = "github.com/tstapler/stapler-squad/server/web",
+)
+
+go_test(
+    name = "web_test",
+    srcs = [":embed_test_go"],
+    deps = [":web"],
+)
