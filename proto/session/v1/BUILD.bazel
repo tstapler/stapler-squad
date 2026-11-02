@@ -1,0 +1,28 @@
+# Spike S1 (Task 0.3a): hand-written, listed in tools/bzl/hand-build-files.txt.
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+
+proto_library(
+    name = "v1_proto",
+    srcs = glob(["*.proto"]),
+    strip_import_prefix = "/proto",
+    visibility = ["//visibility:public"],
+    deps = ["@protobuf//:timestamp_proto"],
+)
+
+go_proto_library(
+    name = "sessionv1_go_proto",
+    compilers = ["@rules_go//proto:go_proto"],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1",
+    proto = ":v1_proto",
+    visibility = ["//visibility:public"],
+)
+
+go_proto_library(
+    name = "sessionv1connect_go_proto",
+    compilers = ["//tools/bzl/proto:connect_go"],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect",
+    proto = ":v1_proto",
+    visibility = ["//visibility:public"],
+    deps = [":sessionv1_go_proto"],
+)
