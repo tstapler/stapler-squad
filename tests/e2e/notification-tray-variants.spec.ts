@@ -299,6 +299,12 @@ test.describe('notification tray variants', () => {
     });
 
     test('entry_should_be_one_visible_element_in_every_frame_once_it_exists_and_hold_its_anchor_across_state_changes', async ({ page, request }) => {
+      // KNOWN PRODUCT GAP (app vs acceptance criteria): project_plans/notification-tray-and-hidden-session-gate/design/ux.md
+      // TH-7/TH-8/TH-9 (lines 293-295) and its undo-placement line 235 ("returns to previous content when the window ends")
+      // say the entry is always present once it exists. TrayEntryChip returns null when
+      // !undo && !wide (web-app/src/components/ui/TrayHandle.tsx:112), so after the undo window of a "move all" the entry is
+      // removed and `data-undo="false"` is never observable. test.fail() keeps the gap visible; the comparator fails if it closes.
+      test.fail();
       const { client, session } = await openSession(page, { waitForText: false });
       try {
         const tray = new NotificationTray(page);
@@ -328,10 +334,11 @@ test.describe('notification tray variants', () => {
         await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
         await page.getByTestId('toast-move-all-to-tray').click();
         await expect(tray.entry).toHaveAttribute('data-undo', 'true');
-        // Keep sampling through the undo bar until the run is long enough to mean something.
-        await expect
-          .poll(() => page.evaluate(() => (window as unknown as { __entryFrames: unknown[] }).__entryFrames.length))
-          .toBeGreaterThan(30);
+        // UndoBar replaces the clicked button in place and pauses its timer while hovered or focused: park the pointer and
+        // blur so the window can end.
+        await page.mouse.move(0, 0);
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await expect(tray.entry).toHaveAttribute('data-undo', 'false', { timeout: 15_000 });
 
         const frames = await page.evaluate(() => {
           const w = window as unknown as { __entryFrames: Array<{ visible: number; right: number; top: number }>; __entryStop: boolean };
@@ -342,13 +349,6 @@ test.describe('notification tray variants', () => {
         expect(frames.filter((f) => f.visible !== 1)).toEqual([]);
         const rights = frames.map((f) => f.right);
         expect(Math.max(...rights) - Math.min(...rights)).toBeLessThanOrEqual(1);
-
-        // Sampling stopped above: once the undo window ends with nothing left in the deck the entry is removed
-        // (TrayEntryChip renders nothing for content "none"), so it is not part of the one-visible-in-every-frame run.
-        // The bar pauses its timer while hovered or focused and replaces the clicked button in place, so park the pointer.
-        await page.mouse.move(0, 0);
-        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await expect(tray.entry).toHaveCount(0, { timeout: 15_000 });
       } finally {
         await client.deleteSession(session.id, true);
       }

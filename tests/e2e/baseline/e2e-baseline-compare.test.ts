@@ -237,8 +237,8 @@ describe("scripts/e2e-baseline-compare.ts", () => {
   });
 
   describe("test.fail() known gaps (expectedStatus: failed)", () => {
-    const rep = (results: { retry: number; status: string }[], expectedStatus?: string): PwReport => ({
-      suites: [{ specs: [{ file: "a.spec.ts", title: "t", tests: [{ projectName: "chromium", expectedStatus, results }] }] }],
+    const rep = (results: { retry: number; status: string }[], expectedStatus?: string, description?: string): PwReport => ({
+      suites: [{ specs: [{ file: "a.spec.ts", title: "t", tests: [{ projectName: "chromium", expectedStatus, annotations: expectedStatus === "failed" ? [{ type: "fail", description }] : [], results }] }] }],
     });
     const FAIL1 = [{ retry: 0, status: "failed" }];
     const PASS1 = [{ retry: 0, status: "passed" }];
@@ -253,8 +253,20 @@ describe("scripts/e2e-baseline-compare.ts", () => {
       expect(gate(rep(FAIL1, "passed")).exitCode).toBe(1);
     });
 
-    test("TF3: a passing attempt of a test.fail() test is left alone (precondition-guard specs pass when the guard trips)", () => {
-      expect(gate(rep(PASS1, "failed")).exitCode).toBe(0);
+    test("TF3: a bare test.fail() known gap that now passes fails the gate (the gap closed; remove test.fail)", () => {
+      const r = gate(rep(PASS1, "failed"));
+      expect(r.exitCode).toBe(1);
+      expect(r.findings.some((f) => f.severity === "fail" && /known gap now passes/.test(f.message))).toBe(true);
+    });
+
+    test("TF4: a test.fail(condition, reason) precondition guard that passes is reported, not failed", () => {
+      const r = gate(rep(PASS1, "failed", "requires a clean backlog"));
+      expect(r.exitCode).toBe(0);
+      expect(r.findings.some((f) => f.severity === "report" && /precondition guard/.test(f.message))).toBe(true);
+    });
+
+    test("TF5: a test.fail() test that fails on every attempt is the expected outcome, with no finding", () => {
+      expect(gate(rep(FAIL1, "failed")).findings).toEqual([]);
     });
   });
 

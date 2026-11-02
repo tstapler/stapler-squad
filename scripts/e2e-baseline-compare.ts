@@ -45,6 +45,8 @@ export interface PwTest {
   projectName: string;
   /** Playwright's own expectation: "failed" for a `test.fail()` known gap. */
   expectedStatus?: string;
+  /** `test.fail(...)` shows up as `{ type: "fail", description? }`; a description marks a conditional precondition guard. */
+  annotations?: { type: string; description?: string }[];
   results: PwTestResult[];
 }
 
@@ -77,11 +79,42 @@ export function keyString(k: SpecKey): string {
 
 /**
  * A `test.fail()` test is expected to fail: its failing attempts are the expected outcome (a known gap kept visible by the
- * spec itself), so they must not read as a Bun-only failure forever. Passing attempts are left as they are: specs that call
- * `test.fail(condition)` as a precondition guard (backlog.spec.ts) pass when the guard trips, and that was never gated.
+ * spec itself), so they must not read as a Bun-only failure forever. Trade-off: while the gap stands, that test is blind to
+ * any further regression of the behaviour it covers, by design -- `unexpectedPassFindings` is the only signal when it closes.
+ * Passing attempts are left as they are here; specs that call `test.fail(condition, reason)` as a precondition guard
+ * (backlog.spec.ts) pass when the guard trips, and that was never gated.
  */
 function attemptStatus(t: PwTest, status: string): string {
   return t.expectedStatus === "failed" && FAILED_STATUSES.has(status) ? "passed" : status;
+}
+
+/**
+ * Playwright reports a `test.fail()` test that passes as "unexpected". A bare `test.fail()` is a known gap that has closed:
+ * fail, so the marker gets removed and the test guards the behaviour again. `test.fail(cond, reason)` is a precondition guard
+ * that trips on a dirty server and passes by design: report only. Playwright's own exit code is not the gate (the shards
+ * tolerate raw failures; this comparator is the verdict), so this finding is the only place an unexpected pass surfaces.
+ */
+export function unexpectedPassFindings(report: PwReport): Finding[] {
+  const out: Finding[] = [];
+  const walk = (suite: PwSuite, titles: string[]) => {
+    for (const spec of suite.specs ?? []) {
+      for (const t of spec.tests ?? []) {
+        if (t.expectedStatus !== "failed") continue;
+        const results = t.results ?? [];
+        if (results.length === 0 || !results.every((r) => r.status === "passed")) continue;
+        const guard = (t.annotations ?? []).some((a) => a.type === "fail" && a.description);
+        const title = [...titles, spec.title].join(" > ");
+        out.push(
+          guard
+            ? { severity: "report", spec: spec.file, project: t.projectName, title, message: "test.fail(condition, reason) precondition guard tripped; the test is blind this run." }
+            : { severity: "fail", spec: spec.file, project: t.projectName, title, message: "test.fail() known gap now passes: the gap closed, remove test.fail() so the test guards the behaviour." },
+        );
+      }
+    }
+    for (const child of suite.suites ?? []) walk(child, child.title && child.title !== child.file ? [...titles, child.title] : titles);
+  };
+  for (const top of report.suites ?? []) walk(top, []);
+  return out;
 }
 
 /** One entry per (spec file, project, title) found anywhere in the report, with that test's attempts. */
@@ -439,6 +472,7 @@ export function compare(input: CompareInput): CompareResult {
   ctx.bunCountedRootGroups = bunPerRun.map((_, i) => countedRootGroups(input.baseline.specs, ctx, i));
   findings.push(...evaluateBaselineSpecs(input.baseline.specs, ctx));
   findings.push(...evaluateSpecsMissingFromBaseline(bunKeys, baselineKeys, ctx));
+  for (const r of input.bunReports) findings.push(...unexpectedPassFindings(r));
   findings.push(...evaluateExpectedDiffShrink(input.expectedDiff.entries, bunKeys, ctx));
 
   const exitCode: 0 | 1 = findings.some((f) => f.severity === "fail") ? 1 : 0;
