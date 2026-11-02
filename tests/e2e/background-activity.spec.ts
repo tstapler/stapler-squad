@@ -91,8 +91,11 @@ for (const key of ['V1', 'V2'] as const) {
       // app may rewrite the URL to its own window id afterwards, so the banner is the proof.
       const view = row.getByTestId('notification-view-output');
       await expect(view).toHaveAttribute('href', /tab=terminal&notification=/);
+      const markedRead = page.waitForResponse((r) => r.url().includes('MarkNotificationRead'));
       await clickWhenScrollIdle(page, view);
       await expect(page.getByTestId('readonly-banner')).toBeVisible();
+      // The reload below would abort a still-in-flight mark-read and leave the row unread for good.
+      await markedRead;
 
       // BA-9: the record is read, so the row is gone and the badge dropped.
       await expect.poll(async () => {
