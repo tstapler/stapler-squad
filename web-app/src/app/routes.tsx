@@ -57,9 +57,8 @@ export const routeTable = {
   "/workflows": { load: () => import("./workflows/page") },
 } satisfies Record<RoutePath, RouteDef>;
 
-// Next applies `app/backlog/layout.tsx` (a shared watch stream) to every backlog route; this table loads pages only, so the
-// provider is added here. Without it each `useBacklogStream()` consumer opens its own stream and a late snapshot overwrites
-// fresher item state (e2e jump-to-session lost its injected sessions on Bun only). Lazy keeps the hook out of the entry chunk.
+// Every backlog route shares one watch stream; this table loads pages only, so the provider is added here.
+// Without it each `useBacklogStream()` consumer opens its own stream and a late snapshot overwrites fresher item state (e2e jump-to-session lost its injected sessions on Bun only). Lazy keeps the hook out of the entry chunk.
 const BacklogStreamLayout = lazy(() =>
   import("@/components/backlog/BacklogStreamContext").then((m) => ({ default: m.BacklogStreamProvider })),
 );
@@ -79,7 +78,7 @@ function guardFor(path: RoutePath): PageRoute["wrap"] {
   return Wrapped;
 }
 
-/** Titles and guards come from `RouteMeta`, so they cannot drift from the Next layouts the drift test checks. */
+/** Titles and guards come from `RouteMeta`. */
 export const appRoutes: AppRoute[] = (Object.entries(routeTable) as [RoutePath, RouteDef][]).map(([path, def]) =>
   "load" in def ? { path, load: def.load, wrap: guardFor(path) } : { path, ...def },
 );

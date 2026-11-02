@@ -12,7 +12,7 @@ import { WindowsProvider } from "@/lib/window/WindowsProvider";
 import { mainContent } from "./layout.css";
 
 /**
- * Provider and chrome tree shared by every entry point (the Next layout now, the Bun entry later).
+ * Provider and chrome tree shared by every entry point (the Bun entry).
  * `mainRef` is the router build's focus target after navigation (see `useFocusOnNavigate`).
  */
 export function RootShell({ children, mainRef }: { children: ReactNode; mainRef?: RefObject<HTMLElement | null> }) {
