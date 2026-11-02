@@ -5,7 +5,7 @@
 // framing ("a comparator that always exits 0 therefore fails seven of these cases").
 import { execFileSync } from "child_process";
 import * as path from "path";
-import { compare, Baseline, PwReport } from "../../../scripts/e2e-baseline-compare";
+import { compare, PwReport, Baseline } from "../../../scripts/e2e-baseline-compare";
 
 const REPO_ROOT = path.join(__dirname, "../../..");
 const SCRIPT = path.join(REPO_ROOT, "scripts/e2e-baseline-compare.ts");
@@ -205,6 +205,26 @@ describe("scripts/e2e-baseline-compare.ts", () => {
       const file = "login-static-assets.spec.ts";
       const bun = { "every static asset /login needs loads 2xx": t([{ retry: 0, status: "skipped" }]) };
       expect(gate([bun], allPass(bun), {}, file).exitCode).toBe(0);
+    });
+  });
+
+  describe("baseline 'flaky' specs and the same-run Next control", () => {
+    const HARD = [{ retry: 0, status: "failed" }, { retry: 1, status: "failed" }];
+    const PASS = [{ retry: 0, status: "passed" }];
+    const rep = (results: { retry: number; status: string }[]): PwReport => ({
+      suites: [{ specs: [{ file: "a.spec.ts", title: "t", tests: [{ projectName: "chromium", results }] }] }],
+    });
+    const baseline: Baseline = { specs: [{ spec: "a.spec.ts", project: "chromium", title: "t", class: "flaky" }] };
+    const gate = (bun: typeof HARD, next: typeof HARD) => compare({ baseline, expectedDiff: { entries: [] }, nextReport: rep(next), bunReports: [rep(bun)] });
+
+    test("FL1: a flaky-class test failing on Bun while Next is clean still fails the gate", () => {
+      expect(gate(HARD, PASS).exitCode).toBe(1);
+    });
+
+    test("FL2: a flaky-class test failing on both builds is a shared failure -- reported, exit 0", () => {
+      const r = gate(HARD, HARD);
+      expect(r.exitCode).toBe(0);
+      expect(r.findings.some((f) => f.severity === "report" && /Shared failure/.test(f.message))).toBe(true);
     });
   });
 
