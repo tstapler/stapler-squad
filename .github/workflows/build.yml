@@ -599,6 +599,7 @@ jobs:
 
       # Fresh per-spec durations for run-ci-shard.sh's balanced assignment: download this artifact and commit it as
       # tests/e2e/shard-timings.json when the suite or its slow specs shift (see tests/e2e/scripts/shard-assign.ts).
+      # Take it from a full, uncut run: a shard cut off by its global timeout leaves unreached specs with no durations.
       - name: Write shard timings
         if: always() && hashFiles('tests/e2e/playwright-report/report.json') != ''
         continue-on-error: true

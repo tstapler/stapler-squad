@@ -40,7 +40,7 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 
 The e2e shard count is a separate knob (`E2E_SHARD_TOTAL` in `build.yml` once #1317 lands) and is the largest remaining contributor.
 
-Within a shard, spec files are assigned by recorded duration (`tests/e2e/shard-timings.json`, `tests/e2e/scripts/shard-assign.ts`) rather than Playwright's count-based `--shard`, which once left one shard at 36 min next to others at 16. Refresh the file from the `e2e-shard-timings` artifact the `e2e (Bun build)` job uploads. Each shard also stops itself with `--global-timeout` inside `E2E_SHARD_BUDGET_S` (default 38 min), so a failing-heavy shard ends with a clean report instead of being killed.
+Within a shard, spec files are assigned by recorded duration (`tests/e2e/shard-timings.json`, `tests/e2e/scripts/shard-assign.ts`) rather than Playwright's count-based `--shard`, which once left one shard at 36 min next to others at 16. Refresh the file from the `e2e-shard-timings` artifact the `e2e (Bun build)` job uploads, taken from a full uncut run (a cut-off shard has no durations for the specs it never reached). Each shard also stops itself with `--global-timeout` inside `E2E_SHARD_BUDGET_S` (default 38 min), so an overrunning shard still writes its reports instead of being killed with none. It still fails loudly (`assert-e2e-report.mjs` names the global-timeout cut-off), and the confirmation rerun does not run for a failed shard. A missing or unusable shard plan also fails the shard; there is no count-based fallback, because mixing schemes across shards would lose and duplicate tests.
 
 ## Runner utilization
 
