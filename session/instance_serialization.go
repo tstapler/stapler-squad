@@ -465,8 +465,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		instance.claudeSession = &claudeSessionCopy
 	}
 
-	// Auto-detect worktree info for migration (existing sessions without this info)
-	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
+	// Re-detects on every load for sessions without GitHub info (including repos
+	// with no GitHub remote), so it is bounded. This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
 		if err := instance.DetectAndPopulateWorktreeInfoBounded(startupWorktreeDetectTimeout); err != nil {
 			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
@@ -483,7 +483,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// No mutex is needed here because the instance is not yet shared.
 	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
 		worktreePath := instance.gitManager.GetWorktreePath()
-		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		statErr, statTimedOut := statBounded(worktreePath, startupWorktreeDetectTimeout)
+		if statTimedOut {
+			log.Warn("worktree stat timed out, leaving session state unchanged", "session", instance.Title, "path", worktreePath)
+		} else if os.IsNotExist(statErr) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
 			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
 			level := worktreeMissingLevel(alreadyLogged)

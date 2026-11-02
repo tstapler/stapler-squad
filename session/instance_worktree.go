@@ -799,6 +799,8 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 // DetectAndPopulateWorktreeInfoBounded is DetectAndPopulateWorktreeInfo with a
 // deadline, for startup paths where one unreadable repo (e.g. a TCC- or
 // iCloud-protected directory whose open() blocks) must not stall every session.
+// If detection outlives the deadline its result is still applied to the
+// instance when it eventually returns.
 func (i *Instance) DetectAndPopulateWorktreeInfoBounded(timeout time.Duration) error {
 	return i.detectAndPopulateWorktreeInfo(timeout)
 }
@@ -823,34 +825,45 @@ func (i *Instance) detectAndPopulateWorktreeInfo(timeout time.Duration) error {
 		return nil
 	}
 
-	info, err := detectWorktreeBounded(detectPath, timeout)
+	apply := func(info *WorktreeInfo) error {
+		return i.sendSyncErr(func(s *instanceState) error {
+			applyWorktreeDetectionLocked(s, info)
+			return nil
+		})
+	}
+	onLate := func(info *WorktreeInfo) {
+		if err := apply(info); err != nil {
+			log.Warn("failed to apply late worktree detection", "path", detectPath, "err", err)
+		}
+	}
+	info, err := detectWorktreeBounded(detectPath, timeout, onLate)
 	if err != nil {
 		return err
 	}
-
-	return i.sendSyncErr(func(s *instanceState) error {
-		applyWorktreeDetectionLocked(s, info)
-		return nil
-	})
+	return apply(info)
 }
 
 // detectWorktreeFn is the detection seam; tests replace it with a blocking func.
 var detectWorktreeFn = DetectWorktree
 
-// stuckWorktreeDetections holds paths whose detection goroutine timed out and
-// has not returned yet, so repeated loads skip them instead of leaking one
-// goroutine per attempt.
-var stuckWorktreeDetections sync.Map
+// inflightWorktreeDetections maps path -> attempt token for bounded detections
+// that have started and not yet returned. A present entry after a timeout
+// means the call is stuck (e.g. in open() on a TCC-protected path).
+var inflightWorktreeDetections sync.Map
 
 // detectWorktreeBounded runs detectWorktreeFn, giving up after timeout (<=0
-// means unbounded). On timeout the goroutine stays blocked in the kernel until
-// the open() returns; at most one such goroutine exists per path.
-func detectWorktreeBounded(path string, timeout time.Duration) (*WorktreeInfo, error) {
+// means unbounded, no goroutine). At most one bounded attempt per path is in
+// flight; a concurrent or later caller fails fast rather than spawning another.
+// If the attempt outlives timeout it keeps running (it cannot be cancelled out
+// of a blocked syscall) and onLate, when non-nil, receives its eventual
+// successful result so the caller can still apply it.
+func detectWorktreeBounded(path string, timeout time.Duration, onLate func(*WorktreeInfo)) (*WorktreeInfo, error) {
 	if timeout <= 0 {
 		return detectWorktreeFn(path)
 	}
-	if _, stuck := stuckWorktreeDetections.Load(path); stuck {
-		return nil, fmt.Errorf("worktree detection for %q still blocked from an earlier attempt", path)
+	token := new(struct{ _ byte }) // unique per attempt (non-zero size)
+	if _, loaded := inflightWorktreeDetections.LoadOrStore(path, token); loaded {
+		return nil, fmt.Errorf("worktree detection for %q already in flight (stuck?)", path)
 	}
 	type result struct {
 		info *WorktreeInfo
@@ -858,11 +871,19 @@ func detectWorktreeBounded(path string, timeout time.Duration) (*WorktreeInfo, e
 	}
 	ch := make(chan result, 1) // buffered so a late finisher never blocks
 	var timedOut atomic.Bool
+	start := time.Now()
+	detect := detectWorktreeFn // read here, not in the goroutine, so a test swapping the seam can't race
 	go func() {
-		info, err := detectWorktreeFn(path)
+		info, err := detect(path)
+		inflightWorktreeDetections.CompareAndDelete(path, token)
 		ch <- result{info, err}
 		if timedOut.Load() {
-			stuckWorktreeDetections.Delete(path)
+			if err != nil {
+				log.Warn("worktree detection finished late with error", "path", path, "elapsed", time.Since(start), "err", err)
+			} else if onLate != nil {
+				log.Info("worktree detection was slow, applying late result", "path", path, "elapsed", time.Since(start))
+				onLate(info)
+			}
 		}
 	}()
 	timer := time.NewTimer(timeout)
@@ -871,14 +892,31 @@ func detectWorktreeBounded(path string, timeout time.Duration) (*WorktreeInfo, e
 	case r := <-ch:
 		return r.info, r.err
 	case <-timer.C:
-		stuckWorktreeDetections.Store(path, struct{}{})
 		timedOut.Store(true)
-		// Finisher may have raced past its check before timedOut was set.
-		select {
-		case <-ch:
-			stuckWorktreeDetections.Delete(path)
+		select { // finisher may have completed just before the flag was set
+		case r := <-ch:
+			return r.info, r.err
 		default:
 		}
-		return nil, fmt.Errorf("worktree detection for %q timed out after %s", path, timeout)
+		return nil, fmt.Errorf("worktree detection for %q stuck: no result after %s", path, timeout)
+	}
+}
+
+// statFn is the os.Stat seam for statBounded.
+var statFn = os.Stat
+
+// statBounded is os.Stat with a deadline. timedOut=true means the path could
+// not be examined in time and the caller must treat existence as unknown.
+func statBounded(path string, timeout time.Duration) (err error, timedOut bool) {
+	ch := make(chan error, 1)
+	stat := statFn
+	go func() { _, e := stat(path); ch <- e }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case e := <-ch:
+		return e, false
+	case <-timer.C:
+		return nil, true
 	}
 }
