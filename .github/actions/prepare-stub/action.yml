@@ -1,5 +1,5 @@
 name: 'Prepare: Protos, Ent ORM, and Web UI Stub'
-description: 'Generates protobuf code and ent ORM code, then stubs server/web/dist/index.html for jobs that only need go build/go test to compile against the go:embed directive, without a real Next.js build'
+description: 'Generates protobuf code and ent ORM code, then stubs server/web/dist/index.html for jobs that only need go build/go test to compile against the go:embed directive, without a real web build'
 
 inputs:
   buf-template:

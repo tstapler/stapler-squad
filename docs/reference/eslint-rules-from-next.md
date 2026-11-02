@@ -1,7 +1,7 @@
 # ESLint rules formerly supplied by `next/core-web-vitals`
 
-`web-app/eslint.config.mjs` (flat config) lists these rules explicitly. `eslint-config-next` is still
-installed (rollback path) but nothing extends it.
+`web-app/eslint.config.mjs` (flat config) lists these rules explicitly. `eslint-config-next` was removed
+with Next.js (PR 9); nothing extends it.
 
 Inventory taken with `eslint --print-config src/app/page.tsx` before and after the change: the
 effective rule sets are identical except for the 21 `@next/next/*` rules, which no longer exist.
@@ -36,8 +36,7 @@ Files outside `src/**` are skipped silently, as `next lint` covered only `src/`.
 
 ## Rollback
 
-Revert the PR that introduced `eslint.config.mjs`. `eslint-config-next` is still installed, so the
-`.eslintrc.json` path and `next lint` return whole.
+Revert the commit that changed `eslint.config.mjs`. There is no `next lint` path to fall back to: Next was removed in PR 9.
 
 ## Verifying a config change
 

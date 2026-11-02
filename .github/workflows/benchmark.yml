@@ -188,10 +188,7 @@ jobs:
     permissions:
       contents: read
     # .size-limit.json's 6,349,052B cap (Story 5.9) is calibrated against the
-    # Bun build (minified by build.ts's default); building Next here instead
-    # measured Next's naturally larger, differently-chunked output against it.
-    env:
-      WEB_BUILD: bun
+    # minified Bun build (build.ts's default).
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -216,20 +213,7 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-bundle-${{ runner.os }}-
-
-      - name: Build web UI (Bun, minified)
+      - name: Build web UI (minified)
         run: cd web-app && bun run build
 
       - name: Check bundle size
@@ -273,19 +257,6 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-throughput-${{ runner.os }}-
-
       - name: Install Playwright browsers
         # apt-get update (invoked internally by --with-deps) has stalled for
         # ~29 minutes against Ubuntu archive mirrors before now — a transient
@@ -304,7 +275,9 @@ jobs:
           echo "Playwright install failed after 3 attempts" >&2
           exit 1
 
-      - name: Build Next.js app
+      - name: Build web UI
+        env:
+          WEB_MINIFY: '0'
         run: cd web-app && bun run build
 
       - name: Run terminal throughput benchmark
@@ -405,20 +378,9 @@ jobs:
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-e2e-latency-${{ runner.os }}-
-
-      - name: Build Next.js app
+      - name: Build web UI
+        env:
+          WEB_MINIFY: '0'
         run: bun run build
         working-directory: web-app
 

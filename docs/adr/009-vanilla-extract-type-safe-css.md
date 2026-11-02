@@ -112,7 +112,7 @@ Adopt **vanilla-extract** as the CSS authoring standard for new components and t
 
 - Dynamic styles (e.g. `background: props.color` where color is a runtime value) cannot be expressed directly. Must use CSS custom properties as a bridge: pass the value as an inline style custom property, consume it via `var()` in the `.css.ts` file.
 - `.css.ts` files cannot use runtime values at style creation time — all variants must be pre-declared. This is a feature for design system work but a friction point for highly dynamic one-off styles.
-- Turbopack (used in `next dev --turbopack`) support in `@vanilla-extract/next-plugin` is available from v1.3+ but is newer than the webpack integration. If dev-mode issues arise, fall back to `next dev` (without `--turbopack`) while the plugin matures (Next mode (removed in PR 9)).
+- Turbopack (used in `next dev --turbopack`) support in `@vanilla-extract/next-plugin` is available from v1.3+ but is newer than the webpack integration. If dev-mode issues arise, fall back to `next dev` (without `--turbopack`) while the plugin matures (historical).
 - Build setup is slightly more complex than plain CSS Modules (requires `@vanilla-extract/next-plugin` in `next.config.ts`).
 
 ### Migration Strategy
