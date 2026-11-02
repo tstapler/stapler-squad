@@ -250,6 +250,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// background goroutine below has re-populated live tmux sessions, so the
 	// proc_pidinfo open-file path will miss; recoverFromStaleResume is the
 	// safety net for sessions that slip through.
+	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
 	srv.goBackground(func() {
 		deps.HistoryLinker.Start(serverCtx)
 		deps.HistoryLinker.Wait()

@@ -827,3 +827,37 @@ func (i *Instance) applyWorktreeInfo(info *WorktreeInfo) error {
 		return nil
 	})
 }
+
+// populateWorktreeInfoOnLoad fills worktree/GitHub info while the instance is
+// still goroutine-local (inside fromInstanceData). Without a registered
+// WorktreeEnricher it detects synchronously, as before; with one it applies a
+// cached result if ready and otherwise leaves the fields empty for the next load.
+func (i *Instance) populateWorktreeInfoOnLoad() {
+	enricher := activeWorktreeEnricher.Load()
+	if enricher == nil {
+		if err := i.DetectAndPopulateWorktreeInfo(); err != nil {
+			log.Warn("failed to detect worktree info", "session", i.Title, "err", err)
+		} else if i.GitHubOwner != "" {
+			log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
+		}
+		return
+	}
+	path := i.worktreeDetectPath()
+	if path == "" {
+		return
+	}
+	info, err, ready := enricher.Result(path)
+	if !ready {
+		enricher.Request(path)
+		return
+	}
+	if err != nil {
+		log.Debug("worktree detection failed (cached)", "session", i.Title, "err", err)
+		return
+	}
+	if err := i.applyWorktreeInfo(info); err != nil {
+		log.Warn("failed to apply cached worktree info", "session", i.Title, "err", err)
+	} else if i.GitHubOwner != "" {
+		log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
+	}
+}

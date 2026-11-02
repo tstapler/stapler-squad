@@ -710,20 +710,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	eventBus := svc.EventBus
 	sessionService := svc.SessionService
 
+	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
+	// path, so instance loading consults this enricher's cache instead of probing
+	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
+	installWorktreeEnricher(context.Background())
+
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
 	if err != nil {
 		return nil, fmt.Errorf("load instances: %w", err)
-	}
-
-	// Worktree detection, GitHub owner/repo migration and the missing-worktree pause
-	// check no longer run inside LoadInstances (an unreadable session path blocked
-	// startup); they run here on a bounded pool, with Step 6 awaiting each instance's
-	// first attempt before starting it. See ADR-038.
-	worktreeEnricher := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{Persist: storage.UpdateInstance})
-	worktreeEnricher.Start(context.Background())
-	for _, inst := range instances {
-		worktreeEnricher.Enqueue(inst)
 	}
 
 	// Seed the delivery gate's visibility index synchronously, before any
@@ -1023,7 +1018,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			worktreeEnricher.Await(inst, worktreeEnrichAwaitMax)
 			if !inst.Started() && !deferToReconcile(inst) {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
@@ -2170,9 +2164,14 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.
 // Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
 // cleanup kills the session's live tmux/tymux session before 6b can adopt it.
-// worktreeEnrichAwaitMax caps how long Step 6 waits for one instance's first
-// enrichment attempt; slightly above the enricher's per-probe deadline.
-const worktreeEnrichAwaitMax = 12 * time.Second
+// installWorktreeEnricher starts and registers the process-wide worktree enricher
+// that instance loading consults (stopped by session.StopWorktreeEnricher).
+func installWorktreeEnricher(ctx context.Context) *session.WorktreeEnricher {
+	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{})
+	e.Start(ctx)
+	session.SetWorktreeEnricher(e)
+	return e
+}
 
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -461,12 +462,36 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		instance.claudeSession = &claudeSessionCopy
 	}
 
-	// No filesystem probing here: worktree detection, the GitHub owner/repo
-	// migration and the missing-worktree pause check run after start in
-	// WorktreeEnricher, so an unreadable session path can never block a load.
+	// Auto-detect worktree info for migration (existing sessions without this info)
+	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
+	// The open()-based probe can block on an unreadable (e.g. TCC-protected) path, so
+	// with a WorktreeEnricher registered this only reads its in-memory cache and
+	// queues a background probe; see ADR-038.
+	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
+		instance.populateWorktreeInfoOnLoad()
+	}
 
 	// Initialize session-specific logging
 	_ = log.GetSessionLoggers
+
+	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
+	// No mutex is needed here because the instance is not yet shared.
+	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
+		worktreePath := instance.gitManager.GetWorktreePath()
+		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+			// Worktree has been deleted — use transitionTo so the state machine is respected.
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			level := worktreeMissingLevel(alreadyLogged)
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
+			if err := instance.transitionTo(context.Background(), Paused); err != nil {
+				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
+				instance.loadStatus(Paused)
+			}
+		}
+	}
 
 	if instance.Paused() {
 		instance.started.Store(true)
