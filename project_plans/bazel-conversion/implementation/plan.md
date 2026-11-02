@@ -2,10 +2,10 @@
 
 **Feature**: Make Bazel (bzlmod, 9.x) the build of record for Go, proto, ent, tmux/tymuxd and the web-app; `make` targets become thin wrappers; CI runs Bazel with affected-target selection; agents get a first-class Bazel workflow.
 **Date**: 2026-11-01
-**Status**: Ready for Epic 0 only. ADR-002, ADR-003 and ADR-007 are Proposed, and the reachability, read-only enforcement and redaction parts of ADR-004 are Proposed; all become Accepted at Story 0.14, which gates Epics 1-11. Repaired after review iterations 1 and 2, after Phase 4 (pre-mortem, consistency review, validation) after triad iteration 1 and after triad iteration 2 (product, UX/DX, engineering); see Review disposition, Phase 4 disposition, Triad disposition and Triad disposition (iteration 2) at the end.
+**Status**: Ready for Epic 0 only (Epic 12 and Story 0.15 added 2026-11-02 for the owner directive on selective e2e; ADR-009 is Proposed and is decided at Story 0.14). ADR-002, ADR-003 and ADR-007 are Proposed, and the reachability, read-only enforcement and redaction parts of ADR-004 are Proposed; all become Accepted at Story 0.14, which gates Epics 1-11. Repaired after review iterations 1 and 2, after Phase 4 (pre-mortem, consistency review, validation) after triad iteration 1 and after triad iteration 2 (product, UX/DX, engineering); see Review disposition, Phase 4 disposition, Triad disposition and Triad disposition (iteration 2) at the end.
 **Sequencing fact**: `baselines.md`, `targets.yaml`, `spike-results.md`, `spike-results.yaml`, `owner-attestations.yaml`, `soak-ledger.yaml`, `batches.json` and every `tools/bzl/**` script named below do not exist at plan time. They are produced by the tasks that list them (Story 0.1 produces the baselines and targets), so each reference to them in this plan is to a future artifact, not a missing file. The wrapper file `tools/bazel` and the helper directory `tools/bzl/` are distinct paths on purpose: Bazelisk runs the executable file `tools/bazel`, and every helper, package and label lives under `tools/bzl/` (`//tools/bzl/...`).
-**Counts**: 12 epics, 73 stories, 218 tasks; raw 15825k tokens, 17.43M CU before verification, 30.50M CU after the x1.75 verification multiplier (recomputed by script after the docs-derived edits: +5 tasks, Tasks 0.10e-h and 0.12f)
-**ADRs**: ADR-001 (adopt Bazel, supersedes ci-speed ADR-001), ADR-002 (generated code + sync-gen), ADR-003 (Bun-owned web build), ADR-004 (bazel-remote on onyx), ADR-005 (permanent exceptions, Windows cross-compile only), ADR-006 (pure-Go sqlite, darwin host cc), ADR-007 (embed staging seam), ADR-008 (rule-repo fork policy) in `project_plans/bazel-conversion/decisions/`.
+**Counts**: 13 epics, 81 stories, 241 tasks; raw 17645k tokens, 19.43M CU before verification, 34.00M CU after the x1.75 verification multiplier (recomputed by script after the ADR-009 additions: +1 epic, +8 stories, +23 tasks, namely spike Story 0.15 with Tasks 0.15a-d and Epic 12 with Stories 12.1-12.7 and 19 tasks; the previous total was 12 epics, 73 stories, 218 tasks, 15825k raw, 17.43M CU, 30.50M CU after verification)
+**ADRs**: ADR-001 (adopt Bazel, supersedes ci-speed ADR-001), ADR-002 (generated code + sync-gen), ADR-003 (Bun-owned web build), ADR-004 (bazel-remote on onyx), ADR-005 (permanent exceptions, Windows cross-compile only), ADR-006 (pure-Go sqlite, darwin host cc), ADR-007 (embed staging seam), ADR-008 (rule-repo fork policy), ADR-009 (Proposed: expensive tests, Playwright e2e first, join the Bazel graph through observed-dependency slices; amends the e2e position of ADR-005) in `project_plans/bazel-conversion/decisions/`.
 
 **Corrections to research applied in this plan**: (1) `research/architecture.md` says Windows "owner decision: dropped"; the actual decision is **cross-compile only** (Epic 6, ADR-005). (2) cgo is resolved: production uses `modernc.org/sqlite`; `mattn/go-sqlite3` is imported only by two test files; real cgo is three darwin files (ADR-006). (3) Scale numbers differ between research files (3,373 tracked vs ~3,743 untracked-inclusive `.go` files); Task 0.1d recounts them. (4) Review repair: every Bazel-owned BUILD file lives in a tracked, non-ignored, non-submodule path (`tools/bzl/tmux`, `tools/bzl/flags`, `tools/bzl/windows`, `tools/bzl/ent`; checked by `tools/bzl/check-build-paths.sh`), never under the `third_party/tmux` gitlink or the gitignored `build/`. (5) Every Bazel behaviour in `architecture.md` is INFERRED (never run); only the go-git `replace` resolution through `go_deps.from_file` is VERIFIED by spike (Bazel 9.3.1, rules_go 0.65.0, gazelle 0.54.0). Epic 0 exists to convert the rest. (6) Flag-name policy (Phase 4): every Bazel flag name the pre-mortem marked UNVERIFIED (remote-cache circuit breaker, `--remote_timeout`/`--remote_retries`, `--remote_download_toplevel`/`minimal`, disk-cache GC, `--incompatible_enable_proto_toolchain_resolution`) is a spike-verified item, not an assumption: Task 0.2b records the `bazel help` line for each on 9.3.1 in `spike-results.md` and no unverified flag may appear in a committed `.bazelrc` (checked by `check-bazelrc.sh`, Task 0.2g, which also rejects every flag absent from `bazel help <command> --long` on the pinned version). Four flags are VERIFIED ABSENT on 9.3.1 by run (`research/bazel-docs-best-practices.md` sections 2.3-2.5) and must never appear: `--local_ram_resources`, `--local_cpu_resources`, `--incompatible_sandbox_hermetic_tmp`, `--experimental_guard_against_concurrent_changes`. Labels from that research are binding: VERIFIED-IN-DOCS and VERIFIED-BY-RUN items are requirements; INFERRED items are spike checks (experiments E1-E11 in Story 0.10 and Task 0.12f), never assumptions. The repository cache and the extracted-repo contents cache are already shared per user by default (VERIFIED by run), so the committed `~/.cache/stapler-squad-bazel/repo` paths are an owner-chosen location, not a requirement for sharing; they must be set together (Task 0.2b). (7) Host fact (VERIFIED 2026-11-01, `hostname` prints `onyx`): the dev box, the live service on `:8543`, all agent worktrees and the future `bazel-remote` are one 24-core, 61 GB host, so containment of Bazel (Task 0.2f) is a prerequisite, not a polish item.
 
@@ -112,11 +112,12 @@ Within approach A, the sequence follows the owner's strangler path: foundations/
 | T5 | Agent experience | first-error legibility: 9 seeded failure fixtures (stale BUILD, missing external dep, missing generated code, OOM, ENOSPC, cache unreachable, flock queue wait, sandbox failure, cache auth rejected) | 100% print a `Remedy:` line within the first 20 lines and at most 60 lines in total (Task 1.6d) | Task 0.1f: same fixtures under make |
 | T6 | Agent experience | manual regen-codegen steps (`make proto-gen`, `make ent-gen`, `make sync` run only to unblock a build) per agent session, from transcripts | at most 10% of baseline median per session after the flip (reported at Story 7.6, enforced at Story 10.1) | Task 0.1f transcript scan |
 | T7 | Hermeticity | hermeticity before/after (collector `tools/bzl/baseline/hermeticity.sh`, Tasks 0.1j and 7.5g): **H1** distinct host executables outside the workspace and the pinned toolchain dirs, and distinct non-loopback network destinations, seen by `strace -f -e trace=execve,connect` during a fresh-clone build; **H2** fresh-clone build success with `PATH` scrubbed to `env -i PATH=/usr/bin:/bin`; **H3** actions that fail under a strict hermetic sandbox (undeclared inputs), Bazel only; **H4** `h_downgrades`, the number of rows in `tools/bzl/hermetic-downgrades.txt` | H1 host executables at most 0.50 x the make baseline (allow-listed Bazel prerequisites excluded) and 0 network destinations during build actions (fetches only inside listed repository rules); H2 true; H3 equals 0; H4 equals the number of D-HERMETIC downgrades the owner accepted in `owner-attestations.yaml` (so a downgrade is visible, counted against T7 and never silent; an unlisted host-tool action fails T7) | Task 0.1j make-path numbers |
+| T8 | CI speed (e2e) | e2e work avoided: e2e runner-minutes (sum of Playwright shard job durations) per partial-change PR, selective Bazel e2e vs the full suite, plus `e2e_escapes` (a spec that fails on `main`/nightly and was not selected on the PR that introduced the failure; collector `tools/bzl/parity/e2e-avoided.sh`, Tasks 12.4d and 7.5g) | at most 0.50 x the baseline median e2e runner-minutes of the 30 sampled partial-change PRs (two sampled PR runs give about 113 runner-minutes, 1030-1949 s per shard, five shards; `ci-billed-minutes.sh` computes the real median) and `e2e_escapes` equals 0 over the last N soak runs; not waivable | Task 0.1i partial-change PR set, restricted to the `e2e (Bun build) shard` jobs; Story 0.15 (`e2e_selected_share_median`) |
 
 **Sampling, proxies and risky assumptions (triad iteration 2).**
 - *Sampling of the T1/T2 partial-change set.* Task 0.1i takes the 100 most recent merged PRs, classifies each `partial` (touches no `GlobalInputs` file) or `global`, and uses the 30 most recent `partial` PRs. Representativeness check: the sample's median changed-file count is within 2x of the 100-PR population's and the share of PRs touching each top-level area (`server/`, `session/`, `web-app/`, other) is within 20 percentage points of the population's; on failure the sample is re-drawn stratified by top-level area and the report says `restratified: true`.
 - *T1 is a proxy.* The affected-target ratio measures work avoided, not time saved; T2 is the outcome and must be read with it. T2 needs billed or runner minutes joined by PR class (Task 0.1i): the repository is public, so GitHub bills 0 and the join uses job-duration runner-minutes weighted by OS multiplier (Linux 1, macOS 10, Windows 2), labelled as such.
-- *Risky assumption RA1: reverse-dependency fan-out is narrow* (most partial-change diffs reach at most 30% of the test targets). *RA2: time-to-green is not dominated by e2e, lint or runner setup* (the parts Bazel does not touch). Task 0.1f pre-measures both before any Bazel work, from the Go import graph and per-job timings; Task 0.14e trips EG5 if RA1 or RA2 fails.
+- *Risky assumption RA1: reverse-dependency fan-out is narrow* (most partial-change diffs reach at most 30% of the test targets). *RA2: time-to-green is not dominated by the parts Bazel does not touch* (runner setup, lint, and, before ADR-009, e2e). **Measured 2026-11-02: RA2 = 0.987** (e2e median 1974 s, runner queue/setup 398 s, lint 0 s, other 34 s of a 2601 s median span; `baselines.md`), so it fails the 0.60 threshold; that measurement is the reason for Epic 12 and ADR-009. After ADR-009, RA2 and EG5 apply to the share that remains after e2e selection: the projected critical path is `setup_and_queue + lint + go_or_other + e2e_median x s`, where `s` is the median selected-spec share measured by spike S14 (Story 0.15), and EG5 is judged on that projection (Task 0.14e). Task 0.1f pre-measures both before any Bazel work, from the Go import graph and per-job timings; Task 0.14e trips EG5 if RA1 or RA2 fails.
 - *Mid-point economic re-check.* Story 2.7 re-evaluates T1 (replay), T3 and T4 after Epics 1 and 2, before Epic 3 releases, as an extra decision gate (never a downscale).
 
 **Post-cutover status of native `go build` / `go test` / gopls (decided; ADR-002 amended).** After the flip, Bazel is the build of record and the only path that produces shipped artifacts, release binaries, parity evidence and the CI pass/fail verdict. Native `go build`, `go vet`, `go test` and gopls stay working in every worktree after `make sync` (sync-gen materialises the `GenSurface`) and are **supported for editor tooling, golangci-lint, quick local iteration and bisecting only**; a native `go test` result is not authoritative (a disagreement is resolved by the Bazel result, and the ExclusionsFile lists known differences). They are not removed in Epic 10. The inverted precondition is announced, not hidden: Bazel needs no generated code, plain `go`/gopls needs `make sync` (printed by `make help` and `make bazel-doctor`, Task 1.6c; staleness caught by the cheap freshness form, Tasks 2.4d and 8.2d).
@@ -181,9 +182,13 @@ Within approach A, the sequence follows the owner's strangler path: foundations/
 - [ ] Cache hit-ratio floor and per-worktree disk bound (P10, Task 7.4c): proposal hit ratio median at least 0.60 over the last 20 warm `main` push runs and `output_base_disk_kb` at most 1.25 x baseline `disk_kb_worktree`; owner may waive either in `owner-attestations.yaml` — blocks Task 7.6a — owner: Tyler
 - [ ] Storage budget for `bazel-remote` and the shared disk cache on onyx: a separate dataset or quota'd `systemd` `StateDirectory` with `--max_size` at most 100 GB (the root filesystem also holds the live service's SQLite state; VERIFIED one 1.9 TB `/` at 67% used) — blocks Task 0.12b — owner: Tyler
 - [ ] Commit or ignore `MODULE.bazel.lock`: decided by spike S13 (Task 0.10d); ignoring it amends ADR-001's consequence line and needs owner approval — blocks Story 0.14 — owner: Tyler
-- [ ] Confirm or amend improvement targets T1-T7 and the economic-gate factors EG1-EG5 (proposals in "Improvement targets" and Task 0.14e) after Task 0.1g computes them from baseline — blocks Story 0.14 — owner: Tyler
+- [ ] Confirm or amend improvement targets T1-T8 and the economic-gate factors EG1-EG5 (proposals in "Improvement targets" and Task 0.14e) after Task 0.1g computes them from baseline — blocks Story 0.14 — owner: Tyler
 - [ ] Waiver policy: proposal maximum validity 90 days, reason of at least 20 characters, only the hit-ratio floor and the 1.25 x disk ceiling are waivable (Task 7.5f) — owner may tune — blocks Task 7.6a — owner: Tyler
 - [ ] Queue-wait timeout for the `tools/bazel` flock slot: proposal 900 s with exit 75 (Task 1.6a E7) — owner may tune — owner: Tyler
+- [ ] ADR-009 (selective e2e): accept the recommended design (observed-dependency slices, out-of-band binary, selection by `rdeps`, nightly full run, shadow before blocking) or choose differently; decided at Story 0.14 from spike S14 — blocks Epic 12 — owner: Tyler
+- [ ] ADR-009: accept the residual risk that a PR can merge a regression the nightly full run catches the next cycle (bounded by the escape detector and the shadow phase), versus keeping full e2e on every PR; and set the proposal values: replay median selected share at most 0.50, p90 at most 0.90, T8 at most 0.50 x baseline e2e minutes, zero escapes over N runs — blocks Story 0.15's verdict and Task 12.6a — owner: Tyler
+- [ ] ADR-009: the full e2e suite on `main` push stays blocking in effect; confirm whether `main` red from the nightly or push full run should block merging (convention, as with D-PROTECT-MERGE) — blocks Task 12.6a — owner: Tyler
+- [ ] ADR-009: spend for Story 0.15 and Task 12.5c (about 30 mutation runs, about 113 runner-minutes each on the public repository's free runners; the harness bounds this with targeted runs) — owner informed, agent proceeds unless the owner objects — owner: Tyler
 - [ ] Record the economic-gate decision (`continue`, `re-plan`, `pause`, `revert`) in `owner-attestations.yaml` if Task 0.14e prints `OWNER DECISION` — blocks Epics 1-11 only on a trip — owner: Tyler
 
 ## Dependency Visualization
@@ -210,7 +215,7 @@ E0 Spikes/Foundation (gate) ─ verdicts + ADR final ─┬───────
                                                                           E10 make retention ─► removal
 ```
 
-**Cross-epic edges not drawn above** (all are hard dependencies): Task 2.2a <- Task 3.1a (`protoc-gen-es` comes from the Bun repository rule); Task 2.6a <- Task 3.1a (the `//...` build includes `//web-app`); Story 2.7 <- Epic 1, Epic 2 and Tasks 0.1f/0.1g/0.14e; Tasks 4.10f/4.7a/4.7b <- Tasks 4.8a and 4.9a; Task 8.2b <- Task 8.2e; Task 7.8b <- Tasks 0.2h and 0.10b (`make setup-git`); Task 10.2a <- Tasks 10.2d and 10.2c; Task 1.6a E5 hint <- Task 11.4a (script lands with Epic 1); Task 1.6a E1/E2 hints <- Task 1.5a (`make gazelle`, `make sync`, `make setup-git` skeleton targets).
+**Cross-epic edges not drawn above** (all are hard dependencies): Task 2.2a <- Task 3.1a (`protoc-gen-es` comes from the Bun repository rule); Task 2.6a <- Task 3.1a (the `//...` build includes `//web-app`); Story 2.7 <- Epic 1, Epic 2 and Tasks 0.1f/0.1g/0.14e; Tasks 4.10f/4.7a/4.7b <- Tasks 4.8a and 4.9a; Task 8.2b <- Task 8.2e; Task 7.8b <- Tasks 0.2h and 0.10b (`make setup-git`); Task 10.2a <- Tasks 10.2d and 10.2c; Task 1.6a E5 hint <- Task 11.4a (script lands with Epic 1); Task 1.6a E1/E2 hints <- Task 1.5a (`make gazelle`, `make sync`, `make setup-git` skeleton targets); **Epic 12 (ADR-009)** <- Stories 3.1 and 3.4 (web dist and root binary), Stories 4.1-4.2 (test env helpers and the `go_test` macro), Story 7.3 (`affected-targets.sh`, `GlobalInputs`), Story 7.4 (read-only PR cache, `main`-only writes) and Story 0.15 (S14 verdict at Story 0.14); Task 12.6a <- Story 7.6 soak and `e2e_escapes = 0`; Task 7.5g (T8) <- Task 12.4d; Task 10.2c must not delete the legacy full e2e job before Task 12.6a; Task 0.14e (EG5) <- Story 0.15.
 
 ## Effort estimate
 
@@ -231,6 +236,7 @@ Basis: bands and weights INFERRED (ESTIMATION.md); recalibrate after the first i
 | 0.11 Spike S11 - Gazelle behaviour on this repo | 3 | 1M, 2S | 240 | 12% | 264 |  |
 | 0.12 Spike S10 - remote cache reachability, server-enforced read-only, secret redaction | 6 | 5S, 1XS | 290 | 12% | 319 | owner deploys bazel-remote on onyx |
 | 0.13 Spike S12 - custom analyzers as nogo | 1 | 1M | 130 | 12% | 143 |  |
+| 0.15 Spike S14 - selective e2e through observed-dependency slices | 4 | 3M, 1S | 445 | 12% | 490 | none (about 30 full-suite runs on free runners) |
 | 0.14 Spike gate - verdicts, ADR finalisation, owner sign-off | 5 | 2S, 3XS | 155 | 12% | 171 | owner reviews verdicts; creates fork repos if any; owner decision if the economic gate trips (Task 0.14e) |
 | 1.1 Gazelle-generated BUILD files and the sqlite test move | 3 | 1M, 1S, 1XS | 200 | 12% | 220 |  |
 | 1.2 Build and test the generated-independent subset | 2 | 1M, 1S | 185 | 12% | 204 |  |
@@ -291,8 +297,15 @@ Basis: bands and weights INFERRED (ESTIMATION.md); recalibrate after the first i
 | 11.6 Reviewability of BUILD changes | 3 | 3S | 165 | 12% | 182 |  |
 | 11.7 Starlark surface cap and buildifier | 1 | 1S | 55 | 12% | 61 |  |
 | 11.8 Version pinning and upgrade canary | 1 | 1S | 55 | 12% | 61 |  |
+| 12.1 Observed-dependency manifest | 4 | 1M, 3S | 295 | 12% | 325 |  |
+| 12.2 Slice targets in the Bazel graph | 3 | 2M, 1XS | 275 | 12% | 303 |  |
+| 12.3 The out-of-band binary seam | 2 | 1S, 1XS | 70 | 12% | 77 |  |
+| 12.4 Selection, shard planning and the shadow job | 4 | 1M, 3S | 295 | 12% | 325 | shadow runs accrue (count-based, same N as Story 7.6) |
+| 12.5 Soundness controls | 4 | 1M, 2S, 1XS | 255 | 12% | 281 | nightly runs accrue |
+| 12.6 Make selective e2e the PR gate | 1 | 1S | 55 | 12% | 61 | soak and zero escapes; owner records the flip |
+| 12.7 The other slow suites | 1 | 1M | 130 | 12% | 143 |  |
 
-- **Raw task total**: 15825k tokens over 218 tasks, 73 stories, 12 epics. **CU before verification**: 17.43M. **Verification multiplier x1.75** (per-story spec and quality review, `6-verify` layers, CI reruns): **30.50M CU**. Size band: **XL (greater than 15M CU)**, consistent with the XL band recorded in requirements.md (informational, not a gate).
+- **Raw task total**: 17645k tokens over 241 tasks, 81 stories, 13 epics. **CU before verification**: 19.43M. **Verification multiplier x1.75** (per-story spec and quality review, `6-verify` layers, CI reruns): **34.00M CU**. Size band: **XL (greater than 15M CU)**, consistent with the XL band recorded in requirements.md (informational, not a gate).
 - Rule-repo fork paths, if chosen, are not in the table; ADR-008's matrix costs them as roughly +0.4M to +1.5M CU each (INFERRED) and they replace, not add to, the matching workaround tasks.
 
 **Critical path in agent waves** (a wave = tasks that can run concurrently in separate worktrees; at most 3 Bazel-heavy runs at once because of host memory and the backlog WIP limit of 2):
@@ -311,7 +324,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 **Wall-clock blockers** (the only calendar-time items; owner = Tyler unless noted):
 - Deploy `bazel-remote`, the read-only and read-write proxy listeners, Tailscale ACL tags and the `bazel-cache-write` environment on onyx/GitHub (Story 0.12, 7.4) - owner.
 - Owner review of spike verdicts and creation of any fork repos (Story 0.14) - owner.
-- Owner confirmation of improvement targets T1-T7 and economic-gate factors (Task 0.1g, evaluated at Task 0.14e); an owner decision if the economic gate trips - owner.
+- Owner confirmation of improvement targets T1-T8 and economic-gate factors (Task 0.1g, evaluated at Task 0.14e); an owner decision if the economic gate trips - owner.
 - Soak of the non-blocking job (Story 7.6; N and K fixed by the owner before Epic 7) and the D-PROTECT-MERGE decision - owner.
 - macOS device TCC verification on arm64 and amd64 (Story 5.2, P8) - owner.
 - Owner sign-off of the parity gate and the `BUILD_SYSTEM` flip (Story 8.6), and the live `make install-service` (Story 9.1d) - owner.
@@ -351,6 +364,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 | S11 gazelle (0.11) | PASS iff second Gazelle run has zero diff; zero diff with and without a synced `GenSurface` present; at most 8 `resolve`/`resolve_regexp` lines in total (a `resolve_regexp` mapping all ent packages to `tools/bzl/ent` targets counts as one line if Gazelle substitutes `$1`; if it does not, the extension path applies); and `session/ent/schema` still gets its generated BUILD file | Directives + `map_kind` macro (S) | Custom Gazelle extension with Go unit tests (M-L) | Directives first |
 | S13 lockfile (0.10d) | PASS iff, over a 20-PR replay of two-dependency-addition merges, the chosen option (committed `MODULE.bazel.lock` with the regenerating merge driver, versus not committing it) yields zero lock conflicts and zero `--lockfile_mode=error` failures on the replayed `main`, AND a real two-PR merge on GitHub shows whether GitHub-side merges ignore repo merge drivers (INFERRED today) | Do not commit the lock (amends ADR-001, owner approval) | none | Commit lock + merge driver (Tasks 0.10b, 11.2a) |
 | S12 nogo (0.13) | One `tools/lint` analyzer runs as `nogo` and flags a seeded violation | Keep `make lint-custom` wrapped (zero) | none | Wrapped; Story 8.4 skipped |
+| S14 selective e2e (0.15) | PASS iff 193/193 specs have an observed manifest entry, the replay over the last 100 `main` commits gives median selected share at most 0.50, p90 at most 0.90 and `__ALL__` fallback at most 15%, the 30-mutation backtest has 0 misses, and the Bazel semantic checks S-a to S-e pass | Diff-line coverage selection with an escape budget (M); or a coarser slice (package prefix plus declared registry sources) | none | Epic 12 not released; e2e stays a full run (owner decision, ADR-009 Consequences) |
 
 #### Story 0.1: Measure baselines for the three drivers
 **As the** owner, **I want** pre-Bazel numbers for CI time-to-green, cold build time and disk per worktree, and hermetic fresh-clone behaviour, **so that** every later claim is compared with evidence.
@@ -364,7 +378,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - The measured pain behind the decision is recorded (why now).
   - *Given* the repo history and agent transcripts, *When* `tools/bzl/baseline/pain-numbers.sh` runs, *Then* `baselines.md` has a "Measured pain" section with CI p50/p95 time-to-green, cold worktree build time, disk per worktree, the count of manual regen-codegen steps per agent session (median and p90 over the last 30 sessions), warm one-package `go test` latency, and the legacy first-error legibility result for the 9 seeded fixtures; `decisions/ADR-001-adopt-bazel-bzlmod-build-of-record.md` links to that section.
 - Improvement targets exist before any Bazel work is judged.
-  - *Given* those baselines, *When* Task 0.1g completes, *Then* `tools/bzl/baseline/targets.yaml` holds targets T1-T7 (see "Improvement targets" above) with formula, baseline value and target value, and `owner-attestations.yaml` records `targets_confirmed: <date>` by the owner (target set at Story 0.1 from baseline, owner-confirmed).
+  - *Given* those baselines, *When* Task 0.1g completes, *Then* `tools/bzl/baseline/targets.yaml` holds targets T1-T8 (see "Improvement targets" above) with formula, baseline value and target value, and `owner-attestations.yaml` records `targets_confirmed: <date>` by the owner (target set at Story 0.1 from baseline, owner-confirmed).
 - The T1/T2 sample is representative and the billed-minutes join exists.
   - *Given* the 100 most recent merged PRs, *When* `bash tools/bzl/baseline/pr-sample.sh` runs, *Then* it prints JSON with 30 `partial` PRs, `population: 100` and either `repr.ok: true` or `restratified: true`, and `ci-billed-minutes.sh` prints runner-minutes and time-to-green p50 for the `partial`, `global` and `all` classes.
 - Hermeticity before is recorded.
@@ -420,7 +434,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Verify: `bash tools/bzl/baseline/pain-numbers.sh | tee tools/bzl/baseline/measured.json | jq -e '(.ci_p50_s|type=="number") and (.ci_p95_s|type=="number") and (.cold_worktree_wall_s|type=="number") and (.disk_kb_worktree|type=="number") and (.regen_steps_per_session_median|type=="number") and (.warm_one_pkg_test_s|type=="number") and (.ra1_median_fanout|type=="number") and (.ra2_non_go_share|type=="number")'` prints `true` (the `tee` saves the output as `measured.json` for later doc checks); `grep -c 'Measured pain' project_plans/bazel-conversion/implementation/baselines.md` is at least `1`.
 
 ##### Task 0.1g: Improvement targets and ADR-001 evidence link (cost XS)
-- Compute T1-T7 from `baselines.md` using the proposal formulas in "Improvement targets" and write `tools/bzl/baseline/targets.yaml` (`{id, formula, baseline_value, target_value, source}` per row, plus the economic-gate factors EG1-EG5 of Task 0.14e). Re-score the RICE table in ADR-001 with the measured Reach/Impact values (inputs that remain unmeasured stay labelled UNVERIFIED) and add the link from ADR-001 to the "Measured pain" section. Ask the owner to confirm or amend each target; record `targets_confirmed: <date>` and any amendment reason in `owner-attestations.yaml`. Owner confirmation is a wall-clock blocker for Story 0.14, not for Epic 0 measurement work.
+- Compute T1-T8 from `baselines.md` (T8's baseline is the e2e share of the partial-class runner-minutes from the `e2e (Bun build) shard` jobs, taken from the same Task 0.1i sample) using the proposal formulas in "Improvement targets" and write `tools/bzl/baseline/targets.yaml` (`{id, formula, baseline_value, target_value, source}` per row, plus the economic-gate factors EG1-EG5 of Task 0.14e). Re-score the RICE table in ADR-001 with the measured Reach/Impact values (inputs that remain unmeasured stay labelled UNVERIFIED) and add the link from ADR-001 to the "Measured pain" section. Ask the owner to confirm or amend each target; record `targets_confirmed: <date>` and any amendment reason in `owner-attestations.yaml`. Owner confirmation is a wall-clock blocker for Story 0.14, not for Epic 0 measurement work.
 - Files: `tools/bzl/baseline/targets.yaml`, `baselines.md`, `decisions/ADR-001-adopt-bazel-bzlmod-build-of-record.md`, `owner-attestations.yaml`
 - Verify: `yq -e '(.targets|length)>=7 and (.targets|all(.formula and .baseline_value != null and .target_value != null))' tools/bzl/baseline/targets.yaml` prints `true`; `grep -c 'Measured pain' project_plans/bazel-conversion/decisions/ADR-001-adopt-bazel-bzlmod-build-of-record.md` is at least `1`; `yq -e '.targets_confirmed' owner-attestations.yaml` prints a date.
 
@@ -841,11 +855,47 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Files: spike `BUILD.bazel`, spike `MODULE.bazel`
 - Verify: `bazel build //tools/bzl/spike/nogo_seed:all 2>&1 | grep -c norawgitcli` is at least 1 with the seed present.
 
+#### Story 0.15: Spike S14 - selective e2e through observed-dependency slices (ADR-009)
+**As the** owner, **I want** to know before Epic 12 whether a spec's measured dependencies are narrow enough that a typical PR re-runs well under half the e2e suite with no missed failures, **so that** the directive "only changed dependencies re-run their tests" is decided on evidence. (File order: this story is listed before Story 0.14 because the gate reads its verdict; its id is the next free number.)
+**Acceptance Criteria**:
+- Registry coverage is measured and the gap list is committed.
+  - *Given* the 193 specs under `tests/e2e/`, `docs/registry/features/**`, the two aggregate registries and `web-app/src/lib/features/features/*.ts`, *When* `python3 tools/bzl/e2e/registry-coverage.py` runs, *Then* it prints the table of ADR-009 (specs with a feature id, resolvable ids, specs with an existing source file, Go/web split, unresolvable id list) and writes `tests/e2e/feature-gaps.json`; the 2026-11-02 baseline is 193 / 119 (61.7%) / 80 (41.5%) / 102 (52.8%) / 55 Go and 68 web, 106 of 238 ids unresolvable. This is information, not a pass criterion: the registry is the seed and cross-check, not the slice source.
+- The observed manifest covers every spec and validates the registry.
+  - *Given* Tasks 0.15a-b, *When* `python3 tools/bzl/e2e/check-manifest.py` runs, *Then* 193 of 193 specs have a non-empty `go_pkgs` (or a recorded `no_server` reason) and, for the specs whose declared registry handler package exists, at least 90% of those declared packages appear in the observed set (a lower figure means the registry is unreliable and is recorded as such).
+- Selection is narrow enough, measured by replay.
+  - *Given* the last 100 first-parent commits on `main`, *When* `bash tools/bzl/e2e/replay-selection.sh` runs the rdeps selection for each commit that touches non-test Go or web source (66 on 2026-11-02, of which 59 touch `session/`, `server/` or `config/`), *Then* the median selected-spec share is at most 0.50, the p90 is at most 0.90 and the share of commits that fall back to `__ALL__` is at most 0.15; today the share is 1.00 for every relevant PR (`build.yml:97`).
+- Zero missed failures against a full run.
+  - *Given* 30 seeded mutations (a patch each, spread over at least 15 Go packages, 10 web files and 5 RPC handlers, listed in `tools/bzl/e2e/mutations.yaml`), *When* `bash tools/bzl/e2e/mutation-backtest.sh` runs the full suite and the selected set per mutation, *Then* for every mutation that fails at least one spec in the full run the selected set contains at least one failing spec: 0 misses. A spec that fails in the full run and not in the selected set is a miss; on any miss the verdict is `Fail` or `FallbackWorkaround` (coarser slices) and the missing edge is recorded.
+- The Bazel semantics ADR-009 relies on are verified on a throwaway target.
+  - *Given* a spike target with a declared slice and `--test_env` binary path, *When* the semantic checks of Task 0.15d run, *Then*: (S-a) editing a file inside the slice re-runs the test and editing one outside does not; (S-b) swapping the file behind the constant `--test_env` path does not change the key; (S-c) a failing run is re-executed on the next invocation and is not served from the disk cache; (S-d) `bazel query rdeps` over a source-file label finds the target through a `go_library` dependency; (S-e) per-target Playwright start-up overhead is at most 15% of a 5-spec group's wall time, measured against the same specs run directly. Each check prints `S-x: PASS|FAIL`.
+**Verdict mapping**: all criteria hold: `Pass`. Replay median above 0.50 or p90 above 0.90 but zero misses: `FallbackWorkaround` (coarser selection is already the baseline; add diff-line coverage selection, ADR-009 Consequences, cost M, needs a larger escape budget). Any miss, or S-a/S-c/S-d failing: `Fail` for the sound-slice design; the owner decides between diff-line coverage selection with an escape budget and keeping e2e as a full run (the directive then applies to the Go, Jest and integration layers only). The measured median share is written to `spike-results.yaml` as `e2e_selected_share_median` and read by the economic gate (Task 0.14e).
+**Files**: `tools/bzl/e2e/registry-coverage.py`, `tools/bzl/e2e/replay-selection.sh`, `tools/bzl/e2e/mutation-backtest.sh`, `tools/bzl/e2e/mutations.yaml`, `tests/e2e/slice-manifest.json` (spike copy), `tests/e2e/feature-gaps.json`, `spike-results.md`
+
+##### Task 0.15a: Cover-instrumented per-spec capture for all specs (cost M)
+- Prototype Tasks 12.1a-12.1c on the spike branch: capture each spec with `go build -cover -coverpkg=./...` and `GOCOVERDIR`, `go tool covdata pkglist`, plus the route-visit and JS-coverage capture; run on 20 representative specs first (record the per-spec capture wall time), then all 193 across the five CI shards' worth of runners. Record the specs that cannot be captured (perf, visual-regression, secondary browsers) as `excluded` with a reason.
+- Files: `tools/bzl/e2e/capture.sh`, `tools/bzl/e2e/gen-manifest.py`, `tests/e2e/slice-manifest.json`
+- Verify: `python3 tools/bzl/e2e/check-manifest.py; echo $?` prints `0`.
+
+##### Task 0.15b: Registry coverage and gap list (cost S)
+- Write `tools/bzl/e2e/registry-coverage.py` (spec header parsing as in `tools/coverage/feature-coverage.ts`, including `FEATURE_CATALOG[...]` references, resolution against the three registry sources, existence check of the source files, the cross-check against the observed manifest) and commit `tests/e2e/feature-gaps.json`.
+- Files: `tools/bzl/e2e/registry-coverage.py`, `tests/e2e/feature-gaps.json`
+- Verify: `python3 tools/bzl/e2e/registry-coverage.py --json | jq -e '.specs==193 and .with_resolvable_id>=1 and (.unresolved_ids|length)>=0'` prints `true`.
+
+##### Task 0.15c: Selection replay on the last 100 commits (cost M)
+- `tools/bzl/e2e/replay-selection.sh` runs a prototype of `affected-e2e.sh` (Task 12.4a) per commit from `git log main --first-parent -n 100 --name-only`, treats docs-only and test-only commits as zero prod change, and prints the selected-share distribution, the `__ALL__` fallback rate and a per-top-level-directory breakdown (so a core-package problem shows up by name).
+- Files: `tools/bzl/e2e/replay-selection.sh`, `tools/ci/affected-e2e.sh`
+- Verify: `bash tools/bzl/e2e/replay-selection.sh --json | jq -e '.commits==100 and .share_median<=0.50 and .share_p90<=0.90 and .all_fallback_rate<=0.15'` prints `true`.
+
+##### Task 0.15d: Mutation backtest and Bazel semantic checks (cost M)
+- Write `mutation-backtest.sh` and `mutations.yaml` (30 patches), run per the AC on the five-runner matrix (the cost is about 30 full runs of about 113 runner-minutes each, on a public repository; the harness first runs only the specs the mutation's package appears in plus a 10% random sample of the rest, then confirms any non-selected failure with a full run, to bound the spend) and the semantic checks S-a to S-e on a throwaway target in `tools/bzl/spike/e2e_slice/`.
+- Files: `tools/bzl/e2e/mutation-backtest.sh`, `tools/bzl/e2e/mutations.yaml`, `tools/bzl/spike/e2e_slice/BUILD.bazel`, `tools/bzl/e2e/semantic-checks.sh`
+- Verify: `bash tools/bzl/e2e/mutation-backtest.sh --summary | grep -c '^MISS '` prints `0`; `bash tools/bzl/e2e/semantic-checks.sh | grep -cE '^S-[a-e]: PASS$'` prints `5`.
+
 #### Story 0.14: Spike gate - verdicts, ADR finalisation, owner sign-off
 **As the** owner, **I want** one place that shows every spike verdict and the decided path, **so that** I can release Epics 1-11 or redirect.
 **Acceptance Criteria**:
 - Complete and machine-checkable.
-  - *Given* the spike ids S-gomod, S1, S1-ts, S2, S3, S4, S5, S6, S7, S8, S9, S10, S10-redaction, S11, S12, S13, *When* `python3 tools/bzl/check-spike-results.py` runs on `spike-results.yaml` (rows `{spike, verdict, path, cost}`), *Then* it exits 0 only if every id has exactly one row, every `verdict` is one of `Pass`, `FallbackWorkaround`, `FallbackFork`, `Fail`, and every `FallbackWorkaround`/`FallbackFork` row names a `path` and `cost`; downstream tasks (for example Task 8.4's skip rule and the S4-fail consequences) read the file, not prose.
+  - *Given* the spike ids S-gomod, S1, S1-ts, S2, S3, S4, S5, S6, S7, S8, S9, S10, S10-redaction, S11, S12, S13, S14, *When* `python3 tools/bzl/check-spike-results.py` runs on `spike-results.yaml` (rows `{spike, verdict, path, cost}`), *Then* it exits 0 only if every id has exactly one row, every `verdict` is one of `Pass`, `FallbackWorkaround`, `FallbackFork`, `Fail`, and every `FallbackWorkaround`/`FallbackFork` row names a `path` and `cost`; downstream tasks (for example Task 8.4's skip rule and the S4-fail consequences) read the file, not prose.
 - Flag names are verified, not assumed.
   - *Given* the flag list of Task 0.2b, *When* `grep -c 'spike-verified' spike-results.md` runs, *Then* it prints at least 24 (one per listed flag: the 20 flags of Task 0.2b plus the 4 recorded-absent flags, or a recorded "absent on 9.3.1" line).
 - Validation gaps are closed or waived.
@@ -867,7 +917,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Verify: `grep -hE '^\*\*Status\*\*: Accepted' decisions/ADR-00[2347]*.md | wc -l` equals 4.
 
 ##### Task 0.14e: Economic abort / re-plan decision gate (cost S)
-- Write `tools/bzl/economic-gate.py` and a unit test. Inputs: `spike-results.yaml`, the S6/S10 measurements in `spike-results.md`, `baselines.md`, and the factors in `targets.yaml` (proposal values; **set at Story 0.1 from baseline, owner-confirmed**). Criteria, any one trips the gate: **EG1** projected PR time-to-green p50 (S10 second-run Bazel job wall time plus the unconverted jobs) above 1.10 x baseline p50; **EG2** projected cold CI (S10 cold run, empty cache) above 1.5 x baseline p50; **EG3** first-worktree Bazel cold build (S6) above 3 x the `baseline-worktree.json` make median, or second-worktree cold median above 2 x the S6 bound (60% of make); **EG4** the plan's CU total re-costed with the chosen fallback paths (Fallback matrix costs) above 1.25 x the verified total in the header; **EG5** (risky assumptions, Task 0.1f) RA1 median reverse-dependency fan-out above 0.60, or RA2 share of the baseline critical path outside Go build and test above 0.60, because then T1/T2 cannot be reached by Bazel alone. `economic-gate.py --midpoint` re-evaluates T1, T3 and T4 for Story 2.7. Output as in the Story 0.14 AC. The trip list is appended to `spike-results.md` with each measured value next to its limit.
+- Write `tools/bzl/economic-gate.py` and a unit test. Inputs: `spike-results.yaml`, the S6/S10 measurements in `spike-results.md`, `baselines.md`, and the factors in `targets.yaml` (proposal values; **set at Story 0.1 from baseline, owner-confirmed**). Criteria, any one trips the gate: **EG1** projected PR time-to-green p50 (S10 second-run Bazel job wall time plus the unconverted jobs) above 1.10 x baseline p50; **EG2** projected cold CI (S10 cold run, empty cache) above 1.5 x baseline p50; **EG3** first-worktree Bazel cold build (S6) above 3 x the `baseline-worktree.json` make median, or second-worktree cold median above 2 x the S6 bound (60% of make); **EG4** the plan's CU total re-costed with the chosen fallback paths (Fallback matrix costs) above 1.25 x the verified total in the header; **EG5** (risky assumptions, Task 0.1f) RA1 median reverse-dependency fan-out above 0.60, or RA2 above its limit, because then T1/T2 cannot be reached by Bazel alone. RA2 is evaluated on the post-selection projection (ADR-009): `(setup_and_queue + lint + go_or_other + e2e_median x s) / baseline_span` above 0.90, where `s = e2e_selected_share_median` from spike S14 (Story 0.15); if S14 has no verdict (`s` unknown) `s = 1.0`, which on the measured baseline (0.987) trips EG5, so Story 0.15 must be decided before the gate. The residual non-e2e share `(setup_and_queue + lint + go_or_other) / baseline_span` (0.17 on the measured baseline: 432 s of 2601 s) must stay at or below 0.60 as before. `economic-gate.py --midpoint` re-evaluates T1, T3 and T4 for Story 2.7. Output as in the Story 0.14 AC. The trip list is appended to `spike-results.md` with each measured value next to its limit.
 - Options the owner may choose (recorded, never auto-selected): `continue` (with reason), `re-plan` (reorder or re-cost stages, scope unchanged), `pause` (stop after a named stage; later stages stay in the plan), `revert` (make-only, strangler artifacts deleted). A trip never removes a task from this plan.
 - Files: `tools/bzl/economic-gate.py`, `tools/bzl/economic-gate_test.py`, `spike-results.md`, `owner-attestations.yaml`
 - Verify: `python3 -m unittest tools/bzl/economic-gate_test.py` exits 0 and includes one fixture per criterion that exits 3 plus an all-clear fixture that exits 0; `python3 tools/bzl/economic-gate.py; echo $?` prints `0` or `3`, and on `3` the `economic_gate` key exists in `owner-attestations.yaml` before Task 1.1a starts.
@@ -1745,10 +1795,10 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 | P4 | Generated-code equivalence | `compare-proto.sh`, `compare-ent.sh` exit 0 (gofmt-normalised; TS equal) | existing scripts |
 | P5 | Binary behaviour | `compare-binary.sh` exit 0 (version fields equal, embed sha256 equal to pins) | `compare-binary.sh` |
 | P6 | Web parity | `compare-web.sh` exit 0; Jest pass-set diff empty | `compare-web.sh` |
-| P7 | E2E | Playwright suite pass count against the Bazel binary equals the make-binary run | `parity/e2e.sh` (uses `TEST_SERVER_BINARY`) |
+| P7 | E2E | Playwright suite pass count against the Bazel binary equals the make-binary run; after Epic 12, also the full set of `//tests/e2e:all` targets run with `--nocache_test_results` against the Bazel binary has a comparator verdict equal to the legacy runner's | `parity/e2e.sh` (uses `TEST_SERVER_BINARY`) |
 | P8 | macOS | Signed Bazel binary keeps TCC grants on arm64 and amd64; `otool` check passes | owner checklist (Task 5.2b) |
 | P9 | Deploy dry run | Isolated manual instance (ports 62871/62872, `STAPLER_SQUAD_TMUX_SOCKET=ssq-manual-1`) from the Bazel binary passes the smoke list | `scripts/bazel-manual-instance.sh` (Task 7.5e, moved here from Epic 9 so the gate can pass before Epic 8) |
-| P10 | Performance | Warm no-op `bazel build //:stapler-squad` at most 10 s (median of 5 runs); PR time-to-green (same definition as Task 0.1a: last required workflow completion minus first start per head SHA) p50 over at least 20 Bazel PR runs is at most 1.10 x the `baselines.md` p50 (10% tolerance for runner variance, with host load recorded beside each sample) and the per-workflow p50 of every required workflow is also within 1.10 x its baseline; second-worktree cold build median of 5 at most 30% of the `baseline-worktree.json` make median (same definition as Story 0.10); per-worktree disk (`output_base_disk_kb`) not more than 1.25 x baseline `disk_kb_worktree` unless the owner waives; cache hit ratio median at least 0.60 over the last 20 warm `main` push runs unless the owner waives; **cold row**: time-to-green with an empty remote cache and an empty `actions/cache` is at most 1.5 x the `baselines.md` p50, and Task 7.6a is blocked until it holds; outbound bytes per run are reported, and if the 1.10 x per-workflow bound fails ADR-004 falls back to `actions/cache` as the primary tier. **Improvement rows (required)**: T1-T7 from "Improvement targets" above, with values from `tools/bzl/baseline/targets.yaml` (set at Story 0.1 from baseline, owner-confirmed): T1 work-avoided ratio, T2 billed minutes and time-to-green on partial-change PRs, T3 second-worktree cold build and disk, T4 edit-build-test latency, T5 first-error legibility, T6 regen steps per session (reported until Story 10.1), T7 hermeticity (H1-H4 against `hermeticity-make.json`; the report prints `h_downgrades`). Non-regression bounds and improvement rows are both required; improvement rows are never waivable | `bazel-trend.sh`, `bazel-worktree-cost.sh`, `improvement.sh` |
+| P10 | Performance | Warm no-op `bazel build //:stapler-squad` at most 10 s (median of 5 runs); PR time-to-green (same definition as Task 0.1a: last required workflow completion minus first start per head SHA) p50 over at least 20 Bazel PR runs is at most 1.10 x the `baselines.md` p50 (10% tolerance for runner variance, with host load recorded beside each sample) and the per-workflow p50 of every required workflow is also within 1.10 x its baseline; second-worktree cold build median of 5 at most 30% of the `baseline-worktree.json` make median (same definition as Story 0.10); per-worktree disk (`output_base_disk_kb`) not more than 1.25 x baseline `disk_kb_worktree` unless the owner waives; cache hit ratio median at least 0.60 over the last 20 warm `main` push runs unless the owner waives; **cold row**: time-to-green with an empty remote cache and an empty `actions/cache` is at most 1.5 x the `baselines.md` p50, and Task 7.6a is blocked until it holds; outbound bytes per run are reported, and if the 1.10 x per-workflow bound fails ADR-004 falls back to `actions/cache` as the primary tier. **Improvement rows (required)**: T1-T8 from "Improvement targets" above, with values from `tools/bzl/baseline/targets.yaml` (set at Story 0.1 from baseline, owner-confirmed): T1 work-avoided ratio, T2 billed minutes and time-to-green on partial-change PRs, T3 second-worktree cold build and disk, T4 edit-build-test latency, T5 first-error legibility, T6 regen steps per session (reported until Story 10.1), T7 hermeticity (H1-H4 against `hermeticity-make.json`; the report prints `h_downgrades`), T8 e2e work avoided and escapes (from `e2e-avoided.sh`, Task 12.4d). Non-regression bounds and improvement rows are both required; improvement rows are never waivable | `bazel-trend.sh`, `bazel-worktree-cost.sh`, `improvement.sh` |
 
 *Given* all ten rows passing, *When* `bash tools/bzl/parity/run-all.sh` runs, *Then* it prints `PARITY: PASS` and exits 0; any failing row prints `PARITY: FAIL P<n>` and exits 1. Waivers never pass silently: when any waiver is in force the line is `PARITY: PASS WITH WAIVERS (<row>: <reason> until <date>; ...)`, the same list is the first block of the PR comment and the saved artifact, and an expired or malformed waiver is `PARITY: FAIL WAIVER <row>` (Tasks 7.5c, 7.5f). Only the hit-ratio floor and the 1.25 x disk ceiling rows of P10 are waivable.
 
@@ -1784,10 +1834,10 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Files: `tools/bzl/parity/check-waivers.py`, `tools/bzl/parity/check-waivers_test.py`, `tools/bzl/parity/run-all.sh`
 - Verify: `python3 -m unittest tools/bzl/parity/check-waivers_test.py` exits 0 with cases for an empty reason, an expiry 120 days out, an expired waiver, a waiver on `P5`, and a valid one; `bash tools/bzl/parity/run-all.sh --dry-run --waivers tools/bzl/parity/testdata/waiver-ok.yaml | grep -c 'PARITY: PASS WITH WAIVERS'` prints `1`.
 
-##### Task 7.5g: Improvement-target collector T1-T7 (cost M)
-- `tools/bzl/parity/improvement.sh` computes: T1/T2 by replaying `affected-targets.sh` over the 30 sampled partial-change PR diffs of Task 0.1i (reusing the Task 7.3c harness and the T1 replay of Task 2.7a; it prints `affected_target_count`, `total_target_count` and their ratio) and joining runner-minutes (the Task 0.1i definition) and time-to-green from the Bazel PR runs against the baseline for the partial class, the global class and the whole population; T3 from `bazel-worktree-cost.sh` (second vs first worktree cold build, `output_base_disk_kb`); T4 via `tools/bzl/parity/edit-build-test.sh` (edit one comment in a non-test file of `config/`, run `make test PKG=./config` warm, median of 5, `loadavg1` recorded); T5 by running `check-error-legibility.sh` (Task 1.6d); T6 by running `regen-steps.sh` over post-flip transcripts (reported as `UNMEASURED` before the flip). T7 by `tools/bzl/baseline/hermeticity.sh --system bazel` (H1-H3 against `hermeticity-make.json`; H4 is the row count of `tools/bzl/hermetic-downgrades.txt`, printed in the parity report, so every D-HERMETIC downgrade is visible and counted). Compares each with `targets.yaml` and prints one `T<n>: PASS|FAIL|UNMEASURED` line each; `UNMEASURED` is a FAIL for T1-T5 and T7 at the gate.
+##### Task 7.5g: Improvement-target collector T1-T8 (cost M)
+- `tools/bzl/parity/improvement.sh` computes: T1/T2 by replaying `affected-targets.sh` over the 30 sampled partial-change PR diffs of Task 0.1i (reusing the Task 7.3c harness and the T1 replay of Task 2.7a; it prints `affected_target_count`, `total_target_count` and their ratio) and joining runner-minutes (the Task 0.1i definition) and time-to-green from the Bazel PR runs against the baseline for the partial class, the global class and the whole population; T3 from `bazel-worktree-cost.sh` (second vs first worktree cold build, `output_base_disk_kb`); T4 via `tools/bzl/parity/edit-build-test.sh` (edit one comment in a non-test file of `config/`, run `make test PKG=./config` warm, median of 5, `loadavg1` recorded); T5 by running `check-error-legibility.sh` (Task 1.6d); T6 by running `regen-steps.sh` over post-flip transcripts (reported as `UNMEASURED` before the flip). T7 by `tools/bzl/baseline/hermeticity.sh --system bazel` (H1-H3 against `hermeticity-make.json`; H4 is the row count of `tools/bzl/hermetic-downgrades.txt`, printed in the parity report, so every D-HERMETIC downgrade is visible and counted). Compares each with `targets.yaml` and prints one `T<n>: PASS|FAIL|UNMEASURED` line each; `UNMEASURED` is a FAIL for T1-T5, T7 and T8 at the gate. T8 is computed by `tools/bzl/parity/e2e-avoided.sh` (Task 12.4d) and is `UNMEASURED` only before the Epic 12 shadow job exists.
 - Files: `tools/bzl/parity/improvement.sh`, `tools/bzl/parity/edit-build-test.sh`, `tools/bzl/parity/run-all.sh`
-- Verify: `bash tools/bzl/parity/improvement.sh | grep -cE '^T[1-7]: (PASS|FAIL|UNMEASURED)$'` prints `7`; `bash tools/bzl/parity/improvement.sh --fixture tools/bzl/parity/testdata/improvement-fail.json; echo $?` prints `1`.
+- Verify: `bash tools/bzl/parity/improvement.sh | grep -cE '^T[1-8]: (PASS|FAIL|UNMEASURED)$'` prints `8`; `bash tools/bzl/parity/improvement.sh --fixture tools/bzl/parity/testdata/improvement-fail.json; echo $?` prints `1`.
 
 #### Story 7.6: Soak and per-job cutover
 **As the** owner, **I want** each CI job flipped separately after evidence, **so that** any regression is one revert.
@@ -1806,7 +1856,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Verify: `actionlint` exits 0; `PR=$(gh pr view --json number --jq .number); gh pr checks $PR --json name,state --jq '[.[]|select(.name|test("^(bazel-|legacy-)"))|.state]|(length>=2) and all(.=="SUCCESS")'` prints `true`.
 
 ##### Task 7.6b: Flip e2e jobs to the Bazel binary (cost M)
-- `e2e-binary-*` jobs build `//:stapler-squad` via Bazel and set `TEST_SERVER_BINARY`.
+- `e2e-binary-*` jobs build `//:stapler-squad` via Bazel and set `TEST_SERVER_BINARY`. This keeps the full legacy Playwright runner; selective execution on PRs is Epic 12 (ADR-009), which supersedes the unconditional full PR run at Task 12.6a.
 - Files: `.github/workflows/build.yml`
 - Verify: `actionlint` exits 0; `PR=$(gh pr view --json number --jq .number); gh pr checks $PR --json name,state --jq '[.[]|select(.name|test("e2e"))|.state]|(length>=1) and all(.=="SUCCESS")'` prints `true`.
 
@@ -2226,6 +2276,159 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 
 ---
 
+## Epic 12: Expensive tests in the Bazel graph (selective Playwright e2e and the other slow suites; ADR-009)
+
+**Why this epic exists**: the measured RA2 share is 0.987 (`baselines.md` line "RA2 non-Go share of the critical path": e2e median 1974 s of a 2601 s median span), so Epics 1-11 alone cannot reach T1/T2. The owner directive (2026-11-02) is that only the targets whose inputs changed re-run their tests, e2e included. **Dependency position**: Epic 12 starts after Story 3.4 (root binary), Stories 4.1-4.2 (test env helpers, `go_test` macro), Story 7.3 (`affected-targets.sh`, the `GlobalInputs` file) and Story 7.4 (read-only PR cache, `main`-only writes); it needs Story 0.15 (S14) to have passed at Story 0.14. Stories 12.1-12.5 run in shadow beside the full suite; Story 12.6 (blocking) is gated by the Story 7.6 soak and by `e2e_escapes = 0`; Task 10.2c must not delete the legacy full e2e job until Story 12.6 has merged. Task 7.6b (Bazel binary into the legacy runner) stays and is the first step; Epic 12 then replaces the unconditional full run on PRs.
+
+#### Story 12.1: Observed-dependency manifest
+**As the** owner, **I want** each spec's real dependencies measured instead of hand-declared, **so that** the slice is complete for what the spec executes and the core packages appear in every slice automatically.
+**Acceptance Criteria**:
+- Every spec has an entry.
+  - *Given* `tests/e2e/slice-manifest.json` generated from a coverage run, *When* `python3 tools/bzl/e2e/check-manifest.py` runs, *Then* it exits 0 only if every `tests/e2e/**/*.spec.ts` appears exactly once with a non-empty `go_pkgs` list (or `"no_server": true` with a reason), `routes`, `web_files`, `rpcs` and a `generated_at` commit, and lists nothing as `unmanaged`.
+- Deterministic.
+  - *Given* two manifest generations from the same commit, *When* diffed, *Then* the Go package lists are identical (a package is included if any statement in it executed, plus all packages with an `init` that ran) and web/route lists differ only by documented timing-dependent entries, which the generator unions over 2 runs.
+**Files**: `tools/bzl/e2e/*`, `tests/e2e/slice-manifest.json`, `tests/e2e/helpers/test-server.ts` (env passthrough only)
+
+##### Task 12.1a: Coverage-instrumented server target and per-spec capture (cost S)
+- Add a `manual`-tagged target `//:stapler-squad_cover` built with `-cover -coverpkg=./...` (rules_go `gotags`/`gc_goopts` per spike S7 results; fall back to `go build -cover` on the synced tree if rules_go cannot pass `-coverpkg`, recorded in the spike row). `tools/bzl/e2e/capture.sh <spec>` runs one Playwright invocation with `--workers=1` for that spec file, `TEST_SERVER_BINARY` set to the cover binary and `GOCOVERDIR=<dir>` (one server per invocation means per-spec attribution without a Go source change), then `go tool covdata pkglist -i=<dir>`.
+- Files: `tools/bzl/e2e/capture.sh`, `BUILD.bazel`, `tools/bzl/e2e/capture_test.sh`
+- Verify: `bash tools/bzl/e2e/capture_test.sh; echo $?` prints `0` (the test captures `alias.spec.ts` and asserts the package list contains `github.com/tstapler/stapler-squad/session` and `.../server/services`).
+
+##### Task 12.1b: Web and RPC capture (cost M)
+- Extend the existing route-visit preload (`tests/e2e/baseline/route-visit-preload.js`, the precedent for per-spec observation) with Chromium JS coverage (`page.coverage.startJSCoverage`; Chromium only, INFERRED from the Playwright API docs, checked in Story 0.15) resolved through the bundle source maps to `web-app/src/**` files, plus the RPC method names seen in the server access log. Firefox/WebKit-only specs get `web_files` from the route closure of the bundler metafile instead.
+- Files: `tests/e2e/helpers/coverage-preload.js`, `tools/bzl/e2e/resolve-sourcemaps.mjs`, `tools/bzl/e2e/resolve_sourcemaps_test.sh`
+- Verify: `bash tools/bzl/e2e/resolve_sourcemaps_test.sh; echo $?` prints `0` (fixture bundle plus source map resolves to the expected three source files).
+
+##### Task 12.1c: Manifest generator, schema and checker (cost S)
+- `tools/bzl/e2e/gen-manifest.py` merges captures (union over 2 runs), writes `tests/e2e/slice-manifest.json` sorted; `check-manifest.py` implements the AC; schema in `tools/bzl/e2e/manifest.schema.json`.
+- Files: `tools/bzl/e2e/gen-manifest.py`, `tools/bzl/e2e/check-manifest.py`, `tools/bzl/e2e/manifest.schema.json`, `tools/bzl/e2e/gen_manifest_test.py`
+- Verify: `python3 -m unittest tools/bzl/e2e/gen_manifest_test.py; echo $?` prints `0` (cases: missing spec, duplicate spec, empty `go_pkgs`, unsorted output all rejected).
+
+##### Task 12.1d: Nightly regeneration and staleness check (cost S)
+- Add a job to `nightly.yml` that regenerates the manifest on `main` and opens a PR if it differs; add a PR check that fails when a changed or added spec has no manifest entry or when its `generated_at` is older than the spec's last change (cheap form, no capture).
+- Files: `.github/workflows/nightly.yml`, `tools/bzl/e2e/check-staleness.sh`
+- Verify: `actionlint .github/workflows/nightly.yml; echo $?` prints `0`; `bash tools/bzl/e2e/check-staleness.sh --fixture tests/e2e/testdata/stale; echo $?` prints `1`.
+
+#### Story 12.2: Slice targets in the Bazel graph
+**As the** owner, **I want** each spec group to be a Bazel test whose declared inputs are its measured slice, **so that** `rdeps` and the test cache both operate on real dependencies.
+**Acceptance Criteria**:
+- Targets exist and exclude the binary.
+  - *Given* the generated `tests/e2e/BUILD.bazel`, *When* `bazel query 'deps(//tests/e2e:all)' | grep -cE '^//(:stapler-squad|server/web:dist)'` runs, *Then* it prints `0`, and `bazel query 'kind(e2e_test, //tests/e2e:all)' | wc -l` is at least 20 and at most 60.
+- Slice sensitivity.
+  - *Given* a manifest-listed Go file of spec group G, *When* `bazel query "rdeps(//tests/e2e:all, //session:instance.go)"` runs (file label), *Then* G's target is in the output; and for a file outside every slice (a `docs/` file) the output is empty.
+**Files**: `tests/e2e/BUILD.bazel` (generated), `tools/bzl/e2e/e2e.bzl`, `tools/bzl/e2e/gen-build.py`
+
+##### Task 12.2a: e2e_slice macro and BUILD generator (cost M)
+- `tools/bzl/e2e/e2e.bzl` (at most 30 lines: `e2e_slice` = `filegroup` over web files and protos plus `deps` on observed `go_library` labels resolved through Gazelle's `go_library` naming) and `gen-build.py` that groups specs by filename family and emits one `e2e_test` per group from the manifest; marked `HandBuildFile`-style generated header, `# gazelle:ignore`.
+- Files: `tools/bzl/e2e/e2e.bzl`, `tools/bzl/e2e/gen-build.py`, `tests/e2e/BUILD.bazel`, `tools/bzl/hand-build-files.txt`
+- Verify: `python3 tools/bzl/e2e/gen-build.py --check; echo $?` prints `0` (generated file equals committed); `bazel query //tests/e2e:all 2>&1 | grep -c 'ERROR'` prints `0`.
+
+##### Task 12.2b: e2e_test runner with comparator verdict (cost M)
+- `e2e_test` runs `npx playwright test <spec files> --reporter=json` with the Playwright image tag and `tests/e2e/bun.lock` as declared inputs, then applies the per-target comparator (`scripts/e2e-baseline-compare.ts` logic against the baseline and expected-diff lists) so the Bazel verdict equals today's `main` verdict (ADR-009 item 5). Tags: `requires-network` not set (loopback only), `block-network` set, `exclusive` not set; `TEST_TMPDIR` short path for unix sockets (S9 result); `shard_count` unset (grouping, not sharding, controls size). Quarantined specs get `no-cache`.
+- Files: `tools/bzl/e2e/e2e.bzl`, `tools/bzl/e2e/run-playwright.sh`, `tools/bzl/e2e/compare-target.ts`, `tools/bzl/e2e/run_playwright_test.sh`
+- Verify: `bash tools/bzl/e2e/run_playwright_test.sh; echo $?` prints `0` (fixture report with one baseline-listed failure passes; with one new failure fails).
+
+##### Task 12.2c: GlobalInputs list for e2e (cost XS)
+- `tools/bzl/e2e-global-inputs.txt` (go.mod, go.sum, MODULE.bazel*, .bazelrc*, `proto/**`, `server/web/embed.go`, `tests/e2e/{playwright.config.ts,global-setup.ts,helpers/**,fixtures/**,bun.lock}`, `tools/bzl/e2e/**`) becomes `//tests/e2e:global_inputs` (a `filegroup` every target lists) and is appended to the Story 7.3 `GlobalInputs` handling.
+- Files: `tools/bzl/e2e-global-inputs.txt`, `tests/e2e/BUILD.bazel`
+- Verify: `bash tools/bzl/e2e/check-global-inputs.sh; echo $?` prints `0` (every path in the list exists or matches a glob, and every target lists the group).
+
+#### Story 12.3: The out-of-band binary seam
+**As the** owner, **I want** the binary kept out of the declared graph and still provably fresh, **so that** a change outside a slice does not re-run the spec and a stale binary cannot be tested.
+**Acceptance Criteria**:
+- *Given* a worktree where only `server/services/<unobserved>.go` changed, *When* `bazel test //tests/e2e:all --config=e2e` runs after a previous passing run, *Then* the summary shows only targets whose slice contains the file as re-run, and all others `(cached)`.
+- *Given* the binary at `TEST_SERVER_BINARY` was built from a different commit than `HEAD`, *When* `tools/bazel test //tests/e2e:all --config=e2e` starts, *Then* the wrapper fails in under 5 s with `Remedy: rebuild the e2e binary (bazel build //:stapler-squad)`.
+**Files**: `.bazelrc`, `tools/bazel`, `tools/bzl/e2e/check-no-binary-dep.sh`
+
+##### Task 12.3a: `--config=e2e` and the revision guard (cost S)
+- `.bazelrc` `test:e2e` sets the value-less forms `--test_env=TEST_SERVER_BINARY`, `--test_env=TEST_SEED_DEMO`, `--test_env=TEST_SEED_HIDDEN`, `--test_env=TEST_SSHD_BINARY` (inherit the client environment; constant paths, so they do not change the key) and `--cache_test_results=auto`. The revision guard lives in the `tools/bazel` wrapper, outside the key and outside the sandbox: for `bazel test ... --config=e2e` it runs `bazel build //:stapler-squad` first, exports the four paths from `bazel cquery --output=files`, and compares `"$TEST_SERVER_BINARY" --version` with `git rev-parse HEAD` (the revision can not be a `--test_env` because a per-commit value would change every key). Flag names are checked by `check-bazelrc.sh` (Task 0.2g).
+- Files: `.bazelrc`, `tools/bazel`, `tools/bzl/e2e/wrapper_e2e_test.sh`
+- Verify: `bash tools/bzl/check-bazelrc.sh; echo $?` prints `0`; `bash tools/bzl/e2e/wrapper_e2e_test.sh; echo $?` prints `0` (the test asserts the wrapper exits non-zero with `Remedy:` when the binary revision differs from `HEAD`, and exports the four variables otherwise).
+
+##### Task 12.3b: Binary-dependency lint (cost XS)
+- `tools/bzl/e2e/check-no-binary-dep.sh` fails if `bazel query 'deps(//tests/e2e:all)'` contains `//:stapler-squad`, `//server/web:dist` or an embed-staging target; runs in `bazel.yml`.
+- Files: `tools/bzl/e2e/check-no-binary-dep.sh`, `.github/workflows/bazel.yml`
+- Verify: `bash tools/bzl/e2e/check-no-binary-dep.sh; echo $?` prints `0`; `bash tools/bzl/e2e/check-no-binary-dep.sh --seed-dep; echo $?` prints `1`.
+
+#### Story 12.4: Selection, shard planning and the shadow job
+**As the** owner, **I want** PRs to run only the affected targets spread evenly over the runners, **so that** e2e minutes fall without lengthening the critical path.
+**Acceptance Criteria**:
+- *Given* a PR diff, *When* `tools/ci/affected-e2e.sh <base> <head>` runs, *Then* it prints the selected target labels one per line, or `__ALL__` if a `GlobalInputs` file changed, plus every `unmanaged` target; a deleted file selects the targets that listed it via the base-side query.
+- *Given* the selected set and `tests/e2e/durations.json` (from the last `main` report), *When* `tools/ci/plan-e2e-shards.py --shards 5` runs, *Then* the longest shard is at most 1.25 x the mean shard.
+- *Given* the shadow job on a PR, *When* it finishes, *Then* the PR comment lists selected / total targets and E2E_MINUTES_AVOIDED (selected-shard-seconds vs the last full run), and the job is non-blocking.
+**Files**: `tools/ci/affected-e2e.sh`, `tools/ci/plan-e2e-shards.py`, `.github/workflows/bazel-e2e.yml`, `tools/bzl/parity/e2e-avoided.sh`
+
+##### Task 12.4a: affected-e2e.sh with fixtures (cost S)
+- Reuses the Story 7.3 harness (`--diff-filter=d`, base-side query for deletions); adds the `__ALL__` and `unmanaged` rules; fixtures cover: one core file, one leaf file, a `proto/` change, a deleted file, a spec added without manifest entry, a docs-only change (empty output).
+- Files: `tools/ci/affected-e2e.sh`, `tools/ci/affected-e2e_test.sh`
+- Verify: `bash tools/ci/affected-e2e_test.sh; echo $?` prints `0`.
+
+##### Task 12.4b: Duration-balanced shard planner (cost S)
+- `plan-e2e-shards.py`: longest-processing-time greedy over per-target durations from the merged Playwright report of the last green `main` run; unknown targets get the median; emits the matrix JSON that replaces `E2E_SHARD_TOTAL`/`--shard`.
+- Files: `tools/ci/plan-e2e-shards.py`, `tools/ci/plan_e2e_shards_test.py`
+- Verify: `python3 -m unittest tools/ci/plan_e2e_shards_test.py; echo $?` prints `0` (property: max shard <= 1.25 x mean on the fixture; every target assigned exactly once).
+
+##### Task 12.4c: Shadow workflow `bazel-e2e.yml` (cost M)
+- Jobs: `plan` (affected-e2e + shard plan), `bin` (one `bazel build //:stapler-squad` plus seed tools, uploaded), `shard` matrix (Playwright container image from `e2e-env`, `bazel test <targets> --config=ci --config=e2e`, read-only cache on PRs), `report` (merges reports, runs the comparator, posts the comment). Runs beside the legacy full e2e job with `continue-on-error: true`; on `main` it runs all targets with `--nocache_test_results` and the cache write endpoint.
+- Files: `.github/workflows/bazel-e2e.yml`
+- Verify: `actionlint .github/workflows/bazel-e2e.yml; echo $?` prints `0`; `grep -c 'continue-on-error: true' .github/workflows/bazel-e2e.yml` is at least `1` until Task 12.6a.
+
+##### Task 12.4d: T8 collector (cost S)
+- `tools/bzl/parity/e2e-avoided.sh` computes e2e runner-minutes per partial-change PR (sum of shard job durations from `gh api .../jobs`) for the 30 sampled partial PRs of Task 0.1i, Bazel-selective vs the baseline full run, and `e2e_escapes` from the escape ledger; prints `T8: PASS|FAIL|UNMEASURED` (wired into `improvement.sh`, Task 7.5g).
+- Files: `tools/bzl/parity/e2e-avoided.sh`, `tools/bzl/parity/improvement.sh`
+- Verify: `bash tools/bzl/parity/e2e-avoided.sh --fixture tools/bzl/parity/testdata/t8-pass.json | grep -c '^T8: PASS$'` prints `1`.
+
+#### Story 12.5: Soundness controls
+**As the** owner, **I want** a miss to be detected and fixed within a day, **so that** skipping tests never silently hides a regression.
+**Acceptance Criteria**:
+- *Given* `main` at any commit, *When* the nightly full run fails a spec, *Then* `tools/ci/e2e-escape.py` finds the PR that last touched the failing spec's slice, reports whether the spec was selected there, and if not appends `{spec, pr, missing_edge}` to `tests/e2e/escapes.json` and files an issue; `e2e_escapes` is the count of unselected-failure rows.
+- *Given* `tests/e2e/quarantine.json`, *When* `python3 tools/bzl/e2e/check-quarantine.py` runs, *Then* it exits 0 only if each row has an owner, an issue and an expiry within 30 days of its date, and no `flaky = True` or `--flaky_test_attempts` appears in the e2e targets.
+**Files**: `tools/ci/e2e-escape.py`, `tests/e2e/quarantine.json`, `tests/e2e/escapes.json`, `tools/bzl/e2e/*`
+
+##### Task 12.5a: Completeness gate (cost S)
+- `tools/bzl/e2e/check-completeness.py`: every spec has a manifest entry; every `@feature` id and `FEATURE_CATALOG` reference resolves or is on `tests/e2e/feature-gaps.json` (the current 106 unresolved ids seed the file and the file may only shrink); every registry feature with a `handlerFile` appears in at least one observed slice or is listed as `untested`. Wired into `registry-generate`'s CI check and `bazel.yml`.
+- Files: `tools/bzl/e2e/check-completeness.py`, `tests/e2e/feature-gaps.json`, `tools/bzl/e2e/check_completeness_test.py`
+- Verify: `python3 tools/bzl/e2e/check-completeness.py; echo $?` prints `0`; `python3 -m unittest tools/bzl/e2e/check_completeness_test.py` exits 0 (seeded missing-entry and grown-gap fixtures fail).
+
+##### Task 12.5b: Nightly full run and escape detector (cost M)
+- `nightly.yml` job `e2e-full-bazel`: `bazel test //tests/e2e:all --nocache_test_results --runs_per_test=3` on `main` (the e2e extension of Task 4.9c); `e2e-escape.py` as in the AC; the job result is the comparator verdict and a failure files one issue per spec.
+- Files: `.github/workflows/nightly.yml`, `tools/ci/e2e-escape.py`, `tools/ci/e2e_escape_test.py`
+- Verify: `python3 -m unittest tools/ci/e2e_escape_test.py; echo $?` prints `0`; `actionlint .github/workflows/nightly.yml; echo $?` prints `0`.
+
+##### Task 12.5c: Mutation backtest harness as a standing check (cost S)
+- Promote the Story 0.15 harness to `tools/bzl/e2e/mutation-backtest.sh` (seeded mutations from `tools/bzl/e2e/mutations.yaml`, each with a patch, run the full suite and the selected set, assert every mutation that fails a spec in the full run fails one in the selected set); scheduled monthly and on any change to `tools/bzl/e2e/**`.
+- Files: `tools/bzl/e2e/mutation-backtest.sh`, `tools/bzl/e2e/mutations.yaml`, `.github/workflows/bazel-e2e.yml`
+- Verify: `bash tools/bzl/e2e/mutation-backtest.sh --dry-run | grep -c '^MUTATION '` is at least `30`.
+
+##### Task 12.5d: Quarantine policy and cache-poisoning check (cost XS)
+- `check-quarantine.py` per the AC; plus a workflow lint that fails if any step with the `bazel-cache-write` credential runs for a `pull_request` event or if `bazel-e2e.yml` passes `--remote_upload_local_results` outside the `main` job (ADR-004 control reused for the new workflow).
+- Files: `tools/bzl/e2e/check-quarantine.py`, `tools/bzl/check-workflow-cache-writes.sh`
+- Verify: `python3 tools/bzl/e2e/check-quarantine.py; echo $?` prints `0`; `bash tools/bzl/check-workflow-cache-writes.sh; echo $?` prints `0`.
+
+#### Story 12.6: Make selective e2e the PR gate
+**As the** owner, **I want** the full PR suite replaced by the selected set once escapes are zero, **so that** the minutes saved are real.
+**Acceptance Criteria**:
+- *Given* the soak ledger (Story 7.6) and `tests/e2e/escapes.json`, *When* the last N shadow runs (the same N as Story 7.6) show `e2e_escapes = 0` and the T8 collector prints `PASS`, *Then* Task 12.6a may merge; the nightly and `main`-push full runs stay blocking-in-effect (failures open issues and block the next release-please merge by convention).
+**Files**: `.github/workflows/build.yml`, `.github/workflows/bazel-e2e.yml`
+
+##### Task 12.6a: Flip PR e2e to selected targets (cost S) (blocked on soak and `e2e_escapes = 0`)
+- On `pull_request`, `build.yml`'s `e2e-bun-shard` matrix is replaced by the `bazel-e2e.yml` planner's matrix (selected targets only); `continue-on-error` removed from `bazel-e2e.yml`; the legacy full job runs on `main` push and `workflow_dispatch` only. The owner records the flip in `owner-attestations.yaml`.
+- Files: `.github/workflows/build.yml`, `.github/workflows/bazel-e2e.yml`
+- Verify: `actionlint .github/workflows/build.yml .github/workflows/bazel-e2e.yml; echo $?` prints `0`; `grep -c 'continue-on-error: true' .github/workflows/bazel-e2e.yml` prints `0`.
+
+#### Story 12.7: The other slow suites
+**As the** owner, **I want** the remaining expensive suites to run only when their inputs changed, **so that** the directive holds beyond Playwright.
+**Acceptance Criteria**:
+- *Given* the inventory `docs/reference/bazel-slow-suites.md` (per-suite p50 from `measured.json`: `build.yml` 2230 s, `lint.yml` 1033 s, `mcp-integration.yml` 590 s, plus the Jest, `ux-analysis.yml` axe/Lighthouse and benchmark jobs), *When* `bash tools/bzl/e2e/check-slow-suites.sh` runs, *Then* each suite is listed with one of: Bazel test selected by `rdeps` (Go integration, Jest), selected by the Epic 12 manifest (axe sweeps that are Playwright specs), or a recorded reason it stays full (lint, benchmarks, visual-regression, RealClaude harness), and the script exits 0 only if no suite over 300 s p50 is unclassified.
+**Files**: `docs/reference/bazel-slow-suites.md`, `tools/bzl/e2e/check-slow-suites.sh`, `.github/workflows/mcp-integration.yml`, `.github/workflows/ux-analysis.yml`
+
+##### Task 12.7a: Slow-suite inventory and rdeps wiring (cost M)
+- Write the inventory from the measured timings; wire `mcp-integration.yml` and `ux-analysis.yml` to `affected-targets.sh` / the Epic 12 selector instead of their `paths:` filters (the filters stay as a cheap pre-gate where the 7.3c inventory says so); Jest targets are the Story 3.x/4.x Bazel tests, selected by `rdeps` like Go tests.
+- Files: `docs/reference/bazel-slow-suites.md`, `tools/bzl/e2e/check-slow-suites.sh`, `.github/workflows/mcp-integration.yml`, `.github/workflows/ux-analysis.yml`
+- Verify: `bash tools/bzl/e2e/check-slow-suites.sh; echo $?` prints `0`; `actionlint .github/workflows/mcp-integration.yml .github/workflows/ux-analysis.yml; echo $?` prints `0`.
+
+---
+
 ## Review disposition
 
 Source reviews: `implementation/architecture-review.md` (arch B1-B3, C1-C14, nitpicks) and `implementation/adversarial-review.md` (adv B1-B3, C1-C10, minors). Repair iteration 1 of 5. "Fixed" cites the story or task where the plan now changes; verified facts are cited inline there.
@@ -2475,3 +2678,15 @@ Format: delta id -> applied at task | follow-up: reason. "User-requested" rows a
 | Research 2.5 `--sandbox_base`, `--experimental_inmemory_sandbox_stashes` | follow-up: leave defaults unless profiling shows sandbox setup dominating |
 | Research 2.4 `--experimental_remote_repo_contents_cache` | follow-up: not recommended (experimental, no gain on one box) |
 | Multiplex-worker inventory (user-requested, https://bazel.build/remote/multiplex) | applied at Task 0.10h (non-gating sub-check of S6), validation.md |
+
+## Selective e2e disposition (ADR-009, owner directive 2026-11-02)
+
+| Item | Disposition |
+|---|---|
+| Owner directive: only changed dependencies re-run their tests, e2e included | fixed at ADR-009, spike Story 0.15 (S14), Epic 12 (Stories 12.1-12.7) |
+| Measured reason (RA2 0.987; e2e 1974 s of 2601 s) | recorded at the RA2 paragraph, Task 0.14e (EG5 re-expressed over the post-selection projection) |
+| ADR-005 e2e position | amended by ADR-009 and a pointer in ADR-005; ADR-005 never listed Playwright as a permanent exception, the plan only kept it outside the graph (P7, Task 7.6b) |
+| Improvement target for e2e minutes avoided | fixed at T8 (Improvement targets table), P10 row and Task 7.5g, collector Task 12.4d |
+| Registry as slice source | rejected as sole source (measured: 52.8% of specs resolve to an existing source file, about 92% of code commits would fall back to run-all); kept as seed and cross-check, Task 12.5a |
+| Soundness, flakes, escapes, cache poisoning | fixed at Story 12.5, ADR-009 "Soundness, flake and trust policy", ADR-004 write rules reused (Task 12.5d) |
+| Risk that the goal is unattainable | recorded at ADR-009 Consequences and the S14 verdict mapping: if core packages dominate every slice the replay median stays high; the fallbacks are diff-line coverage selection or leaving e2e as a full run |

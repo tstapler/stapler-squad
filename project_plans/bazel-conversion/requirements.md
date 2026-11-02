@@ -21,11 +21,12 @@ All three drivers are co-equal (owner decision):
 1. **CI speed**: affected-target selection replaces the three selection mechanisms; measured CI time-to-green versus the ci-speed baseline, and remote cache hit ratio (floor set in P10; not a standalone improvement target).
 2. **Hermeticity**: one pinned toolchain (Go, protoc/buf plugins, ent, bun/node, tmux) so a clean checkout, a worktree and CI produce the same artifacts; `bazel build //...` works on a fresh clone with no `make proto-gen ent-gen` precondition.
 3. **Worktree cost**: cold-build time and disk per new worktree measured before/after, using a shared disk cache (and remote cache if available).
-Baselines are measured in implementation Story 0.1 (Task 0.1g computes the targets T1-T7 from them; the owner confirms them before Story 0.14). They do not exist at planning time.
+4. **Expensive tests re-run only when their inputs changed (owner, 2026-11-02)**: a PR runs only the e2e specs whose dependencies it touches, with no missed failures against a full run and a recorded escape count of zero over the soak; measured as e2e runner-minutes per partial-change PR against the full-suite baseline (target T8). Evidence: e2e is 1974 s of a 2601 s median critical path (RA2 = 0.987, `baselines.md`).
+Baselines are measured in implementation Story 0.1 (Task 0.1g computes the targets T1-T8 from them; the owner confirms them before Story 0.14). They do not exist at planning time.
 
 **End state (owner decision)**: Bazel is the build of record. `bazel build //...` and `bazel test //...` cover Go, proto, ent, tmux and the web-app; `Makefile` targets become thin wrappers over Bazel; CI runs Bazel.
 
-**Improvement targets (triad repair, 2026-11-01)**: beyond non-regression, the plan adds required improvement targets T1-T7 (work-avoided ratio, billed minutes and time-to-green on partial-change PRs, second-worktree cold build and disk, edit-build-test latency, first-error legibility, regen steps per agent session). Each is a formula over measured baselines, set at Story 0.1 (Task 0.1g) and owner-confirmed; see "Improvement targets" in `implementation/plan.md`. Priority rationale (RICE, inputs UNVERIFIED) is in ADR-001.
+**Improvement targets (triad repair, 2026-11-01)**: beyond non-regression, the plan adds required improvement targets T1-T8 (work-avoided ratio, billed minutes and time-to-green on partial-change PRs, second-worktree cold build and disk, edit-build-test latency, first-error legibility, regen steps per agent session, e2e work avoided). Each is a formula over measured baselines, set at Story 0.1 (Task 0.1g) and owner-confirmed; see "Improvement targets" in `implementation/plan.md`. Priority rationale (RICE, inputs UNVERIFIED) is in ADR-001.
 
 ## Size
 XL (> 15M CU) — informational estimate, bands INFERRED (see ESTIMATION.md). Full scope is the default; not a gate.
@@ -56,7 +57,7 @@ XL (> 15M CU) — informational estimate, bands INFERRED (see ESTIMATION.md). Fu
 - web-app via `aspect_rules_js` / `rules_ts` / Bun-compatible install, producing `server/web/dist`; jest tests.
 - Separate modules (`tuitest`, `tools/scanner`, `tools/lint`) and custom lint analyzers; `make lint`/`ready` gates (golangci-lint, dupl, jscpd, custom analyzers) mapped to Bazel or kept as wrapped tools.
 - Makefile wrappers, `scripts/install-service.sh`, GitHub Actions workflows (Bazel setup, caching, affected-target selection), release-please/release artifacts, Formula/.
-- Playwright e2e global-setup use of the built binary.
+- Playwright e2e global-setup use of the built binary, and (owner directive 2026-11-02, ADR-009) e2e participation in the Bazel dependency graph: per-spec-group test targets whose declared inputs are the measured slice of Go packages, web files and protos the spec exercises, selected by reverse dependencies on every PR, with a full run on `main` and nightly as the safety net. Other expensive suites (Jest, Go integration, axe/Lighthouse) are selected the same way.
 - Docs: how-to/reference/explanation under `docs/`, ADR superseding ci-speed ADR-001, updates to `CLAUDE.md`.
 
 ### Out of Scope
