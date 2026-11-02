@@ -4,6 +4,7 @@ import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { Providers } from "./Providers";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import { TrayErrorBoundary } from "@/components/ui/TrayErrorBoundary";
+import { TCCEnrichmentBanner } from "@/components/system/TCCEnrichmentBanner";
 import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismatchBanner";
 import { ForkPressureStatusBanner } from "@/components/system/ForkPressureStatusBanner";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
@@ -25,6 +26,7 @@ export function RootShell({ children, mainRef }: { children: ReactNode; mainRef?
               <WindowsProvider>
                 <a href="#main-content" className="skip-link">Skip to main content</a>
                 <main id="main-content" ref={mainRef} tabIndex={-1} className={mainContent}>
+                  <TCCEnrichmentBanner />
                   <TmuxVersionMismatchBanner />
                   <ForkPressureStatusBanner />
                   {children}

@@ -20,6 +20,9 @@ jest.mock("./Providers", () => ({
 jest.mock("@/components/layout/CockpitShell", () => ({
   CockpitShell: ({ children }: { children: React.ReactNode }) => <div data-testid="cockpit-shell">{children}</div>,
 }));
+jest.mock("@/components/system/TCCEnrichmentBanner", () => ({
+  TCCEnrichmentBanner: () => <div data-testid="tcc-banner" />,
+}));
 jest.mock("@/components/system/TmuxVersionMismatchBanner", () => ({
   TmuxVersionMismatchBanner: () => <div data-testid="tmux-banner" />,
 }));

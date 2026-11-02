@@ -13,7 +13,7 @@ import (
 // register the enricher that instance loading consults and the shutdown hook must stop it.
 func TestInstallWorktreeEnricher_RegistersAndStops(t *testing.T) {
 	t.Cleanup(func() { session.SetWorktreeEnricher(nil) })
-	e := installWorktreeEnricher(context.Background())
+	e := installWorktreeEnricher(context.Background(), session.WorktreeEnricherConfig{})
 	require.Same(t, e, session.ActiveWorktreeEnricher())
 	session.StopWorktreeEnricher()
 	require.Nil(t, session.ActiveWorktreeEnricher())

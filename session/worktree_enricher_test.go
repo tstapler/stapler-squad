@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
 func enrichWatchdog(t *testing.T, fn func()) {
@@ -242,6 +243,102 @@ func TestWorktreeEnricher_BackoffSuppressesEarlyRetry(t *testing.T) {
 	enrichWaitUntil(t, func() bool { return e.Stats().TimedOut == 2 })
 	require.Equal(t, 2, e.StuckPaths())
 	require.EqualValues(t, 2, e.Stats().TimedOut, "/p must not time out a second time inside backoff")
+}
+
+func waitEnrichmentSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("enrichment synchronization signal did not arrive")
+	}
+}
+
+func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
+	t.Parallel()
+	blocked, release, fast := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	deadline := make(chan time.Time, 1)
+	var probes atomic.Int32
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Workers: 1,
+		Ready: func(path string) bool {
+			if path == "/slow" {
+				close(blocked)
+				<-release
+				return false
+			}
+			return true
+		},
+		Timer:     func(time.Duration) (<-chan time.Time, func()) { return deadline, func() {} },
+		AfterFunc: func(time.Duration, func()) {},
+		Probe:     func(string) (*WorktreeInfo, error) { probes.Add(1); close(fast); return okInfo(), nil },
+	}, false)
+	t.Cleanup(func() { close(release) })
+	e.Request("/slow")
+	waitEnrichmentSignal(t, blocked)
+	deadline <- time.Now()
+	e.Request("/fast")
+	waitEnrichmentSignal(t, fast)
+	require.EqualValues(t, 1, probes.Load())
+	require.EqualValues(t, 1, e.Stats().TimedOut)
+}
+
+func TestWorktreeEnricher_StopWhileReadyPreventsProbe(t *testing.T) {
+	t.Parallel()
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	e := NewWorktreeEnricher(WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
+	go func() { defer close(returned); _, _ = e.safeProbe("/protected") }()
+	waitEnrichmentSignal(t, entered)
+	e.Stop()
+	close(release)
+	waitEnrichmentSignal(t, returned)
+	require.Zero(t, probes.Load())
+}
+
+func TestWorktreeEnricher_UnparkDuringReadiness(t *testing.T) {
+	t.Parallel()
+	checked, release := make(chan struct{}), make(chan struct{})
+	var ready atomic.Bool
+	var calls atomic.Int32
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Ready: func(string) bool {
+			allowed := ready.Load()
+			if calls.Add(1) == 1 {
+				close(checked)
+				<-release
+			}
+			return allowed
+		},
+		Probe: func(string) (*WorktreeInfo, error) { return okInfo(), nil },
+	}, false)
+	e.Request("/protected/repo")
+	waitEnrichmentSignal(t, checked)
+	ready.Store(true)
+	e.Unpark("/protected/repo")
+	close(release)
+	enrichWaitUntil(t, func() bool { return e.Outcome("/protected/repo") == "completed" })
+}
+
+func TestWorktreeEnricher_ConsentGateIntegration(t *testing.T) {
+	t.Parallel()
+	saved := false
+	gate := tcc.NewConsentGate(func(string) tcc.Result { return tcc.Result{Protected: true, Root: "/protected"} }, nil, func(string) error { saved = true; return nil })
+	var probes atomic.Int32
+	e := startEnricher(t, WorktreeEnricherConfig{
+		Ready: gate.Ready,
+		Probe: func(string) (*WorktreeInfo, error) { require.True(t, saved); probes.Add(1); return okInfo(), nil },
+	}, false)
+	e.Request("/protected/repo")
+	enrichWaitUntil(t, func() bool { return e.queue.Stats().Processed == 1 })
+	require.Zero(t, probes.Load())
+	paths, err := gate.Continue(gate.Roots()[0].ID)
+	require.NoError(t, err)
+	for _, path := range paths {
+		e.Unpark(path)
+	}
+	enrichWaitUntil(t, func() bool { return e.Outcome("/protected/repo") == "completed" })
+	require.EqualValues(t, 1, probes.Load())
 }
 
 func TestWorktreeEnricher_ParkedPathWaitsForUnpark(t *testing.T) {
