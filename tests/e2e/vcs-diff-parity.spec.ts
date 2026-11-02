@@ -14,6 +14,7 @@
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
 import { baseUrl } from './helpers/base-url';
+import { markAllNotificationsRead } from './pages/NotificationPanel';
 
 const BASE_URL = baseUrl();
 
@@ -85,7 +86,9 @@ test.describe("vcs-diff-parity", () => {
   let client: SessionClient;
   let title: string;
 
-  test.beforeEach(async () => {
+  test.beforeEach(async ({ request }) => {
+    // Earlier specs on this worker's server leave unread Question cards that replay as toasts over the diff buttons.
+    await markAllNotificationsRead(request, BASE_URL);
     client = new SessionClient(BASE_URL);
     title = `e2e-vcs-diff-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     await client.createSession({ title, path: "/tmp", program: "bash" });

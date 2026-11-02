@@ -123,6 +123,19 @@ export async function sendNotification(
   if (!response.ok()) throw new Error(`SendNotification ${n.title} failed: ${response.status()}`);
 }
 
+/**
+ * Marks every unread notification read. The server-side history outlives a spec and replays unread
+ * rows as toasts on the next page load, where they cover controls a later spec clicks.
+ */
+export async function markAllNotificationsRead(request: APIRequestContext, baseUrl: string): Promise<void> {
+  const rpc = (method: string, data: object) =>
+    request.post(`${baseUrl}/api/session.v1.SessionService/${method}`, { headers: { 'Content-Type': 'application/json' }, data });
+  const history = await rpc('GetNotificationHistory', { limit: 500, unreadOnly: true });
+  const { notifications = [] } = (await history.json()) as { notifications?: { id: string }[] };
+  if (notifications.length === 0) return;
+  await rpc('MarkNotificationRead', { notificationIds: notifications.map((n) => n.id) });
+}
+
 /** The capped toast deck: cards, the "+N more" chip and the single bulk control. */
 export class ToastDeck {
   readonly deck: Locator;

@@ -26,6 +26,7 @@ import {
   InlineActionRow,
   QuestionCard,
   clickWhenScrollIdle,
+  markAllNotificationsRead,
   openNotificationTray,
   setFeatureFlag,
 } from './pages/NotificationPanel';
@@ -816,6 +817,7 @@ test.afterAll(async ({ request }) => {
   // The shared server outlives this file; other specs expect the legacy buttons.
   await setFeatureFlag(request, BASE_URL, INLINE_ACTIONS_FLAG, false);
   await setFeatureFlag(request, BASE_URL, STRUCTURED_FLAG, false);
+  await markAllNotificationsRead(request, BASE_URL);
 });
 
 /** First cells of the rows of the table under the `### <section> ` heading in ux.md. */
