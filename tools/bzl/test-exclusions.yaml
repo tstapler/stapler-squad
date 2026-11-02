@@ -1,0 +1,21 @@
+# Tests whose result differs between `go test` and Bazel. Ratchet: this list only shrinks.
+# Mechanism: the BUILD target carries tags = ["manual"]  # keep   (Gazelle preserves it).
+# sandbox_class values: cwd, home, tmpdir-socket, exec-host-binary, network, runtime-caller, shard-timeout
+exclusions:
+  - target: //tools/lint/silenttransition:silenttransition_test
+    sandbox_class: cwd
+    owner: tstapler
+    issue: UNFILED  # owner to file; Epic 4 class sweep (SandboxClass cwd) fixes at source
+    reason: >-
+      TestSilentTransition_OperatorCallerSetMatchesRegistry parses
+      ../../../session/transition_callers.go, a repo file outside this package's runfiles
+      (needs a Bazel package over //session, which does not exist until Epic 1).
+  - target: //tuitest/integration/claude_squad:claude_squad_test
+    sandbox_class: none  # not a sandbox failure: pre-existing, also fails under go
+    owner: tstapler
+    issue: UNFILED
+    reason: >-
+      Imports github.com/tstapler/stapler-squad/testutil/wait and github.com/linkdata/deadlock,
+      neither of which tuitest/go.mod requires, so `cd tuitest && go vet ./...` already fails
+      ("no required module provides package github.com/linkdata/deadlock"). Under Bazel it also
+      needs //testutil/wait, which exists after Epic 1.

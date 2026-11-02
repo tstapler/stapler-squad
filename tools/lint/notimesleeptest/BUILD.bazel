@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "notimesleeptest",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/notimesleeptest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/lint/internal/nolintcomment",
+        "@lint_x_tools//go/analysis",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":notimesleeptest",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "notimesleeptest_test",
+    srcs = ["analyzer_test.go"],
+    deps = [
+        ":notimesleeptest",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

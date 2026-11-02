@@ -145,3 +145,8 @@ tests/e2e/website-demo-output/
 
 # demo clips recorded during the deploy; never committed
 website/public/clips/
+
+# Bazel: personal overrides and root-level output symlinks only. ANCHORED on purpose:
+# an unanchored bazel-* would ignore tracked files like .github/workflows/bazel-parity.yml.
+user.bazelrc
+/bazel-*

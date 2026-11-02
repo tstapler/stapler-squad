@@ -1,0 +1,4 @@
+# Copy to user.bazelrc (gitignored). Personal overrides only; never commit credentials.
+# build --config=agent
+# build --local_resources=memory=HOST_RAM*.1
+# startup --max_idle_secs=30

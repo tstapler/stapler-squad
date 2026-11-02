@@ -1,0 +1,18 @@
+load("@gazelle//:def.bzl", "gazelle")
+
+# gazelle:prefix github.com/tstapler/stapler-squad
+# gazelle:go_naming_convention import_alias
+# gazelle:exclude .claude
+# gazelle:exclude worktrees
+# gazelle:exclude **/node_modules
+# gazelle:exclude third_party/tmux
+# gazelle:exclude project_plans
+# gazelle:exclude website
+# gazelle:exclude build
+# gazelle:exclude **/testdata
+# gazelle:exclude gen
+# gazelle:exclude web-app/src/gen
+# Provisional (finalised by Task 0.11b): spares the tracked session/ent/schema.
+# gazelle:exclude session/ent/[!s]*
+
+gazelle(name = "gazelle")

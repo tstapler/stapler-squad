@@ -1,0 +1,48 @@
+# Pins and flag names verified against `bazel help build` on 9.3.1
+# (project_plans/bazel-conversion/implementation/spike-results.md, "S-gomod / Task 0.2b").
+common --lockfile_mode=update
+common --experimental_isolated_extension_usages
+
+# Startup: modest JVM so ~100 agent worktrees can each hold a server. The tools/bazel
+# wrapper passes --max_idle_secs=30 and -Xmx2g on the command line (startup:<config> lines are
+# ignored, and ~/.bazelrc sets an 8g heap that would override the line above).
+startup --max_idle_secs=300
+startup --host_jvm_args=-Xmx2g
+
+# The repository cache is already shared per user by default (no flag). Disk cache lives outside ~/.stapler-squad (live service state).
+build --disk_cache=~/.cache/stapler-squad-bazel/disk
+build --experimental_disk_cache_gc_max_size=100G
+build --experimental_disk_cache_gc_max_age=30d
+# Default idle delay (5m) never fires when the server exits after 30s idle.
+build --experimental_disk_cache_gc_idle_delay=10s
+build --local_resources=cpu=HOST_CPUS*.5
+build --local_resources=memory=HOST_RAM*.2
+
+build:agent --color=no
+build:agent --curses=no
+build:agent --noshow_progress
+build:agent --noshow_loading_progress
+build:agent --test_output=errors
+build:agent --test_summary=terse
+build:agent --verbose_failures
+
+build:dev --test_output=errors
+
+build:ci --lockfile_mode=error
+build:ci --noshow_progress
+build:ci --verbose_failures
+build:ci --test_output=errors
+
+# Read-only remote cache for PR jobs. A cache outage must cost seconds, not minutes.
+# The --remote_cache URL is supplied by CI (Task 0.12), never committed.
+build:ci-cache-read --remote_timeout=3s
+build:ci-cache-read --remote_retries=1
+build:ci-cache-read --remote_local_fallback
+build:ci-cache-read --incompatible_remote_local_fallback_for_remote_cache
+build:ci-cache-read --remote_download_toplevel
+build:ci-cache-read --experimental_circuit_breaker_strategy=failure
+build:ci-cache-read --experimental_remote_failure_rate_threshold=10
+build:ci-cache-read --experimental_remote_failure_window_interval=60s
+# Test-only jobs use --remote_download_minimal instead of --remote_download_toplevel.
+
+try-import %workspace%/user.bazelrc

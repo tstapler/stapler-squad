@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "linter_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/cmd/linter",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/lint/entfullscan",
+        "//tools/lint/hotpolllog",
+        "//tools/lint/noarchivedrevival",
+        "//tools/lint/nocommandpattern",
+        "//tools/lint/nolegacylog",
+        "//tools/lint/noliveinstanceraw",
+        "//tools/lint/norawdb",
+        "//tools/lint/norawexec",
+        "//tools/lint/norawghrequest",
+        "//tools/lint/norawgitcli",
+        "//tools/lint/norawgitopen",
+        "//tools/lint/nosessiondrivertest",
+        "//tools/lint/notimesleeptest",
+        "//tools/lint/novartestseam",
+        "//tools/lint/nowrongdbentity",
+        "//tools/lint/silenttransition",
+        "//tools/lint/tmuxsocketscope",
+        "@lint_x_tools//go/analysis/multichecker",
+    ],
+)
+
+go_binary(
+    name = "linter",
+    embed = [":linter_lib"],
+    visibility = ["//visibility:public"],
+)

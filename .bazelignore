@@ -1,0 +1,8 @@
+.claude/worktrees
+worktrees
+third_party/tmux
+project_plans
+website
+gen
+web-app/src/gen
+build

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nosessiondrivertest",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/nosessiondrivertest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/lint/internal/nolintcomment",
+        "@lint_x_tools//go/analysis",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nosessiondrivertest",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nosessiondrivertest_test",
+    srcs = [
+        "analyzer_test.go",
+        "export_test.go",
+    ],
+    embed = [":nosessiondrivertest"],
+    deps = ["@lint_x_tools//go/analysis/analysistest"],
+)
