@@ -710,6 +710,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	eventBus := svc.EventBus
 	sessionService := svc.SessionService
 
+	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
+	// path, so instance loading consults this enricher's cache instead of probing
+	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
+	installWorktreeEnricher(context.Background())
+
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
 	if err != nil {
@@ -2154,6 +2159,17 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// installWorktreeEnricher starts and registers the process-wide worktree enricher
+// that instance loading consults (stopped by session.StopWorktreeEnricher). Any
+// previously registered enricher is stopped first.
+func installWorktreeEnricher(ctx context.Context) *session.WorktreeEnricher {
+	session.StopWorktreeEnricher()
+	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{})
+	e.Start(ctx)
+	session.SetWorktreeEnricher(e)
+	return e
 }
 
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.

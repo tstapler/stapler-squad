@@ -469,13 +469,11 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	// Auto-detect worktree info for migration (existing sessions without this info)
 	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
+	// The open()-based probe can block on an unreadable (e.g. TCC-protected) path, so
+	// with a WorktreeEnricher registered this only reads its in-memory cache and
+	// queues a background probe; see ADR-038.
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
-		if err := instance.DetectAndPopulateWorktreeInfo(); err != nil {
-			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
-			// Non-fatal - session can still work without this info
-		} else if instance.GitHubOwner != "" {
-			log.Info("auto-detected github info", "session", instance.Title, "owner", instance.GitHubOwner, "repo", instance.GitHubRepo, "worktree", instance.IsWorktree)
-		}
+		instance.populateWorktreeInfoOnLoad()
 	}
 
 	// Initialize session-specific logging

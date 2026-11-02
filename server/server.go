@@ -244,6 +244,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
 	}
 
+	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
+
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	// Known startup race: the initial ScanAll in Start fires before the
