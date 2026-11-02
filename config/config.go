@@ -406,6 +406,8 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// TCCEnrichmentConsent records app consent by opaque protected-root ID, not OS grants.
+	TCCEnrichmentConsent map[string]bool `json:"tcc_enrichment_consent,omitempty"`
 	// FeatureFlagScopes holds per-scope overrides of a scopable flag, keyed by
 	// flag name then scope ("kind:review"). A scope key is explicit when present;
 	// deleting it returns the scope to the flag's global value. Today only

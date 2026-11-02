@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -713,7 +714,21 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
 	// path, so instance loading consults this enricher's cache instead of probing
 	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
-	installWorktreeEnricher(context.Background())
+	gate := tcc.NewConsentGate(tcc.Classify, cfg.TCCEnrichmentConsent, func(id string) error {
+		return config.UpdateConfig(func(c *config.Config) error {
+			if c.TCCEnrichmentConsent == nil {
+				c.TCCEnrichmentConsent = map[string]bool{}
+			}
+			c.TCCEnrichmentConsent[id] = true
+			return nil
+		})
+	})
+	enricherConfig := session.WorktreeEnricherConfig{}
+	if cfg.TCCEnrichmentConsentEnabled() {
+		enricherConfig.Ready = gate.Ready
+	}
+	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
+	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
 
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
@@ -2164,9 +2179,9 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 // installWorktreeEnricher starts and registers the process-wide worktree enricher
 // that instance loading consults (stopped by session.StopWorktreeEnricher). Any
 // previously registered enricher is stopped first.
-func installWorktreeEnricher(ctx context.Context) *session.WorktreeEnricher {
+func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherConfig) *session.WorktreeEnricher {
 	session.StopWorktreeEnricher()
-	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{})
+	e := session.NewWorktreeEnricher(cfg)
 	e.Start(ctx)
 	session.SetWorktreeEnricher(e)
 	return e

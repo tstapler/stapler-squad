@@ -1,10 +1,10 @@
 // Package tcc classifies filesystem paths that macOS TCC (Transparency,
 // Consent and Control) guards behind a user consent prompt.
 //
-// Classification is pure path/filesystem inspection: stat and statfs never
-// trigger a TCC prompt, whereas open, readdir and access do, and no public
-// API reports a grant's state. Callers therefore use Classify to decide
-// whether an open may prompt, not whether it will succeed.
+// Classification is heuristic and does filesystem I/O, including symlink
+// resolution, stat and statfs; these operations can block on unhealthy storage.
+// No public API reports a grant's state. Classify estimates whether access may
+// need consent, not whether an operation will prompt or succeed.
 package tcc
 
 import (

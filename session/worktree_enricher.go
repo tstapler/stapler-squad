@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -179,7 +180,7 @@ func (e *WorktreeEnricher) Request(path string) {
 func (e *WorktreeEnricher) Unpark(path string) { e.Request(path) }
 
 func (e *WorktreeEnricher) handle(path string) {
-	if e.stopped.Load() || (e.cfg.Ready != nil && !e.cfg.Ready(path)) {
+	if e.stopped.Load() {
 		return
 	}
 	e.mu.Lock()
@@ -208,6 +209,12 @@ func (e *WorktreeEnricher) handle(path string) {
 	// handler already gave up on a stuck call.
 	ch := e.group.DoChan(path, func() (any, error) {
 		info, err := e.safeProbe(path)
+		if errors.Is(err, errEnrichmentParked) {
+			e.mu.Lock()
+			delete(e.stuck, path)
+			e.mu.Unlock()
+			return struct{}{}, nil
+		}
 		e.finish(path, worktreeResult{info: info, err: err}, e.cfg.Now().Sub(start))
 		return struct{}{}, nil
 	})
@@ -228,7 +235,28 @@ func (e *WorktreeEnricher) safeProbe(path string) (info *WorktreeInfo, err error
 			info, err = nil, fmt.Errorf("worktree probe panicked: %v", r)
 		}
 	}()
+	if e.cfg.Ready != nil && !e.cfg.Ready(path) {
+		return nil, errEnrichmentParked
+	}
 	return e.cfg.Probe(path)
+}
+
+var errEnrichmentParked = errors.New("enrichment awaiting app consent")
+
+// Outcome describes enrichment only; it does not infer an OS prompt or grant.
+func (e *WorktreeEnricher) Outcome(path string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stuck[path] != nil {
+		return "unresolved/slow"
+	}
+	if r, ok := e.results[path]; ok {
+		if r.err != nil {
+			return "error"
+		}
+		return "completed"
+	}
+	return "pending"
 }
 
 func (e *WorktreeEnricher) markStuck(path string, attemptStart time.Time) {
