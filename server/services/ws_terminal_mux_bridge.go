@@ -45,6 +45,8 @@ type TerminalMuxBridge struct {
 
 	// policies is the upgrade origin rule per listener; a listener without one is refused.
 	policies map[string]func(*http.Request) bool
+	// dispatchers re-runs the listener's auth chain on every OPEN; nil refuses every OPEN.
+	dispatchers UnaryDispatchers
 
 	mu      sync.Mutex
 	sockets map[*muxSocket]struct{}
@@ -56,6 +58,12 @@ type TerminalMuxOption func(*TerminalMuxBridge)
 // WithTerminalMuxOriginPolicy sets the upgrade origin rule for a listener name.
 func WithTerminalMuxOriginPolicy(listener string, policy func(*http.Request) bool) TerminalMuxOption {
 	return func(b *TerminalMuxBridge) { b.policies[listener] = policy }
+}
+
+// WithTerminalMuxDispatchers sets the per-listener handler chain each OPEN re-enters to
+// re-check authentication (the same chain a plain StreamTerminal upgrade passes).
+func WithTerminalMuxDispatchers(d UnaryDispatchers) TerminalMuxOption {
+	return func(b *TerminalMuxBridge) { b.dispatchers = d }
 }
 
 // NewTerminalMuxBridge returns a bridge advertising poolSize sockets to clients. A poolSize
@@ -90,6 +98,10 @@ func (b *TerminalMuxBridge) config() muxConfig {
 }
 
 func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Value(muxAuthProbeKey{}) != nil {
+		w.WriteHeader(http.StatusNoContent) // reached only after the listener's auth chain passed
+		return
+	}
 	if b.PoolSize() <= 0 {
 		http.NotFound(w, r)
 		return
@@ -107,7 +119,8 @@ func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Warn("[TerminalMux] upgrade failed", "err", err)
 		return
 	}
-	s := newMuxSocket(b, conn)
+	rec, _ := RequestRecordFrom(r.Context())
+	s := newMuxSocket(b, conn, r, rec.Listener)
 	b.mu.Lock()
 	b.sockets[s] = struct{}{}
 	b.mu.Unlock()
@@ -147,8 +160,11 @@ func (b *TerminalMuxBridge) admit(w http.ResponseWriter, r *http.Request) bool {
 
 // muxSocket is one shared WebSocket and its single writer.
 type muxSocket struct {
-	bridge *TerminalMuxBridge
-	conn   *websocket.Conn
+	bridge   *TerminalMuxBridge
+	conn     *websocket.Conn
+	upgrade  *http.Request // identity (cookie, host, peer) re-checked on every OPEN
+	listener string
+	denials  int // refused OPENs on this socket; only touched by readLoop
 
 	mu       sync.Mutex
 	streams  map[uint32]*muxStreamConn
@@ -160,9 +176,9 @@ type muxSocket struct {
 	wg       sync.WaitGroup
 }
 
-func newMuxSocket(b *TerminalMuxBridge, conn *websocket.Conn) *muxSocket {
+func newMuxSocket(b *TerminalMuxBridge, conn *websocket.Conn, upgrade *http.Request, listener string) *muxSocket {
 	return &muxSocket{
-		bridge: b, conn: conn,
+		bridge: b, conn: conn, upgrade: upgrade, listener: listener,
 		streams: map[uint32]*muxStreamConn{},
 		notify:  make(chan struct{}, 1),
 		done:    make(chan struct{}),
@@ -273,14 +289,17 @@ func (s *muxSocket) readLoop(ctx context.Context) string {
 			return "malformed"
 		}
 		muxMetrics.frame("in", f.Type)
-		s.dispatch(ctx, f)
+		if !s.dispatch(ctx, f) {
+			return "unauthorized"
+		}
 	}
 }
 
-func (s *muxSocket) dispatch(ctx context.Context, f muxFrame) {
+// dispatch handles one client frame; false ends the socket (repeated unauthorized OPENs).
+func (s *muxSocket) dispatch(ctx context.Context, f muxFrame) bool {
 	switch f.Type {
 	case muxFrameOpen:
-		s.openStream(ctx, f.ID)
+		return s.openStream(ctx, f.ID)
 	case muxFrameData:
 		if st := s.lookup(f.ID); st != nil {
 			st.deliver(f.Kind, f.Fin, f.Payload)
@@ -297,6 +316,7 @@ func (s *muxSocket) dispatch(ctx context.Context, f muxFrame) {
 	case muxFramePing:
 		s.sendControl(encodeMuxEmpty(muxFramePong, 0))
 	}
+	return true
 }
 
 func (s *muxSocket) lookup(id uint32) *muxStreamConn {
@@ -319,7 +339,13 @@ func (s *muxSocket) forget(id uint32, st *muxStreamConn) {
 	}
 }
 
-func (s *muxSocket) openStream(ctx context.Context, id uint32) {
+// openStream authorizes and registers one stream; false means the socket must close.
+func (s *muxSocket) openStream(ctx context.Context, id uint32) bool {
+	if id != 0 {
+		if reason := s.authorizeOpen(ctx); reason != "" {
+			return s.denyOpen(id, reason)
+		}
+	}
 	s.mu.Lock()
 	_, dup := s.streams[id]
 	full := len(s.streams) >= muxMaxStreamsPerSocket
@@ -331,10 +357,67 @@ func (s *muxSocket) openStream(ctx context.Context, id uint32) {
 	s.mu.Unlock()
 	if st == nil {
 		s.sendControl(encodeMuxClose(id, websocket.CloseTryAgainLater, "stream refused"))
-		return
+		return true
 	}
 	muxMetrics.streamOpened()
 	go s.runStream(ctx, st)
+	return true
+}
+
+// Closed set of terminal_mux_open_denied_total reasons.
+const (
+	muxDenyUnauthenticated = "unauthenticated"
+	muxDenyForbidden       = "forbidden"
+	muxDenyUnavailable     = "unavailable"
+	muxDenyError           = "error"
+	// muxMaxOpenDenials closes a socket that keeps opening after being refused.
+	muxMaxOpenDenials = 3
+)
+
+type muxAuthProbeKey struct{}
+
+// authorizeOpen re-runs the listener's auth chain with the upgrade request's identity, as a
+// plain StreamTerminal upgrade would, so an expired or revoked session cannot keep opening
+// streams on a socket that was admitted earlier. It returns "" when allowed, else a deny reason.
+func (s *muxSocket) authorizeOpen(ctx context.Context) string {
+	if s.bridge.dispatchers == nil {
+		return muxDenyUnavailable
+	}
+	h := s.bridge.dispatchers(s.listener)
+	if h == nil {
+		return muxDenyUnavailable
+	}
+	req, err := synthesizeUnaryRequest(context.WithValue(ctx, muxAuthProbeKey{}, true), s.upgrade,
+		strings.TrimPrefix(TerminalMuxPath, "/api"), nil, unaryRequestMeta{})
+	if err != nil {
+		return muxDenyError
+	}
+	rec := &unaryRecorder{header: http.Header{}}
+	h.ServeHTTP(rec, req)
+	switch rec.statusOrOK() {
+	case http.StatusNoContent:
+		return ""
+	case http.StatusUnauthorized, http.StatusFound:
+		return muxDenyUnauthenticated
+	case http.StatusForbidden:
+		return muxDenyForbidden
+	default:
+		return muxDenyError
+	}
+}
+
+// denyOpen refuses the stream with a fixed reason text (nothing about the session or the
+// credential) and ends the socket once it has been refused muxMaxOpenDenials times.
+func (s *muxSocket) denyOpen(id uint32, reason string) bool {
+	muxMetrics.openDenied(s.listener, reason)
+	log.Warn("[TerminalMux] OPEN denied", "listener", s.listener, "reason", reason)
+	s.sendControl(encodeMuxClose(id, websocket.ClosePolicyViolation, "unauthorized"))
+	s.denials++
+	if s.denials < muxMaxOpenDenials {
+		return true
+	}
+	closeWebSocket(s.conn, websocket.ClosePolicyViolation, "unauthorized")
+	return false
 }
 
 func (s *muxSocket) runStream(ctx context.Context, st *muxStreamConn) {

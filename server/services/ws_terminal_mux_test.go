@@ -30,7 +30,7 @@ type muxTestClient struct {
 
 func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestClient, *TerminalMuxBridge) {
 	t.Helper()
-	bridge := NewTerminalMuxBridge(serve, poolSize)
+	bridge := NewTerminalMuxBridge(serve, poolSize, WithTerminalMuxDispatchers(allowAllDispatcher))
 	srv := httptest.NewServer(WithRequestRecord(ListenerLocal, false)(bridge))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
@@ -52,6 +52,11 @@ func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestC
 	}()
 	t.Cleanup(func() { _ = conn.Close() })
 	return c, bridge
+}
+
+// allowAllDispatcher stands in for a listener chain with no auth: every OPEN's re-check passes.
+func allowAllDispatcher(string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 }
 
 func (c *muxTestClient) send(frame []byte) {
@@ -496,5 +501,27 @@ func TestMuxBridge_should_ReportCounts_And_ValidateRequestedSize(t *testing.T) {
 	for raw, want := range map[string]bool{"0": true, "64": true, " 3 ": true, "65": false, "-1": false, "x": false, "": false} {
 		_, ok := ParseTerminalMuxPoolSize(raw)
 		assert.Equal(t, want, ok, raw)
+	}
+}
+
+func TestMuxBridge_should_RefuseOpen_When_NoDispatcherConfigured(t *testing.T) {
+	t.Parallel()
+	bridge := NewTerminalMuxBridge(echoServe, 1)
+	srv := httptest.NewServer(WithRequestRecord(ListenerLocal, false)(bridge))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodeMuxEmpty(muxFrameOpen, 1)))
+	for {
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err)
+		f, derr := decodeMuxFrame(msg)
+		require.NoError(t, derr)
+		if f.Type == muxFrameClose {
+			assert.Equal(t, uint16(websocket.ClosePolicyViolation), f.Code)
+			assert.Equal(t, "unauthorized", f.Reason)
+			return
+		}
 	}
 }

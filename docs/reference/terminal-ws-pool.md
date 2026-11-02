@@ -34,10 +34,16 @@ Binary WebSocket messages, big-endian: `type u8 | stream id u32 | body`. Codecs:
 - A stream with queued output and no credit for 30 s is closed with 1013. Streams per socket: 64 (`OPEN` beyond it gets `CLOSE 1013`). Socket idle timeout 60 s (client and server each ping every 20 s; the peer answers with `PONG`); socket write deadline 10 s.
 - Admission matches `/api/ws/unary`: remote listener requires authentication and a strict origin match; local requires a loopback origin.
 
+## Authorization
+
+The socket is authenticated at upgrade, and **every `OPEN` re-runs the listener's auth chain** with the upgrade request's identity (cookie, host, peer), the same chain a plain `StreamTerminal` upgrade passes. A session that expires or is revoked after the socket was admitted therefore cannot open new streams on it. A denied `OPEN` gets `CLOSE 1008` with the fixed text `unauthorized` (no session id, credential or chain detail), the handler never runs, and the socket is closed with 1008 after 3 denied `OPEN`s. A bridge with no dispatcher wired refuses every `OPEN`. Streams already open when a session is revoked keep running until they end, as a plain WebSocket does.
+
+There is no per-session ACL to check: authorization in stapler-squad is a single passkey session, and `StreamTerminal` resolves any known session id for any authenticated caller on both the pooled and plain paths (including archived sessions, which the handler does not filter). If per-session scoping is ever added it must be enforced in `streamTerminal` so both paths get it.
+
 ## Failure behaviour
 
 A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
 
 ## Metrics
 
-Server: `terminal_mux_sockets_open`, `terminal_mux_streams_open`, `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (histogram, per-stream queued bytes at enqueue), `terminal_mux_hol_wait` (ms from enqueue to first frame written), `terminal_mux_credit_stalls_total`, `terminal_mux_write_errors_total`, `terminal_mux_socket_closed_total{reason}`. Spans: `terminal_mux.socket`, `terminal_mux.stream`. Dashboard: "Terminal socket pool (ADR-033)" row in `docs/observability/grafana/dashboards/client-network.json`.
+Server: `terminal_mux_sockets_open`, `terminal_mux_streams_open`, `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (histogram, per-stream queued bytes at enqueue), `terminal_mux_hol_wait` (ms from enqueue to first frame written), `terminal_mux_credit_stalls_total`, `terminal_mux_write_errors_total`, `terminal_mux_socket_closed_total{reason}`, `terminal_mux_open_denied_total{listener,reason}` (listener `local`/`remote`; reason `unauthenticated`, `forbidden`, `unavailable`, `error`). A denied `OPEN` also logs `[TerminalMux] OPEN denied` with the same two fields. Spans: `terminal_mux.socket`, `terminal_mux.stream`. Dashboard: "Terminal socket pool (ADR-033)" row in `docs/observability/grafana/dashboards/client-network.json`.
