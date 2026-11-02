@@ -93,11 +93,11 @@ Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `thir
 | C3 | 11.7a | starlark_surface_should_stay_bounded | Static | `bash tools/bzl/check-starlark-size.sh`; `buildifier -lint=warn -r . \| wc -l` | exit 0; `0` | macro >~30 lines or .bzl >500 |
 | C4 | 0.12 / S10 | pr_cache_should_be_server_enforced_read_only | Security | S10 PASS rule: PUT via `:9092` -> 4xx; unauth PUT `:9093` -> 401; main credential PUT -> 2xx | as stated | PR credential can write |
 | C4 | 7.4b | write_job_should_run_only_on_main_push | Static | `bash tools/bzl/check-workflows.sh`; PR-branch run of write job | exit 0; rejected by `bazel-cache-write` environment | job runs on PR |
-| C4 | 0.12c, 7.4b | unreachable_cache_should_not_fail_or_slow_build | Build | `bazel build //tools/lint/... --remote_local_fallback --remote_timeout=3s --remote_retries=1` against (a) DROP-ed `192.0.2.1` (and `iptables -j DROP` where root), (b) `tc netem delay 2s loss 20%`, (c) accept-then-silent listener; `echo $?` each; CI pre-flight fallback to `actions/cache` | `0` each, delta vs no-cache <= 10 s each | non-zero or >10 s (the former `127.0.0.1:1` test was an instant refusal and is not the criterion) |
+| C4 | 0.12c, 7.4b | unreachable_cache_should_not_fail_or_slow_build | Build | `bazel build //tools/lint/... --remote_timeout=3s --remote_retries=1 --experimental_circuit_breaker_strategy=failure` (no `--remote_local_fallback`: a no-op for `--remote_cache` without the incompatible flag) against (a) DROP-ed `192.0.2.1` (and `iptables -j DROP` where root), (b) `tc netem delay 2s loss 20%`, (c) accept-then-silent listener; `echo $?` each; CI pre-flight fallback to `actions/cache` | `0` each, delta vs no-cache <= 10 s each | non-zero or >10 s (the former `127.0.0.1:1` test was an instant refusal and is not the criterion) |
 | C4 | 7.4a | cache_flags_should_use_HTTP_protocol_only_and_no_inline_headers | Static | `grep -c 'remote_header' .bazelrc`; `grep -c 'grpcs\?://' .bazelrc` | `0`; `0` | >0 |
 | C4 | 7.4b | fork_prs_without_secrets_should_still_build | Build | `workflow_dispatch` with empty secrets | green via disk-only fallback | red |
 | C4 | 0.2b | shared_disk_and_repository_cache_should_be_configured | Static | `bazel info --config=agent workspace`; `grep -E 'disk_cache\|repository_cache' .bazelrc` | repo path, no flag errors; both flags present | flag error |
-| C4 | 7.4c | disk_cache_gc_flags_should_exist_in_bazel_9_3_1 | Static | `bazel help build \| grep -c disk_cache_gc` | >= 1 | 0 |
+| C4 | 7.4c | disk_cache_gc_flags_should_exist_in_bazel_9_3_1 | Static | `bazel help build --long \| grep -c experimental_disk_cache_gc` | >= 3 | < 3 |
 | C4 | 0.12e | D-PROTECT-WRITE_environment_should_gate_write_credential | Owner | `gh api repos/tstapler/stapler-squad/environments/bazel-cache-write --jq '[.protection_rules[].type]\|sort\|join(",")'` | contains `branch_policy` and `required_reviewers` | missing either |
 | C5 | 5.1a/b | darwin_arm64_should_build_with_Info_plist | Build | macOS CI job; `otool -s __TEXT __info_plist bazel-bin/.../stapler-squad \| grep -c .` | >= 1 | 0 / build fail |
 | C5 | 5.1c | infoplist_test_should_pass_on_macos_and_skip_on_linux | Build | `bazel test //macos:infoplist_test` | PASSED on macOS; incompatible/skipped on Linux | FAILED |
@@ -210,7 +210,7 @@ Given a fresh clone (no `gen/`, `web-app/src/gen/`, `session/ent/*`, empty `thir
 | S3 | spike_embed_should_pass | Spike | row 0.5 | tree-expansion rule |
 | S4 | spike_web_should_pass | Spike | row 0.6 (sha256 equal, Jest 20 equal, 0 escapes; >1.5x time stays `Pass` with `repo-rule+no-sandbox`) | `rules_bun` (Task 0.6f, `FallbackWorkaround`), then aspect_rules_js fork (`FallbackFork`), then `Fail` + D-HERMETIC |
 | S5 | spike_tmux_should_pass | Spike | row 0.7 | genrule host cc (D-HERMETIC) |
-| S6 | spike_worktree_should_pass | Spike | row 0.10 (incl. wrapper live-latency check and Task 0.10c integrity) | per-worktree output base |
+| S6 | spike_worktree_should_pass | Spike | row 0.10 (incl. wrapper live-latency check, Task 0.10c integrity and the cross-worktree sharing checks E1-E6 of Tasks 0.10e-f; Tasks 0.10g-h are non-gating inputs) | per-worktree output base |
 | S13 | spike_lockfile_should_pass | Spike | row 0.10d (20-PR replay) | do not commit the lock (owner approval) |
 | S7 | spike_tags_should_pass | Spike | row 0.8 | transition macro |
 | S8/S9 | spike_sandbox_census_should_pass | Spike | row 0.9 (`census-check.py` exit 0) | n/a |
@@ -244,7 +244,7 @@ Every one of the 39 requirements has at least one verification above (38 testabl
 | Generated-file repair | 7.8a-c, 0.10d | main_and_PR_drift_should_be_auto_repaired | Build | seeded drift run of `bazel-main-repair.yml` and `bazel-autofix.yml`; S13 replay | repair PR within 10 min; autofix push is non-forced; zero lock conflicts |
 | Test-cache false-green control | 4.2a, 4.9c, 8.5b, 0.2g | env_coupled_tests_should_never_be_cached | Build | `bazel test //tools/bzl:go_test_bzl_test` (tag policy); nightly `--nocache_test_results --runs_per_test=3`; canary pass-set equality | `external` tag on the four classes; no `flaky = True`; ledger rows appended |
 | Cold-floor and pre-flight | 7.4b, 0.3f, P10 | cold_ci_should_be_within_1_5x_and_cache_outage_should_fall_back | Perf | `perf.sh` cold row; unreachable-cache run of `bazel.yml` | cold <= 1.5 x p50; job continues on `actions/cache` |
-| Flag names verified | 0.2b, 0.14 | flag_names_should_be_spike_verified | Static | `grep -c 'spike-verified' spike-results.md` | at least 8 |
+| Flag names verified | 0.2b, 0.14 | flag_names_should_be_spike_verified | Static | `grep -c 'spike-verified' spike-results.md` | at least 24 (20 flags plus 4 recorded-absent) |
 | Retention evidence | 10.1, 10.2a | retention_should_require_release_canary_and_owner_installs | Owner | attestation file check by the environment-approved job | Release PR, 2 canary runs, Linux and macOS installs attested |
 | S4 fallback reachable | 0.6f | S4_failure_should_reach_rules_bun_then_fork | Spike | `python3 tools/bzl/check-spike-results.py` on a seeded `FallbackWorkaround` S4 row | exit 0 and `path` names `rules_bun` |
 
@@ -297,6 +297,22 @@ Every one of the 39 requirements has at least one verification above (38 testabl
 | Orphan cleanup protects owner files | 11.4a | owner_uncommitted_files_should_be_untouched | Static | `sha256sum -c "$TMPDIR/owner-files.sha"` | exit 0 |
 | Dependency change annotation | 11.6c | dep_changes_should_be_summarised_on_PRs | Static | `bash tools/bzl/annotate-deps_test.sh` | exit 0 |
 | Doc commands verified | 11.1d, 11.3a, 11.3d | doc_commands_should_be_listed_or_marked | Static | `bash tools/bzl/check-skill-proposals.sh --docs <files>` | exit 0 |
+
+## Docs-derived additions (from `research/bazel-docs-best-practices.md`, 2026-11-01)
+
+| Control | Plan task | Verification name | Type | Command | Expected |
+|---|---|---|---|---|---|
+| Startup flags reach the server (D1) | 0.2b, 0.2g | startup_flags_should_reach_server_and_startup_config_lines_rejected | Static | `bash tools/bzl/check-bazelrc_test.sh` (E9); `tr '\0' '\n' < /proc/$(bazel info server_pid)/cmdline \| grep -c max_idle_secs=300` | fixture `startup:agent` exits 1, `startup:linux` exits 0; count >= 1 |
+| Known-absent flags rejected (D20, X1) | 0.2g, 0.9b | absent_flags_should_never_be_committed | Static | `bash tools/bzl/check-bazelrc_test.sh`; `bazel help build --long \| grep -c incompatible_sandbox_hermetic_tmp` | exit 0; `0` |
+| Cross-path cache hit ratio (E1, E2) | 0.10e | second_worktree_at_other_path_should_hit_95pct | Perf | `bash tools/bzl/baseline/cross-worktree-cache.sh \| jq -e '.e1_hit_ratio>=0.95 and .e2_nonallow_spawns==0'` | `true` |
+| Go compile path independence and digest determinism (E3, E4) | 0.10e | gocompile_and_outputs_should_be_path_independent | Parity | same script, `.e3_gocompile_identical and .e4_digest_lists_equal and .e4_control_flagged` | `true` |
+| GC runs under idle timeout (E5) | 0.10f, 11.4c | disk_cache_gc_should_run_with_short_idle | Perf | `bash tools/bzl/baseline/cache-layout-checks.sh \| jq -e '.e5_gc_trimmed_with_idle_delay'` | `true` |
+| Repo contents cache and reflink (E6, E10) | 0.10f, 0.10a | extracted_repos_should_be_shared_and_hits_reflinked | Perf | same script, `.e6_offline_build_ok`, `.e10_shared_extent` boolean recorded; `bazel-worktree-cost.sh \| jq -e '.cache_fs == .output_base_fs'` | `true`; filesystem equal |
+| Containment alternatives and queue value (E7, E11) | 0.10g | serialised_builds_should_cost_at_most_60pct_cpu | Perf | `bash tools/bzl/baseline/containment-checks.sh \| jq -e '.e11_serial_over_concurrent_cpu<=0.60'` | `true` (recorded input to S6) |
+| Disk + remote layering (E8) | 0.12f | disk_and_remote_cache_should_compose | Perf | `bash tools/bzl/baseline/cache-layering.sh \| jq -e '.b_remote_hits>0 and .c_delta_s<=10'` | `true` |
+| Multiplex-worker inventory (user-requested; non-gating) | 0.10h | multiplex_workers_should_be_inventoried | Spike | `bash tools/bzl/baseline/worker-inventory.sh \| jq -e '(.outcome=="none-found" or (.rss_reduction_pct\|type=="number")) and (.verdict=="Pass" or .verdict=="NoAction")'` | `true`; "none found" is Pass-with-no-action, never skipped; within-one-build memory only, not cross-worktree |
+| Orphan base with live server (D16, D17) | 11.4a | orphan_server_should_be_killed_via_pid_file | Static | `bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases_test.sh` | exit 0 |
+| Merge driver text from docs (D19) | 0.10b | merge_driver_should_match_documented_snippet | Static | `grep -c 'bazel.build/external/lockfile' spike-results.md` | >= 1 |
 
 ## Test Stack
 - **Unit**: Go `testing` for helpers (`internal/reporoot`, `internal/testenv`, `tools/bzl/testsummary`), Python `unittest` for `check-spike-results.py` / `check-exclusions.py`, shell fixture tests (`affected-targets_test.sh`, `bazel-trend_test.sh`, `check-tymux-pin_test.sh`), Starlark `analysistest` (`ent_bzl_test`, `go_test_bzl_test`).
