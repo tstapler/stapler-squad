@@ -3,3 +3,7 @@
   verdict: Pass
   path: direct
   cost: M
+- spike: S2
+  verdict: FallbackWorkaround
+  path: declared-output ent_gen rule + entc program (no GoSource rule, no fork); importer check run on a subset only (see spike-results.md S2)
+  cost: M
