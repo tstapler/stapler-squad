@@ -1,0 +1,139 @@
+{
+  "run_date": "2026-11-02T04:57:55Z",
+  "ci_n": 30,
+  "ci_p50_s": 2339,
+  "ci_p90_s": 4298,
+  "ci_p95_s": 5001,
+  "ci_per_workflow": [
+    {
+      "workflow": "build.yml",
+      "n": 30,
+      "p50_s": 2230,
+      "p90_s": 4245
+    },
+    {
+      "workflow": "lint.yml",
+      "n": 27,
+      "p50_s": 1033,
+      "p90_s": 1102
+    },
+    {
+      "workflow": "mcp-integration.yml",
+      "n": 12,
+      "p50_s": 590,
+      "p90_s": 675
+    }
+  ],
+  "cold_worktree_wall_s": "UNMEASURED: PENDING-QUIET-HOST",
+  "disk_kb_worktree": "UNMEASURED: PENDING-QUIET-HOST",
+  "disk_kb_node_modules": "UNMEASURED: PENDING-QUIET-HOST",
+  "regen_steps_per_session_median": 0,
+  "regen_steps_per_session_p90": 0,
+  "regen_steps_detail": {
+    "all": {
+      "n": 30,
+      "median": 0,
+      "p90": 0,
+      "sessions_with_any": 1,
+      "totals": {
+        "proto_gen": 1,
+        "ent_gen": 1,
+        "sync": 0,
+        "build_errors": 0
+      }
+    },
+    "build_active": {
+      "n": 16,
+      "median": 0,
+      "p90": 2,
+      "sessions_with_any": 5,
+      "totals": {
+        "proto_gen": 4,
+        "ent_gen": 2,
+        "sync": 0,
+        "build_errors": 20
+      }
+    }
+  },
+  "warm_one_pkg_test_s": "UNMEASURED: PENDING-QUIET-HOST",
+  "partial_class": {
+    "n": 30,
+    "n_with_runs": 30,
+    "runner_min_p50": 183.63333333333335,
+    "runner_min_p90": 285.1333333333334,
+    "billed_style_min_p50": 194,
+    "n_ttg": 27,
+    "ttg_p50_s": 2704,
+    "ttg_p90_s": 4298
+  },
+  "global_class": {
+    "n": 2,
+    "n_with_runs": 2,
+    "runner_min_p50": 334.0833333333333,
+    "runner_min_p90": 364.0166666666667,
+    "billed_style_min_p50": 361,
+    "n_ttg": 2,
+    "ttg_p50_s": 2404,
+    "ttg_p90_s": 19745
+  },
+  "all_class": {
+    "n": 100,
+    "n_with_runs": 99,
+    "runner_min_p50": 279.29999999999995,
+    "runner_min_p90": 335.2166666666667,
+    "billed_style_min_p50": 291,
+    "n_ttg": 84,
+    "ttg_p50_s": 3629,
+    "ttg_p90_s": 17834
+  },
+  "ra1_median_fanout": 0.25874125874125875,
+  "ra1_median_fanout_go_touching": 0.26573426573426573,
+  "ra1_share_prs_le_30pct": 0.9666666666666667,
+  "ra2_non_go_share": 0.9871217409876094,
+  "ra2_median_components_s": {
+    "e2e": 1974.5,
+    "lint": 0,
+    "setup_and_queue": 398,
+    "go_or_other": 34,
+    "span": 2601
+  },
+  "fixtures": [
+    {
+      "fixture": "1-stale-build",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "2-missing-external-dep",
+      "names_remedy": true
+    },
+    {
+      "fixture": "3-missing-generated-code",
+      "names_remedy": false
+    },
+    {
+      "fixture": "4-oom",
+      "names_remedy": false
+    },
+    {
+      "fixture": "5-enospc",
+      "names_remedy": false
+    },
+    {
+      "fixture": "6-cache-unreachable",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "7-flock-queue-wait",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "8-sandbox-failure",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "9-cache-auth-rejected",
+      "names_remedy": "N/A-make"
+    }
+  ],
+  "hermeticity_make": "UNMEASURED: PENDING-QUIET-HOST"
+}

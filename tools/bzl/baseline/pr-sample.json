@@ -1,0 +1,3127 @@
+{
+  "run_date": "2026-11-02T04:49:48Z",
+  "population": 100,
+  "class_counts": {
+    "global": 2,
+    "partial": 98
+  },
+  "truncated_prs": 1,
+  "seed_global_regex": "^(MODULE\\.bazel|\\.bazelrc[^/]*|\\.bazelversion|tools/bzl/.*|go\\.mod|go\\.sum)$",
+  "repr_initial": {
+    "median_files_sample": 3.5,
+    "median_files_population": 5,
+    "median_ok": true,
+    "area_share_sample": {
+      "server": 0.26666666666666666,
+      "session": 0.36666666666666664,
+      "web-app": 0.2,
+      "other": 0.6666666666666666
+    },
+    "area_share_population": {
+      "server": 0.38,
+      "session": 0.46,
+      "web-app": 0.15,
+      "other": 0.57
+    },
+    "max_area_diff_pp": 11.333333333333334,
+    "area_ok": true,
+    "ok": true
+  },
+  "restratified": false,
+  "repr": {
+    "median_files_sample": 3.5,
+    "median_files_population": 5,
+    "median_ok": true,
+    "area_share_sample": {
+      "server": 0.26666666666666666,
+      "session": 0.36666666666666664,
+      "web-app": 0.2,
+      "other": 0.6666666666666666
+    },
+    "area_share_population": {
+      "server": 0.38,
+      "session": 0.46,
+      "web-app": 0.15,
+      "other": 0.57
+    },
+    "max_area_diff_pp": 11.333333333333334,
+    "area_ok": true,
+    "ok": true
+  },
+  "quotas": null,
+  "partial": [
+    {
+      "number": 1382,
+      "mergedAt": "2026-11-02T04:38:06Z",
+      "headRefOid": "93ac3aed087f53824f2bfc1ba9afcc70057d84e3",
+      "files_n": 4,
+      "paths": [
+        ".github/workflows/build.yml",
+        "scripts/e2e-baseline-compare.ts",
+        "scripts/e2e-confirm.ts",
+        "tests/e2e/baseline/e2e-confirm.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1379,
+      "mergedAt": "2026-11-02T02:49:18Z",
+      "headRefOid": "288b991176ae667527f2c93905027f9b770944fa",
+      "files_n": 1,
+      "paths": [
+        "tests/e2e/session-creation-async.spec.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1375,
+      "mergedAt": "2026-11-02T02:48:52Z",
+      "headRefOid": "34651d835844670f14507957f0a1abcb4f881478",
+      "files_n": 8,
+      "paths": [
+        "server/services/current_pane_gone_test.go",
+        "session/external_discovery.go",
+        "session/external_discovery_test.go",
+        "session/instance_serialization.go",
+        "session/instance_serialization_backend_test.go",
+        "session/tymux/session.go",
+        "session/tymux/stream.go",
+        "session/tymux/stream_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1378,
+      "mergedAt": "2026-11-02T00:26:11Z",
+      "headRefOid": "f8fc7abb3c3f110cb351d62dde2fa982d687bb7f",
+      "files_n": 2,
+      "paths": [
+        "web-app/src/app/routes.backlog-layout.test.tsx",
+        "web-app/src/app/routes.tsx"
+      ],
+      "truncated": false,
+      "areas": [
+        "web-app"
+      ],
+      "primary": "web-app",
+      "class": "partial"
+    },
+    {
+      "number": 1376,
+      "mergedAt": "2026-11-02T00:12:00Z",
+      "headRefOid": "07968e7a55aba2967d8713c28f14d7f33db94fd6",
+      "files_n": 8,
+      "paths": [
+        "session/retry_state.go",
+        "session/retry_state_test.go",
+        "session/tymux/exited.go",
+        "session/tymux/lifecycle_matrix_test.go",
+        "session/tymux/resync.go",
+        "session/tymux/session.go",
+        "session/tymux/session_test.go",
+        "session/tymux/stream.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1377,
+      "mergedAt": "2026-11-02T00:02:12Z",
+      "headRefOid": "5327cf1142daff7ae6476a0db556548b61a7b927",
+      "files_n": 2,
+      "paths": [
+        "scripts/e2e-baseline-compare.ts",
+        "tests/e2e/baseline/e2e-baseline-compare.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1374,
+      "mergedAt": "2026-11-01T22:32:10Z",
+      "headRefOid": "3db7c847f1d8c5e519fca693e4de52df6f79855a",
+      "files_n": 2,
+      "paths": [
+        "scripts/e2e-baseline-compare.ts",
+        "tests/e2e/baseline/e2e-baseline-compare.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1373,
+      "mergedAt": "2026-11-01T21:54:25Z",
+      "headRefOid": "f757282f8fe8640fd8aee6fb33ec2bcc08c1808b",
+      "files_n": 1,
+      "paths": [
+        "scripts/record-website-demos.sh"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1366,
+      "mergedAt": "2026-11-01T20:53:40Z",
+      "headRefOid": "cb7d8380d91daa6914016254277b90414e5c92ee",
+      "files_n": 12,
+      "paths": [
+        "docs/registry/features/frontend/backlog-jump-to-session.json",
+        "project_plans/jump-to-session-modal/plan.md",
+        "project_plans/jump-to-session-modal/requirements.md",
+        "project_plans/jump-to-session-modal/research.md",
+        "project_plans/jump-to-session-modal/validation.md",
+        "session/background_outcome_test.go",
+        "session/wake_polling_guard_test.go",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.css.ts",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.test.tsx",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.tsx",
+        "web-app/src/components/sessions/SessionPeekModal.css.ts",
+        "web-app/src/components/sessions/SessionPeekModal.tsx"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "session",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1368,
+      "mergedAt": "2026-11-01T20:44:25Z",
+      "headRefOid": "a61cb87770fee80eee72d45af2137334b7ea2f2e",
+      "files_n": 8,
+      "paths": [
+        "session/instance.go",
+        "session/retry_state.go",
+        "session/retry_state_test.go",
+        "session/session_driver.go",
+        "session/tymux/exited.go",
+        "session/tymux/lifecycle_integration_test.go",
+        "session/tymux/lifecycle_matrix_test.go",
+        "session/tymux/session.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1371,
+      "mergedAt": "2026-11-01T20:43:55Z",
+      "headRefOid": "7e85e4375e78c5cc0d4214ea8644ca3df6f9d250",
+      "files_n": 3,
+      "paths": [
+        "website/src/components/FeatureCard.astro",
+        "website/tests/e2e/landing.spec.ts",
+        "website/tests/unit/feature-card.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1369,
+      "mergedAt": "2026-11-01T20:43:22Z",
+      "headRefOid": "4c29db4b250b74bcac28e4af2b301d7b78fc70ba",
+      "files_n": 9,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/connectrpc_websocket_firstpaint_test.go",
+        "server/services/connectrpc_websocket_test.go",
+        "server/services/current_pane_gone_test.go",
+        "server/services/stream_route_test.go",
+        "session/instance_serialization.go",
+        "session/instance_serialization_backend_test.go",
+        "session/tymux/stream.go",
+        "session/tymux/stream_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1365,
+      "mergedAt": "2026-11-01T20:41:36Z",
+      "headRefOid": "12b715729f596be770f2982bc69d744d719d4261",
+      "files_n": 74,
+      "paths": [
+        "Makefile",
+        "docs/how-to/vt-conformance-runbook.md",
+        "project_plans/ghostty-terminal-migration/implementation/plan.md",
+        "project_plans/ghostty-terminal-migration/implementation/validation.md",
+        "project_plans/ghostty-terminal-migration/implementation/verify.md",
+        "project_plans/ghostty-terminal-migration/requirements.md",
+        "project_plans/ghostty-terminal-migration/research/ghostty-web.md",
+        "server/services/config_surface_proof_test.go",
+        "server/services/feature_flag_service.go",
+        "server/services/feature_flag_service_test.go",
+        "session/detection/ratelimit/detector_test.go",
+        "tests/terminal-conformance/alt-screen.ans",
+        "tests/terminal-conformance/alt-screen.expected.txt",
+        "tests/terminal-conformance/autowrap.ans",
+        "tests/terminal-conformance/autowrap.expected.txt",
+        "tests/terminal-conformance/backspace-cr.ans",
+        "tests/terminal-conformance/backspace-cr.expected.txt",
+        "tests/terminal-conformance/baseline.json",
+        "tests/terminal-conformance/combining-mark.ans",
+        "tests/terminal-conformance/combining-mark.expected.txt",
+        "tests/terminal-conformance/cursor-movement.ans",
+        "tests/terminal-conformance/cursor-movement.expected.txt",
+        "tests/terminal-conformance/cursor-position-report.ans",
+        "tests/terminal-conformance/cursor-position-report.expected.txt",
+        "tests/terminal-conformance/cursor-position-report.response.txt",
+        "tests/terminal-conformance/decaln-alignment.ans",
+        "tests/terminal-conformance/decaln-alignment.expected.txt",
+        "tests/terminal-conformance/erase-line.ans",
+        "tests/terminal-conformance/erase-line.expected.txt",
+        "tests/terminal-conformance/full-reset.ans",
+        "tests/terminal-conformance/full-reset.expected.txt",
+        "tests/terminal-conformance/insert-delete.ans",
+        "tests/terminal-conformance/insert-delete.expected.txt",
+        "tests/terminal-conformance/kitty-keyboard-query.ans",
+        "tests/terminal-conformance/kitty-keyboard-query.expected.txt",
+        "tests/terminal-conformance/kitty-keyboard-query.response.txt",
+        "tests/terminal-conformance/manifest.json",
+        "tests/terminal-conformance/osc-title-hyperlink.ans",
+        "tests/terminal-conformance/osc-title-hyperlink.expected.txt",
+        "tests/terminal-conformance/rep-repeat-char.ans",
+        "tests/terminal-conformance/rep-repeat-char.expected.txt",
+        "tests/terminal-conformance/scroll-region.ans",
+        "tests/terminal-conformance/scroll-region.expected.txt",
+        "tests/terminal-conformance/sgr-colon-truecolor.ans",
+        "tests/terminal-conformance/sgr-colon-truecolor.expected.txt",
+        "tests/terminal-conformance/sync-output-2026.ans",
+        "tests/terminal-conformance/sync-output-2026.expected.txt",
+        "tests/terminal-conformance/sync-output-decrqm.ans",
+        "tests/terminal-conformance/sync-output-decrqm.expected.txt",
+        "tests/terminal-conformance/sync-output-decrqm.response.txt",
+        "tests/terminal-conformance/tab-stops.ans",
+        "tests/terminal-conformance/tab-stops.expected.txt",
+        "tests/terminal-conformance/wide-chars.ans",
+        "tests/terminal-conformance/wide-chars.expected.txt",
+        "web-app/bun.lock",
+        "web-app/package.json",
+        "web-app/scripts/measure-lcp.mjs",
+        "web-app/src/components/sessions/GhosttyTerminal.tsx",
+        "web-app/src/components/window/ConnectingPlaceholder.css.ts",
+        "web-app/src/lib/features/flagStore.test.ts",
+        "web-app/src/lib/features/flagStore.ts",
+        "web-app/src/lib/terminal/TerminalPool.tsx",
+        "web-app/src/lib/terminal/__tests__/TerminalStreamManager.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/TerminalStreamManager.resync.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/conformance.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/conformance.xterm.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/runBaseline.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/vectors.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyAdapter.test.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyHeadless.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyQueryResponder.test.ts",
+        "web-app/src/lib/terminal/ghosttyAdapter.ts",
+        "web-app/src/lib/terminal/ghosttyQueryResponder.ts",
+        "web-app/src/lib/terminal/ghosttySearch.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1364,
+      "mergedAt": "2026-11-01T04:17:09Z",
+      "headRefOid": "855ed8abe6d0be6cc6cbd1fa8a9d1d8dea8466db",
+      "files_n": 9,
+      "paths": [
+        ".github/workflows/build.yml",
+        "tests/e2e/accessibility.spec.ts",
+        "tests/e2e/helpers/test-sshd.ts",
+        "tests/e2e/notification-inline-actions.spec.ts",
+        "tests/e2e/notification-tray-bulk.spec.ts",
+        "tests/e2e/playwright.config.ts",
+        "tests/e2e/scripts/run-ci-shard.sh",
+        "tests/e2e/toast-stack.spec.ts",
+        "tests/e2e/unfinished-work.spec.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1367,
+      "mergedAt": "2026-11-01T03:00:35Z",
+      "headRefOid": "0df4855f5b3d252ccda62e5aa9eab3c656297aeb",
+      "files_n": 2,
+      "paths": [
+        "website/src/components/FeatureCard.astro",
+        "website/tests/unit/feature-card.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1339,
+      "mergedAt": "2026-11-01T02:12:29Z",
+      "headRefOid": "57428c28ace4a318a73232ccb1815fd5bb9b4d44",
+      "files_n": 22,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/session_gone.go",
+        "server/services/session_gone_test.go",
+        "session/backend_factory.go",
+        "session/backend_tymux.go",
+        "session/backend_tymux_test.go",
+        "session/ent/schema/session.go",
+        "session/ent_repository.go",
+        "session/instance.go",
+        "session/instance_serialization.go",
+        "session/instance_tmux.go",
+        "session/instance_tymux_identity_test.go",
+        "session/process_capabilities.go",
+        "session/process_manager.go",
+        "session/storage.go",
+        "session/tymux/exited_test.go",
+        "session/tymux/manager.go",
+        "session/tymux/session.go",
+        "session/tymux/session_identity_test.go",
+        "session/tymux/session_test.go",
+        "session/tymux/stream_test.go",
+        "web-app/src/lib/utils/backoff.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session",
+        "web-app"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1283,
+      "mergedAt": "2026-11-01T02:02:23Z",
+      "headRefOid": "4ded74bcd38693e337b3d716df2732d613202a45",
+      "files_n": 15,
+      "paths": [
+        "docs/how-to/enable-opentelemetry.md",
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/vcs-status-stages.json",
+        "server/mcp/tools_backlog_test.go",
+        "server/services/vcs_range_cache.go",
+        "server/services/vcs_range_cache_test.go",
+        "server/services/vcs_status_flight.go",
+        "server/services/workspace_service.go",
+        "session/git/native/open.go",
+        "session/git/ops.go",
+        "session/git/ops_bench_test.go",
+        "session/git/ops_realrepo_bench_test.go",
+        "session/git/range_walk.go",
+        "session/git/range_walk_test.go",
+        "session/vc/git_provider.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1363,
+      "mergedAt": "2026-11-01T01:26:07Z",
+      "headRefOid": "1d982b2a664cb8eac4850ea5e5e94e3cd3e74017",
+      "files_n": 1,
+      "paths": [
+        ".github/workflows/build.yml"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1360,
+      "mergedAt": "2026-11-01T00:54:48Z",
+      "headRefOid": "0d31e0599590c6fa12240225d755d24f3301441b",
+      "files_n": 7,
+      "paths": [
+        ".github/workflows/benchmark.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/main-ci.yml",
+        ".gitignore",
+        "docs/reference/ci-job-budget.md",
+        "tools/ci-gates/benchmark-regression.js",
+        "web-app/scripts/__tests__/workflow-paths.test.mjs"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1358,
+      "mergedAt": "2026-11-01T00:49:55Z",
+      "headRefOid": "8af13bcf1e9506afcd32758af4607e7fcc992ddc",
+      "files_n": 1,
+      "paths": [
+        ".github/workflows/build.yml"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1297,
+      "mergedAt": "2026-11-01T00:37:55Z",
+      "headRefOid": "04ad9c5311bcc820f003038c7c8affe58cf7a4cb",
+      "files_n": 8,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/terminal-streams.json",
+        "server/services/connectrpc_websocket.go",
+        "server/services/terminal_stream_metrics.go",
+        "server/services/terminal_stream_metrics_test.go",
+        "session/streamhub/hub.go",
+        "session/streamhub/hub_test.go",
+        "session/streamhub/observability.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1298,
+      "mergedAt": "2026-10-31T23:59:32Z",
+      "headRefOid": "cfd30b43bd82d6a8d17d3ddb32e411d3c23a0dd7",
+      "files_n": 35,
+      "paths": [
+        ".github/workflows/deploy-website.yml",
+        ".github/workflows/website-ci.yml",
+        ".github/workflows/website-demo-publish.yml",
+        ".gitignore",
+        "README.md",
+        "docs/features.md",
+        "scripts/demo-post-process.sh",
+        "scripts/demo-post-process.test.sh",
+        "scripts/record-website-demos.sh",
+        "tests/e2e/demo.spec.ts",
+        "tests/e2e/playwright.config.ts",
+        "tests/e2e/playwright.website-demos.config.ts",
+        "tests/e2e/website-demos.spec.ts",
+        "tests/e2e/website-demos/clips.ts",
+        "tests/e2e/website-demos/recorder.ts",
+        "web-app/src/lib/__tests__/e2e_isolation_guard.test.ts",
+        "website/astro.config.mjs",
+        "website/bun.lock",
+        "website/package.json",
+        "website/public/apple-touch-icon.png",
+        "website/public/favicon-32.png",
+        "website/public/favicon.svg",
+        "website/scripts/build-features.mjs",
+        "website/src/components/FeatureCard.astro",
+        "website/src/components/NoThemeSelect.astro",
+        "website/src/content/features.json",
+        "website/src/styles/wh40k.css",
+        "website/tests/a11y.spec.ts",
+        "website/tests/e2e/landing.spec.ts",
+        "website/tests/e2e/reduced-motion.spec.ts",
+        "website/tests/integration/features-json.integration.test.ts",
+        "website/tests/unit/feature-card.test.ts",
+        "website/tests/unit/features-json.test.ts",
+        "website/tests/unit/wh40k-theme.test.ts",
+        "website/tests/unit/workflow-yaml.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1352,
+      "mergedAt": "2026-10-31T23:34:01Z",
+      "headRefOid": "532a1318e8f1585bcbf38032bc757a510475e16f",
+      "files_n": 6,
+      "paths": [
+        "server/listener_metrics.go",
+        "server/os_rlimit_unix.go",
+        "server/os_rlimit_windows.go",
+        "server/services/gatestats_liveness.go",
+        "server/services/gatestats_liveness_unix.go",
+        "server/services/gatestats_liveness_windows.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1351,
+      "mergedAt": "2026-10-31T23:33:56Z",
+      "headRefOid": "7befd4fa6c1238180a90c805c9e6f422907df61a",
+      "files_n": 1,
+      "paths": [
+        "session/streamhub/full_state_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1350,
+      "mergedAt": "2026-10-31T23:33:51Z",
+      "headRefOid": "9a917eed1396cecbe81e75b5b0a7fdb6c69710f3",
+      "files_n": 2,
+      "paths": [
+        "server/services/session_service_remote_test.go",
+        "server/services/session_service_stream_terminal_remote_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1349,
+      "mergedAt": "2026-10-31T23:33:46Z",
+      "headRefOid": "e0c2d771d20364c713f8a19953c0d1edde518318",
+      "files_n": 1,
+      "paths": [
+        "session/session_restart_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1347,
+      "mergedAt": "2026-10-31T22:33:38Z",
+      "headRefOid": "568f4992a09138362b00778b603d4445a7f4742f",
+      "files_n": 1,
+      "paths": [
+        "github/repos_pr_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1359,
+      "mergedAt": "2026-10-31T22:33:14Z",
+      "headRefOid": "8cefe821faba6482f259f873ba729ee40969727c",
+      "files_n": 3,
+      "paths": [
+        ".github/workflows/_prepare.yml",
+        ".github/workflows/build.yml",
+        "docs/reference/ci-job-budget.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1357,
+      "mergedAt": "2026-10-31T22:22:37Z",
+      "headRefOid": "5361809f133a02be456333732876bdf58fdfb903",
+      "files_n": 2,
+      "paths": [
+        ".github/workflows/build.yml",
+        "tests/e2e/scripts/assert-e2e-report.mjs"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1355,
+      "mergedAt": "2026-10-31T22:21:22Z",
+      "headRefOid": "c98262e7f0bd3cadf7eedb8eb609beced7d9a8e6",
+      "files_n": 11,
+      "paths": [
+        ".github/actions/runner-utilization/action.yml",
+        ".github/actions/runner-utilization/report/action.yml",
+        ".github/workflows/_prepare.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/lint.yml",
+        ".github/workflows/main-ci.yml",
+        ".github/workflows/mcp-integration.yml",
+        ".github/workflows/ux-analysis.yml",
+        "docs/reference/ci-job-budget.md",
+        "tools/ci/runner-utilization.py",
+        "tools/ci/utilization-report.py"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    }
+  ],
+  "all": [
+    {
+      "number": 1382,
+      "mergedAt": "2026-11-02T04:38:06Z",
+      "headRefOid": "93ac3aed087f53824f2bfc1ba9afcc70057d84e3",
+      "files_n": 4,
+      "paths": [
+        ".github/workflows/build.yml",
+        "scripts/e2e-baseline-compare.ts",
+        "scripts/e2e-confirm.ts",
+        "tests/e2e/baseline/e2e-confirm.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1379,
+      "mergedAt": "2026-11-02T02:49:18Z",
+      "headRefOid": "288b991176ae667527f2c93905027f9b770944fa",
+      "files_n": 1,
+      "paths": [
+        "tests/e2e/session-creation-async.spec.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1375,
+      "mergedAt": "2026-11-02T02:48:52Z",
+      "headRefOid": "34651d835844670f14507957f0a1abcb4f881478",
+      "files_n": 8,
+      "paths": [
+        "server/services/current_pane_gone_test.go",
+        "session/external_discovery.go",
+        "session/external_discovery_test.go",
+        "session/instance_serialization.go",
+        "session/instance_serialization_backend_test.go",
+        "session/tymux/session.go",
+        "session/tymux/stream.go",
+        "session/tymux/stream_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1378,
+      "mergedAt": "2026-11-02T00:26:11Z",
+      "headRefOid": "f8fc7abb3c3f110cb351d62dde2fa982d687bb7f",
+      "files_n": 2,
+      "paths": [
+        "web-app/src/app/routes.backlog-layout.test.tsx",
+        "web-app/src/app/routes.tsx"
+      ],
+      "truncated": false,
+      "areas": [
+        "web-app"
+      ],
+      "primary": "web-app",
+      "class": "partial"
+    },
+    {
+      "number": 1376,
+      "mergedAt": "2026-11-02T00:12:00Z",
+      "headRefOid": "07968e7a55aba2967d8713c28f14d7f33db94fd6",
+      "files_n": 8,
+      "paths": [
+        "session/retry_state.go",
+        "session/retry_state_test.go",
+        "session/tymux/exited.go",
+        "session/tymux/lifecycle_matrix_test.go",
+        "session/tymux/resync.go",
+        "session/tymux/session.go",
+        "session/tymux/session_test.go",
+        "session/tymux/stream.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1377,
+      "mergedAt": "2026-11-02T00:02:12Z",
+      "headRefOid": "5327cf1142daff7ae6476a0db556548b61a7b927",
+      "files_n": 2,
+      "paths": [
+        "scripts/e2e-baseline-compare.ts",
+        "tests/e2e/baseline/e2e-baseline-compare.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1374,
+      "mergedAt": "2026-11-01T22:32:10Z",
+      "headRefOid": "3db7c847f1d8c5e519fca693e4de52df6f79855a",
+      "files_n": 2,
+      "paths": [
+        "scripts/e2e-baseline-compare.ts",
+        "tests/e2e/baseline/e2e-baseline-compare.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1373,
+      "mergedAt": "2026-11-01T21:54:25Z",
+      "headRefOid": "f757282f8fe8640fd8aee6fb33ec2bcc08c1808b",
+      "files_n": 1,
+      "paths": [
+        "scripts/record-website-demos.sh"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1366,
+      "mergedAt": "2026-11-01T20:53:40Z",
+      "headRefOid": "cb7d8380d91daa6914016254277b90414e5c92ee",
+      "files_n": 12,
+      "paths": [
+        "docs/registry/features/frontend/backlog-jump-to-session.json",
+        "project_plans/jump-to-session-modal/plan.md",
+        "project_plans/jump-to-session-modal/requirements.md",
+        "project_plans/jump-to-session-modal/research.md",
+        "project_plans/jump-to-session-modal/validation.md",
+        "session/background_outcome_test.go",
+        "session/wake_polling_guard_test.go",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.css.ts",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.test.tsx",
+        "web-app/src/components/backlog/detail/JumpToSessionPanel.tsx",
+        "web-app/src/components/sessions/SessionPeekModal.css.ts",
+        "web-app/src/components/sessions/SessionPeekModal.tsx"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "session",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1368,
+      "mergedAt": "2026-11-01T20:44:25Z",
+      "headRefOid": "a61cb87770fee80eee72d45af2137334b7ea2f2e",
+      "files_n": 8,
+      "paths": [
+        "session/instance.go",
+        "session/retry_state.go",
+        "session/retry_state_test.go",
+        "session/session_driver.go",
+        "session/tymux/exited.go",
+        "session/tymux/lifecycle_integration_test.go",
+        "session/tymux/lifecycle_matrix_test.go",
+        "session/tymux/session.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1371,
+      "mergedAt": "2026-11-01T20:43:55Z",
+      "headRefOid": "7e85e4375e78c5cc0d4214ea8644ca3df6f9d250",
+      "files_n": 3,
+      "paths": [
+        "website/src/components/FeatureCard.astro",
+        "website/tests/e2e/landing.spec.ts",
+        "website/tests/unit/feature-card.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1369,
+      "mergedAt": "2026-11-01T20:43:22Z",
+      "headRefOid": "4c29db4b250b74bcac28e4af2b301d7b78fc70ba",
+      "files_n": 9,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/connectrpc_websocket_firstpaint_test.go",
+        "server/services/connectrpc_websocket_test.go",
+        "server/services/current_pane_gone_test.go",
+        "server/services/stream_route_test.go",
+        "session/instance_serialization.go",
+        "session/instance_serialization_backend_test.go",
+        "session/tymux/stream.go",
+        "session/tymux/stream_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1365,
+      "mergedAt": "2026-11-01T20:41:36Z",
+      "headRefOid": "12b715729f596be770f2982bc69d744d719d4261",
+      "files_n": 74,
+      "paths": [
+        "Makefile",
+        "docs/how-to/vt-conformance-runbook.md",
+        "project_plans/ghostty-terminal-migration/implementation/plan.md",
+        "project_plans/ghostty-terminal-migration/implementation/validation.md",
+        "project_plans/ghostty-terminal-migration/implementation/verify.md",
+        "project_plans/ghostty-terminal-migration/requirements.md",
+        "project_plans/ghostty-terminal-migration/research/ghostty-web.md",
+        "server/services/config_surface_proof_test.go",
+        "server/services/feature_flag_service.go",
+        "server/services/feature_flag_service_test.go",
+        "session/detection/ratelimit/detector_test.go",
+        "tests/terminal-conformance/alt-screen.ans",
+        "tests/terminal-conformance/alt-screen.expected.txt",
+        "tests/terminal-conformance/autowrap.ans",
+        "tests/terminal-conformance/autowrap.expected.txt",
+        "tests/terminal-conformance/backspace-cr.ans",
+        "tests/terminal-conformance/backspace-cr.expected.txt",
+        "tests/terminal-conformance/baseline.json",
+        "tests/terminal-conformance/combining-mark.ans",
+        "tests/terminal-conformance/combining-mark.expected.txt",
+        "tests/terminal-conformance/cursor-movement.ans",
+        "tests/terminal-conformance/cursor-movement.expected.txt",
+        "tests/terminal-conformance/cursor-position-report.ans",
+        "tests/terminal-conformance/cursor-position-report.expected.txt",
+        "tests/terminal-conformance/cursor-position-report.response.txt",
+        "tests/terminal-conformance/decaln-alignment.ans",
+        "tests/terminal-conformance/decaln-alignment.expected.txt",
+        "tests/terminal-conformance/erase-line.ans",
+        "tests/terminal-conformance/erase-line.expected.txt",
+        "tests/terminal-conformance/full-reset.ans",
+        "tests/terminal-conformance/full-reset.expected.txt",
+        "tests/terminal-conformance/insert-delete.ans",
+        "tests/terminal-conformance/insert-delete.expected.txt",
+        "tests/terminal-conformance/kitty-keyboard-query.ans",
+        "tests/terminal-conformance/kitty-keyboard-query.expected.txt",
+        "tests/terminal-conformance/kitty-keyboard-query.response.txt",
+        "tests/terminal-conformance/manifest.json",
+        "tests/terminal-conformance/osc-title-hyperlink.ans",
+        "tests/terminal-conformance/osc-title-hyperlink.expected.txt",
+        "tests/terminal-conformance/rep-repeat-char.ans",
+        "tests/terminal-conformance/rep-repeat-char.expected.txt",
+        "tests/terminal-conformance/scroll-region.ans",
+        "tests/terminal-conformance/scroll-region.expected.txt",
+        "tests/terminal-conformance/sgr-colon-truecolor.ans",
+        "tests/terminal-conformance/sgr-colon-truecolor.expected.txt",
+        "tests/terminal-conformance/sync-output-2026.ans",
+        "tests/terminal-conformance/sync-output-2026.expected.txt",
+        "tests/terminal-conformance/sync-output-decrqm.ans",
+        "tests/terminal-conformance/sync-output-decrqm.expected.txt",
+        "tests/terminal-conformance/sync-output-decrqm.response.txt",
+        "tests/terminal-conformance/tab-stops.ans",
+        "tests/terminal-conformance/tab-stops.expected.txt",
+        "tests/terminal-conformance/wide-chars.ans",
+        "tests/terminal-conformance/wide-chars.expected.txt",
+        "web-app/bun.lock",
+        "web-app/package.json",
+        "web-app/scripts/measure-lcp.mjs",
+        "web-app/src/components/sessions/GhosttyTerminal.tsx",
+        "web-app/src/components/window/ConnectingPlaceholder.css.ts",
+        "web-app/src/lib/features/flagStore.test.ts",
+        "web-app/src/lib/features/flagStore.ts",
+        "web-app/src/lib/terminal/TerminalPool.tsx",
+        "web-app/src/lib/terminal/__tests__/TerminalStreamManager.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/TerminalStreamManager.resync.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/conformance.ghostty.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/conformance.xterm.test.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/runBaseline.ts",
+        "web-app/src/lib/terminal/__tests__/conformance/vectors.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyAdapter.test.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyHeadless.ts",
+        "web-app/src/lib/terminal/__tests__/ghosttyQueryResponder.test.ts",
+        "web-app/src/lib/terminal/ghosttyAdapter.ts",
+        "web-app/src/lib/terminal/ghosttyQueryResponder.ts",
+        "web-app/src/lib/terminal/ghosttySearch.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1364,
+      "mergedAt": "2026-11-01T04:17:09Z",
+      "headRefOid": "855ed8abe6d0be6cc6cbd1fa8a9d1d8dea8466db",
+      "files_n": 9,
+      "paths": [
+        ".github/workflows/build.yml",
+        "tests/e2e/accessibility.spec.ts",
+        "tests/e2e/helpers/test-sshd.ts",
+        "tests/e2e/notification-inline-actions.spec.ts",
+        "tests/e2e/notification-tray-bulk.spec.ts",
+        "tests/e2e/playwright.config.ts",
+        "tests/e2e/scripts/run-ci-shard.sh",
+        "tests/e2e/toast-stack.spec.ts",
+        "tests/e2e/unfinished-work.spec.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1367,
+      "mergedAt": "2026-11-01T03:00:35Z",
+      "headRefOid": "0df4855f5b3d252ccda62e5aa9eab3c656297aeb",
+      "files_n": 2,
+      "paths": [
+        "website/src/components/FeatureCard.astro",
+        "website/tests/unit/feature-card.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1339,
+      "mergedAt": "2026-11-01T02:12:29Z",
+      "headRefOid": "57428c28ace4a318a73232ccb1815fd5bb9b4d44",
+      "files_n": 22,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/session_gone.go",
+        "server/services/session_gone_test.go",
+        "session/backend_factory.go",
+        "session/backend_tymux.go",
+        "session/backend_tymux_test.go",
+        "session/ent/schema/session.go",
+        "session/ent_repository.go",
+        "session/instance.go",
+        "session/instance_serialization.go",
+        "session/instance_tmux.go",
+        "session/instance_tymux_identity_test.go",
+        "session/process_capabilities.go",
+        "session/process_manager.go",
+        "session/storage.go",
+        "session/tymux/exited_test.go",
+        "session/tymux/manager.go",
+        "session/tymux/session.go",
+        "session/tymux/session_identity_test.go",
+        "session/tymux/session_test.go",
+        "session/tymux/stream_test.go",
+        "web-app/src/lib/utils/backoff.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session",
+        "web-app"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1283,
+      "mergedAt": "2026-11-01T02:02:23Z",
+      "headRefOid": "4ded74bcd38693e337b3d716df2732d613202a45",
+      "files_n": 15,
+      "paths": [
+        "docs/how-to/enable-opentelemetry.md",
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/vcs-status-stages.json",
+        "server/mcp/tools_backlog_test.go",
+        "server/services/vcs_range_cache.go",
+        "server/services/vcs_range_cache_test.go",
+        "server/services/vcs_status_flight.go",
+        "server/services/workspace_service.go",
+        "session/git/native/open.go",
+        "session/git/ops.go",
+        "session/git/ops_bench_test.go",
+        "session/git/ops_realrepo_bench_test.go",
+        "session/git/range_walk.go",
+        "session/git/range_walk_test.go",
+        "session/vc/git_provider.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1363,
+      "mergedAt": "2026-11-01T01:26:07Z",
+      "headRefOid": "1d982b2a664cb8eac4850ea5e5e94e3cd3e74017",
+      "files_n": 1,
+      "paths": [
+        ".github/workflows/build.yml"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1360,
+      "mergedAt": "2026-11-01T00:54:48Z",
+      "headRefOid": "0d31e0599590c6fa12240225d755d24f3301441b",
+      "files_n": 7,
+      "paths": [
+        ".github/workflows/benchmark.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/main-ci.yml",
+        ".gitignore",
+        "docs/reference/ci-job-budget.md",
+        "tools/ci-gates/benchmark-regression.js",
+        "web-app/scripts/__tests__/workflow-paths.test.mjs"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1358,
+      "mergedAt": "2026-11-01T00:49:55Z",
+      "headRefOid": "8af13bcf1e9506afcd32758af4607e7fcc992ddc",
+      "files_n": 1,
+      "paths": [
+        ".github/workflows/build.yml"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1297,
+      "mergedAt": "2026-11-01T00:37:55Z",
+      "headRefOid": "04ad9c5311bcc820f003038c7c8affe58cf7a4cb",
+      "files_n": 8,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/terminal-streams.json",
+        "server/services/connectrpc_websocket.go",
+        "server/services/terminal_stream_metrics.go",
+        "server/services/terminal_stream_metrics_test.go",
+        "session/streamhub/hub.go",
+        "session/streamhub/hub_test.go",
+        "session/streamhub/observability.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1298,
+      "mergedAt": "2026-10-31T23:59:32Z",
+      "headRefOid": "cfd30b43bd82d6a8d17d3ddb32e411d3c23a0dd7",
+      "files_n": 35,
+      "paths": [
+        ".github/workflows/deploy-website.yml",
+        ".github/workflows/website-ci.yml",
+        ".github/workflows/website-demo-publish.yml",
+        ".gitignore",
+        "README.md",
+        "docs/features.md",
+        "scripts/demo-post-process.sh",
+        "scripts/demo-post-process.test.sh",
+        "scripts/record-website-demos.sh",
+        "tests/e2e/demo.spec.ts",
+        "tests/e2e/playwright.config.ts",
+        "tests/e2e/playwright.website-demos.config.ts",
+        "tests/e2e/website-demos.spec.ts",
+        "tests/e2e/website-demos/clips.ts",
+        "tests/e2e/website-demos/recorder.ts",
+        "web-app/src/lib/__tests__/e2e_isolation_guard.test.ts",
+        "website/astro.config.mjs",
+        "website/bun.lock",
+        "website/package.json",
+        "website/public/apple-touch-icon.png",
+        "website/public/favicon-32.png",
+        "website/public/favicon.svg",
+        "website/scripts/build-features.mjs",
+        "website/src/components/FeatureCard.astro",
+        "website/src/components/NoThemeSelect.astro",
+        "website/src/content/features.json",
+        "website/src/styles/wh40k.css",
+        "website/tests/a11y.spec.ts",
+        "website/tests/e2e/landing.spec.ts",
+        "website/tests/e2e/reduced-motion.spec.ts",
+        "website/tests/integration/features-json.integration.test.ts",
+        "website/tests/unit/feature-card.test.ts",
+        "website/tests/unit/features-json.test.ts",
+        "website/tests/unit/wh40k-theme.test.ts",
+        "website/tests/unit/workflow-yaml.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1352,
+      "mergedAt": "2026-10-31T23:34:01Z",
+      "headRefOid": "532a1318e8f1585bcbf38032bc757a510475e16f",
+      "files_n": 6,
+      "paths": [
+        "server/listener_metrics.go",
+        "server/os_rlimit_unix.go",
+        "server/os_rlimit_windows.go",
+        "server/services/gatestats_liveness.go",
+        "server/services/gatestats_liveness_unix.go",
+        "server/services/gatestats_liveness_windows.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1351,
+      "mergedAt": "2026-10-31T23:33:56Z",
+      "headRefOid": "7befd4fa6c1238180a90c805c9e6f422907df61a",
+      "files_n": 1,
+      "paths": [
+        "session/streamhub/full_state_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1350,
+      "mergedAt": "2026-10-31T23:33:51Z",
+      "headRefOid": "9a917eed1396cecbe81e75b5b0a7fdb6c69710f3",
+      "files_n": 2,
+      "paths": [
+        "server/services/session_service_remote_test.go",
+        "server/services/session_service_stream_terminal_remote_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1349,
+      "mergedAt": "2026-10-31T23:33:46Z",
+      "headRefOid": "e0c2d771d20364c713f8a19953c0d1edde518318",
+      "files_n": 1,
+      "paths": [
+        "session/session_restart_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1347,
+      "mergedAt": "2026-10-31T22:33:38Z",
+      "headRefOid": "568f4992a09138362b00778b603d4445a7f4742f",
+      "files_n": 1,
+      "paths": [
+        "github/repos_pr_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1359,
+      "mergedAt": "2026-10-31T22:33:14Z",
+      "headRefOid": "8cefe821faba6482f259f873ba729ee40969727c",
+      "files_n": 3,
+      "paths": [
+        ".github/workflows/_prepare.yml",
+        ".github/workflows/build.yml",
+        "docs/reference/ci-job-budget.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1357,
+      "mergedAt": "2026-10-31T22:22:37Z",
+      "headRefOid": "5361809f133a02be456333732876bdf58fdfb903",
+      "files_n": 2,
+      "paths": [
+        ".github/workflows/build.yml",
+        "tests/e2e/scripts/assert-e2e-report.mjs"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1355,
+      "mergedAt": "2026-10-31T22:21:22Z",
+      "headRefOid": "c98262e7f0bd3cadf7eedb8eb609beced7d9a8e6",
+      "files_n": 11,
+      "paths": [
+        ".github/actions/runner-utilization/action.yml",
+        ".github/actions/runner-utilization/report/action.yml",
+        ".github/workflows/_prepare.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/lint.yml",
+        ".github/workflows/main-ci.yml",
+        ".github/workflows/mcp-integration.yml",
+        ".github/workflows/ux-analysis.yml",
+        "docs/reference/ci-job-budget.md",
+        "tools/ci/runner-utilization.py",
+        "tools/ci/utilization-report.py"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1344,
+      "mergedAt": "2026-10-31T21:26:55Z",
+      "headRefOid": "b44a9b565978e1a809c1823f2cf596d6eb2eecef",
+      "files_n": 17,
+      "paths": [
+        "server/services/backlog_service_events.go",
+        "server/services/backlog_service_events_test.go",
+        "server/services/backlog_service_query.go",
+        "server/services/superseded_session_sweeper.go",
+        "server/services/superseded_session_sweeper_test.go",
+        "session/contexthistory/recorder.go",
+        "session/contexthistory/recorder_test.go",
+        "session/ent_repository.go",
+        "session/ent_repository_backlog.go",
+        "session/ent_repository_guidance.go",
+        "session/ent_repository_guidance_cache.go",
+        "session/ent_repository_guidance_cache_test.go",
+        "session/ent_repository_seed.go",
+        "session/storage.go",
+        "session/storage_save_dedup.go",
+        "session/storage_save_dedup_test.go",
+        "session/storage_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1345,
+      "mergedAt": "2026-10-31T21:16:51Z",
+      "headRefOid": "1e7ee97a31c71fd0e8f13651949b984fb22336d1",
+      "files_n": 2,
+      "paths": [
+        ".github/workflows/build.yml",
+        "tests/e2e/helpers/test-server.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1353,
+      "mergedAt": "2026-10-31T20:56:31Z",
+      "headRefOid": "0324ba6ed3ef0ec84e27ef76dcb6347446809844",
+      "files_n": 37,
+      "paths": [
+        "config/config.go",
+        "docs/how-to/reclaim-sqlite-free-space.md",
+        "server/analytics/db_indexes_test.go",
+        "server/analytics/escapedb/db.go",
+        "server/analytics/escapedb/escape_event_batch_writer.go",
+        "server/analytics/escapedb/escape_event_batch_writer_test.go",
+        "server/analytics/escapedb/escape_event_eviction.go",
+        "server/analytics/escapedb/helpers_test.go",
+        "server/analytics/escapedb/index_usage_test.go",
+        "server/analytics/escapedb/migrate.go",
+        "server/analytics/escapedb/migrate_test.go",
+        "server/analytics/escapedb/retention.go",
+        "server/analytics/escapedb/retention_test.go",
+        "server/analytics/escapedb/wall_time_test.go",
+        "server/analytics/retention.go",
+        "server/analytics/retention_test.go",
+        "server/db_maintenance.go",
+        "server/dependencies.go",
+        "server/escape_events_migration.go",
+        "server/server.go",
+        "server/services/analytics_escape_service.go",
+        "server/services/analytics_escape_service_test.go",
+        "server/services/config_surface_proof_flags_test.go",
+        "server/services/config_surface_proof_test.go",
+        "server/services/feature_flag_service.go",
+        "server/services/session_service.go",
+        "server/services/session_service_wiring.go",
+        "session/dbpool/dbpool_test.go",
+        "session/dbpool/doc.go",
+        "session/dbpool/handles.go",
+        "session/dbpool/spec.go",
+        "tools/lint/nowrongdbentity/analyzer.go",
+        "tools/lint/nowrongdbentity/analyzer_test.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/server/analytics/analytics.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/server/analytics/escapedb/escapedb.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/session/ent/ent.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/session/session.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1340,
+      "mergedAt": "2026-10-31T20:40:39Z",
+      "headRefOid": "253b69d2f26c4376472d275cb0deaaf8c4457709",
+      "files_n": 1,
+      "paths": [
+        "session/pause_resume_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1354,
+      "mergedAt": "2026-10-31T20:39:16Z",
+      "headRefOid": "d2e89ec1a50512fd7ff5f505a496d129df42f543",
+      "files_n": 100,
+      "paths": [
+        "CLAUDE.md",
+        "docs/explanation/e2e-per-worker-server-seam.md",
+        "project_plans/e2e-test-parallelization/decisions/ADR-003-go-on-per-worker-server-rearchitecture.md",
+        "tests/e2e/a11y-route-sweep.spec.ts",
+        "tests/e2e/accessibility.spec.ts",
+        "tests/e2e/agent-wake-triggers.spec.ts",
+        "tests/e2e/alias-settings.spec.ts",
+        "tests/e2e/alias.spec.ts",
+        "tests/e2e/android-url-bar.spec.ts",
+        "tests/e2e/approval-ci-block.spec.ts",
+        "tests/e2e/approval-reconciliation-race.spec.ts",
+        "tests/e2e/askuserquestion-structured.spec.ts",
+        "tests/e2e/background-activity.spec.ts",
+        "tests/e2e/backlog-github-sync-settings.spec.ts",
+        "tests/e2e/backlog-item-detail-redesign.spec.ts",
+        "tests/e2e/backlog-item-id-deep-link.spec.ts",
+        "tests/e2e/backlog-live-updates.spec.ts",
+        "tests/e2e/backlog-manual-override.spec.ts",
+        "tests/e2e/backlog-pipeline-mode.spec.ts",
+        "tests/e2e/backlog-plan-approval-flicker.spec.ts",
+        "tests/e2e/backlog-queue.spec.ts",
+        "tests/e2e/backlog-result-panels-mobile.spec.ts",
+        "tests/e2e/backlog-rich-text.spec.ts",
+        "tests/e2e/backlog-send-back-feedback.spec.ts",
+        "tests/e2e/backlog-session-steer.spec.ts",
+        "tests/e2e/backlog-sources-settings.spec.ts",
+        "tests/e2e/backlog-stuck-items.spec.ts",
+        "tests/e2e/backlog.spec.ts",
+        "tests/e2e/browser-passthrough.spec.ts",
+        "tests/e2e/bulk-select.spec.ts",
+        "tests/e2e/ci-status-badge.spec.ts",
+        "tests/e2e/connection-count-indicator.spec.ts",
+        "tests/e2e/crashed-session-ux.spec.ts",
+        "tests/e2e/create-pull-request.spec.ts",
+        "tests/e2e/deep-link-trailing-slash.spec.ts",
+        "tests/e2e/demo.spec.ts",
+        "tests/e2e/enter-detection.spec.ts",
+        "tests/e2e/escalation-reasoning.spec.ts",
+        "tests/e2e/escape-analytics-global-view.spec.ts",
+        "tests/e2e/fanout-session-lifecycle.spec.ts",
+        "tests/e2e/files-large.spec.ts",
+        "tests/e2e/helpers/backlog-settings-mocks.ts",
+        "tests/e2e/helpers/base-url.ts",
+        "tests/e2e/helpers/feature-flag.ts",
+        "tests/e2e/helpers/scroll-forward-fixture.ts",
+        "tests/e2e/hidden-session-quiet.spec.ts",
+        "tests/e2e/hidden-session-reply.spec.ts",
+        "tests/e2e/hidden-session-view.spec.ts",
+        "tests/e2e/history-behaviour.spec.ts",
+        "tests/e2e/history-search.spec.ts",
+        "tests/e2e/idle-session-chip.spec.ts",
+        "tests/e2e/input-drop-badge.spec.ts",
+        "tests/e2e/insights.spec.ts",
+        "tests/e2e/item-budget-warning.spec.ts",
+        "tests/e2e/jules-dispatch.spec.ts",
+        "tests/e2e/jules-status-badge.spec.ts",
+        "tests/e2e/jump-to-session.spec.ts",
+        "tests/e2e/launcher-presets.spec.ts",
+        "tests/e2e/leader-command-bar.spec.ts",
+        "tests/e2e/local-file-browser.spec.ts",
+        "tests/e2e/log-viewer.spec.ts",
+        "tests/e2e/mobile-navigation.spec.ts",
+        "tests/e2e/mobile-webkit.spec.ts",
+        "tests/e2e/nav-navigation.spec.ts",
+        "tests/e2e/not-found.spec.ts",
+        "tests/e2e/notification-a11y-matrix.spec.ts",
+        "tests/e2e/notification-contrast-over-xterm.spec.ts",
+        "tests/e2e/notification-inline-actions.spec.ts",
+        "tests/e2e/notification-tray-bulk.spec.ts",
+        "tests/e2e/notification-tray-handle-drag.spec.ts",
+        "tests/e2e/notification-tray-terminal-invariants.spec.ts",
+        "tests/e2e/notification-tray-variants.spec.ts",
+        "tests/e2e/notification-triage-walkthrough.spec.ts",
+        "tests/e2e/notifications-needs-decision.spec.ts",
+        "tests/e2e/notifications-responsive.spec.ts",
+        "tests/e2e/omnibar-backlog-compose.spec.ts",
+        "tests/e2e/omnibar-backlog-intent-confirm.spec.ts",
+        "tests/e2e/onboarding-hook-install.spec.ts",
+        "tests/e2e/one-off-session.spec.ts",
+        "tests/e2e/pages/AppShellPage.ts",
+        "tests/e2e/pages/BacklogItemDetailPage.ts",
+        "tests/e2e/pages/BacklogMutations.ts",
+        "tests/e2e/pages/BacklogQueuePage.ts",
+        "tests/e2e/pages/BacklogQuotaSettingsPage.ts",
+        "tests/e2e/pages/BacklogSourcesSettingsPage.ts",
+        "tests/e2e/pages/BacklogStagesSettingsPage.ts",
+        "tests/e2e/pages/BaselineProbes.ts",
+        "tests/e2e/pages/FeaturesSettingsPage.ts",
+        "tests/e2e/pages/HandoffSummaryPage.ts",
+        "tests/e2e/pages/InsightsPage.ts",
+        "tests/e2e/pages/JulesDispatchPage.ts",
+        "tests/e2e/pages/PipelineModesSettingsPage.ts",
+        "tests/e2e/pages/SessionDetailPage.ts",
+        "tests/e2e/pages/StuckItemsPage.ts",
+        "tests/e2e/pages/TaggingRulesPage.ts",
+        "tests/e2e/pages/ThemeToggle.ts",
+        "tests/e2e/pages/TriggersPage.ts",
+        "tests/e2e/pages/UpNextPage.ts",
+        "tests/e2e/pages/files-tab.page.ts",
+        "tests/e2e/pathname-probe.spec.ts"
+      ],
+      "truncated": true,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1317,
+      "mergedAt": "2026-10-31T20:19:51Z",
+      "headRefOid": "f8389efb501c74b9bf802903237355cd31e3e3f0",
+      "files_n": 6,
+      "paths": [
+        ".github/workflows/backlog-scaffolding-guard.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/css-differential.yml",
+        ".github/workflows/goreleaser-check.yml",
+        ".github/workflows/lint.yml",
+        ".github/workflows/nightly.yml"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1334,
+      "mergedAt": "2026-10-31T20:19:10Z",
+      "headRefOid": "9797145f04b793710036ec3cfc492c84940d7ed7",
+      "files_n": 21,
+      "paths": [
+        "server/dependencies.go",
+        "session/artifacts/resume_test.go",
+        "session/artifacts/scan.go",
+        "session/artifacts/store.go",
+        "session/artifacts/store_test.go",
+        "session/contexthistory/nextindex_test.go",
+        "session/contexthistory/store.go",
+        "session/ent/schema/transcript_scan_state.go",
+        "session/scanqueue/queue.go",
+        "session/scanqueue/queue_test.go",
+        "session/scanstate/position.go",
+        "session/scanstate/position_test.go",
+        "session/scanstate/store.go",
+        "session/scanstate/store_test.go",
+        "session/scanstate/writer.go",
+        "session/tokens/checkpoint.go",
+        "session/tokens/checkpoint_test.go",
+        "session/tokens/parse_state.go",
+        "session/tokens/parser.go",
+        "session/tokens/store.go",
+        "session/tokens/store_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1348,
+      "mergedAt": "2026-10-31T19:58:05Z",
+      "headRefOid": "d9c5f027de016689f263dbd183603ed667a568ab",
+      "files_n": 2,
+      "paths": [
+        "session/unfinished/gogit_vcs_reader.go",
+        "session/unfinished/gogit_vcs_reader_cachesize_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1287,
+      "mergedAt": "2026-10-31T19:53:36Z",
+      "headRefOid": "cb28cec145e36635ffae1c9773fa3eb84665f3be",
+      "files_n": 12,
+      "paths": [
+        "github/repo_settings_test.go",
+        "github/testing.go",
+        "server/analytics/sqlite_provider_test.go",
+        "session/git/backend/cli/cli.go",
+        "session/history_linker.go",
+        "session/history_linker_bench_test.go",
+        "session/history_linker_concurrency_test.go",
+        "session/pause_resume_test.go",
+        "session/pty_readwait_other.go",
+        "session/pty_readwait_unix.go",
+        "session/response_stream.go",
+        "session/scan_coalescer.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1346,
+      "mergedAt": "2026-10-31T19:48:18Z",
+      "headRefOid": "0435a4bd7775a26ece7d8c17eb1d619d7b9f3d63",
+      "files_n": 12,
+      "paths": [
+        "config/config.go",
+        "server/analytics/escape_event_batch_writer.go",
+        "server/analytics/escape_event_batch_writer_test.go",
+        "server/analytics/escape_event_eviction.go",
+        "server/analytics/retention.go",
+        "server/analytics/retention_test.go",
+        "session/dbmaint/config.go",
+        "session/dbmaint/dbmaint.go",
+        "session/dbmaint/dbmaint_test.go",
+        "session/dbobs/caller_label.go",
+        "session/dbobs/driver.go",
+        "session/dbobs/driver_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1342,
+      "mergedAt": "2026-10-31T19:35:38Z",
+      "headRefOid": "b519a3cd6843a24d8a945ec6274dc6cc514dc334",
+      "files_n": 6,
+      "paths": [
+        ".claude/skills/profile-blocking-and-locking/SKILL.md",
+        ".claude/skills/profile-blocking-and-locking/reference.md",
+        ".claude/skills/profile-blocking-and-locking/scripts/goroutine-states.py",
+        ".claude/skills/profile-blocking-and-locking/scripts/pq.py",
+        ".claude/skills/profile-blocking-and-locking/scripts/pyro-top.py",
+        "CLAUDE.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1341,
+      "mergedAt": "2026-10-31T19:35:34Z",
+      "headRefOid": "6167fa9a3c3ac3f05c06b2f186a37ae4029547c9",
+      "files_n": 3,
+      "paths": [
+        ".claude/skills/profile-db-usage/SKILL.md",
+        ".claude/skills/profile-db-usage/reference.md",
+        "CLAUDE.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1319,
+      "mergedAt": "2026-10-31T17:58:16Z",
+      "headRefOid": "44a6046ae356d1bbd22e1c8a8a00dd626bd12d41",
+      "files_n": 1,
+      "paths": [
+        "docs/adr/ADR-036-database-pool-registry.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1288,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "c2515108bc9427d64b58fd96542f9f3ef2f27912",
+      "files_n": 4,
+      "paths": [
+        "session/backlog_lifecycle.go",
+        "session/backlog_lifecycle_archive.go",
+        "session/backlog_lifecycle_stuck_test.go",
+        "session/terminal_sweep_settled.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1307,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "c0193b5ba1d9d23373d0042d36f028d9642128a8",
+      "files_n": 6,
+      "paths": [
+        "server/analytics/provider.go",
+        "server/analytics/quality_metrics.go",
+        "server/analytics/sqlite_provider.go",
+        "server/analytics/sqlite_provider_test.go",
+        "server/handlers/analytics_handler.go",
+        "server/handlers/analytics_handler_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1310,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "3f9a62fe4da0b6dd56d0691ea5c04080b9750298",
+      "files_n": 5,
+      "paths": [
+        "session/git/backend/cli/cli.go",
+        "session/git/backend/cli/cli_test.go",
+        "session/git/backend/cli/export_test.go",
+        "session/git/backend/cli/localgit.go",
+        "session/git/backend/cli/localgit_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1323,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "865b28a5fb3987b34d30f9b26e17c4007f505873",
+      "files_n": 35,
+      "paths": [
+        "Makefile",
+        "internal/storage/sqlite.go",
+        "server/actuator.go",
+        "server/actuator_test.go",
+        "server/analytics/db.go",
+        "server/services/capacity_monitor.go",
+        "server/services/database_service.go",
+        "session/agy_adapter.go",
+        "session/dbpool/dbpool_test.go",
+        "session/dbpool/doc.go",
+        "session/dbpool/foreign.go",
+        "session/dbpool/handles.go",
+        "session/dbpool/lazy.go",
+        "session/dbpool/open.go",
+        "session/dbpool/profile.go",
+        "session/dbpool/registry.go",
+        "session/dbpool/spec.go",
+        "session/ent_client_instrumented.go",
+        "session/ent_repository.go",
+        "session/hotqueries_test.go",
+        "session/opencode_adapter.go",
+        "session/testing.go",
+        "session/workflow_engine_replay.go",
+        "tools/lint/cmd/linter/main.go",
+        "tools/lint/internal/nolintcomment/nolintcomment.go",
+        "tools/lint/norawdb/analyzer.go",
+        "tools/lint/norawdb/analyzer_test.go",
+        "tools/lint/norawdb/testdata/src/a/a.go",
+        "tools/lint/norawdb/testdata/src/example.com/m/session/dbpool/dbpool.go",
+        "tools/lint/nowrongdbentity/analyzer.go",
+        "tools/lint/nowrongdbentity/analyzer_test.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/other/other.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/server/analytics/analytics.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/session/ent/ent.go",
+        "tools/lint/nowrongdbentity/testdata/src/example.com/m/session/session.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1324,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "ba5c1851c4e2a94b15758d62929fe61d824dfb53",
+      "files_n": 6,
+      "paths": [
+        "session/pty_readwait_other.go",
+        "session/pty_readwait_unix.go",
+        "session/pty_readwait_unix_test.go",
+        "session/response_stream.go",
+        "session/response_stream_pty_bench_test.go",
+        "session/response_stream_pty_shutdown_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1326,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "694c30e7156d48ee1a3b499d80fff54593693548",
+      "files_n": 7,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/tmux-spawns.json",
+        "executor/safeexec/safeexec.go",
+        "executor/safeexec/tmuxspawn.go",
+        "executor/safeexec/tmuxspawn_test.go",
+        "session/tmux/exec_gate.go",
+        "session/tmux/exec_gate_observability.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "session"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1327,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "ee68cd63b2783ccc37cc0acb6f720615c52dfc4d",
+      "files_n": 6,
+      "paths": [
+        "docs/adr/ADR-037-tmux-spawn-reduction.md",
+        "server/services/feature_flag_service.go",
+        "session/pane_activity_gate.go",
+        "session/pane_activity_gate_test.go",
+        "session/pty_discovery.go",
+        "session/session_driver.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1330,
+      "mergedAt": "2026-10-31T16:20:32Z",
+      "headRefOid": "3170e1214bf50be4b6dbdef55e7f99042b55289e",
+      "files_n": 5,
+      "paths": [
+        "server/dependencies.go",
+        "server/dependencies_defer_reconcile_test.go",
+        "session/instance.go",
+        "session/retry_state.go",
+        "session/retry_state_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1313,
+      "mergedAt": "2026-10-31T13:29:02Z",
+      "headRefOid": "7a978ebd1b4891bb7f71139df49bd9441ac56df5",
+      "files_n": 4,
+      "paths": [
+        "docs/adr/ADR-032-tymux-first-paint-full-state-redraw.md",
+        "session/streamhub/failure_modes_test.go",
+        "session/streamhub/quiescence_test.go",
+        "session/streamhub/snapshot_prepare_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1336,
+      "mergedAt": "2026-10-31T13:24:30Z",
+      "headRefOid": "65052184b5a2b77a7005635a9ceed1d4c3ca6259",
+      "files_n": 6,
+      "paths": [
+        "project_plans/session-peek-mobile/plan.md",
+        "project_plans/session-peek-mobile/requirements.md",
+        "project_plans/session-peek-mobile/research.md",
+        "project_plans/session-peek-mobile/validate.md",
+        "web-app/src/components/pane/PaneTilingContainer.tsx",
+        "web-app/src/components/pane/__tests__/PaneTilingContainer.mobilePicker.test.tsx"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1338,
+      "mergedAt": "2026-10-31T13:06:23Z",
+      "headRefOid": "42ccf077201c2241fd63d4d560c1e37915b8f657",
+      "files_n": 7,
+      "paths": [
+        "server/mcp/tools_terminal_submit_test.go",
+        "server/services/session_service_update_steer_test.go",
+        "session/autonomous_driver_test.go",
+        "session/instance.go",
+        "session/pane_submit.go",
+        "session/pane_submit_test.go",
+        "session/pause_resume_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1318,
+      "mergedAt": "2026-10-31T12:38:26Z",
+      "headRefOid": "461fdaa611d2a985999cf520ff54ae15342d9256",
+      "files_n": 9,
+      "paths": [
+        "docs/adr/ADR-033-terminal-websocket-pool.md",
+        "docs/reference/terminal-ws-pool.md",
+        "server/services/ws_terminal_mux_bridge.go",
+        "server/services/ws_terminal_mux_stream.go",
+        "server/services/ws_terminal_mux_test.go",
+        "tests/e2e/terminal-ws-pool.spec.ts",
+        "web-app/src/lib/transport/terminal-mux-frame.ts",
+        "web-app/src/lib/transport/terminal-socket-pool.test.ts",
+        "web-app/src/lib/transport/terminal-socket-pool.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1312,
+      "mergedAt": "2026-10-31T12:37:10Z",
+      "headRefOid": "e3a5438584d6553685c5ad50ba1d98733378c9c3",
+      "files_n": 4,
+      "paths": [
+        "internal/matview/clock.go",
+        "internal/matview/subscribe.go",
+        "internal/matview/view.go",
+        "internal/matview/view_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1320,
+      "mergedAt": "2026-10-31T12:36:15Z",
+      "headRefOid": "dda390f1f049c633ddd5700b284f2ff81cd48de6",
+      "files_n": 1,
+      "paths": [
+        "server/wakes/dispatcher_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1308,
+      "mergedAt": "2026-10-31T12:35:52Z",
+      "headRefOid": "dca03f87d07d73d8678a8846f8016e21baafc6ab",
+      "files_n": 1,
+      "paths": [
+        "session/instance_workspace_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1306,
+      "mergedAt": "2026-10-31T12:35:12Z",
+      "headRefOid": "7ccaf4ffd9c1061cbc8b9f5cd5d38ffec9b529e0",
+      "files_n": 3,
+      "paths": [
+        "server/notifications/prune.go",
+        "server/notifications/store.go",
+        "server/notifications/store_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1303,
+      "mergedAt": "2026-10-31T12:34:19Z",
+      "headRefOid": "73ca12bdda518560ee0ec1e6c27fc2420af2b977",
+      "files_n": 2,
+      "paths": [
+        "web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts",
+        "web-app/src/lib/hooks/useTerminalStream.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "web-app"
+      ],
+      "primary": "web-app",
+      "class": "partial"
+    },
+    {
+      "number": 1301,
+      "mergedAt": "2026-10-31T12:33:33Z",
+      "headRefOid": "b6b10c107bbffd7f89e5d5968bdc841dc3d3f52a",
+      "files_n": 2,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/connectrpc_websocket_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1299,
+      "mergedAt": "2026-10-31T12:32:54Z",
+      "headRefOid": "6c4d579743e5a3dadb45f692bbb63b7e43bc1f81",
+      "files_n": 5,
+      "paths": [
+        "web-app/src/components/sessions/SessionDetail.tsx",
+        "web-app/src/lib/hooks/useSessionVcs.pollMode.test.tsx",
+        "web-app/src/lib/hooks/useSessionVcs.ts",
+        "web-app/src/lib/hooks/useVcsStatus.fanout.test.tsx",
+        "web-app/src/lib/hooks/useVcsStatus.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "web-app"
+      ],
+      "primary": "web-app",
+      "class": "partial"
+    },
+    {
+      "number": 1285,
+      "mergedAt": "2026-10-31T12:31:58Z",
+      "headRefOid": "cc2c9e8eeb8126803289484e08c84d2189086e9c",
+      "files_n": 13,
+      "paths": [
+        "docs/adr/ADR-033-terminal-websocket-pool.md",
+        "server/actuator.go",
+        "server/actuator_terminal_mux_test.go",
+        "server/server.go",
+        "server/services/config_surface_proof_test.go",
+        "server/services/connectrpc_websocket.go",
+        "server/services/feature_flag_service.go",
+        "server/services/ws_terminal_mux_bridge.go",
+        "server/services/ws_terminal_mux_frame.go",
+        "server/services/ws_terminal_mux_metrics.go",
+        "server/services/ws_terminal_mux_stream.go",
+        "server/services/ws_terminal_mux_test.go",
+        "web-app/src/lib/transport/__fixtures__/terminal-mux-vectors.json"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "web-app"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1286,
+      "mergedAt": "2026-10-31T12:31:30Z",
+      "headRefOid": "d555500c2d0078c156c958ea99d68876d12aead8",
+      "files_n": 10,
+      "paths": [
+        "docs/PROFILING.md",
+        "docs/how-to/find-lock-contention.md",
+        "docs/how-to/profile-lockups.md",
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/pprof-profiles.json",
+        "go.mod",
+        "main.go",
+        "profiling/lockprofile_bench_test.go",
+        "profiling/profiling.go",
+        "profiling/profiling_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "global"
+    },
+    {
+      "number": 1292,
+      "mergedAt": "2026-10-31T12:30:37Z",
+      "headRefOid": "65edf2bb47e1bb31486213efe4ffaa1e95fc6ec7",
+      "files_n": 34,
+      "paths": [
+        "docs/how-to/enable-opentelemetry.md",
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/go-runtime-request-path.json",
+        "docs/observability/grafana/dashboards/http-rpc-connections.json",
+        "github/repo_settings_cache.go",
+        "github/repo_settings_test.go",
+        "server/dependencies.go",
+        "server/interceptors/db_query_count.go",
+        "server/interceptors/db_query_count_test.go",
+        "server/interceptors/request_flow.go",
+        "server/listener_metrics.go",
+        "server/listener_metrics_test.go",
+        "server/os_socket_darwin.go",
+        "server/os_socket_linux.go",
+        "server/os_socket_other.go",
+        "server/server.go",
+        "server/services/backlog_service.go",
+        "server/services/backlog_service_stuck.go",
+        "server/services/backlog_stuck_rpc_test.go",
+        "server/services/connectrpc_websocket.go",
+        "server/services/watch_stream_metrics.go",
+        "server/services/websocket_transport.go",
+        "server/services/websocket_transport_test.go",
+        "server/ws_readtimeout_test.go",
+        "session/dbobs/driver.go",
+        "session/dbobs/querycount.go",
+        "session/dbobs/querycount_test.go",
+        "session/storage.go",
+        "session/storage_backlog.go",
+        "telemetry/goruntime.go",
+        "telemetry/goruntime_test.go",
+        "telemetry/latency_views.go",
+        "telemetry/latency_views_test.go",
+        "telemetry/telemetry.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1300,
+      "mergedAt": "2026-10-31T12:30:02Z",
+      "headRefOid": "bd61e1ab52082272c06d2204f55cace82d7ccc84",
+      "files_n": 12,
+      "paths": [
+        "server/analytics/client_metrics.go",
+        "server/analytics/client_metrics_test.go",
+        "server/services/ws_unary_allowlist.go",
+        "server/services/ws_unary_frame_test.go",
+        "server/ws_unary_batch_allowlist_guard_test.go",
+        "web-app/src/lib/api/idempotentMethods.test.ts",
+        "web-app/src/lib/api/idempotentMethods.ts",
+        "web-app/src/lib/telemetry/__tests__/rpcTiming.clientMetrics.test.ts",
+        "web-app/src/lib/transport/__fixtures__/ws-unary-allowlist.json",
+        "web-app/src/lib/transport/unary-mux-frame.test.ts",
+        "web-app/src/lib/transport/wsUnaryPolicy.test.ts",
+        "web-app/src/lib/transport/wsUnaryPolicy.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "web-app"
+      ],
+      "primary": "web-app",
+      "class": "partial"
+    },
+    {
+      "number": 1311,
+      "mergedAt": "2026-10-31T12:29:24Z",
+      "headRefOid": "e922bead4551d15fe5e42e84d6188ad292f17ad4",
+      "files_n": 2,
+      "paths": [
+        "session/history_watcher.go",
+        "session/history_watcher_fds_unix_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1321,
+      "mergedAt": "2026-10-31T12:28:36Z",
+      "headRefOid": "7a02434ecbb9319f5a6079df852a59a82baaa1c5",
+      "files_n": 9,
+      "paths": [
+        "session/actor.go",
+        "session/actor_cancel_test.go",
+        "session/instance_actor_setters.go",
+        "session/instance_checkpoint.go",
+        "session/instance_serialization.go",
+        "session/instance_state.go",
+        "session/instance_terminal.go",
+        "session/instance_workspace.go",
+        "session/turn_end.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1322,
+      "mergedAt": "2026-10-31T12:28:16Z",
+      "headRefOid": "2c8494706e2e64eea10afe01576edf64005c3ba8",
+      "files_n": 2,
+      "paths": [
+        "session/git/native/worktree_list.go",
+        "session/git/native/worktree_list_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1325,
+      "mergedAt": "2026-10-31T12:27:42Z",
+      "headRefOid": "39fe4719761548eb121790de65bcf93df7e51df4",
+      "files_n": 4,
+      "paths": [
+        "docs/adr/ADR-034-materialized-vcs-status-view.md",
+        "docs/adr/ADR-035-connectrpc-over-websocket-delivery-classes.md",
+        "docs/explanation/matview-data-structures.md",
+        "docs/explanation/polling-audit.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1328,
+      "mergedAt": "2026-10-31T12:27:17Z",
+      "headRefOid": "93fdcc2d8df14c01bb75a8db3005061e6fe515db",
+      "files_n": 2,
+      "paths": [
+        "session/tmux/control_mode.go",
+        "session/tmux/control_mode_donech_close_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1329,
+      "mergedAt": "2026-10-31T12:26:48Z",
+      "headRefOid": "0e19e29b7ad2d6ceebfdedb20c4d954a95c148e3",
+      "files_n": 11,
+      "paths": [
+        ".gitignore",
+        "tests/e2e/global-setup.ts",
+        "tests/e2e/global-teardown.ts",
+        "tests/e2e/helpers/base-url.ts",
+        "tests/e2e/helpers/server-pool.ts",
+        "tests/e2e/helpers/session-client.ts",
+        "tests/e2e/helpers/test-server.ts",
+        "tests/e2e/helpers/theme-fixtures.ts",
+        "tests/e2e/playwright.config.ts",
+        "tests/e2e/worker-server-isolation.spec.ts",
+        "web-app/src/lib/__tests__/e2e_isolation_guard.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1332,
+      "mergedAt": "2026-10-31T12:25:57Z",
+      "headRefOid": "78dc621a0e6b49ffd3156f1bcd9d329a2c7caf7e",
+      "files_n": 3,
+      "paths": [
+        "session/tmux/command_runner_test.go",
+        "session/tmux/exec_gate.go",
+        "session/tmux/tmux.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1331,
+      "mergedAt": "2026-10-31T12:24:13Z",
+      "headRefOid": "d4e5c5c07876df32a3b34950624e44afa9bdf77c",
+      "files_n": 4,
+      "paths": [
+        "session/pane_activity_test.go",
+        "session/pty_discovery.go",
+        "session/review_queue_poller.go",
+        "session/startup_scanner.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1333,
+      "mergedAt": "2026-10-31T12:23:43Z",
+      "headRefOid": "c5133fe8c0ea73e49198dfd3554dd6505d7c6471",
+      "files_n": 20,
+      "paths": [
+        ".github/actions/prepare-stub/action.yml",
+        ".github/scripts/mcp-suite.sh",
+        ".github/workflows/backlog-scaffolding-guard.yml",
+        ".github/workflows/benchmark.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/e2e-video.yml",
+        ".github/workflows/generated-proto-guard.yml",
+        ".github/workflows/goreleaser-check.yml",
+        ".github/workflows/lint.yml",
+        ".github/workflows/main-ci.yml",
+        ".github/workflows/mcp-integration.yml",
+        ".github/workflows/ux-analysis.yml",
+        ".gitignore",
+        "CLAUDE.md",
+        "Makefile",
+        "docs/reference/ci-job-budget.md",
+        "docs/reference/eslint-rules-from-next.md",
+        "tools/ci/count-pr-checks.py",
+        "tools/ci/duration-trend.sh",
+        "web-app/scripts/__tests__/workflow-paths.test.mjs"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "web-app"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1335,
+      "mergedAt": "2026-10-31T10:52:54Z",
+      "headRefOid": "a123e7063b0a227c2373713b02a51431c5a09093",
+      "files_n": 15,
+      "paths": [
+        "server/mcp/tools_terminal.go",
+        "server/services/debug_snapshot.go",
+        "server/wakes/delivery.go",
+        "server/wakes/delivery_test.go",
+        "server/wakes/pane.go",
+        "session/instance_terminal.go",
+        "session/instance_tmux.go",
+        "session/pane_reply.go",
+        "session/pane_reply_exited_test.go",
+        "session/pane_reply_sequence.go",
+        "session/tymux/exited.go",
+        "session/tymux/exited_test.go",
+        "session/tymux/session.go",
+        "session/tymux/session_test.go",
+        "session/tymux/transport.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1276,
+      "mergedAt": "2026-10-31T10:10:47Z",
+      "headRefOid": "581933ae3ad4c4d38b9816778ae01c7d0eda6b44",
+      "files_n": 5,
+      "paths": [
+        ".github/actions/fetch-tymuxd/action.yml",
+        "Makefile",
+        "go.mod",
+        "go.sum",
+        "scripts/tymuxd-checksums.txt"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "global"
+    },
+    {
+      "number": 1305,
+      "mergedAt": "2026-10-31T06:07:39Z",
+      "headRefOid": "5e65a93a28a3128bed485a5f6a92fc62ca06b058",
+      "files_n": 1,
+      "paths": [
+        "server/services/ws_hijack_deadline_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1291,
+      "mergedAt": "2026-10-31T04:49:08Z",
+      "headRefOid": "841506e9e5ebbaaaaff96c1528ceb11b1a553762",
+      "files_n": 5,
+      "paths": [
+        "server/services/insights_service.go",
+        "server/services/insights_session_meta_cache.go",
+        "server/services/insights_session_meta_cache_test.go",
+        "server/services/session_service_shells.go",
+        "server/services/session_service_shells_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1296,
+      "mergedAt": "2026-10-31T04:48:41Z",
+      "headRefOid": "5e9415a69beffa54ad79930d69b62373672731ff",
+      "files_n": 7,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/database.json",
+        "docs/reference/database-observability.md",
+        "session/dbobs/caller_label.go",
+        "session/dbobs/caller_label_test.go",
+        "session/dbobs/driver.go",
+        "session/dbobs/stats.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1316,
+      "mergedAt": "2026-10-31T04:36:32Z",
+      "headRefOid": "bb326dbc33d43765f49d0e0314dcda01d39ef1a9",
+      "files_n": 1,
+      "paths": [
+        "docs/explanation/polling-audit.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1315,
+      "mergedAt": "2026-10-31T04:36:28Z",
+      "headRefOid": "abaa3ed042092643c5961d4511a6743fb2fff021",
+      "files_n": 1,
+      "paths": [
+        "docs/explanation/matview-data-structures.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1314,
+      "mergedAt": "2026-10-31T04:36:23Z",
+      "headRefOid": "9af138aa6dabb8cac0869026ffffe713beab692b",
+      "files_n": 1,
+      "paths": [
+        "docs/adr/ADR-035-connectrpc-over-websocket-delivery-classes.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1309,
+      "mergedAt": "2026-10-31T04:36:18Z",
+      "headRefOid": "e256070a79b7f218561e274a3376fee36791c738",
+      "files_n": 1,
+      "paths": [
+        "docs/adr/ADR-034-materialized-vcs-status-view.md"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1284,
+      "mergedAt": "2026-10-31T03:23:35Z",
+      "headRefOid": "620a131120af677a50af4b53848a9c905b1e7180",
+      "files_n": 5,
+      "paths": [
+        "session/ent/schema/classificationanalytics.go",
+        "session/ent/schema/item_session.go",
+        "session/ent_repository_indexes_test.go",
+        "session/ent_repository_migrations.go",
+        "session/ent_repository_obsolete_indexes.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1289,
+      "mergedAt": "2026-10-31T03:12:10Z",
+      "headRefOid": "f2fbaec1e9838634d8960c3a9a3df6027ad52051",
+      "files_n": 3,
+      "paths": [
+        "session/ent_client_instrumented.go",
+        "session/ent_pragmas_test.go",
+        "session/ent_repository.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1282,
+      "mergedAt": "2026-10-31T02:45:47Z",
+      "headRefOid": "723670686665d1e4917a423a17df7ac4a3c73e9a",
+      "files_n": 4,
+      "paths": [
+        "session/streamhub/hub.go",
+        "session/streamhub/hub_test.go",
+        "session/tmux/capture_pane_session_guard_test.go",
+        "session/tmux/tmux.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1304,
+      "mergedAt": "2026-10-31T02:41:45Z",
+      "headRefOid": "1de11adfd94a8413cc814f47b0c3305a221fef1e",
+      "files_n": 15,
+      "paths": [
+        "docs/how-to/enable-opentelemetry.md",
+        "docs/observability/grafana/dashboards/http-rpc-connections.json",
+        "server/interceptors/db_query_count_test.go",
+        "server/interceptors/request_flow.go",
+        "server/listener_metrics.go",
+        "server/listener_metrics_test.go",
+        "server/os_socket_darwin.go",
+        "server/os_socket_linux.go",
+        "server/os_socket_other.go",
+        "server/server.go",
+        "server/services/connectrpc_websocket.go",
+        "server/services/watch_stream_metrics.go",
+        "server/services/websocket_transport.go",
+        "server/services/websocket_transport_test.go",
+        "server/ws_readtimeout_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1302,
+      "mergedAt": "2026-10-31T02:41:12Z",
+      "headRefOid": "d3cea37f02de13677da26d3016490be41fbbe951",
+      "files_n": 27,
+      "paths": [
+        "CLAUDE.md",
+        "docs/adr/ADR-033-terminal-websocket-pool.md",
+        "docs/how-to/tune-terminal-ws-pool.md",
+        "docs/observability/grafana/dashboards/client-network.json",
+        "docs/reference/terminal-ws-pool.md",
+        "server/actuator.go",
+        "server/actuator_terminal_mux_test.go",
+        "server/server.go",
+        "server/services/config_surface_proof_test.go",
+        "server/services/connectrpc_websocket.go",
+        "server/services/feature_flag_service.go",
+        "server/services/ws_terminal_mux_bridge.go",
+        "server/services/ws_terminal_mux_frame.go",
+        "server/services/ws_terminal_mux_metrics.go",
+        "server/services/ws_terminal_mux_stream.go",
+        "server/services/ws_terminal_mux_test.go",
+        "tests/e2e/terminal-ws-pool.spec.ts",
+        "web-app/src/lib/features/flagStore.ts",
+        "web-app/src/lib/transport/__fixtures__/terminal-mux-vectors.json",
+        "web-app/src/lib/transport/terminal-mux-frame.test.ts",
+        "web-app/src/lib/transport/terminal-mux-frame.ts",
+        "web-app/src/lib/transport/terminal-socket-pool.test.ts",
+        "web-app/src/lib/transport/terminal-socket-pool.ts",
+        "web-app/src/lib/transport/terminal-socket.test.ts",
+        "web-app/src/lib/transport/terminal-socket.ts",
+        "web-app/src/lib/transport/websocket-transport.ts",
+        "web-app/src/lib/utils/backoff.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "web-app"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1290,
+      "mergedAt": "2026-10-31T02:19:58Z",
+      "headRefOid": "e1f83f481c8fbea7ac9c517352a02e739d51652e",
+      "files_n": 3,
+      "paths": [
+        "docs/observability/grafana/dashboards/pprof-profiles.json",
+        "telemetry/runtime_contention.go",
+        "telemetry/runtime_contention_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1294,
+      "mergedAt": "2026-10-31T01:49:56Z",
+      "headRefOid": "06bc1a43c744050555adfd777e4af7b1498168fa",
+      "files_n": 8,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/terminal-streams.json",
+        "server/services/connectrpc_websocket.go",
+        "server/services/terminal_stream_metrics.go",
+        "server/services/terminal_stream_metrics_test.go",
+        "session/streamhub/hub.go",
+        "session/streamhub/hub_test.go",
+        "session/streamhub/observability.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1281,
+      "mergedAt": "2026-10-31T01:49:43Z",
+      "headRefOid": "cbe9ade68c90a46fa5db69d74d05e7a005d38c73",
+      "files_n": 3,
+      "paths": [
+        "server/services/connectrpc_websocket.go",
+        "server/services/websocket_transport.go",
+        "server/services/websocket_transport_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1279,
+      "mergedAt": "2026-10-31T01:22:57Z",
+      "headRefOid": "d07f8e160379a61e2e727ed5b4c2676b4ecb6c3e",
+      "files_n": 17,
+      "paths": [
+        ".claude/skills/deterministic-fast-tests/SKILL.md",
+        "Makefile",
+        "server/services/driver_leak_test.go",
+        "server/services/session_service_test.go",
+        "session/session_driver.go",
+        "tools/lint/cmd/linter/main.go",
+        "tools/lint/internal/nolintcomment/nolintcomment.go",
+        "tools/lint/nosessiondrivertest/analyzer.go",
+        "tools/lint/nosessiondrivertest/analyzer_test.go",
+        "tools/lint/nosessiondrivertest/export_test.go",
+        "tools/lint/nosessiondrivertest/testdata/src/dot/dot_test.go",
+        "tools/lint/nosessiondrivertest/testdata/src/example.com/session/session.go",
+        "tools/lint/nosessiondrivertest/testdata/src/lib/lib.go",
+        "tools/lint/nosessiondrivertest/testdata/src/nonsession/nonsession_test.go",
+        "tools/lint/nosessiondrivertest/testdata/src/other/session/session_test.go",
+        "tools/lint/nosessiondrivertest/testdata/src/user/user_test.go",
+        "tools/lint/notimesleeptest/analyzer.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1280,
+      "mergedAt": "2026-10-31T01:10:48Z",
+      "headRefOid": "4b32042ea5d915b639c4589fbe275902f69a1063",
+      "files_n": 14,
+      "paths": [
+        "docs/adr/ADR-032-tymux-first-paint-full-state-redraw.md",
+        "server/services/connectrpc_websocket.go",
+        "server/services/connectrpc_websocket_firstpaint_test.go",
+        "session/streamhub/batch.go",
+        "session/streamhub/capture_tap_test.go",
+        "session/streamhub/clock.go",
+        "session/streamhub/fake_clock.go",
+        "session/streamhub/full_state_test.go",
+        "session/streamhub/hub.go",
+        "session/streamhub/quiescence.go",
+        "session/streamhub/quiescence_internal_test.go",
+        "session/streamhub/snapshot_prepare.go",
+        "session/streamhub/snapshot_prepare_test.go",
+        "session/streamhub/subscriber.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1278,
+      "mergedAt": "2026-10-30T23:00:24Z",
+      "headRefOid": "99fd37bb0ffa28e25f50497eb26b45359d9ad0a9",
+      "files_n": 20,
+      "paths": [
+        ".github/workflows/deploy-website.yml",
+        ".github/workflows/website-ci.yml",
+        "website/lighthouserc.json",
+        "website/lighthouserc.mobile.json",
+        "website/scripts/build-features.mjs",
+        "website/src/components/FeatureGrid.astro",
+        "website/src/content/docs/help/add-user-themes.md",
+        "website/src/content/docs/help/debug-with-logs.md",
+        "website/src/content/docs/help/macos-codesigning.md",
+        "website/src/content/features.json",
+        "website/src/lib/reduced-motion-video.ts",
+        "website/tests/integration/check-asset-health.integration.test.ts",
+        "website/tests/integration/features-json.integration.test.ts",
+        "website/tests/integration/lighthouse.integration.test.ts",
+        "website/tests/unit/feature-card.test.ts",
+        "website/tests/unit/features-json.test.ts",
+        "website/tests/unit/features-md.test.ts",
+        "website/tests/unit/features-mdx.test.ts",
+        "website/tests/unit/hero-video.test.ts",
+        "website/tests/unit/workflow-yaml.test.ts"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    },
+    {
+      "number": 1272,
+      "mergedAt": "2026-10-30T21:33:30Z",
+      "headRefOid": "ed33e58e9cd87c6220c484a7a458ef933c517c19",
+      "files_n": 5,
+      "paths": [
+        "server/analytics/db.go",
+        "server/analytics/db_indexes.go",
+        "server/analytics/db_indexes_test.go",
+        "server/analytics/escape_event_batch_writer.go",
+        "session/ent/schema/escape_event.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1275,
+      "mergedAt": "2026-10-30T21:33:25Z",
+      "headRefOid": "9605292460148fe5a19e2d5567d1be394e3eea9e",
+      "files_n": 2,
+      "paths": [
+        "server/services/vcs_status_flight.go",
+        "server/services/workspace_service_vcs_coalesce_test.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1271,
+      "mergedAt": "2026-10-30T21:20:35Z",
+      "headRefOid": "b9d78a0650a41f4986528fdf3d19a23f371da4ee",
+      "files_n": 18,
+      "paths": [
+        "CLAUDE.md",
+        "docs/how-to/reclaim-sqlite-free-space.md",
+        "scripts/analytics-db-maintenance.sh",
+        "server/actuator.go",
+        "server/analytics/db.go",
+        "server/analytics/db_autovacuum_test.go",
+        "server/db_maintenance.go",
+        "server/dependencies.go",
+        "server/server.go",
+        "session/dbmaint/config.go",
+        "session/dbmaint/dbmaint.go",
+        "session/dbmaint/dbmaint_test.go",
+        "session/dbmaint/registry.go",
+        "session/ent_client_instrumented.go",
+        "session/ent_repository.go",
+        "session/ent_repository_autovacuum_test.go",
+        "session/ent_repository_seed.go",
+        "session/storage.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "other",
+        "server",
+        "session"
+      ],
+      "primary": "session",
+      "class": "partial"
+    },
+    {
+      "number": 1274,
+      "mergedAt": "2026-10-30T20:22:06Z",
+      "headRefOid": "6991d244d3766877872086eb2450927bb29c0380",
+      "files_n": 6,
+      "paths": [
+        "server/services/backlog_service_test.go",
+        "server/services/driver_leak_test.go",
+        "server/services/insights_summary_cache.go",
+        "server/services/insights_summary_cache_test.go",
+        "server/services/session_service_create_test.go",
+        "session/session_driver.go"
+      ],
+      "truncated": false,
+      "areas": [
+        "server",
+        "session"
+      ],
+      "primary": "server",
+      "class": "partial"
+    },
+    {
+      "number": 1273,
+      "mergedAt": "2026-10-30T17:22:01Z",
+      "headRefOid": "d411b62d6142dfff0b2be8ecc43f1cb09c04ba72",
+      "files_n": 7,
+      "paths": [
+        "docs/observability/README.md",
+        "docs/observability/grafana/dashboards/cgroup-memory.json",
+        "docs/observability/grafana/dashboards/client-network.json",
+        "docs/observability/grafana/dashboards/http-rpc-connections.json",
+        "docs/observability/grafana/dashboards/pprof-profiles.json",
+        "docs/observability/grafana/dashboards/tmux-control-mode.json",
+        "docs/observability/grafana/dashboards/tymux-backend.json"
+      ],
+      "truncated": false,
+      "areas": [
+        "other"
+      ],
+      "primary": "other",
+      "class": "partial"
+    }
+  ]
+}
