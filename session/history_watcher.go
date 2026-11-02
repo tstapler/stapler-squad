@@ -8,14 +8,23 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
 )
 
 // HistoryFileWatcher watches ~/.claude/projects/ for new JSONL files.
+//
+// The event loop only classifies events and enqueues paths; callback runs on a
+// single scanqueue worker, so a slow callback (a HistoryLinker pass) never stops
+// fsnotify events from draining. One worker keeps callbacks serialized, as they
+// were when run inline. Events for a path already queued or running coalesce
+// into one (newest wins), and callers re-read the file, so nothing is lost.
 type HistoryFileWatcher struct {
 	watchDir string
 	callback func(filePath string)
 	watcher  *fsnotify.Watcher
 	stopped  chan struct{}
+	queue    *scanqueue.Queue
+	cancel   context.CancelFunc
 }
 
 // NewHistoryFileWatcher creates a watcher for the given directory.
@@ -27,11 +36,17 @@ func NewHistoryFileWatcher(watchDir string, callback func(filePath string)) *His
 			watchDir = filepath.Join(homeDir, ".claude", "projects")
 		}
 	}
-	return &HistoryFileWatcher{
+	w := &HistoryFileWatcher{
 		watchDir: watchDir,
 		callback: callback,
 		stopped:  make(chan struct{}),
 	}
+	w.queue = scanqueue.New(scanqueue.Config{Workers: 1}, func(path string) {
+		if w.callback != nil {
+			w.callback(path)
+		}
+	})
+	return w
 }
 
 // Start begins watching the directory. It returns without error even if the
@@ -69,6 +84,8 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		return nil
 	})
 
+	ctx, w.cancel = context.WithCancel(ctx)
+	w.queue.Start(ctx)
 	go w.run(ctx)
 	return nil
 }
@@ -80,6 +97,7 @@ func (w *HistoryFileWatcher) Stopped() <-chan struct{} {
 
 func (w *HistoryFileWatcher) run(ctx context.Context) {
 	defer close(w.stopped)
+	defer w.cancel() // stops the queue workers; a callback already running finishes
 	defer func() {
 		if w.watcher != nil {
 			_ = w.watcher.Close()
@@ -134,9 +152,7 @@ func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
-	if w.callback != nil {
-		w.callback(path)
-	}
+	w.queue.Enqueue(path)
 }
 
 // watchNewDir adds a newly created subdirectory to the fsnotify watch list
@@ -164,9 +180,7 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
 			continue
 		}
-		if w.callback != nil {
-			w.callback(filepath.Join(dir, name))
-		}
+		w.queue.Enqueue(filepath.Join(dir, name))
 	}
 }
 
@@ -182,5 +196,8 @@ func skipHistoryDir(dir string) bool {
 func (w *HistoryFileWatcher) Stop() {
 	if w.watcher != nil {
 		_ = w.watcher.Close()
+	}
+	if w.cancel != nil {
+		w.cancel()
 	}
 }

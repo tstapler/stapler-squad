@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -247,4 +249,80 @@ func TestHistoryFileWatcher_FiltersAgentJSONL(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Empty(t, received, "agent-*.jsonl files should not trigger callback")
+}
+
+// A callback stuck on one path must not make handleEvent block: events for
+// other paths are accepted at once, repeats of the stuck path coalesce, and
+// everything is delivered once the callback is released.
+func TestHistoryFileWatcher_should_KeepAcceptingEvents_When_CallbackIsSlow(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	var mu sync.Mutex
+	counts := map[string]int{}
+
+	w := NewHistoryFileWatcher(t.TempDir(), func(path string) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		mu.Lock()
+		counts[path]++
+		mu.Unlock()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.queue.Start(ctx)
+
+	event := func(name string) fsnotify.Event {
+		return fsnotify.Event{Name: filepath.Join("/proj", name+".jsonl"), Op: fsnotify.Write}
+	}
+	w.handleEvent(event("stuck"))
+	<-entered // the single worker is now blocked inside the callback
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			w.handleEvent(event("stuck")) // coalesces into one re-run
+		}
+		for i := 0; i < 100; i++ {
+			w.handleEvent(event(fmt.Sprintf("other-%d", i)))
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleEvent blocked behind a slow callback")
+	}
+
+	close(release)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(counts) == 101 && counts[filepath.Join("/proj", "stuck.jsonl")] == 2
+	}, 5*time.Second, time.Millisecond)
+}
+
+// Stop must end the run loop and queue workers even while a callback is blocked.
+func TestHistoryFileWatcher_should_StopPromptly_When_CallbackIsBlocked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	w := NewHistoryFileWatcher(dir, func(string) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	require.NoError(t, w.Start(context.Background()))
+	t.Cleanup(func() { close(release) })
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0600))
+	<-entered
+	w.Stop()
+	select {
+	case <-w.Stopped():
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher run loop did not exit while a callback was blocked")
+	}
 }
