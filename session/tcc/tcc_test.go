@@ -18,6 +18,8 @@ func fakeClassifier(t *testing.T, home string, devs map[string]uint64, fs map[st
 			}
 			return 0, errors.New("no device")
 		},
+		// Only "/", /Volumes and home exist, regardless of the host.
+		Exists: func(p string) bool { return p == "/" || p == volumesDir || p == home },
 		FS: func(p string) (FSInfo, error) {
 			if i, ok := fs[p]; ok {
 				return i, nil
@@ -47,6 +49,12 @@ func TestClassify(t *testing.T) {
 		{"mail is FDA", home + "/Library/Mail/V10", Result{true, home + "/Library/Mail", FullDiskAccess}},
 		{"safari is FDA", home + "/Library/Safari", Result{true, home + "/Library/Safari", FullDiskAccess}},
 		{"nested FDA root", home + "/Library/Application Support/AddressBook/x", Result{true, home + "/Library/Application Support/AddressBook", FullDiskAccess}},
+		{"biome is FDA", home + "/Library/Biome/streams", Result{true, home + "/Library/Biome", FullDiskAccess}},
+		{"knowledge is FDA", home + "/Library/Application Support/Knowledge/k.db", Result{true, home + "/Library/Application Support/Knowledge", FullDiskAccess}},
+		{"news is FDA", home + "/Library/News/x", Result{true, home + "/Library/News", FullDiskAccess}},
+		{"daemon containers is FDA", home + "/Library/Daemon Containers/x", Result{true, home + "/Library/Daemon Containers", FullDiskAccess}},
+		{"notes group container is FDA", home + "/Library/Group Containers/group.com.apple.notes/db", Result{true, home + "/Library/Group Containers/group.com.apple.notes", FullDiskAccess}},
+		{"other group container", home + "/Library/Group Containers/group.com.other/x", Result{}},
 		{"plain library", home + "/Library/Caches/x", Result{}},
 		{"unprotected code dir", home + "/code/repo", Result{}},
 		{"sibling prefix not matched", home + "/DocumentsOld/x", Result{}},
@@ -109,7 +117,7 @@ func TestClassifyNetworkFS(t *testing.T) {
 	})
 	t.Run("statfs error tolerated", func(t *testing.T) {
 		t.Parallel()
-		c := Classifier{Home: home, FS: func(string) (FSInfo, error) { return FSInfo{}, errors.New("boom") }}
+		c := Classifier{Home: home, Exists: func(p string) bool { return p == "/" }, FS: func(string) (FSInfo, error) { return FSInfo{}, errors.New("boom") }}
 		if got := c.Classify("/mnt/x"); got.Protected {
 			t.Errorf("got %+v, want unprotected", got)
 		}

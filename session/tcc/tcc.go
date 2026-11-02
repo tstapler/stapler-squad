@@ -92,15 +92,22 @@ type Classifier struct {
 	FS func(path string) (FSInfo, error)
 	// Device reports the device ID of an existing path.
 	Device func(path string) (uint64, error)
+	// Exists reports whether a path exists; nil means os.Lstat. Injected so
+	// tests do not depend on which directories the host has.
+	Exists func(path string) bool
 }
 
-// homeProtected are home-relative roots, canonical spelling; matched
-// case-insensitively because APFS is case-insensitive by default.
+// Home-relative roots in canonical spelling. matchRoot always compares
+// case-insensitively, assuming the default case-insensitive APFS; a
+// case-sensitive volume would over-match (safe: only extra consent prompts).
 var (
 	homeFilesAndFolders = []string{
 		"Documents", "Desktop", "Downloads", "Library/Mobile Documents",
 	}
 	homeFullDiskAccess = []string{
+		"Library/Biome", "Library/Application Support/Knowledge",
+		"Library/News", "Library/Daemon Containers",
+		"Library/Group Containers/group.com.apple.notes",
 		"Library/Mail", "Library/Messages", "Library/Safari", "Library/Cookies",
 		"Library/Calendars", "Library/Suggestions", "Library/HomeKit",
 		"Library/IdentityServices", "Library/Metadata/CoreSpotlight",
@@ -160,11 +167,11 @@ func (c Classifier) classifyVolume(p, home string) (Result, bool) {
 		return Result{}, false
 	}
 	root := filepath.Join(volumesDir, strings.SplitN(rel, string(filepath.Separator), 2)[0])
-	volDev, err := c.Device(existingAncestor(root))
+	volDev, err := c.Device(c.existingAncestor(root))
 	if err != nil {
 		return Result{}, false
 	}
-	dataDev, err := c.Device(existingAncestor(home))
+	dataDev, err := c.Device(c.existingAncestor(home))
 	if err != nil || volDev == dataDev {
 		return Result{}, false
 	}
@@ -175,7 +182,7 @@ func (c Classifier) classifyNetwork(p string) Result {
 	if c.FS == nil {
 		return Result{}
 	}
-	info, err := c.FS(existingAncestor(p))
+	info, err := c.FS(c.existingAncestor(p))
 	if err != nil || !networkFSTypes[strings.ToLower(info.Type)] {
 		return Result{}
 	}
@@ -240,9 +247,13 @@ func resolve(p string) string {
 
 // existingAncestor returns the nearest ancestor of p (or p itself) that exists,
 // so stat-style lookups work for paths not yet created.
-func existingAncestor(p string) string {
+func (c Classifier) existingAncestor(p string) string {
+	exists := c.Exists
+	if exists == nil {
+		exists = func(q string) bool { _, err := os.Lstat(q); return err == nil }
+	}
 	for cur := p; ; cur = filepath.Dir(cur) {
-		if _, err := os.Lstat(cur); err == nil || filepath.Dir(cur) == cur {
+		if exists(cur) || filepath.Dir(cur) == cur {
 			return cur
 		}
 	}
