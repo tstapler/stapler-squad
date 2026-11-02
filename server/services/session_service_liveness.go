@@ -289,7 +289,8 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
-		if inst == nil || inst.UUID == excludeUUID || !inst.IsLiveOrStoredSessionLive() {
+		// Not IsLiveOrStoredSessionLive: a pane-less view has no cwd to compare, so its probe is a wasted RPC.
+		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}
 		cwd, cwdErr := inst.GetCurrentWorkingDirectory()

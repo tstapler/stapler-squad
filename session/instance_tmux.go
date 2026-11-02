@@ -922,12 +922,25 @@ func (i *Instance) initTmuxSession() {
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
 	// An unrestored tymux record has no pane yet but still owns a daemon session.
-	if i.pm().HasSession() || i.tymuxSessionID() != "" {
+	return i.killSession(i.tymuxSessionID() != "")
+}
+
+// killSession closes the process session when a pane is attached, and also when
+// includeUnrestored is set and the record only stores a daemon session id.
+func (i *Instance) killSession(includeUnrestored bool) error {
+	if i.pm().HasSession() || includeUnrestored {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
 	}
 	return nil
+}
+
+// killSessionAttachedByThisAttempt is KillSession for a failed Start's cleanup: it never
+// closes a stored daemon session the failed attempt did not attach or create, which a
+// transient create/list error must not turn into killing a running agent.
+func (i *Instance) killSessionAttachedByThisAttempt() error {
+	return i.killSession(false)
 }
 
 // KillSessionKeepWorktree terminates tmux session but preserves worktree for recovery scenarios.

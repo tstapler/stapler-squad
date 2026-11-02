@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -199,4 +201,35 @@ func TestSeam_IsBackendProcessAliveIgnoresStoredSessionOfUnrestoredView(t *testi
 
 	assert.False(t, view.IsBackendProcessAlive())
 	assert.True(t, view.IsLiveOrStoredSessionLive())
+}
+
+// failingStartTymux fails every Start, as a transient CreateSession error would.
+type failingStartTymux struct{ seamFakeTymux }
+
+func (f *failingStartTymux) Start(string) error             { return errors.New("create failed") }
+func (f *failingStartTymux) IsAlive() bool                  { return false }
+func (f *failingStartTymux) ResetExitOnce()                 {}
+func (f *failingStartTymux) SetOnExitCallback(func(string)) {}
+func (f *failingStartTymux) AppendEnv(...string)            {}
+func (f *failingStartTymux) GetPTY() (*os.File, error)      { return nil, errors.New("no pty") }
+
+// A restart whose Start fails (a transient create error) must not kill the
+// running agent its stored id names: the cleanup closes only what the failed
+// attempt attached or created.
+func TestSeam_FailedStartOfUnrestoredRecordDoesNotKillStoredSession(t *testing.T) {
+	fake := &failingStartTymux{}
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
+	t.Cleanup(func() { newTymuxSessionFn = orig })
+	data := restoredPausedData(t, "failed-start-keeps-session")
+	data.Backend = BackendTymux
+	data.TymuxSessionID = "d-80"
+	inst, err := FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+
+	require.Error(t, inst.Start(false))
+
+	assert.Zero(t, fake.closeCalls, "a failed Start must not close the stored daemon session")
+	assert.Equal(t, "d-80", inst.ToInstanceData().TymuxSessionID, "the record keeps its id")
 }

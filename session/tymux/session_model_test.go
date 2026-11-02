@@ -138,6 +138,7 @@ type identityModel struct {
 	insts  []*modelInstance
 	rng    *rand.Rand
 	trace  []string
+	seq    int
 	// shadows are extra views of a record; they are not Instances of their own.
 	shadows []TymuxManager
 }
@@ -146,7 +147,14 @@ func (m *identityModel) log(format string, a ...any) {
 	m.trace = append(m.trace, fmt.Sprintf(format, a...))
 }
 
+// uniq makes a record label unique: titles are, and a label is the record identity.
+func (m *identityModel) uniq(label string) string {
+	m.seq++
+	return fmt.Sprintf("%s-%d", label, m.seq)
+}
+
 func (m *identityModel) fresh(label, dir string) *modelInstance {
+	label = m.uniq(label)
 	mgr := NewTymuxGRPCSession(m.d)
 	mgr.SetSessionLabel(label)
 	return &modelInstance{mgr: mgr, label: label, dir: dir}
@@ -183,7 +191,7 @@ func (m *identityModel) pick() *modelInstance {
 func (m *identityModel) restartProcess() {
 	// A fresh process: no claims survive, every manager is rebuilt from its record.
 	claimedSessions.Range(func(k, _ any) bool { claimedSessions.Delete(k); return true })
-	storedIDHolders.Range(func(k, _ any) bool { storedIDHolders.Delete(k); return true })
+	storedIDHolders.reset()
 	m.shadows = nil // views of the dead process are gone with it
 	live := m.live()
 	for _, in := range live {
@@ -194,6 +202,11 @@ func (m *identityModel) restartProcess() {
 	// Production restores run concurrently in unspecified order; the model picks
 	// one seeded order per restart so every seed replays identically.
 	for _, i := range m.rng.Perm(len(live)) {
+		// Instance.Start(false) on an unrestored record runs Start then Restore (the
+		// cold-restore path); neither order may spawn a second agent.
+		if m.rng.Intn(2) == 0 {
+			_ = live[i].mgr.Start(live[i].dir)
+		}
 		_ = live[i].mgr.RestoreWithWorkDir(live[i].dir)
 	}
 	for _, in := range live {
@@ -256,7 +269,7 @@ func (m *identityModel) step() {
 		}
 	case 4: // rename: label changes, record keeps the id
 		if in := m.pick(); in != nil {
-			in.label = m.labels[m.rng.Intn(len(m.labels))]
+			in.label = m.uniq(m.labels[m.rng.Intn(len(m.labels))])
 			in.mgr.SetSessionLabel(in.label)
 			in.stored = in.mgr.GetSessionIdentifier() // Rename saves the whole record
 			m.log("rename %s -> %q", in.mgr.GetSessionIdentifier(), in.label)
@@ -322,9 +335,9 @@ func (m *identityModel) step() {
 			}
 			m.log("recover %s -> %s without persisting (record still stores %s)", lost, in.mgr.GetSessionIdentifier(), in.stored)
 		}
-	case 14: // legacy record (no id) that shares a label with a record storing an id
+	case 14: // legacy record (no id) in the same dir as a record storing an id (titles, so labels, are unique)
 		if src := m.pick(); src != nil && src.stored != "" {
-			leg := m.fresh(src.label, src.dir)
+			leg := m.fresh("legacy", src.dir)
 			m.insts = append(m.insts, leg) // restored at the next process restart
 			m.log("legacy record label=%q next to %s", src.label, src.stored)
 		}

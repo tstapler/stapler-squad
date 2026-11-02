@@ -2124,7 +2124,7 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	}
 	i.stopVNC()
 	i.stopCDP()
-	return i.KillSession()
+	return i.killSessionAttachedByThisAttempt()
 }
 
 // Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a

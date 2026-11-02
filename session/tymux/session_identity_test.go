@@ -264,7 +264,7 @@ func resetClaims(t *testing.T) {
 	t.Helper()
 	wipe := func() {
 		claimedSessions.Range(func(k, _ any) bool { claimedSessions.Delete(k); return true })
-		storedIDHolders.Range(func(k, _ any) bool { storedIDHolders.Delete(k); return true })
+		storedIDHolders.reset()
 	}
 	wipe()
 	t.Cleanup(wipe)
@@ -334,7 +334,7 @@ func TestRestoreWithWorkDir_StoredIDAbsent_DoesNotAdoptLabelSessionStoredByAnoth
 	starts := 0
 	transport := &fakeTransport{
 		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("theirs", dir+" [t]", dir)}}), nil
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("theirs", dir, dir)}}), nil
 		},
 		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
 			starts++
@@ -342,7 +342,7 @@ func TestRestoreWithWorkDir_StoredIDAbsent_DoesNotAdoptLabelSessionStoredByAnoth
 		},
 	}
 	other := NewTymuxGRPCSession(transport) // record that stores "theirs", not restored yet
-	other.SetSessionLabel("t")
+	other.SetSessionLabel("o")
 	other.SetStoredSessionID("theirs")
 	s := NewTymuxGRPCSession(transport)
 	s.SetSessionLabel("t")
@@ -362,7 +362,7 @@ func TestRestoreWithWorkDir_LegacyRecordDoesNotDoubleHoldAnotherRecordsStoredID(
 	var killed []string
 	transport := &fakeTransport{
 		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("held", dir+" [t]", dir)}}), nil
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("held", dir, dir)}}), nil
 		},
 		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
 			return connect.NewResponse(namedSession("legacy-fresh", dir, dir)), nil
@@ -373,10 +373,10 @@ func TestRestoreWithWorkDir_LegacyRecordDoesNotDoubleHoldAnotherRecordsStoredID(
 		},
 	}
 	stored := NewTymuxGRPCSession(transport)
-	stored.SetSessionLabel("t")
+	stored.SetSessionLabel("s")
 	stored.SetStoredSessionID("held")
 	legacy := NewTymuxGRPCSession(transport)
-	legacy.SetSessionLabel("t")
+	legacy.SetSessionLabel("l")
 	require.NoError(t, legacy.RestoreWithWorkDir(dir)) // restores first
 	require.NoError(t, stored.RestoreWithWorkDir(dir))
 	assert.Equal(t, "held", stored.GetSessionIdentifier())
@@ -586,4 +586,260 @@ func TestRestoreWithWorkDir_ConcurrentStartupRestoreOfSharedDirRecords(t *testin
 	wg.Wait()
 	assert.Equal(t, ids, got)
 	assert.Len(t, daemon.ids(), n, "restore must not spawn extra sessions")
+}
+
+// seedDaemonSession plants a session the way an earlier process left it.
+func seedDaemonSession(t *testing.T, d *modelDaemon, name, dir string, live bool) string {
+	t.Helper()
+	resp, err := d.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{Name: name, Cwd: dir}))
+	require.NoError(t, err)
+	id := resp.Msg.GetId()
+	d.mu.Lock()
+	d.sessions[id].live = live
+	d.mu.Unlock()
+	return id
+}
+
+func labeledView(d *modelDaemon, label, storedID string) TymuxManager {
+	v := NewTymuxGRPCSession(d)
+	v.SetSessionLabel(label)
+	v.SetStoredSessionID(storedID)
+	return v
+}
+
+// A live view re-entering restore already holds the claim for its session. Throwaway
+// copies of the same record store that id too (health-tick loads, liveness shadows);
+// they are the same record, never "another" one, so the view must keep its session
+// instead of spawning a second agent and orphaning the first.
+func TestRestoreWithWorkDir_ReEntryKeepsOwnSessionWhileCopyOfRecordStoresIt(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	view := NewTymuxGRPCSession(d)
+	view.SetSessionLabel("x")
+	require.NoError(t, view.Start(dir))
+	t.Cleanup(func() { _ = view.Close() })
+	own := view.GetSessionIdentifier()
+	_ = labeledView(d, "x", own) // the copy, still reachable
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.Equal(t, own, view.GetSessionIdentifier())
+	assert.Equal(t, map[string]bool{own: true}, d.ids(), "re-entering restore must not spawn a second agent")
+}
+
+// Same, for a stale stored id: recovery created d001 under the record's label, and a
+// copy of the record (saved after recovery) stores d001. The view's own label session
+// must not be skipped as "stored by another record".
+func TestRestoreWithWorkDir_StaleStoredID_CopyOfSameRecordDoesNotBlockLabelAdoption(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	recovered := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	_ = labeledView(d, "x", recovered) // copy saved after recovery
+	view := labeledView(d, "x", "gone-id")
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = view.Close() })
+
+	assert.Equal(t, recovered, view.GetSessionIdentifier())
+	assert.Len(t, d.ids(), 1, "the record's own session must be re-adopted, not duplicated")
+}
+
+// A session another record stores by id is still never adopted by name.
+func TestRestoreWithWorkDir_OtherRecordsStoredSessionIsStillSkipped(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	theirs := seedDaemonSession(t, d, dir, dir, true) // legacy name
+	_ = labeledView(d, "other", theirs)
+	view := labeledView(d, "x", "")
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = view.Close() })
+
+	assert.NotEqual(t, theirs, view.GetSessionIdentifier())
+}
+
+// A view that holds the claim for the session it drives re-adopts it before any
+// stored-id lookup, even if its stored id was changed to name another session.
+func TestRestoreWithWorkDir_HeldClaimWinsOverStoredID(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	view := NewTymuxGRPCSession(d)
+	view.SetSessionLabel("x")
+	require.NoError(t, view.Start(dir))
+	t.Cleanup(func() { _ = view.Close() })
+	own := view.GetSessionIdentifier()
+	other := seedDaemonSession(t, d, "unrelated", dir, true)
+	view.SetStoredSessionID(other)
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.Equal(t, own, view.GetSessionIdentifier())
+}
+
+// The registry holds one entry per live record, not one per view ever built: it
+// shrinks when a record clears or changes its stored id.
+func TestStoredIDHolders_UnregisteredOnCloseAndIDChange(t *testing.T) {
+	resetClaims(t)
+	d := newModelDaemon()
+	a := labeledView(d, "x", "id-1")
+	a.SetStoredSessionID("id-2")
+	storedIDHolders.mu.Lock()
+	_, stale := storedIDHolders.labels["id-1"]
+	storedIDHolders.mu.Unlock()
+	assert.False(t, stale, "a changed stored id must be unregistered")
+
+	require.NoError(t, a.Close())
+	storedIDHolders.mu.Lock()
+	n := len(storedIDHolders.labels)
+	storedIDHolders.mu.Unlock()
+	assert.Zero(t, n, "a closed record must not stay registered")
+}
+
+// Instance.Start(false) on an unrestored record runs Start then RestoreWithWorkDir.
+// The record's live session must be attached by Start, never shadowed by a fresh
+// agent that Restore then drops (verified identical on main before the fix).
+func TestStartThenRestore_UnrestoredRecordWithLiveStoredSessionHoldsOneSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	view := labeledView(d, "x", stored)
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.Start(dir))
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.Equal(t, stored, view.GetSessionIdentifier())
+	assert.Equal(t, map[string]bool{stored: true}, d.ids(), "the daemon must hold exactly the record's session")
+}
+
+// With the stored id gone, Start re-adopts the record's still-running label session.
+func TestStart_UnrestoredRecordWithGoneStoredIDAdoptsLabelSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	labeled := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	view := labeledView(d, "x", "gone-id")
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.Start(dir))
+
+	assert.Equal(t, labeled, view.GetSessionIdentifier())
+	assert.Len(t, d.ids(), 1)
+}
+
+// A dead stored session is replaced (the caller wants a fresh launch command) and
+// the dead one is removed, leaving exactly one session.
+func TestStart_UnrestoredRecordWithDeadStoredSessionReplacesIt(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir+" [x]", dir, false)
+	view := labeledView(d, "x", stored)
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.Start(dir))
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.NotEqual(t, stored, view.GetSessionIdentifier())
+	assert.Equal(t, map[string]bool{view.GetSessionIdentifier(): true}, d.ids())
+	assert.Equal(t, view.GetSessionIdentifier(), view.PersistedSessionID())
+}
+
+// An unanswered ListSessions must not be read as "no stored session": creating
+// blind would put a second agent next to the live one.
+func TestStart_UnrestoredRecordDoesNotCreateWhenDaemonListFails(t *testing.T) {
+	resetClaims(t)
+	creates := 0
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New("tymuxd unreachable"))
+		},
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			creates++
+			return connect.NewResponse(namedSession("dup", "d", "d")), nil
+		},
+	}
+	view := NewTymuxGRPCSession(transport)
+	view.SetStoredSessionID("live-1")
+
+	require.Error(t, view.Start(t.TempDir()))
+
+	assert.Zero(t, creates)
+	assert.Equal(t, "live-1", view.PersistedSessionID())
+}
+
+// A restored view whose kill fails (tymuxd unreachable) keeps persisting the id,
+// or the next save writes "" and orphans the running session; the failed kill is
+// still not retried by the next Close.
+func TestClose_RestoredViewKeepsIDWhenKillFails(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	kills := 0
+	var live *v1.Session
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{live}}), nil
+		},
+		killSessionFn: func(context.Context, *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			kills++
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New("tymuxd unreachable"))
+		},
+	}
+	live = namedSession("run-1", dir, dir)
+	view := NewTymuxGRPCSession(transport)
+	view.SetStoredSessionID("run-1")
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	require.Error(t, view.Close())
+	assert.Equal(t, "run-1", view.PersistedSessionID(), "a failed kill must not drop the persisted id")
+	_ = view.Close()
+	assert.Equal(t, 1, kills)
+}
+
+// Close clears the record-owned kill right, so a repeat Close never kills again
+// (the first kill may be long gone and its id reused by another owner).
+func TestClose_RecordOwnedViewKillsOnce(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	holder := labeledView(d, "x", stored)
+	require.NoError(t, holder.RestoreWithWorkDir(dir)) // holds the claim
+	t.Cleanup(func() { _ = holder.Close() })
+	view := labeledView(d, "x", stored)
+	require.NoError(t, view.RestoreWithWorkDir(dir)) // record-owned, claim held by holder
+
+	require.NoError(t, view.Close())
+	require.NoError(t, view.Close())
+
+	assert.Equal(t, []string{stored}, d.kills)
+}
+
+// A recovery Start replaces a record-owned session with one this view created, so the
+// record-owned kill right must not carry over to a session another owner now claims.
+func TestStart_RecoveryClearsRecordOwnedKillRight(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	holder := labeledView(d, "x", stored)
+	require.NoError(t, holder.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = holder.Close() })
+	view := labeledView(d, "x", stored)
+	require.NoError(t, view.RestoreWithWorkDir(dir)) // record-owned
+	d.mu.Lock()
+	delete(d.sessions, stored)
+	d.mu.Unlock()
+	require.NoError(t, view.Start(dir))
+	fresh := view.GetSessionIdentifier()
+	claimedSessions.Store(fresh, any(holder)) // another owner took the replacement
+
+	require.NoError(t, view.Close())
+
+	assert.NotContains(t, d.kills, fresh)
 }
