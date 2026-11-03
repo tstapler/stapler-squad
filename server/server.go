@@ -494,7 +494,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
 	muxPool := services.TerminalMuxPoolSizeFromEnv()
 	muxBridge := services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
-		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		services.WithTerminalMuxDispatchers(srv.unaryDispatcher))
 	srv.terminalMuxBridge.Store(muxBridge)
 	srv.mux.Handle(services.TerminalMuxPath, muxBridge)
 	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)

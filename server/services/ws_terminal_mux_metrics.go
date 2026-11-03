@@ -13,12 +13,13 @@ import (
 )
 
 // Terminal mux instruments (ADR-033). Labels are bounded: direction (2), frame type (8),
-// close reason (a fixed set).
+// close reason (a fixed set), listener (local/remote), deny reason (a fixed set).
 var (
 	muxSocketsOpen   = upDownNamed("terminal_mux_sockets_open", "Terminal mux sockets currently open")
 	muxStreamsOpen   = upDownNamed("terminal_mux_streams_open", "Terminal streams currently carried by mux sockets")
 	muxFramesTotal   = counterNamed("terminal_mux_frames_total", "Terminal mux frames by direction and type")
 	muxSocketsClosed = counterNamed("terminal_mux_socket_closed_total", "Terminal mux sockets ended, by reason")
+	muxOpensDenied   = counterNamed("terminal_mux_open_denied_total", "Mux OPEN frames refused by the per-OPEN authorization re-check, by listener and reason")
 	muxCreditStalls  = counterNamed("terminal_mux_credit_stalls_total", "Times a stream with queued output had to wait for client credit")
 	muxWriteErrors   = counterNamed("terminal_mux_write_errors_total", "Mux socket write failures (each ends its socket)")
 	muxHolWait       = histNamed("terminal_mux_hol_wait", "ms", "Time from a message being queued to its first frame being written")
@@ -62,6 +63,12 @@ func (muxMetricsRecorder) frame(dir string, t muxFrameType) {
 	}
 	if c := muxFramesTotal(); c != nil {
 		c.Add(context.Background(), 1, metric.WithAttributes(attribute.String("dir", dir), attribute.String("type", name)))
+	}
+}
+
+func (muxMetricsRecorder) openDenied(listener, reason string) {
+	if c := muxOpensDenied(); c != nil {
+		c.Add(context.Background(), 1, metric.WithAttributes(attribute.String("listener", listener), attribute.String("reason", reason)))
 	}
 }
 
