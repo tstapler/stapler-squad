@@ -36,6 +36,7 @@ func (c *collector) waitFor(t *testing.T, d time.Duration, what string, pred fun
 		if c.has(pred) {
 			return
 		}
+		//nolint:notimesleeptest FSEvents delivery is OS-driven and cannot use a virtual clock.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("no %s event within %v; got %+v", what, d, c.evs)

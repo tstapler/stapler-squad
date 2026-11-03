@@ -3,11 +3,13 @@
 package fsevents
 
 import (
+	"context"
 	"os"
-	"os/exec"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestSpikeEventVolume measures FSEvents events/sec over a repo while a command
@@ -27,7 +29,7 @@ func TestSpikeEventVolume(t *testing.T) {
 		SinceWhen: SinceNow,
 	})
 
-	c := exec.Command("sh", "-c", cmdline)
+	c := safeexec.CommandContext(context.Background(), "sh", "-c", cmdline)
 	c.Dir = repo
 	start := time.Now()
 	out, err := c.CombinedOutput()
