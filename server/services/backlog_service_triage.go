@@ -571,7 +571,8 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// (stop review session + transition back to in_progress so restart begins from
 	// the work phase where the git worktree and slash commands are set up).
 	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
-		item.Status == string(session.BacklogStatusReview)) {
+		item.Status == string(session.BacklogStatusReview) ||
+		item.Status == string(session.BacklogStatusPRPending)) {
 		var forceErr error
 		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
@@ -1368,13 +1369,23 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
 func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
-	if item.Status == string(session.BacklogStatusReview) {
+	if item.Status == string(session.BacklogStatusReview) || item.Status == string(session.BacklogStatusPRPending) {
+		wasPRPending := item.Status == string(session.BacklogStatusPRPending)
 		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		})
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
+		}
+		if wasPRPending {
+			// Leaving pr_pending: clear stuck rows that only apply there so the item
+			// doesn't re-enter stuck right after the spawn.
+			for _, reason := range []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed} {
+				if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, reason); resolveErr != nil {
+					log.Warn("[forceResetItem] ResolveStuck failed", "reason", reason, "item", item.ID, "error", resolveErr)
+				}
+			}
 		}
 		return updated, nil
 	}

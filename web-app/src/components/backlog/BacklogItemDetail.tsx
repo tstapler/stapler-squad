@@ -1897,6 +1897,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             steeringSessionId={steeringSessionId}
             authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
             getSession={getSession}
+            onRestartWork={item.status === "pr_pending" ? () => void handleAction("restart_session") : undefined}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

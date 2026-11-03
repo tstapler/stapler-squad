@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -502,6 +503,10 @@ func (s *BacklogService) TriggerRemediationNow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
 	}
 
+	if reason == domain.StuckReasonMultipleReasons {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, s.multipleReasonsRemediationError(ctx, req.Msg.ItemId))
+	}
+
 	action := s.remediationActionByReason(reason)
 	if action == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no automated remediation action is available for reason %q yet", reason))
@@ -533,4 +538,22 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil
+}
+
+// multipleReasonsRemediationError explains that multiple_reasons is an aggregate
+// escalation row with no action of its own, naming the item's open constituent
+// reasons so the caller can retry each one individually.
+func (s *BacklogService) multipleReasonsRemediationError(ctx context.Context, itemID string) error {
+	rows, err := s.storage.FindOpenStuckStates(ctx)
+	if err != nil {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually (could not list them: %w)", err)
+	}
+	var names []string
+	for _, row := range rows {
+		if row.ItemID != itemID || row.Reason == domain.StuckReasonMultipleReasons {
+			continue
+		}
+		names = append(names, string(row.Reason))
+	}
+	return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually: [%s]", strings.Join(names, ", "))
 }

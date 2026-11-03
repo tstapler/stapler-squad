@@ -24,6 +24,8 @@ export interface JumpToSessionPanelProps {
   backlogItemId: string;
   /** Fetches the full Session proto by id — the real-time terminal needs more than the lightweight LinkedSession the backlog item already carries (useSessionService's getSession). */
   getSession: (id: string) => Promise<Session | null>;
+  /** Force-restarts the item's work session; shown beside the "Session not found." error when provided (pr_pending items). */
+  onRestartWork?: () => void;
 }
 
 function roleLabel(role: string): string {
@@ -31,6 +33,7 @@ function roleLabel(role: string): string {
 }
 
 const PANEL_ID = "jump-to-session-panel";
+const SESSION_NOT_FOUND = "Session not found.";
 
 /**
  * A single button that opens a real, interactive terminal for the backlog
@@ -40,7 +43,7 @@ const PANEL_ID = "jump-to-session-panel";
  * operator pick a different role's most recent session when more than one
  * is available.
  */
-export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }: JumpToSessionPanelProps) {
+export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, onRestartWork }: JumpToSessionPanelProps) {
   const { track } = useAnalytics();
   const { isMobile } = useViewport();
   const defaultTarget = getMostRecentJumpableSession(linkedSessions);
@@ -81,7 +84,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       .then((result) => {
         if (seq !== fetchSeqRef.current) return;
         if (!result) {
-          setError("Session not found.");
+          setError(SESSION_NOT_FOUND);
           setSession(null);
         } else {
           setSession(result);
@@ -230,7 +233,27 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       {!isMobile && expanded && (
         <div id={PANEL_ID} className={styles.panel} data-testid={PANEL_ID}>
           {loading && <div className={styles.panelLoading}>Loading terminal…</div>}
-          {!loading && error && <div className={styles.panelError}>{error}</div>}
+          {!loading && error && (
+            <div className={styles.panelError}>
+              {error}
+              {error === SESSION_NOT_FOUND && onRestartWork && (
+                <button
+                  type="button"
+                  data-testid="jump-to-session-restart-work"
+                  onClick={() => {
+                    track({
+                      name: "backlog_restart_work_from_missing_session",
+                      category: "user_action",
+                      component: "JumpToSessionPanel",
+                    });
+                    onRestartWork();
+                  }}
+                >
+                  Restart work
+                </button>
+              )}
+            </div>
+          )}
           {!loading && !error && session && (
             <SessionDetail
               session={session}
