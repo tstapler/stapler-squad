@@ -244,6 +244,17 @@ describe("getAvailableActions", () => {
       expect(actions.has("send_back_idea")).toBe(true);
       expect(actions.has("send_back_ready")).toBe(true);
     });
+
+    it("still exposes restart_session when a live work session is linked", () => {
+      const { actions } = getAvailableActions(
+        makeItem({
+          id: "a",
+          status: "pr_pending",
+          linkedSessions: [{ entityId: "e1", sessionId: "s1", role: "work", estimatedCostUsd: 0 }],
+        })
+      );
+      expect(actions.has("restart_session")).toBe(true);
+    });
   });
 
   describe("done", () => {

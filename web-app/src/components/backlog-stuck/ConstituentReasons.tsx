@@ -24,6 +24,7 @@ export function ConstituentReasons({ itemId, reasons, onTriggerRemediationNow }:
 
   async function retry(reason: StuckReason) {
     if (!onTriggerRemediationNow || pending !== null) return;
+    track({ name: "stuck_constituent_retry", category: "user_action", component: "ConstituentReasons" });
     setPending(reason);
     setErrors((prev) => ({ ...prev, [reason]: undefined }));
     try {
@@ -41,14 +42,13 @@ export function ConstituentReasons({ itemId, reasons, onTriggerRemediationNow }:
         <li key={reason} data-testid={`stuck-constituent-reason-${reason}`}>
           {getStuckReasonLabel(reason)}
           {onTriggerRemediationNow && hasRemediationAction(reason) && (
+            // Tracked inside retry(), after its pending guard.
+            // analytics-exempt
             <button
               type="button"
               data-testid={`stuck-constituent-retry-${reason}`}
               disabled={pending !== null}
-              onClick={() => {
-                track({ name: "stuck_constituent_retry", category: "user_action", component: "ConstituentReasons" });
-                void retry(reason);
-              }}
+              onClick={() => void retry(reason)}
             >
               {pending === reason ? "Retrying…" : "Retry"}
             </button>

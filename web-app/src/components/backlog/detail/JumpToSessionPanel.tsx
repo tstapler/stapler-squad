@@ -25,7 +25,7 @@ export interface JumpToSessionPanelProps {
   /** Fetches the full Session proto by id — the real-time terminal needs more than the lightweight LinkedSession the backlog item already carries (useSessionService's getSession). */
   getSession: (id: string) => Promise<Session | null>;
   /** Force-restarts the item's work session; shown beside the "Session not found." error when provided (pr_pending items). */
-  onRestartWork?: () => void;
+  onRestartWork?: () => void | Promise<void>;
 }
 
 function roleLabel(role: string): string {
@@ -33,7 +33,7 @@ function roleLabel(role: string): string {
 }
 
 const PANEL_ID = "jump-to-session-panel";
-const SESSION_NOT_FOUND = "Session not found.";
+type SessionErrorKind = "not_found" | "load_failed";
 
 /**
  * A single button that opens a real, interactive terminal for the backlog
@@ -58,6 +58,8 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<SessionErrorKind | null>(null);
+  const [restarting, setRestarting] = useState(false);
 
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -77,6 +79,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
     setSession(null); // never show the previous open/role's session while loading
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     // View-only fetch to populate the inline terminal, not a user-initiated
     // mutation — the click that triggers it is tracked separately below.
     // analytics-exempt
@@ -84,7 +87,8 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
       .then((result) => {
         if (seq !== fetchSeqRef.current) return;
         if (!result) {
-          setError(SESSION_NOT_FOUND);
+          setError("Session not found.");
+          setErrorKind("not_found");
           setSession(null);
         } else {
           setSession(result);
@@ -93,6 +97,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
       .catch(() => {
         if (seq !== fetchSeqRef.current) return;
         setError("Failed to load session.");
+        setErrorKind("load_failed");
         setSession(null);
       })
       .finally(() => {
@@ -236,17 +241,24 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, 
           {!loading && error && (
             <div className={styles.panelError}>
               {error}
-              {error === SESSION_NOT_FOUND && onRestartWork && (
+              {errorKind === "not_found" && onRestartWork && (
                 <button
                   type="button"
                   data-testid="jump-to-session-restart-work"
-                  onClick={() => {
+                  disabled={restarting}
+                  onClick={async () => {
+                    if (restarting) return;
+                    setRestarting(true);
                     track({
                       name: "backlog_restart_work_from_missing_session",
                       category: "user_action",
                       component: "JumpToSessionPanel",
                     });
-                    onRestartWork();
+                    try {
+                      await onRestartWork();
+                    } finally {
+                      setRestarting(false);
+                    }
                   }}
                 >
                   Restart work
