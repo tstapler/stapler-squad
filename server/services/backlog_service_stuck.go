@@ -555,5 +555,8 @@ func (s *BacklogService) multipleReasonsRemediationError(ctx context.Context, it
 		}
 		names = append(names, string(row.Reason))
 	}
+	if len(names) == 0 {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own, and no constituent reasons are open")
+	}
 	return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually: [%s]", strings.Join(names, ", "))
 }

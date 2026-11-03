@@ -73,6 +73,8 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 	svc.SetSessionStopper(stopper)
 	itemID := spawnedPRPendingItem(t, svc, storage)
 	seedOpenStuckRow(t, storage, itemID, domain.StuckReasonReworkCap, time.Now(), "cap")
+	seedOpenStuckRow(t, storage, itemID, domain.StuckReasonPRNeedsFix, time.Now(), "fix")
+	seedOpenStuckRow(t, storage, itemID, domain.StuckReasonMultipleReasons, time.Now(), "multi")
 
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)

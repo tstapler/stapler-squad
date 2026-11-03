@@ -1364,13 +1364,19 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 	}
 }
 
+// prPendingScopedStuckReasons are the stuck reasons that only describe a pr_pending item.
+var prPendingScopedStuckReasons = []domain.StuckReason{
+	domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed,
+	domain.StuckReasonPRNeedsFix, domain.StuckReasonPRPendingNoPR, domain.StuckReasonMergedPRUnverified,
+	domain.StuckReasonMultipleReasons,
+}
+
 // forceResetItem stops any in-flight work or review sessions for the item, and — if
 // the item is currently in review — transitions it back to in_progress. Used when
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
 func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
 	if item.Status == string(session.BacklogStatusReview) || item.Status == string(session.BacklogStatusPRPending) {
-		wasPRPending := item.Status == string(session.BacklogStatusPRPending)
 		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
@@ -1378,10 +1384,12 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
 		}
-		if wasPRPending {
+		if item.Status == string(session.BacklogStatusPRPending) {
 			// Leaving pr_pending: clear stuck rows that only apply there so the item
-			// doesn't re-enter stuck right after the spawn.
-			for _, reason := range []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed} {
+			// doesn't re-enter stuck right after the spawn. The rework counter is
+			// deliberately untouched: force is an explicit operator override of the cap.
+			for _, reason := range prPendingScopedStuckReasons {
+				//nolint:silenttransition // best-effort: the next stuck sweep re-detects any row left open.
 				if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, reason); resolveErr != nil {
 					log.Warn("[forceResetItem] ResolveStuck failed", "reason", reason, "item", item.ID, "error", resolveErr)
 				}
