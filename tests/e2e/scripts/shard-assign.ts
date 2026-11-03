@@ -4,6 +4,7 @@
 //
 //   bun scripts/shard-assign.ts assign --shard 4 --total 5 [--timings shard-timings.json] < files.txt
 //       prints the "tests/e2e/<file>$" filter for each file of that shard (files.txt: one spec path per line)
+//   bun scripts/shard-assign.ts drift --report merged-report.json --total 5   (is the committed plan still balanced?)
 //   bun scripts/shard-assign.ts timings --report merged-report.json --out shard-timings.json
 //       rebuilds the timings file from a merged Playwright JSON report (refresh when the suite shifts)
 import * as fs from "fs";
@@ -63,6 +64,17 @@ export function shardLoads(files: string[], timings: Timings, total: number): nu
   return assignShards(files, timings, total).map((fs_) => fs_.reduce((n, f) => n + (timings.specSeconds[f] ?? fallback), 0));
 }
 
+/**
+ * How the committed plan would have loaded each shard under the durations this run actually measured. A max well above
+ * the mean means shard-timings.json is stale (the 2.3x notification-contrast-over-xterm drift left one shard 35% heavy).
+ */
+export function planDrift(committed: Timings, fresh: Timings, total: number): { loads: number[]; maxOverMean: number } {
+  const files = Object.keys(fresh.specSeconds);
+  const loads = assignShards(files, committed, total).map((fs_) => fs_.reduce((n, f) => n + (fresh.specSeconds[f] ?? 0), 0));
+  const mean = loads.reduce((a, b) => a + b, 0) / loads.length;
+  return { loads, maxOverMean: mean === 0 ? 1 : Math.max(...loads) / mean };
+}
+
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Anchored so `files.spec.ts` can never also select `profiles.spec.ts` (file filters are regexes over the absolute path). */
@@ -88,6 +100,12 @@ if (require.main === module) {
     const loads = shardLoads(files, timings, total);
     console.error(`shard-assign: shard ${shard}/${total}: ${assigned[shard - 1].length} files, estimated ${loads[shard - 1]}s of test time (all shards: ${loads.join("s, ")}s)`);
     for (const f of assigned[shard - 1]) console.log(fileFilter(f));
+  } else if (cmd === "drift") {
+    const committed = JSON.parse(fs.readFileSync(arg(rest, "timings", `${__dirname}/../shard-timings.json`), "utf8")) as Timings;
+    const fresh = timingsFromReport(JSON.parse(fs.readFileSync(arg(rest, "report"), "utf8")) as Report);
+    const { loads, maxOverMean } = planDrift(committed, fresh, Number(arg(rest, "total")));
+    const stale = maxOverMean > 1.15;
+    console.log(`Shard plan vs measured durations: loads ${loads.join("s, ")}s, heaviest is ${maxOverMean.toFixed(2)}x the mean${stale ? " -- shard-timings.json is stale, refresh it from the e2e-shard-timings artifact of a full uncut run" : ""}`);
   } else if (cmd === "timings") {
     const report = JSON.parse(fs.readFileSync(arg(rest, "report"), "utf8")) as Report;
     fs.writeFileSync(arg(rest, "out"), `${JSON.stringify(timingsFromReport(report), null, 1)}\n`);

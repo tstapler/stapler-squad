@@ -19,7 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -2120,48 +2119,6 @@ func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program
 		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
 	}
 	return convertAnalyticsEntries(entries), nil
-}
-
-// ListAnalyticsBySessionID returns up to 2000 analytics events recorded for
-// the given session UUID, ordered by created_at DESC (most-recent first).
-// The 2000-row cap prevents unbounded reads for long-lived sessions.
-func (r *EntRepository) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
-	//nolint:nowrongdbentity known latent bug (ADR-036): analytics_events rows live in analytics.db, so this reads an empty table; fixed when analytics_events gets its own handle
-	entries, err := r.client.AnalyticsEvent.Query().
-		Where(analyticsevent.SessionIDEQ(sessionID)).
-		Order(ent.Desc(analyticsevent.FieldCreatedAt)).
-		Limit(2000).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ListAnalyticsBySessionID %q: %w", sessionID, err)
-	}
-	return convertAnalyticsEventEntries(entries), nil
-}
-
-// convertAnalyticsEventEntry maps a single ent.AnalyticsEvent row to AnalyticsData.
-// Fields that have no counterpart in AnalyticsEvent are left as zero values.
-func convertAnalyticsEventEntry(e *ent.AnalyticsEvent) AnalyticsData {
-	var durationMs int64
-	if e.DurationMs != nil {
-		durationMs = *e.DurationMs
-	}
-	return AnalyticsData{
-		ID:              e.ID,
-		SessionID:       e.SessionID,
-		ToolName:        e.EventName,
-		CommandCategory: e.EventCategory,
-		DurationMs:      durationMs,
-		CreatedAt:       e.CreatedAt,
-	}
-}
-
-// convertAnalyticsEventEntries maps a slice of ent.AnalyticsEvent rows to the domain model.
-func convertAnalyticsEventEntries(es []*ent.AnalyticsEvent) []AnalyticsData {
-	out := make([]AnalyticsData, len(es))
-	for i, e := range es {
-		out[i] = convertAnalyticsEventEntry(e)
-	}
-	return out
 }
 
 func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
