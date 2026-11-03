@@ -20,19 +20,12 @@ func TestSpikeEventVolume(t *testing.T) {
 		t.Skip("set FSEVENTS_SPIKE_REPO and FSEVENTS_SPIKE_CMD to run")
 	}
 	var n, rescans atomic.Int64
-	s, err := NewStream(Config{
+	s := startTestStream(t, Config{
 		Paths:     []string{repo},
 		OnEvents:  func(e []Event) { n.Add(int64(len(e))) },
 		OnRescan:  func(Event) { rescans.Add(1) },
 		SinceWhen: SinceNow,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Stop()
 
 	c := exec.Command("sh", "-c", cmdline)
 	c.Dir = repo
