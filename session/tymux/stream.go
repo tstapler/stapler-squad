@@ -44,9 +44,17 @@ func clampResizeDim(v int) uint32 {
 // attempts, where blocking is safe because it always runs off the
 // reader goroutine, never off a caller of Start/RestoreWithWorkDir.
 func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
+	return s.openStandingStreamForView(context.Background(), paneID)
+}
+
+func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, paneID string) error {
 	s.teardownStandingStream()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCancel := context.AfterFunc(parent, cancel)
+	defer stopCancel()
+	timer := time.AfterFunc(lifecycleRPCTimeout, cancel)
+	defer timer.Stop()
 	stream := s.transport.Attach(ctx)
 	if stream == nil {
 		cancel()
@@ -497,6 +505,12 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		stream, first, cancel, err := s.dialAttachInterruptible(paneID)
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
+			s.mu.RLock()
+			viewOnly := s.viewOnly
+			s.mu.RUnlock()
+			if viewOnly {
+				break // Viewing never revives a pane, even after a daemon restart.
+			}
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
 			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()

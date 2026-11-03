@@ -119,6 +119,149 @@ func startedMatrixSession(t *testing.T, dir string, ft *fakeTransport) TymuxMana
 	return sess
 }
 
+func TestLifecycleMatrix_AdoptForViewing(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			dir := t.TempDir()
+			calls := &matrixCalls{}
+			sess := NewTymuxGRPCSession(matrixTransport(dir, p, calls))
+			sess.SetStoredSessionID(testSessionID)
+			viewer, ok := sess.(interface{ AdoptForViewing(context.Context) error })
+			require.True(t, ok, "viewing needs a nonmutating adoption capability")
+			require.NoError(t, viewer.AdoptForViewing(context.Background()))
+			if p.liveness == v1.Liveness_LIVENESS_LIVE {
+				t.Cleanup(func() { require.NoError(t, sess.DetachSafely()) })
+			}
+			require.True(t, sess.HasSession())
+			_, err := sess.CapturePaneContentRaw()
+			require.NoError(t, err)
+			_, err = sess.CapturePaneContent()
+			if p.liveness == v1.Liveness_LIVENESS_DEAD {
+				require.ErrorIs(t, err, ErrPaneExited)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Zero(t, calls.create.Load())
+			assert.Zero(t, calls.revive.Load())
+			assert.Zero(t, calls.kill.Load())
+		})
+	}
+}
+
+func TestLifecycleMatrix_ViewOnlyPreservesRecordCleanup(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			calls := &matrixCalls{}
+			s := NewTymuxGRPCSession(matrixTransport(t.TempDir(), p, calls)).(*tymuxGRPCSession)
+			s.SetStoredSessionID(testSessionID)
+			require.NoError(t, s.AdoptForViewing(context.Background()))
+			assert.Zero(t, calls.kill.Load(), "viewing never kills")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "explicit cleanup retains exact-record ownership")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "repeat cleanup must not kill again")
+		})
+	}
+}
+
+func TestLifecycleMatrix_ViewOnlyDoesNotTakeAnotherManagersClaim(t *testing.T) {
+	resetClaims(t)
+	calls := &matrixCalls{}
+	ft := matrixTransport(t.TempDir(), matrixStates[0], calls)
+	owner := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	claimedSessions.Store(testSessionID, any(owner))
+	viewer := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	viewer.SetStoredSessionID(testSessionID)
+	require.NoError(t, viewer.AdoptForViewing(context.Background()))
+	require.NoError(t, viewer.Close())
+	assert.Zero(t, calls.kill.Load())
+	claim, ok := claimedSessions.Load(testSessionID)
+	require.True(t, ok)
+	assert.Same(t, owner, claim)
+}
+
+func TestLifecycleMatrix_ViewOnlyLiveStreamCannotWriteOrRevive(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	calls := &matrixCalls{}
+	ft := matrixTransport(dir, matrixStates[0], calls)
+	var stream *fakeAttachStream
+	ft.attachFn = func(ctx context.Context) attachStream {
+		stream = newFakeAttachStream(ctx)
+		return stream
+	}
+	sess := NewTymuxGRPCSession(ft)
+	sess.SetStoredSessionID(testSessionID)
+	s := sess.(*tymuxGRPCSession)
+	require.NoError(t, s.AdoptForViewing(context.Background()))
+	t.Cleanup(func() { require.NoError(t, s.DetachSafely()) })
+	require.NotNil(t, s.stream, "a live retained pane still streams updates")
+	_, updates := s.SubscribeToControlModeUpdates()
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("live update")}})
+	require.Equal(t, []byte("live update"), <-updates)
+	_, err := s.SendKeys("do not send")
+	require.Error(t, err)
+	require.Error(t, s.SetWindowSize(80, 24))
+	ft.attachFn = func(ctx context.Context) attachStream {
+		f := newFakeAttachStream(ctx)
+		f.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane dead"))
+		return f
+	}
+	_, _, ok, _ := s.ReconnectLoop(context.Background(), testPaneID, "test")
+	require.False(t, ok)
+	assert.Zero(t, calls.revive.Load())
+	assert.Zero(t, calls.create.Load())
+	assert.Zero(t, calls.kill.Load())
+}
+
+func TestLifecycleMatrix_ViewOnlyRetriesFailedLiveAttach(t *testing.T) {
+	resetClaims(t)
+	calls := &matrixCalls{}
+	ft := matrixTransport(t.TempDir(), matrixStates[0], calls)
+	ft.attachFn = func(context.Context) attachStream { return nil }
+	s := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	s.SetStoredSessionID(testSessionID)
+	require.Error(t, s.AdoptForViewing(context.Background()))
+	var stream *fakeAttachStream
+	ft.attachFn = func(ctx context.Context) attachStream {
+		stream = newFakeAttachStream(ctx)
+		return stream
+	}
+	require.NoError(t, s.AdoptForViewing(context.Background()))
+	t.Cleanup(func() { require.NoError(t, s.DetachSafely()) })
+	_, updates := s.SubscribeToControlModeUpdates()
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("retry update")}})
+	require.Equal(t, []byte("retry update"), <-updates)
+	assert.Zero(t, calls.create.Load())
+	assert.Zero(t, calls.revive.Load())
+	assert.Zero(t, calls.kill.Load())
+}
+
+func TestLifecycleMatrix_AdoptForViewing_DoesNotFallbackByName(t *testing.T) {
+	for _, id := range []string{"", "missing-id"} {
+		t.Run("id="+id, func(t *testing.T) {
+			resetClaims(t)
+			dir := t.TempDir()
+			calls := &matrixCalls{}
+			sess := NewTymuxGRPCSession(matrixTransport(dir, matrixStates[0], calls))
+			sess.SetStoredSessionID(id)
+			viewer, ok := sess.(interface{ AdoptForViewing(context.Context) error })
+			require.True(t, ok)
+			adoptErr := viewer.AdoptForViewing(context.Background())
+			require.Error(t, adoptErr)
+			if id != "" {
+				assert.Equal(t, connect.CodeNotFound, connect.CodeOf(adoptErr))
+			}
+			assert.False(t, sess.HasSession())
+			assert.Zero(t, calls.create.Load())
+			assert.Zero(t, calls.revive.Load())
+			assert.Zero(t, calls.kill.Load())
+		})
+	}
+}
+
 func TestLifecycleMatrix_IsAlive(t *testing.T) {
 	for _, p := range matrixStates {
 		t.Run(p.name, func(t *testing.T) {

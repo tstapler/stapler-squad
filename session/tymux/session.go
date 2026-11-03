@@ -66,6 +66,8 @@ type tymuxGRPCSession struct {
 	// so Close kills it even when another view of the same record holds the
 	// claim. Name-matched adoption stays claim-exclusive.
 	recordOwned bool
+	// viewOnly forbids daemon recovery when a retained pane was adopted for display.
+	viewOnly bool
 	// adoptedPreexisting marks a session adopted (not created) by the latest Start/Restore;
 	// ReleaseAdoptedSession lets go of it instead of killing it.
 	adoptedPreexisting bool
@@ -326,6 +328,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.setStoredIDLocked(sess.GetId())
 	s.paneID = pane.GetId()
 	s.cwd = pane.GetCwd()
+	s.viewOnly = false
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.restartIsPending = false
 	s.closed = false
@@ -802,6 +805,75 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	return s.adopt(ctx, found, viaStoredID)
 }
 
+// AdoptForViewing makes the persisted pane readable without creating or reviving it.
+// Name lookup is deliberately excluded: a retained screen must belong to this exact record.
+func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer cancel()
+	s.mu.RLock()
+	id, closed, ready := s.storedID, s.closed, s.paneID != ""
+	s.mu.RUnlock()
+	if closed || id == "" {
+		return errSessionNotStarted
+	}
+	if ready {
+		s.mu.Lock()
+		s.viewOnly = true
+		live, done, paneID := s.liveness == v1.Liveness_LIVENESS_LIVE, s.streamDone, s.paneID
+		s.mu.Unlock()
+		if live && !streamRunning(done) {
+			return s.openStandingStreamForView(ctx, paneID)
+		}
+		return nil
+	}
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return classifyRPCError("AdoptForViewing", err)
+	}
+	for _, found := range resp.Msg.GetSessions() {
+		if found.GetId() != id {
+			continue
+		}
+		return s.cacheForViewing(ctx, id, found)
+	}
+	return connect.NewError(connect.CodeNotFound, fmt.Errorf("tymux: persisted session %q not found", id))
+}
+
+func streamRunning(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found *v1.Session) error {
+	pane := firstPane(found)
+	if pane == nil || pane.GetId() == "" {
+		return errSessionNotStarted
+	}
+	s.mu.Lock()
+	if s.closed || s.storedID != id {
+		s.mu.Unlock()
+		return errSessionNotStarted
+	}
+	s.sessionID, s.paneID, s.cwd = id, pane.GetId(), pane.GetCwd()
+	// Read-only rendering must not revoke the persisted record's cleanup ownership.
+	s.recordOwned = true
+	s.liveness = found.GetLiveness()
+	s.viewOnly = true
+	s.mu.Unlock()
+	// Dead panes retain their screen without a stream; live panes keep delivering output.
+	if found.GetLiveness() == v1.Liveness_LIVENESS_LIVE {
+		return s.openStandingStreamForView(ctx, pane.GetId())
+	}
+	return nil
+}
+
 // adopt attaches to a session this owner has claimed, reviving it when tymuxd lists it dead.
 func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStoredID bool) error {
 	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
@@ -863,6 +935,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	recordOwned := s.recordOwned
+	viewOnly := s.viewOnly
 	s.mu.RUnlock()
 	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
@@ -894,7 +967,13 @@ func (s *tymuxGRPCSession) Close() error {
 	}
 	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
 	// take down a session another Instance adopted.
-	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || recordOwned
+	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || (recordOwned && !viewOnly)
+	if !owned && recordOwned && viewOnly {
+		_, claimed := claimedSessions.LoadOrStore(sessionID, any(s))
+		if !claimed {
+			owned = claimedSessions.CompareAndDelete(sessionID, any(s))
+		}
+	}
 	var err error
 	if owned {
 		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
@@ -1042,7 +1121,7 @@ func (s *tymuxGRPCSession) GetSessionIdentifier() string {
 func (s *tymuxGRPCSession) HasSession() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.paneID != ""
+	return s.paneID != "" && !s.closed
 }
 
 // --- Working directory ---

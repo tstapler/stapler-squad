@@ -114,9 +114,10 @@ func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
 func (s *tymuxGRPCSession) sendOnStreamCtx(ctx context.Context, req *v1.AttachRequest) (int, error) {
 	s.mu.RLock()
 	stream, gate := s.stream, s.sendGate
+	viewOnly := s.viewOnly
 	frameWait, payloadTimeout := s.sendLockWait, s.inputPayloadTimeout
 	s.mu.RUnlock()
-	if stream == nil {
+	if stream == nil || viewOnly {
 		return 0, errSessionNotStarted
 	}
 	if frameWait <= 0 {

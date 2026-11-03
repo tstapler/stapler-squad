@@ -689,6 +689,10 @@ type Instance struct {
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	// -1 reserves automatic hibernation; nonnegative values count attached streams.
+	terminalViewers      atomic.Int64
+	terminalViewClosedAt atomic.Int64
+
 	snapshot atomic.Pointer[InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
@@ -771,7 +775,8 @@ type Instance struct {
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
-	hibernateWG sync.WaitGroup
+	hibernateWG         sync.WaitGroup
+	hibernateTeardownWG sync.WaitGroup
 
 	// scrollLease serializes this instance's own concurrent
 	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
