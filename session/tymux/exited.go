@@ -19,8 +19,9 @@ import (
 var ErrPaneExited = errors.New("tymux: pane exited")
 
 // ErrPaneNotRevivable matches (errors.Is) a restore that tymuxd will not revive: the pane is
-// FAILED or STOPPED (tymuxd's ReviveSession answers FAILED_PRECONDITION for those, and the
-// pre-check in reviveForRestore reports the same without the RPC). It needs an operator, so a
+// FAILED or STOPPED (the pre-check in reviveForRestore), or tymuxd's ReviveSession answered
+// FAILED_PRECONDITION, which v1.12.0 also returns when relaunching fails (EngineError::ReviveLaunch,
+// e.g. a deleted argument file). It needs an operator, so a
 // caller should surface it rather than retry. No caller outside session/tymux branches on it
 // yet: Instance's hot-restore path wraps it with %w and fails the start like any restore error.
 var ErrPaneNotRevivable = errors.New("tymux: pane not revivable")

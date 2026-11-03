@@ -32,6 +32,8 @@ const LOAD_HALF_LIFE_MS = 1_000;
 const NORMAL_CLOSE = 1000;
 const GOING_AWAY = 1001;
 const ABNORMAL_CLOSE = 1006;
+/** Server refused an OPEN after re-checking authentication (ADR-033, per-OPEN authorization). */
+export const POLICY_VIOLATION = 1008;
 
 const READY_CONNECTING = 0;
 const READY_OPEN = 1;
@@ -328,7 +330,11 @@ class MuxConn {
         break;
       }
       case "CLOSE":
+        // 1008: the server re-checked auth on OPEN and refused. Stop placing new streams on
+        // this socket so the next attempt dials a fresh one with the current cookie.
+        if (frame.code === POLICY_VIOLATION) this.draining = true;
         this.streams.get(frame.id)?.finish(frame.code, frame.reason, true);
+        if (frame.code === POLICY_VIOLATION) this.pool.onStreamEnded(this);
         break;
       case "PING":
         // The server pings so a hidden tab's throttled timers cannot look like a dead peer.

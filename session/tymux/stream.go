@@ -44,9 +44,17 @@ func clampResizeDim(v int) uint32 {
 // attempts, where blocking is safe because it always runs off the
 // reader goroutine, never off a caller of Start/RestoreWithWorkDir.
 func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
+	return s.openStandingStreamForView(context.Background(), paneID)
+}
+
+func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, paneID string) error {
 	s.teardownStandingStream()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCancel := context.AfterFunc(parent, cancel)
+	defer stopCancel()
+	timer := time.AfterFunc(lifecycleRPCTimeout, cancel)
+	defer timer.Stop()
 	stream := s.transport.Attach(ctx)
 	if stream == nil {
 		cancel()
@@ -193,12 +201,14 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 	case *v1.AttachEvent_Snapshot:
 		s.mu.Lock()
 		s.liveness = p.Snapshot.GetLiveness()
+		s.restartIsPending = false
 		s.mu.Unlock()
 	case *v1.AttachEvent_Output:
 		s.fanout.Broadcast(p.Output)
 	case *v1.AttachEvent_Exited:
 		s.mu.Lock()
 		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
 		s.mu.Unlock()
 		s.deliverExit(exitReason(p.Exited))
 	case *v1.AttachEvent_GapExceeded:
@@ -463,16 +473,23 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 
 	s.mu.Lock()
 	maxAttempts := s.reconnectMaxAttempts
+	if s.paneID != "" {
+		// The argument is the pane the reader started on; a follow since then
+		// repointed s.paneID, and redialling the old one would waste an attempt.
+		paneID = s.paneID
+	}
 	s.reconnecting = true
 	s.reconnectAttempt = 0
 	s.reconnectCause = cause
 	s.reconnectSince = time.Now()
 	s.mu.Unlock()
 
+	lastDialNotFound := false
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if s.closing.Load() {
 			break
 		}
+		lastDialNotFound = false
 		s.mu.Lock()
 		s.reconnectAttempt = attempt
 		s.mu.Unlock()
@@ -488,6 +505,12 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		stream, first, cancel, err := s.dialAttachInterruptible(paneID)
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
+			s.mu.RLock()
+			viewOnly := s.viewOnly
+			s.mu.RUnlock()
+			if viewOnly {
+				break // Viewing never revives a pane, even after a daemon restart.
+			}
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
 			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()
@@ -503,8 +526,23 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 			}
 			stream, first, cancel, err = s.dialAttachInterruptible(paneID)
 		}
+		if err != nil && s.closing.Load() {
+			break // a deliberate Close() surfaces as a dial error; keep ReasonDeliberateClose
+		}
 		if err != nil && connect.CodeOf(err) == connect.CodeNotFound {
-			return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+			if s.daemonConfirmsPaneGone(sessionID, paneID) {
+				if s.closing.Load() {
+					break // Close() landed during the confirmation round trip
+				}
+				return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+			}
+			lastDialNotFound = true
+			// Unconfirmed, or the session respawned its pane: daemonConfirmsPaneGone
+			// repointed s.paneID, so redial that one.
+			s.mu.RLock()
+			paneID = s.paneID
+			s.mu.RUnlock()
+			continue
 		}
 		if err != nil {
 			continue
@@ -545,7 +583,11 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
-	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	if lastDialNotFound {
+		s.deliverExit(fmt.Sprintf("reconnect failed: pane not found and not confirmed gone after %d attempts", maxAttempts))
+	} else {
+		s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	}
 	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }
 

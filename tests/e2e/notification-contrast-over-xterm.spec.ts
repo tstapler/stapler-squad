@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { test, expect, type Page } from '@playwright/test';
-import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
+import { NotificationTray, ToastDeck, sendNotification, sendOnceStreamLive, watchStreamLive } from './pages/NotificationPanel';
 import { SessionClient } from './helpers/session-client';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
@@ -270,10 +270,9 @@ async function seedDeck(page: Page, request: Parameters<typeof sendNotification>
     const metadata = kind === 'approval' ? { approval_id: `${prefix}-approval-id`, tool_name: 'Bash' } : undefined;
     return sendNotification(request, BASE_URL, { sessionId: `${prefix}-${kind}`, metadata, ...n });
   };
-  await expect(async () => {
+  await sendOnceStreamLive(page, async () => {
     await send(kinds[0]);
-    await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-  }).toPass({ timeout: 20_000 });
+  }, [deck.toasts.first()]);
   for (const kind of kinds.slice(1)) await send(kind);
   await expect(deck.toasts).toHaveCount(Math.min(kinds.length, 3));
   return deck;
@@ -338,6 +337,7 @@ for (const vpKey of ['V1', 'V2'] as const) {
           vpKey === 'V1' ? [['approval', 'error', 'info', 'warning']] : [['approval'], ['error'], ['info'], ['warning']];
         for (const mode of MODES) {
           for (const [round, kinds] of rounds.entries()) {
+            watchStreamLive(page);
             await page.goto(`${BASE_URL}/?session=${sessions.get(mode)}`, { waitUntil: 'domcontentloaded' });
             await terminalSettled(page);
             const deck = await seedDeck(page, request, `mc1-${vpKey}-${theme}-${mode}-${round}-${Date.now()}`, kinds);

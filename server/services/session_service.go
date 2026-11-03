@@ -84,6 +84,7 @@ type FeatureController interface {
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
+	tccEnrichment     tccEnrichmentState
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager

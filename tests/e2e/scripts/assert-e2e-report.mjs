@@ -14,8 +14,11 @@ function checkReport(report) {
   const stats = report?.stats ?? {};
   const executed = (stats.expected ?? 0) + (stats.unexpected ?? 0) + (stats.flaky ?? 0);
   if (executed === 0) problems.push('zero tests executed');
+  // Playwright reports a --global-timeout cut-off as these two runner errors (see run-ci-shard.sh).
+  const cutOff = /Timed out waiting \d+s for the (teardown for )?test suite to run/;
   for (const err of report?.errors ?? []) {
-    problems.push(`runner error: ${(err.message ?? JSON.stringify(err)).split('\n')[0].slice(0, 300)}`);
+    const line = (err.message ?? JSON.stringify(err)).replace(/\u001b\[[0-9;]*m/g, '').split('\n')[0].slice(0, 300);
+    problems.push(cutOff.test(line) ? `shard hit its global timeout and was cut off (${line})` : `runner error: ${line}`);
   }
   return { executed, stats, problems };
 }

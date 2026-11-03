@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -238,7 +239,58 @@ func (i *Instance) GetCategoryPath() []string {
 	return parts
 }
 
-// MarkViewed records that the user has viewed this session.
+// AcquireTerminalView inhibits automatic hibernation until the returned cleanup runs.
+func (i *Instance) AcquireTerminalView() (func(), error) {
+	for {
+		viewers := i.terminalViewers.Load()
+		if viewers < 0 {
+			return nil, fmt.Errorf("session is being automatically hibernated; reconnect to resume")
+		}
+		if i.terminalViewers.CompareAndSwap(viewers, viewers+1) {
+			break
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Publish the idle baseline before making the session eligible again.
+			i.terminalViewClosedAt.Store(time.Now().UnixNano())
+			i.terminalViewers.Add(-1)
+		})
+	}, nil
+}
+
+// HasTerminalViewers reports whether any terminal transport is attached.
+func (i *Instance) HasTerminalViewers() bool {
+	return i.terminalViewers.Load() > 0
+}
+
+func (i *Instance) hibernationIdleDuration() time.Duration {
+	idle := i.TimeSinceLastMeaningfulOutput(i.Snapshot().CreatedAt)
+	if closedAt := i.terminalViewClosedAt.Load(); closedAt != 0 {
+		if sinceClose := time.Since(time.Unix(0, closedAt)); sinceClose < idle {
+			idle = sinceClose
+		}
+	}
+	return idle
+}
+
+func (i *Instance) hibernateAutomatically(ctx context.Context, reason string) error {
+	if !i.terminalViewers.CompareAndSwap(0, -1) {
+		return nil
+	}
+	i.SetHibernateReason(reason)
+	if err := i.Hibernate(ctx); err != nil {
+		i.terminalViewers.Store(0)
+		return err
+	}
+	go func() {
+		i.hibernateTeardownWG.Wait()
+		i.terminalViewers.Store(0)
+	}()
+	return nil
+}
+
 func (i *Instance) MarkViewed() {
 	i.mu.Lock()
 	defer i.mu.Unlock()

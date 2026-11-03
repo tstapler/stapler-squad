@@ -689,6 +689,10 @@ type Instance struct {
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	// -1 reserves automatic hibernation; nonnegative values count attached streams.
+	terminalViewers      atomic.Int64
+	terminalViewClosedAt atomic.Int64
+
 	snapshot atomic.Pointer[InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
@@ -771,7 +775,8 @@ type Instance struct {
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
-	hibernateWG sync.WaitGroup
+	hibernateWG         sync.WaitGroup
+	hibernateTeardownWG sync.WaitGroup
 
 	// scrollLease serializes this instance's own concurrent
 	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
@@ -1259,6 +1264,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	instance.pinResolvedBackend()
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()
@@ -2123,7 +2129,11 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	}
 	i.stopVNC()
 	i.stopCDP()
-	return i.KillSession()
+	// A session that ran before this attempt is released, not killed.
+	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	return i.killSessionAttachedByThisAttempt()
 }
 
 // Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a

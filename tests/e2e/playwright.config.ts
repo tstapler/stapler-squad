@@ -47,6 +47,8 @@ const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 // terminal-stress specs assert absolute in-browser throughput (frames/s, frame time, heap growth), which sibling
 // workers starve of CPU. CI runs them in their own one-worker pass: E2E_SKIP_STRESS=1 drops them from the
 // parallel pass, E2E_STRESS_ONLY=1 selects only them (see scripts/run-ci-shard.sh).
+// The server pool is shared across projects, so one project proves it; a skip elsewhere would read as a gap to the baseline gate.
+const POOL_ISOLATION_SPEC = '**/worker-server-isolation.spec.ts';
 const STRESS_SPECS = '**/terminal-stress/*.spec.ts';
 const SKIP_STRESS = process.env.E2E_SKIP_STRESS === '1';
 const STRESS_ONLY = process.env.E2E_STRESS_ONLY === '1';
@@ -112,7 +114,7 @@ export default defineConfig({
     ['list'], // Console output
     ['html', { outputFolder: './playwright-report' }],
     ['allure-playwright', { outputFolder: 'allure-results' }],
-    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-next/e2e-bun (build.yml)
+    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-bun (build.yml)
     // and the local baseline/expected-diff procedures (Stories 0.1, 7.11, 8.1) all read this.
     ['json', { outputFile: process.env.PLAYWRIGHT_JSON_REPORT_PATH || './playwright-report/report.json' }],
   ],
@@ -249,7 +251,7 @@ export default defineConfig({
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
       ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', POOL_ISOLATION_SPEC, DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {

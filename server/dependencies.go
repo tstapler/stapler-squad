@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -710,6 +711,30 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	eventBus := svc.EventBus
 	sessionService := svc.SessionService
 
+	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
+	// path, so instance loading consults this enricher's cache instead of probing
+	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		home = "/__unresolved_home__"
+	}
+	gate := tcc.NewConsentGate(tcc.LexicalPolicy(home), cfg.TCCEnrichmentConsent, func(id string) error {
+		return config.UpdateConfig(func(c *config.Config) error {
+			if c.TCCEnrichmentConsent == nil {
+				c.TCCEnrichmentConsent = map[string]bool{}
+			}
+			c.TCCEnrichmentConsent[id] = true
+			return nil
+		})
+	})
+	enricherConfig := session.WorktreeEnricherConfig{}
+	if cfg.TCCEnrichmentConsentEnabled() {
+		enricherConfig.Ready = gate.Ready
+		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
+	}
+	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
+	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
+
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
 	if err != nil {
@@ -1047,7 +1072,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
+			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
 				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
@@ -2154,6 +2179,22 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// installWorktreeEnricher starts and registers the process-wide worktree enricher
+// that instance loading consults (stopped by session.StopWorktreeEnricher). Any
+// previously registered enricher is stopped first.
+func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherConfig) *session.WorktreeEnricher {
+	session.StopWorktreeEnricher()
+	e := session.NewWorktreeEnricher(cfg)
+	e.Start(ctx)
+	session.SetWorktreeEnricher(e)
+	return e
+}
+
+// hotRestoreEligible probes persisted backend identity before a pane is attached.
+func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
+	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
 }
 
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.

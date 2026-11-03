@@ -1,5 +1,5 @@
 import path from 'path';
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page, type WebSocket as PwWebSocket } from '@playwright/test';
 import { SessionClient } from '../helpers/session-client';
 
 // Closes anything that can steal keyboard focus from the session list: the
@@ -59,6 +59,50 @@ export interface SeededNotification {
   metadata?: Record<string, string>;
 }
 
+const streamLiveByPage = new WeakMap<Page, { live: boolean }>();
+
+/**
+ * Starts tracking whether the page's WatchSessions WebSocket has delivered its first frame, i.e. the
+ * server accepted the stream and notifications sent now reach the page as toasts. Call it before the
+ * navigation that opens the stream; the phone layout has no visible connection indicator to wait on.
+ */
+export function watchStreamLive(page: Page): void {
+  if (streamLiveByPage.has(page)) return;
+  const state = { live: false };
+  streamLiveByPage.set(page, state);
+  let current: PwWebSocket | undefined;
+  page.on('websocket', (ws) => {
+    if (!ws.url().endsWith('/WatchSessions')) return;
+    current = ws;
+    state.live = false;
+    ws.once('framereceived', () => {
+      if (current === ws) state.live = true;
+    });
+    ws.once('close', () => {
+      if (current === ws) state.live = false;
+    });
+  });
+}
+
+/**
+ * Publishes one notification exactly once, after every page's stream is live, then waits for its
+ * first toast. Re-sending inside a retry loop publishes a duplicate toast on every attempt under
+ * load, which skews the deck counts the specs assert on.
+ */
+export async function sendOnceStreamLive(
+  pages: Page | Page[],
+  send: () => Promise<void>,
+  firstToasts: Locator[],
+): Promise<void> {
+  for (const page of Array.isArray(pages) ? pages : [pages]) {
+    const state = streamLiveByPage.get(page);
+    if (!state) throw new Error('call watchStreamLive(page) before navigating, so the stream open is observed');
+    await expect.poll(() => state.live, { message: 'WatchSessions stream live', timeout: 20_000 }).toBe(true);
+  }
+  await send();
+  for (const toast of firstToasts) await expect(toast).toBeVisible({ timeout: 20_000 });
+}
+
 /** Publishes one notification through SendNotification (localhost only; external session ids are accepted). */
 export async function sendNotification(
   request: APIRequestContext,
@@ -77,6 +121,19 @@ export async function sendNotification(
     },
   });
   if (!response.ok()) throw new Error(`SendNotification ${n.title} failed: ${response.status()}`);
+}
+
+/**
+ * Marks every unread notification read. The server-side history outlives a spec and replays unread
+ * rows as toasts on the next page load, where they cover controls a later spec clicks.
+ */
+export async function markAllNotificationsRead(request: APIRequestContext, baseUrl: string): Promise<void> {
+  const rpc = (method: string, data: object) =>
+    request.post(`${baseUrl}/api/session.v1.SessionService/${method}`, { headers: { 'Content-Type': 'application/json' }, data });
+  const history = await rpc('GetNotificationHistory', { limit: 500, unreadOnly: true });
+  const { notifications = [] } = (await history.json()) as { notifications?: { id: string }[] };
+  if (notifications.length === 0) return;
+  await rpc('MarkNotificationRead', { notificationIds: notifications.map((n) => n.id) });
 }
 
 /** The capped toast deck: cards, the "+N more" chip and the single bulk control. */
@@ -192,10 +249,16 @@ export class NotificationTray {
     await this.tray.getByTestId(`tray-menu-${item}`).click();
   }
 
-  /** Dismisses the one-time "What changed" card so it does not sit above the list in layout checks. */
+  /**
+   * Dismisses the one-time "What changed" card so it does not sit above the list in layout checks.
+   * A 390x844 peek sheet is all header (its scroll region is 0px tall), so the card is clipped and the
+   * bottom nav sits where Playwright aims the click; expand first.
+   */
   async dismissWhatChanged(): Promise<void> {
     const dismiss = this.tray.getByTestId('tray-what-changed-dismiss');
-    if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
+    if (!(await dismiss.isVisible().catch(() => false))) return;
+    await this.expandIfPeek();
+    await dismiss.click();
   }
 }
 

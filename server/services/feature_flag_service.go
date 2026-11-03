@@ -323,6 +323,11 @@ var knownFeatureFlags = []struct {
 		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
 	},
 	{
+		name:         config.TCCEnrichmentConsentFlag,
+		description:  "Explain protected-root metadata access and require app consent before background worktree enrichment on macOS. Does not gate other filesystem access or represent OS grants. Default: on on Darwin, no-op elsewhere. Restart required.",
+		defaultValue: config.DefaultTCCEnrichmentConsent,
+	},
+	{
 		name:        worktreeChangeDetectionFlagName,
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},

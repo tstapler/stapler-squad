@@ -1,4 +1,4 @@
-// Bun dev server with HMR: `bun run dev` (WEB_BUILD=bun) from web-app/. Env: PORT (default 3001),
+// Bun dev server with HMR: `bun run dev` from web-app/. Env: PORT (default 3001),
 // WEB_DEV_HMR=0 (no hot swap; every source change reloads the page), NEXT_PUBLIC_* (inlined, as in build.ts).
 import { mkdirSync, watch, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";

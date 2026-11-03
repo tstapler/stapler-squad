@@ -36,6 +36,7 @@ func (c *collector) waitFor(t *testing.T, d time.Duration, what string, pred fun
 		if c.has(pred) {
 			return
 		}
+		//nolint:notimesleeptest FSEvents delivery is OS-driven and cannot use a virtual clock.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("no %s event within %v; got %+v", what, d, c.evs)
@@ -55,17 +56,23 @@ func forPath(p string, f EventFlags) func(Event) bool {
 	return func(e Event) bool { return e.Path == p && e.Flags&f != 0 }
 }
 
-func TestStreamCreateModifyRenameDelete(t *testing.T) {
-	dir := resolved(t)
-	var c collector
-	s, err := NewStream(Config{Paths: []string{dir}, SinceWhen: SinceNow, OnEvents: c.add})
+func startTestStream(t *testing.T, cfg Config) *Stream {
+	t.Helper()
+	s, err := NewStream(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Stop()
+	t.Cleanup(s.Stop)
+	return s
+}
+
+func TestStreamCreateModifyRenameDelete(t *testing.T) {
+	dir := resolved(t)
+	var c collector
+	startTestStream(t, Config{Paths: []string{dir}, SinceWhen: SinceNow, OnEvents: c.add})
 
 	f := filepath.Join(dir, "a.txt")
 	const budget = 500 * time.Millisecond

@@ -244,6 +244,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
 	}
 
+	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
+
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	// Known startup race: the initial ScanAll in Start fires before the
@@ -492,7 +494,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
 	muxPool := services.TerminalMuxPoolSizeFromEnv()
 	muxBridge := services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
-		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		services.WithTerminalMuxDispatchers(srv.unaryDispatcher))
 	srv.terminalMuxBridge.Store(muxBridge)
 	srv.mux.Handle(services.TerminalMuxPath, muxBridge)
 	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
@@ -697,7 +700,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc := services.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)

@@ -39,6 +39,10 @@ type fakeTransport struct {
 	capabilities []string
 	// serverInfoCalls counts GetServerInfo calls.
 	serverInfoCalls int32
+	// serverInfoErr, when set, makes GetServerInfo fail with it (a transient fault).
+	serverInfoErr atomic.Pointer[error]
+	// lastServerInfoHadDeadline records whether the latest GetServerInfo ctx was bounded.
+	lastServerInfoHadDeadline atomic.Bool
 
 	// paneStatusFn answers GetPaneStatus; nil means the daemon lacks the RPC.
 	paneStatusFn func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
@@ -90,8 +94,13 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 	return f.capturePaneFn(ctx, req)
 }
 
-func (f *fakeTransport) GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+func (f *fakeTransport) GetServerInfo(ctx context.Context, _ *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
 	atomic.AddInt32(&f.serverInfoCalls, 1)
+	_, hasDeadline := ctx.Deadline()
+	f.lastServerInfoHadDeadline.Store(hasDeadline)
+	if err := f.serverInfoErr.Load(); err != nil {
+		return nil, *err
+	}
 	if f.capabilities == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetServerInfo"))
 	}

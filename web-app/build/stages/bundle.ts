@@ -1,6 +1,5 @@
 import path from "node:path";
 import { NAMING, PUBLIC_ENV_VARS } from "../config";
-import { buildSeamPlugin } from "../plugins/build-seam";
 import type { BuildContext } from "./context";
 import { copyHashedFonts, rewriteFontUrls } from "./fonts";
 import type { Stage } from "./runner";
@@ -66,7 +65,7 @@ export const bundle: Stage<BuildContext> = {
         naming: NAMING,
         // fonts.css points at /_next/static/media/*; keep those external so Bun does not inline them as data: URIs.
         external: ["/_next/*"],
-        plugins: [buildSeamPlugin(ctx.srcDir), ctx.ve.plugin()],
+        plugins: [ctx.ve.plugin()],
       });
     } catch (e) {
       throw bundleError(e);

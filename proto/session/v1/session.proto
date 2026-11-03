@@ -691,6 +691,14 @@ service SessionService {
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
 
+  // GetTCCEnrichmentStatus lists heuristic protected roots discovered by background enrichment.
+  // +api: tcc:enrichment-status
+  rpc GetTCCEnrichmentStatus(GetTCCEnrichmentStatusRequest) returns (GetTCCEnrichmentStatusResponse) {}
+
+  // ContinueTCCEnrichment persists app consent, not an OS permission grant.
+  // +api: tcc:continue-enrichment
+  rpc ContinueTCCEnrichment(ContinueTCCEnrichmentRequest) returns (ContinueTCCEnrichmentResponse) {}
+
   // GetTmuxVersionStatus reports any detected tmux client/server version
   // mismatch (see session/tmux/version_check.go) -- a mismatch disables
   // control mode for the affected socket, degrading terminal input/output to
@@ -3788,6 +3796,30 @@ message InstallHooksResponse {
   // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
   repeated string messages = 2;
 }
+
+message GetTCCEnrichmentStatusRequest {}
+
+message TCCEnrichmentRoot {
+  string id = 1;
+  string root = 2;
+  repeated string paths = 3;
+  repeated string session_titles = 4;
+  bool app_consented = 5;
+  // Enrichment outcome only: pending, unresolved/slow, error, or completed.
+  string outcome = 6;
+}
+
+message GetTCCEnrichmentStatusResponse {
+  bool enabled = 1;
+  repeated TCCEnrichmentRoot roots = 2;
+}
+
+message ContinueTCCEnrichmentRequest {
+  // Must be a known opaque ID returned by GetTCCEnrichmentStatus.
+  string root_id = 1;
+}
+
+message ContinueTCCEnrichmentResponse {}
 
 message GetTmuxVersionStatusRequest {}
 

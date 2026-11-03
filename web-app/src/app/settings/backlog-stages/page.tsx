@@ -16,10 +16,6 @@ import { EngineModeBanner } from "./EngineModeBanner";
 import { StageForm } from "./StageForm";
 import * as styles from "./page.css";
 
-// Note: `export const metadata` only applies to server components — this page
-// is a client component (needs useState/useEffect for the list + form
-// toggle), so metadata is intentionally omitted, matching pipeline-modes/page.tsx.
-
 /**
  * Management page for backlog workflow stages (Epic 2.8, Story 2.8.1):
  * lists every stage (built-in and custom, enabled and disabled) with a quick

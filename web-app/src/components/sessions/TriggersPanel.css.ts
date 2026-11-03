@@ -214,8 +214,8 @@ export const typeBadge = style({
 });
 
 export const typeCron = style({ background: vars.color.panelBgSecondary, color: vars.color.textSecondary });
-export const typeGithubPush = style({ background: vars.color.accentHover, color: vars.color.primary });
-export const typeWebhook = style({ background: vars.color.warningBg, color: vars.color.warning });
+export const typeGithubPush = style({ background: vars.color.accentHover, color: vars.color.accentText });
+export const typeWebhook = style({ background: vars.color.warningBg, color: vars.color.warningText });
 
 // ── 5-state outcome/status badges (research/ux.md §4) ──────────────────────
 // Status must never be color-only (WCAG 1.4.1) — every badge below pairs a
@@ -233,7 +233,7 @@ export const statusBadge = style({
 });
 
 export const statusFiredSuccess = style({ background: vars.color.successBg, color: vars.color.success });
-export const statusFiredFailed = style({ background: vars.color.warningBg, color: vars.color.warning });
+export const statusFiredFailed = style({ background: vars.color.warningBg, color: vars.color.warningText });
 export const statusRejected = style({ background: vars.color.errorBg, color: vars.color.error });
 export const statusNoMatch = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted });
 
@@ -391,7 +391,7 @@ export const historyToggle = style({
   background: "none",
   border: "none",
   cursor: "pointer",
-  color: vars.color.primary,
+  color: vars.color.accentText,
   fontSize: 12,
   padding: "2px 4px",
   textDecoration: "underline",
@@ -440,7 +440,7 @@ export const historyError = style({
 });
 
 export const historySessionLink = style({
-  color: vars.color.primary,
+  color: vars.color.accentText,
   fontSize: 11,
   textDecoration: "underline",
 });
