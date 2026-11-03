@@ -124,6 +124,9 @@ test.describe('notification tray variants', () => {
 
       blocked = true;
       for (const ws of sockets) await ws.close();
+      // Cutting the sockets alone is not an outage: the app claims offline only when the stream has been down 10s AND
+      // history fetches fail (useNotificationConnectivity), or the browser reports no network. Take the network away.
+      await page.context().setOffline(true);
       await expect(tray.tray.getByTestId('tray-banner-offline')).toBeVisible({ timeout: 30_000 });
       await expect(tray.tray.getByRole('button', { name: 'Mark activity read' })).toHaveAttribute('aria-disabled', 'true');
       await expect(tray.tray.getByText('All caught up')).toHaveCount(0);
