@@ -607,7 +607,9 @@ jobs:
       - name: Write shard timings
         if: always() && hashFiles('tests/e2e/playwright-report/report.json') != ''
         continue-on-error: true
-        run: bun tests/e2e/scripts/shard-assign.ts timings --report tests/e2e/playwright-report/report.json --out tests/e2e/shard-timings.new.json
+        run: |
+          bun tests/e2e/scripts/shard-assign.ts timings --report tests/e2e/playwright-report/report.json --out tests/e2e/shard-timings.new.json
+          bun tests/e2e/scripts/shard-assign.ts drift --report tests/e2e/playwright-report/report.json --total ${{ env.E2E_SHARD_TOTAL }} | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload shard timings
         if: always() && hashFiles('tests/e2e/shard-timings.new.json') != ''

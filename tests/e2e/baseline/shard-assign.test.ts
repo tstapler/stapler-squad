@@ -1,4 +1,4 @@
-import { assignShards, fileFilter, shardLoads, timingsFromReport } from "../scripts/shard-assign";
+import { assignShards, fileFilter, planDrift, shardLoads, timingsFromReport } from "../scripts/shard-assign";
 
 const timings = { specSeconds: { "big.spec.ts": 900, "mid-a.spec.ts": 300, "mid-b.spec.ts": 300, "small-a.spec.ts": 100, "small-b.spec.ts": 100, "tiny.spec.ts": 10 } };
 const files = Object.keys(timings.specSeconds);
@@ -38,5 +38,14 @@ describe("shard-assign", () => {
       ],
     };
     expect(timingsFromReport(report).specSeconds).toEqual({ "a.spec.ts": 35, "b.spec.ts": 1 });
+  });
+
+  test("SA7: planDrift measures the committed plan against fresh durations and flags a stale file", () => {
+    const committed = { specSeconds: { "a.spec.ts": 100, "b.spec.ts": 100, "c.spec.ts": 100, "d.spec.ts": 100 } };
+    const balanced = planDrift(committed, committed, 2);
+    expect(balanced.maxOverMean).toBeCloseTo(1, 5);
+    // a.spec.ts really takes 5x as long as recorded: whichever shard holds it is now far heavier.
+    const drifted = planDrift(committed, { specSeconds: { ...committed.specSeconds, "a.spec.ts": 500 } }, 2);
+    expect(drifted.maxOverMean).toBeGreaterThan(1.15);
   });
 });

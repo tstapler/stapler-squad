@@ -34,7 +34,8 @@ A goroutine-plus-timeout leaves the call blocked and detached, needs a marker ma
 
 - A session on a stuck path loads without GitHub info; it gets it on a load after the probe returns. Boot instances that become live are not re-loaded from disk, so their GitHub info appears after the next restart (or from the other resolvers that fill it). Persisting from the worker through the actor was left out to avoid the races above.
 - A stuck probe still holds one OS thread in `open()` until the kernel returns.
-- Unbounded `DetectWorktree` callers remain: `NewInstance` (session creation), `WorkspacePeersBlockForPath`, and `prwatch` `detectRemote` (a background poller that holds a mutex while detecting).
+- `prwatch` `detectRemote` no longer calls `DetectWorktree`: it reads the enricher cache, queues a probe on a miss, and treats the path as unresolved (retried next poll, not cached) until a result lands. `prwatchSessions.remoteOf` also no longer holds its mutex across the resolver. With no enricher registered the path stays unresolved.
+- Unbounded `DetectWorktree` callers remain, deliberately: `NewInstance` (session creation) and `WorkspacePeersBlockForPath`. Both run once per user-initiated create on a path the same request goes on to use with git, and both need the answer synchronously (the instance's GitHub fields; the peers lookup key), so a cache-first read would change behavior (no GitHub info on a fresh session, no peers nudge) rather than just bound it. Neither is reachable from boot or a poller.
 
 ## Extension point
 
