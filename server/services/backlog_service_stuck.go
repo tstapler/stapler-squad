@@ -445,7 +445,10 @@ func pluralSuffix(n int) string {
 // AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner/
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
-// connect.CodeUnimplemented until a future phase adds it here.
+// connect.CodeUnimplemented until a future phase adds it here (except
+// multiple_reasons, which TriggerRemediationNow rejects earlier with
+// CodeFailedPrecondition). The web-app mirrors this set as REMEDIABLE_STUCK_REASONS
+// (web-app/src/components/backlog-stuck/stuckReason.ts); keep the two in sync.
 //
 // Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
 // and domain.StuckReasonSteerFailed both fall through to the default case, so
@@ -486,7 +489,9 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 // dispatcher-triggered one, so it counts toward the same 5-attempt cap. The
 // wrapped action's own circuit breaker (IsRepeatedFailure/
 // IsRepeatedNoVerdictFailure inside AutoReopenAfterFailedReview, for example)
-// still applies — this RPC does not bypass it.
+// still applies — this RPC does not bypass it. multiple_reasons is an aggregate
+// with no action of its own: it returns CodeFailedPrecondition naming the
+// item's open constituent reasons.
 // +api: backlog:trigger-remediation-now
 func (s *BacklogService) TriggerRemediationNow(
 	ctx context.Context,
