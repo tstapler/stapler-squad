@@ -37,7 +37,10 @@ func (s *SessionService) HibernateSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := findInstanceByID(instances, req.Msg.Id)
+	instance := s.FindLiveInstance(req.Msg.Id)
+	if instance == nil {
+		instance = findInstanceByID(instances, req.Msg.Id)
+	}
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
@@ -88,16 +91,15 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := findInstanceByID(instances, req.Msg.Id)
+	instance := s.FindLiveInstance(req.Msg.Id)
+	if instance == nil {
+		instance = findInstanceByID(instances, req.Msg.Id)
+	}
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
-	// This instance was loaded raw from storage above, bypassing
-	// Registry.Acquire/WireInstanceCallbacks entirely, so it has no
-	// MCPServerURL provider wired yet — without this, the relaunch below
-	// would omit --mcp-config and the resumed session could never call
-	// session-scoped MCP tools again.
+	// Preserve the canonical instance's in-flight hibernation teardown barrier.
 	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := instance.ResumeFromHibernation(ctx); err != nil {

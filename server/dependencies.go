@@ -1072,7 +1072,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
+			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
 				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
@@ -2190,6 +2190,11 @@ func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherCo
 	e.Start(ctx)
 	session.SetWorktreeEnricher(e)
 	return e
+}
+
+// hotRestoreEligible probes persisted backend identity before a pane is attached.
+func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
+	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
 }
 
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.

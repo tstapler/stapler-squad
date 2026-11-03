@@ -401,6 +401,10 @@ type ConnectRPCWebSocketHandler struct {
 // is decided server-side from the instance snapshot; the client's own
 // read-only flag is never consulted.
 func (h *ConnectRPCWebSocketHandler) writerFor(instance *session.Instance) TerminalWriter {
+	snap := instance.Snapshot()
+	if snap.ArchivedAt != nil || (snap.Backend == session.BackendTymux && snap.Status != session.Active) {
+		return nil
+	}
 	writer, err := AccessFor(instance).Writer(h.tmuxSender)
 	if err != nil {
 		log.Debug("[WebSocket] read-only attach: input, resize and scroll forwarding are dropped", "session", instance.GetTitle())
@@ -1133,6 +1137,12 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	}
 	log.Debug("[streamTerminal] resolved session", "session", sessionID, "external", isExternal)
 
+	releaseView, err := instance.AcquireTerminalView()
+	if err != nil {
+		return fmt.Errorf("attach terminal: %w", err)
+	}
+	defer releaseView()
+
 	// Shell tabs are independent sibling tmux sessions (see instance_shells.go), not the
 	// main session's PTY, so they route separately from the main-terminal logic below.
 	if shellID != "" {
@@ -1289,7 +1299,11 @@ func parseControlModeHandshake(stream *connectWebSocketStream) (*sessionv1.Curre
 // otherwise let control mode attach to a dead session and immediately
 // receive %exit.
 func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.Instance, sessionID string, streamer SessionStreamer) error {
-	if !instance.IsBackendProcessAlive() {
+	handled, err := instance.PrepareRetainedTerminalView(context.Background())
+	if err != nil {
+		return err
+	}
+	if !handled && !instance.IsBackendProcessAlive() {
 		log.Info("[streamViaControlMode] session not alive, restoring before control mode", "session", sessionID)
 		workDir := instance.ActiveDir()
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
@@ -2104,6 +2118,9 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
 func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
+	if handled, err := instance.PrepareRetainedTerminalView(context.Background()); handled {
+		return false, err // Render readiness does not imply process/input readiness.
+	}
 	if instance.IsBackendProcessAlive() {
 		return true, nil
 	}

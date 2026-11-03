@@ -97,6 +97,15 @@ func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
 	})
 }
 
+// AdoptForViewing never starts the daemon or restores a missing session.
+func (b *TymuxBackend) AdoptForViewing(ctx context.Context) error {
+	p, ok := b.mgr.(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		return fmt.Errorf("tymux manager cannot adopt a retained pane")
+	}
+	return p.AdoptForViewing(ctx)
+}
+
 func (b *TymuxBackend) Close() error  { return b.mgr.Close() }
 func (b *TymuxBackend) IsAlive() bool { return b.mgr.IsAlive() }
 
