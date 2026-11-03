@@ -935,6 +935,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	recordOwned := s.recordOwned
+	viewOnly := s.viewOnly
 	s.mu.RUnlock()
 	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
@@ -966,7 +967,13 @@ func (s *tymuxGRPCSession) Close() error {
 	}
 	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
 	// take down a session another Instance adopted.
-	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || recordOwned
+	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || (recordOwned && !viewOnly)
+	if !owned && recordOwned && viewOnly {
+		_, claimed := claimedSessions.LoadOrStore(sessionID, any(s))
+		if !claimed {
+			owned = claimedSessions.CompareAndDelete(sessionID, any(s))
+		}
+	}
 	var err error
 	if owned {
 		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
