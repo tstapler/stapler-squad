@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -17,6 +18,16 @@ func NewStartedInstanceForTest(tb testing.TB, title string, pm ProcessManager) *
 	inst.processManager = pm
 	inst.started.Store(true)
 	return inst
+}
+
+// HoldHibernationTeardownForTest blocks resume startup until the returned release runs.
+func HoldHibernationTeardownForTest(tb testing.TB, inst *Instance) func() {
+	tb.Helper()
+	inst.hibernateTeardownWG.Add(1)
+	var once sync.Once
+	release := func() { once.Do(inst.hibernateTeardownWG.Done) }
+	tb.Cleanup(release)
+	return release
 }
 
 // SetTymuxManagerFactoryForTest makes every tymux-backed Instance built until tb ends use

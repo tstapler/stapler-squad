@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -104,6 +105,9 @@ func (i *Instance) scrollbackPath() string {
 // The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
+		if s.inst.ArchivedAt != nil || s.inst.Status != Hibernated {
+			return fmt.Errorf("session is not an unarchived hibernated session")
+		}
 		return transitionToLocked(s, ctx, Active)
 	})
 }

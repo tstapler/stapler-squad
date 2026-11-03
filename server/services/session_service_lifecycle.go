@@ -21,6 +21,18 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
+func (s *SessionService) findLifecycleInstance(instances []*session.Instance, id string) *session.Instance {
+	if s.registry != nil {
+		if live := s.registry.Lookup(id); live != nil {
+			return live.Instance
+		}
+	}
+	if live := s.FindLiveInstance(id); live != nil {
+		return live
+	}
+	return findInstanceByID(instances, id)
+}
+
 // HibernateSession checkpoints the session state, kills the AI process, and
 // transitions the session to Hibernated status.
 // +api: session:hibernate
@@ -37,12 +49,14 @@ func (s *SessionService) HibernateSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := s.FindLiveInstance(req.Msg.Id)
-	if instance == nil {
-		instance = findInstanceByID(instances, req.Msg.Id)
-	}
+	instance := s.findLifecycleInstance(instances, req.Msg.Id)
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Retain before transitioning: poller removal must not discard the teardown barrier.
+	if s.registry != nil {
+		instance = s.registry.Retain(instance).Instance
 	}
 
 	// Stop any running autonomous driver so it does not continue injecting prompts
@@ -91,10 +105,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := s.FindLiveInstance(req.Msg.Id)
-	if instance == nil {
-		instance = findInstanceByID(instances, req.Msg.Id)
-	}
+	instance := s.findLifecycleInstance(instances, req.Msg.Id)
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
