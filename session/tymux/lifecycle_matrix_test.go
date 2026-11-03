@@ -149,6 +149,39 @@ func TestLifecycleMatrix_AdoptForViewing(t *testing.T) {
 	}
 }
 
+func TestLifecycleMatrix_ViewOnlyPreservesRecordCleanup(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			calls := &matrixCalls{}
+			s := NewTymuxGRPCSession(matrixTransport(t.TempDir(), p, calls)).(*tymuxGRPCSession)
+			s.SetStoredSessionID(testSessionID)
+			require.NoError(t, s.AdoptForViewing(context.Background()))
+			assert.Zero(t, calls.kill.Load(), "viewing never kills")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "explicit cleanup retains exact-record ownership")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "repeat cleanup must not kill again")
+		})
+	}
+}
+
+func TestLifecycleMatrix_ViewOnlyDoesNotTakeAnotherManagersClaim(t *testing.T) {
+	resetClaims(t)
+	calls := &matrixCalls{}
+	ft := matrixTransport(t.TempDir(), matrixStates[0], calls)
+	owner := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	claimedSessions.Store(testSessionID, any(owner))
+	viewer := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	viewer.SetStoredSessionID(testSessionID)
+	require.NoError(t, viewer.AdoptForViewing(context.Background()))
+	require.NoError(t, viewer.Close())
+	assert.Zero(t, calls.kill.Load())
+	claim, ok := claimedSessions.Load(testSessionID)
+	require.True(t, ok)
+	assert.Same(t, owner, claim)
+}
+
 func TestLifecycleMatrix_ViewOnlyLiveStreamCannotWriteOrRevive(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()

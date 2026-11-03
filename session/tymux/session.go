@@ -862,6 +862,8 @@ func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found
 		return errSessionNotStarted
 	}
 	s.sessionID, s.paneID, s.cwd = id, pane.GetId(), pane.GetCwd()
+	// Read-only rendering must not revoke the persisted record's cleanup ownership.
+	s.recordOwned = true
 	s.liveness = found.GetLiveness()
 	s.viewOnly = true
 	s.mu.Unlock()

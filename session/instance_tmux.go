@@ -1187,7 +1187,7 @@ func (i *Instance) terminalScreenReady() bool {
 	if i.started.Load() {
 		return true
 	}
-	_, retained := i.pm().(*TymuxBackend)
+	_, retained := i.pm().(interface{ AdoptForViewing(context.Context) error })
 	return retained && i.pm().HasSession()
 }
 
