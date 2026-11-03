@@ -44,7 +44,7 @@ export function ConstituentReasons({ itemId, reasons, onTriggerRemediationNow }:
             <button
               type="button"
               data-testid={`stuck-constituent-retry-${reason}`}
-              aria-disabled={pending !== null}
+              disabled={pending !== null}
               onClick={() => {
                 track({ name: "stuck_constituent_retry", category: "user_action", component: "ConstituentReasons" });
                 void retry(reason);

@@ -268,11 +268,12 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   const constituentReasonsFor = useCallback(
     (item: StuckBacklogItem): StuckReason[] =>
       item.reason === StuckReason.MULTIPLE_REASONS
-        ? visibleItems
+        ? // Unfiltered `items`: an active reason filter hides the sibling rows.
+          items
             .filter((i) => i.itemId === item.itemId && !isEscalationReason(i.reason))
             .map((i) => i.reason)
         : [],
-    [visibleItems]
+    [items]
   );
 
   const grouped = useMemo(() => {
