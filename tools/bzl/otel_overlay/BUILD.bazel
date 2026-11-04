@@ -2,7 +2,7 @@
 # gazelle:ignore
 filegroup(
     name = "overlay",
-    srcs = glob(["*.overlay", "matched.json.tmpl", "otelc-build.tar"]),
+    srcs = glob(["*.overlay", "matched.json.tmpl", "otelc-build.tar.bin"]),
     visibility = ["//visibility:public"],
 )
 

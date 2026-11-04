@@ -6,7 +6,7 @@
 #                                              toolexec build of the declared source tree, no network
 # Manifests are lines "dest<TAB>src"; overlay dests are relative to tools/bzl/otel_overlay.
 # The weave never runs `otelc setup`: tools/bzl/otel_overlay/ holds its pre-computed output
-# (go.mod/go.sum with the otelc modules, otel.instrumentation.go, otelc.runtime.go, .otelc-build/ as a tar).
+# (go.mod/go.sum with the otelc modules, otel.instrumentation.go, otelc.runtime.go, .otelc-build/ as a tar, .bin because *.tar is commonly git-ignored).
 set -euo pipefail
 
 mode=$1
@@ -18,7 +18,7 @@ apply_overlay() { # DEST_DIR MANIFEST
   while IFS=$'\t' read -r rel src; do
     case "$rel" in
       *.overlay) dest=${rel%.overlay} ;;
-      otelc-build.tar) mkdir -p "$1/.otelc-build" && tar -xf "$exec_root/$src" -C "$1/.otelc-build"; continue ;;
+      otelc-build.tar.bin) mkdir -p "$1/.otelc-build" && tar -xf "$exec_root/$src" -C "$1/.otelc-build"; continue ;;
       matched.json.tmpl) dest=.otelc-build/matched.json.tmpl ;;
       *) continue ;;
     esac

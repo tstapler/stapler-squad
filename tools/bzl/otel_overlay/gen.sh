@@ -48,7 +48,7 @@ sed "s#=> $scratch/src/.otelc-build#=> ./.otelc-build#" go.mod >"$new/go.mod.ove
 cp go.sum "$new/go.sum.overlay"
 cp otel.instrumentation.go "$new/otel.instrumentation.go.overlay"
 cp otelc.runtime.go "$new/otelc.runtime.go.overlay"
-tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf "$new/otelc-build.tar" -C .otelc-build instrumentation pkg
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf "$new/otelc-build.tar.bin" -C .otelc-build instrumentation pkg
 sed -e "s#$scratch/src#@SRC@#g" -e "s#$goroot#@GOROOT@#g" -e "s#$scratch/mc#@MODCACHE@#g" .otelc-build/matched.json >"$new/matched.json.tmpl"
 if grep -rlq "$scratch" "$new"; then echo "gen.sh: absolute scratch path leaked into the overlay" >&2; exit 1; fi
 
