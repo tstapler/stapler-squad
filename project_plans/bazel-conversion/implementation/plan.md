@@ -874,7 +874,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 ##### Task 0.13a: nogo with one analyzer from the isolated module (cost M)
 - Register `go_sdk`/`nogo` with `//tools/lint/norawgitcli:norawgitcli`; resolve the cross-module dependency via isolated extension or `local_path_override`; record whether `analysistest` fixtures need runfiles `testdata`.
 - Files: spike `BUILD.bazel`, spike `MODULE.bazel`
-- Verify: `bazel build //tools/bzl/spike-nogo:seed 2>&1 | grep -c norawgitcli` is at least 1 with the seed present (Epic 0 S12 path; `//tools/bzl/spike/nogo_seed` does not exist). **Epic 0 correction (S12):** nogo links one copy of `x/tools`, so each analyzer needs a twin library built against the root `x/tools` (the isolated `tools/lint` module resolves a different version and the link fails); `go_sdk.nogo` registers one nogo for the whole repo, so it stays commented out until Epic 1 BUILD files exist and is then scoped with `exclude_files`; 14 of 15 analyzer tests still skip under Bazel until the `gotool` helper is applied to each.
+- Verify: `bazel build //tools/bzl/spike-nogo:seed 2>&1 | grep -c norawgitcli` is at least 1 with the seed present (Epic 0 S12 path; `//tools/bzl/spike/nogo_seed` does not exist). **Epic 0 correction (S12):** nogo links one copy of `x/tools`, so each analyzer needs a twin library built against the root `x/tools` (the isolated `tools/lint` module resolves a different version and the link fails); `go_sdk.nogo` registers one nogo for the whole repo, scoped with `exclude_files`. **Story 8.4 applied this** (owner decision `nogo_story_8_4`): twins for all 17 analyzers in `tools/bzl/nogo`, nogo enabled in `MODULE.bazel`, all 17 analysistest targets run under Bazel; the spike dir `tools/bzl/spike-nogo` is gone (its seed is `//tools/bzl/nogo/testdata:seed_norawgitcli`).
 
 #### Story 0.15: Spike S14 - selective e2e through observed-dependency slices (ADR-009)
 **As the** owner, **I want** to know before Epic 12 whether a spec's measured dependencies are narrow enough that a typical PR re-runs well under half the e2e suite with no missed failures, **so that** the directive "only changed dependencies re-run their tests" is decided on evidence. (File order: this story is listed before Story 0.14 because the gate reads its verdict; its id is the next free number.)
@@ -2005,22 +2005,23 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Files: `Makefile`
 - Verify: `BUILD_SYSTEM=bazel make -n ready | grep -cE 'gazelle-check|buildifier-check|gen-freshness'` prints at least `3`; `BUILD_SYSTEM=make make -n ready | grep -c 'skipped: BUILD_SYSTEM=make'` prints `3`; `BUILD_SYSTEM=make make -n ready | grep -c 'bazel '` prints `0`.
 
-#### Story 8.4: Custom analyzers as nogo (conditional on S12)
-**As the** owner, **I want** the 17 structural analyzers to run on every build, **so that** the rules in `.claude/rules/*.md` are enforced by the compiler path. Skipped if S12 is `Fail` (wrapped `make lint-custom` remains).
+#### Story 8.4: Custom analyzers as nogo (owner decision: twins for all analyzers)
+**As the** owner, **I want** the 17 structural analyzers to run on every build, **so that** the rules in `.claude/rules/*.md` are enforced by the compiler path. `make lint-custom` stays as the parity oracle until the Story 8.6 flip.
 **Acceptance Criteria**:
-- *Given* a seeded violation for each analyzer (a fixture list), *When* `bazel build` compiles it, *Then* it fails with that analyzer's message, matching the output of `make lint-custom` on the same fixture.
+- *Given* a seeded violation for each analyzer (`tools/bzl/nogo/testdata`), *When* `bazel build` compiles it, *Then* it fails with that analyzer's own finding; the twins compile the same `analyzer.go` as `make lint-custom`, so the message and position are the same source (a dual-run of both tools on every seed is not possible: the path-scoped analyzers key on real package paths, which the seeds only stand in for).
 - *Given* main, *When* `bazel build //...` runs with nogo enabled, *Then* exit 0.
-**Files**: `BUILD.bazel`, `tools/bzl/nogo/BUILD.bazel`, `tools/lint/**/BUILD.bazel`, `MODULE.bazel`
+- *Given* the analyzer tests, *When* `bazel test //tools/lint/...` runs, *Then* all 17 execute (none skips).
+**Files**: `MODULE.bazel`, `BUILD.bazel`, `tools/bzl/nogo/**`, `tools/bzl/nogotwins/**`, `tools/bzl/nogoseed/**`, `tools/lint/**/BUILD.bazel`
 
-##### Task 8.4a: Register analyzers (cost M)
-- Productionise Task 0.13a for all analyzers; exclude the ones needing `go/packages` loading at runtime if any (record).
-- Files: `BUILD.bazel`, `tools/bzl/nogo/BUILD.bazel`
-- Verify: `bazel build //... ; echo $?` prints `0`.
+##### Task 8.4a: Twins and nogo registration (cost M) - done
+- Twin library per analyzer plus `internal/nolintcomment` in `tools/bzl/nogo/BUILD.bazel` (sources referenced from `tools/lint`, not copied); `go_sdk.nogo` in `MODULE.bazel`; `nogo_config.json` `_base.exclude_files` for `external/`, `bazel-out/`, `tools/lint/`. No analyzer needs `go/packages` at runtime (all 17 run under nogo).
+- Files: `BUILD.bazel`, `tools/bzl/nogo/BUILD.bazel`, `tools/bzl/nogo/nogo_config.json`, `MODULE.bazel`
+- Verify: `bazel build //... ; echo $?` prints `0`; `make nogo-twins-check` exits 0 (twin list equals `tools/lint` directories and `cmd/linter`).
 
-##### Task 8.4b: Fixture parity with lint-custom (cost M)
-- For each analyzer, a seeded-violation fixture run through both paths; table in PR.
-- Files: `tools/bzl/nogo/fixtures/**`, `tools/bzl/nogo/check-parity.sh`
-- Verify: `bash tools/bzl/nogo/check-parity.sh; echo $?` prints `0`.
+##### Task 8.4b: Seeded violations and converted analyzer tests (cost M) - done
+- One manual seed target per analyzer (`//tools/bzl/nogo/testdata:seed_<analyzer>`) and `tools/bzl/nogoseed`, which builds them and requires each to fail with its own analyzer; every `analyzer_test.go` calls `gotool.Setup(t)`.
+- Files: `tools/bzl/nogo/testdata/**`, `tools/bzl/nogoseed/**`, `tools/lint/*/analyzer_test.go`
+- Verify: `make nogo-seed-check; echo $?` prints `0` with 17 `FAILS (finding reported)` rows; `bazel test //tools/lint/...` passes 17 of 17.
 
 #### Story 8.5: Fallback canary
 **As the** owner, **I want** the make path exercised on a schedule and on risky PRs, **so that** the escape hatch cannot rot.
@@ -2953,7 +2954,7 @@ Source: `spike-results.md` and `epic0-seal.md` on branch `sdd/bazel-epic0`. Each
 | `--config` chains are not additive for `tags` (last wins) | Task 0.8a |
 | Task 4.1b: no global `TMPDIR` or `STAPLER_SQUAD_TMUX_SOCKET` test env; HOME fixture with `.gitconfig`; tmux/gh on test PATH | Task 4.1b, pre-mortem #13 guard |
 | Story 0.9: private short `/tmp` is the Bazel 9.3.1 default; `--test_env=TMPDIR` is ignored | Story 0.9 AC |
-| Task 0.13a verify path is `//tools/bzl/spike-nogo:seed`; nogo needs per-analyzer twin libraries and stays disabled until Epic 1 | Task 0.13a |
+| Task 0.13a verify path was `//tools/bzl/spike-nogo:seed`; nogo needs per-analyzer twin libraries (built in Story 8.4, spike dir removed) | Task 0.13a |
 
 Follow-ups F6-F11 of the triad disposition are applied (see the follow-ups list there). Open owner decisions (S13, S4, Story 8.4 and others) are in `epic0-seal.md`.
 

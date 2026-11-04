@@ -59,7 +59,8 @@ What stays outside Bazel, from [ADR-005](../../project_plans/bazel-conversion/de
 |---|---|
 | macOS codesign and TCC identity | The install path signs a copy of the Bazel output at a stable path |
 | Diff- and history-based gates (`dupl --new-from-rev`, complexity gate, `proto-breaking`, jscpd, actionlint, shellcheck) | Wrapped; run after `make sync` |
-| golangci-lint and the custom analyzers | Wrapped; `make lint-custom` stays the whole-suite path |
+| golangci-lint | Wrapped; run after `make sync` |
+| The 17 custom analyzers (`tools/lint`) | Run twice: as `nogo` on every Go target in the Bazel build (twin libraries, [below](#custom-analyzers-nogo)), and by `make lint-custom`, which stays the parity oracle until the Story 8.6 flip |
 | release-please, website and demo deploys, benchmarks, RealClaude harness | Unchanged |
 | goreleaser | Keeps its own `CGO_ENABLED=0 go build`; parity checked by `goreleaser-check.yml` |
 | Homebrew formula | Written by goreleaser |
@@ -115,3 +116,21 @@ Reference for the Bazel labels that replace each `make` binary target, the `--co
 Maintenance: after any change to `go.mod`, `go.sum`, the otelc version or `instrumentation/otelc/safeexec`, run `GO=<rules_go sdk go> tools/bzl/otel_overlay/gen.sh` and commit the result. `CHECK=1` diffs instead (CI runs it); the generator canonicalizes otelc's order-nondeterministic output so the check is stable.
 
 Remaining non-hermetic parts: the module cache comes from the `OtelModcache` action, a go.sum-verified `go mod download` that needs the network (the result is cached and re-run only when the overlay changes; a `go_deps`-based replacement is S15b-4); cgo packages use the host `gcc` (S15b-7); a cache miss is a cold `GOCACHE` (S15b-5); darwin was not built. The work directory is fixed (`/tmp/ssq-otel-work` under Bazel's hermetic `/tmp`) because a per-sandbox path leaks into the Go build IDs; with it two real executions are `cmp`-identical.
+
+## Custom analyzers (nogo)
+
+`go_sdk.nogo` in `MODULE.bazel` registers one nogo, `//tools/bzl/nogo:nogo`, for every Go target in the repo. It
+runs all 17 analyzers from `tools/lint` (the rules in `.claude/rules/*.md`); a finding fails the build of that target.
+
+| Piece | What it is |
+|---|---|
+| `//tools/bzl/nogo:<analyzer>` | Twin library: the same `tools/lint/<analyzer>/analyzer.go` (referenced, never copied) compiled against the root `x/tools`. nogo links the root `x/tools`, and the isolated `tools/lint` module's copy would be a second one at link time. |
+| `ANALYZERS` in `tools/bzl/nogo/BUILD.bazel` | The twin list. `make nogo-twins-check` (also run by `make lint-custom`) fails when it, the `tools/lint/*/analyzer.go` directories and `cmd/linter`'s imports disagree. |
+| `tools/bzl/nogo/nogo_config.json` | `_base.exclude_files`: `external/`, `bazel-out/` (generated code) and `tools/lint/` (not linted by `make lint-custom` either). The analyzers scope themselves by package path and file name. |
+| `//tools/bzl/nogo/testdata:seed_<analyzer>` | One seeded violation per analyzer, all `manual`. `make nogo-seed-check` builds them and requires each to fail with its own analyzer's finding. |
+| `//tools/lint/<analyzer>:<analyzer>_test` | The analysistest fixtures; `gotool.Setup(t)` lets them run under Bazel instead of skipping. |
+
+To add an analyzer: create `tools/lint/<name>/`, add `exports_files(["analyzer.go"])` to its `BUILD.bazel`, add the name to
+`ANALYZERS` and to `cmd/linter`, add a seed under `testdata/seed/<name>/` and a `SEEDS` or `TEST_SEEDS` row, then run
+`make nogo-twins-check nogo-seed-check`. Suppress a finding the same way as under make: `//nolint:<analyzer> <reason>`.
+Action cost: [spike-results.md, "8.4 nogo twins"](../../project_plans/bazel-conversion/implementation/spike-results.md).
