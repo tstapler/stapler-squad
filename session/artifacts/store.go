@@ -510,9 +510,8 @@ func (ae *ArtifactExtractor) RescanSession(historyFile string) {
 	if historyFile == "" {
 		return
 	}
-	paths := []string{historyFile}
 	subs, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(historyFile, ".jsonl"), "subagents", "agent-*.jsonl"))
-	paths = append(paths, subs...)
+	paths := append([]string{historyFile}, subs...)
 	ae.posMu.Lock()
 	for _, p := range paths {
 		delete(ae.positions, p)
