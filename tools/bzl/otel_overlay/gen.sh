@@ -7,8 +7,8 @@
 # Prerequisite: bazel build //proto/session/v1:gen_go //tools/bzl/ent:ent_gen //server/web:dist_staged
 # (the generated Go and the web dist come from bazel-bin).
 # Usage: GO=/path/to/go tools/bzl/otel_overlay/gen.sh        # CHECK=1 diffs instead of writing
-# Caveat: otelc setup output is order-nondeterministic (go.mod replace order, otelc.runtime.go stub numbering,
-# matched.json order), so CHECK=1 reports false drift until the output is canonicalized (S15b task 6).
+# otelc setup output is order-nondeterministic (go.mod replace order, otelc.runtime.go stub numbering, matched.json
+# order), so canon() below rewrites those three files into a canonical order before they are written or compared.
 set -euo pipefail
 
 OTELC_VERSION=v1.0.1
@@ -38,6 +38,41 @@ unset GOFLAGS GOROOT
 unset GOBIN
 goroot=$("$GO" env GOROOT)
 
+# Canonical order: replace lines sorted at the end of go.mod; stub pairs sorted by linkname target and renumbered;
+# matched.json keys sorted, top level by module_path, rule lists (items with a "target") by their JSON text.
+# Struct new_field lists keep their order (field layout is semantic).
+canon() { # GOMOD RUNTIME_GO MATCHED_JSON
+  python3 - "$@" <<'PY'
+import json, re, sys
+mod, rt, mj = sys.argv[1:]
+lines = open(mod).read().split("\n")
+rep = sorted(l for l in lines if l.startswith("replace "))
+rest = [l for l in lines if not l.startswith("replace ")]
+body = re.sub(r"\n{3,}", "\n\n", "\n".join(rest)).rstrip("\n")
+open(mod, "w").write(body + "\n\n" + "\n\n".join(rep) + "\n")
+head, *blocks = re.split(r"\n\n(?=//go:linkname _(?:get|print)stack)", open(rt).read().rstrip("\n"))
+pairs = {}
+for b in blocks:
+    m = re.match(r"//go:linkname _(get|print)stack(\d+) (\S+)", b)
+    pairs.setdefault(m[2], {})[m[1]] = b
+out = []
+for i, n in enumerate(sorted(pairs, key=lambda n: pairs[n]["get"].split()[2])):
+    out += [re.sub(r"_(get|print)stack%s\b" % n, r"_\1stack%d" % i, pairs[n][k]) for k in ("get", "print")]
+open(rt, "w").write("\n\n".join([head] + out) + "\n")
+def canon(v):
+    if isinstance(v, dict):
+        return {k: canon(x) for k, x in sorted(v.items())}
+    if isinstance(v, list):
+        v = [canon(x) for x in v]
+        if v and all(isinstance(x, dict) and "target" in x for x in v):
+            v.sort(key=lambda x: json.dumps(x, sort_keys=True))
+    return v
+d = canon(json.load(open(mj)))
+d.sort(key=lambda x: x["module_path"])
+open(mj, "w").write(json.dumps(d, separators=(",", ":")))
+PY
+}
+
 cd "$scratch/src"
 export GOFLAGS=-tags=otelcauto
 otelc setup .
@@ -52,6 +87,7 @@ cp otel.instrumentation.go "$new/otel.instrumentation.go.overlay"
 cp otelc.runtime.go "$new/otelc.runtime.go.overlay"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf "$new/otelc-build.tar.bin" -C .otelc-build instrumentation pkg
 sed -e "s#$scratch/src#@SRC@#g" -e "s#$goroot#@GOROOT@#g" -e "s#$scratch/mc#@MODCACHE@#g" .otelc-build/matched.json >"$new/matched.json.tmpl"
+canon "$new/go.mod.overlay" "$new/otelc.runtime.go.overlay" "$new/matched.json.tmpl"
 if grep -rlq "$scratch" "$new"; then echo "gen.sh: absolute scratch path leaked into the overlay" >&2; exit 1; fi
 
 if [ -n "${CHECK:-}" ]; then

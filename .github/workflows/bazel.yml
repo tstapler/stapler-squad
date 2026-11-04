@@ -178,6 +178,13 @@ jobs:
           file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe | grep -q 'PE32+'
           bash tools/bzl/check-platform-targets.sh
 
+      # The woven build runs from a committed otelc overlay; this fails when go.mod, go.sum, the otelc version or the
+      # custom rule changed without `tools/bzl/otel_overlay/gen.sh` being re-run (S15b-6).
+      - name: Otel overlay drift check
+        run: |
+          go_sdk="$(bazel info output_base)/external/rules_go++go_sdk+main___download_0_linux_amd64/bin/go"
+          GO="$go_sdk" CHECK=1 bash tools/bzl/otel_overlay/gen.sh
+
       - name: Upload BEP
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

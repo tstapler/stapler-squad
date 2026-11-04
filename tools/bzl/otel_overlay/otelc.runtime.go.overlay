@@ -18,68 +18,68 @@ import _otel_log "log"
 import _otel_debug "runtime/debug"
 import _ "unsafe"
 
-//go:linkname _getstack0 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel.OtelGetStackImpl
+//go:linkname _getstack0 github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec.OtelGetStackImpl
 var _getstack0 = _otel_debug.Stack
 
-//go:linkname _printstack0 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel.OtelPrintStackImpl
+//go:linkname _printstack0 github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec.OtelPrintStackImpl
 var _printstack0 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack1 github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec.OtelGetStackImpl
+//go:linkname _getstack1 go.opentelemetry.io/otelc/instrumentation/database/sql.OtelGetStackImpl
 var _getstack1 = _otel_debug.Stack
 
-//go:linkname _printstack1 github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec.OtelPrintStackImpl
+//go:linkname _printstack1 go.opentelemetry.io/otelc/instrumentation/database/sql.OtelPrintStackImpl
 var _printstack1 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack2 go.opentelemetry.io/otelc/instrumentation/log.OtelGetStackImpl
+//go:linkname _getstack2 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel.OtelGetStackImpl
 var _getstack2 = _otel_debug.Stack
 
-//go:linkname _printstack2 go.opentelemetry.io/otelc/instrumentation/log.OtelPrintStackImpl
+//go:linkname _printstack2 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel.OtelPrintStackImpl
 var _printstack2 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack3 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/trace.OtelGetStackImpl
+//go:linkname _getstack3 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace.OtelGetStackImpl
 var _getstack3 = _otel_debug.Stack
 
-//go:linkname _printstack3 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/trace.OtelPrintStackImpl
+//go:linkname _printstack3 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace.OtelPrintStackImpl
 var _printstack3 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack4 go.opentelemetry.io/otelc/instrumentation/log/slog.OtelGetStackImpl
+//go:linkname _getstack4 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/trace.OtelGetStackImpl
 var _getstack4 = _otel_debug.Stack
 
-//go:linkname _printstack4 go.opentelemetry.io/otelc/instrumentation/log/slog.OtelPrintStackImpl
+//go:linkname _printstack4 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/trace.OtelPrintStackImpl
 var _printstack4 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack5 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace.OtelGetStackImpl
+//go:linkname _getstack5 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/client.OtelGetStackImpl
 var _getstack5 = _otel_debug.Stack
 
-//go:linkname _printstack5 go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace.OtelPrintStackImpl
+//go:linkname _printstack5 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/client.OtelPrintStackImpl
 var _printstack5 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack9 go.opentelemetry.io/otelc/instrumentation/database/sql.OtelGetStackImpl
+//go:linkname _getstack6 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/server.OtelGetStackImpl
+var _getstack6 = _otel_debug.Stack
+
+//go:linkname _printstack6 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/server.OtelPrintStackImpl
+var _printstack6 = func(bt []byte) { _otel_log.Print(string(bt)) }
+
+//go:linkname _getstack7 go.opentelemetry.io/otelc/instrumentation/log.OtelGetStackImpl
+var _getstack7 = _otel_debug.Stack
+
+//go:linkname _printstack7 go.opentelemetry.io/otelc/instrumentation/log.OtelPrintStackImpl
+var _printstack7 = func(bt []byte) { _otel_log.Print(string(bt)) }
+
+//go:linkname _getstack8 go.opentelemetry.io/otelc/instrumentation/log/slog.OtelGetStackImpl
+var _getstack8 = _otel_debug.Stack
+
+//go:linkname _printstack8 go.opentelemetry.io/otelc/instrumentation/log/slog.OtelPrintStackImpl
+var _printstack8 = func(bt []byte) { _otel_log.Print(string(bt)) }
+
+//go:linkname _getstack9 go.opentelemetry.io/otelc/instrumentation/net/http/client.OtelGetStackImpl
 var _getstack9 = _otel_debug.Stack
 
-//go:linkname _printstack9 go.opentelemetry.io/otelc/instrumentation/database/sql.OtelPrintStackImpl
+//go:linkname _printstack9 go.opentelemetry.io/otelc/instrumentation/net/http/client.OtelPrintStackImpl
 var _printstack9 = func(bt []byte) { _otel_log.Print(string(bt)) }
 
-//go:linkname _getstack29 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/client.OtelGetStackImpl
-var _getstack29 = _otel_debug.Stack
+//go:linkname _getstack10 go.opentelemetry.io/otelc/instrumentation/net/http/server.OtelGetStackImpl
+var _getstack10 = _otel_debug.Stack
 
-//go:linkname _printstack29 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/client.OtelPrintStackImpl
-var _printstack29 = func(bt []byte) { _otel_log.Print(string(bt)) }
-
-//go:linkname _getstack31 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/server.OtelGetStackImpl
-var _getstack31 = _otel_debug.Stack
-
-//go:linkname _printstack31 go.opentelemetry.io/otelc/instrumentation/google.golang.org/grpc/server.OtelPrintStackImpl
-var _printstack31 = func(bt []byte) { _otel_log.Print(string(bt)) }
-
-//go:linkname _getstack32 go.opentelemetry.io/otelc/instrumentation/net/http/client.OtelGetStackImpl
-var _getstack32 = _otel_debug.Stack
-
-//go:linkname _printstack32 go.opentelemetry.io/otelc/instrumentation/net/http/client.OtelPrintStackImpl
-var _printstack32 = func(bt []byte) { _otel_log.Print(string(bt)) }
-
-//go:linkname _getstack33 go.opentelemetry.io/otelc/instrumentation/net/http/server.OtelGetStackImpl
-var _getstack33 = _otel_debug.Stack
-
-//go:linkname _printstack33 go.opentelemetry.io/otelc/instrumentation/net/http/server.OtelPrintStackImpl
-var _printstack33 = func(bt []byte) { _otel_log.Print(string(bt)) }
+//go:linkname _printstack10 go.opentelemetry.io/otelc/instrumentation/net/http/server.OtelPrintStackImpl
+var _printstack10 = func(bt []byte) { _otel_log.Print(string(bt)) }
