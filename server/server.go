@@ -224,6 +224,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.joinAfterCancel(serverCtx, deps.PRStatusPoller.Wait)
 	log.Info("PRStatusPoller started")
 
+	if deps.StopPRMaintenance != nil {
+		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
+	}
+
 	if deps.SessionTagClassificationPoller != nil {
 		deps.SessionTagClassificationPoller.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, deps.SessionTagClassificationPoller.Wait)

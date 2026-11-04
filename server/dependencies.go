@@ -53,15 +53,19 @@ const (
 type ServerDependencies struct {
 	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
 	// so both feed one wake_trigger_total mirror; set at registration.
-	WakeMetrics             *wakes.Metrics
-	SessionService          *services.SessionService
-	Storage                 *session.Storage
-	Instances               []*session.Instance
-	EventBus                *events.EventBus
-	StatusManager           *session.InstanceStatusManager
-	ReviewQueue             *session.ReviewQueue
-	ReviewQueuePoller       *session.ReviewQueuePoller
-	PRStatusPoller          *session.PRStatusPoller
+	WakeMetrics       *wakes.Metrics
+	SessionService    *services.SessionService
+	Storage           *session.Storage
+	Instances         []*session.Instance
+	EventBus          *events.EventBus
+	StatusManager     *session.InstanceStatusManager
+	ReviewQueue       *session.ReviewQueue
+	ReviewQueuePoller *session.ReviewQueuePoller
+	PRStatusPoller    *session.PRStatusPoller
+
+	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
+	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
+	StopPRMaintenance       func()
 	ReactiveQueueMgr        *ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
@@ -215,6 +219,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ReviewQueue:                    rt.ReviewQueue,
 		ReviewQueuePoller:              rt.ReviewQueuePoller,
 		PRStatusPoller:                 rt.PRStatusPoller,
+		StopPRMaintenance:              rt.StopPRMaintenance,
 		ReactiveQueueMgr:               rt.ReactiveQueueMgr,
 		ScrollbackManager:              rt.ScrollbackManager,
 		TmuxStreamerManager:            rt.TmuxStreamerManager,
@@ -272,7 +277,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 
 	// Phase 1 (core): SessionService, Storage, EventBus, ReviewQueue, ApprovalStore
 	// was: step 1 - SessionService + getter calls
-	core, err := BuildCoreDeps()
+	core, err := BuildCoreDepsWithOptions(BuildOptions{RunPRMaintenance: true})
 	if err != nil {
 		return nil, fmt.Errorf("phase 1 (core): %w", err)
 	}
@@ -398,6 +403,10 @@ type CoreDeps struct {
 	ReviewQueue    *session.ReviewQueue
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
+
+	// StopPRMaintenance stops the PR startup-maintenance retry ticker and waits for
+	// its goroutine; nil unless BuildOptions.RunPRMaintenance was set.
+	StopPRMaintenance func()
 }
 
 // BuildOptions carries optional overrides for BuildCoreDepsWithOptions.
@@ -406,6 +415,16 @@ type BuildOptions struct {
 	// EntClient supplies a pre-opened *ent.Client, bypassing config-based DB path
 	// discovery and schema migration. nil = open from config as usual.
 	EntClient *ent.Client
+
+	// RunPRMaintenance runs session.Storage.RunPRStartupMaintenance right after
+	// Storage exists and before any poller, sweeper or ticker is built. Only the
+	// service bootstrap sets it: the stdio MCP fallback (buildMCPDeps) and hook/CLI
+	// processes must not import links or reset verification counters.
+	RunPRMaintenance bool
+
+	// PRMaintenanceRunner replaces the real maintenance call in tests (a recording
+	// fake); nil means storage.RunPRStartupMaintenance.
+	PRMaintenanceRunner func(context.Context, *session.Storage) error
 }
 
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
@@ -423,6 +442,11 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	}
 
 	storage := sessionService.GetStorage()
+
+	stopPRMaintenance, err := runPRMaintenanceIfRequested(opts, storage)
+	if err != nil {
+		return nil, err
+	}
 
 	// Wire the ErrorRegistry using the existing ent client from Storage.
 	// GetEntClient returns nil when storage is not ent-backed (e.g. in tests),
@@ -442,7 +466,27 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 		ReviewQueue:    sessionService.GetReviewQueueInstance(),
 		ApprovalStore:  sessionService.GetApprovalStore(),
 		ErrorRegistry:  errorRegistry,
+
+		StopPRMaintenance: stopPRMaintenance,
 	}, nil
+}
+
+// runPRMaintenanceIfRequested runs the PR startup maintenance for the service
+// bootstrap. Maintenance never fails the boot, so an error here means only that a
+// test runner returned one. The retry ticker, if any, is owned by storage and
+// stopped through the returned function.
+func runPRMaintenanceIfRequested(opts BuildOptions, storage *session.Storage) (func(), error) {
+	if !opts.RunPRMaintenance {
+		return nil, nil
+	}
+	run := opts.PRMaintenanceRunner
+	if run == nil {
+		run = func(ctx context.Context, st *session.Storage) error { return st.RunPRStartupMaintenance(ctx) }
+	}
+	if err := run(context.Background(), storage); err != nil {
+		return nil, fmt.Errorf("pr startup maintenance: %w", err)
+	}
+	return storage.StopPRMaintenance, nil
 }
 
 // BuildCoreDeps constructs Phase 1 dependencies using config defaults.

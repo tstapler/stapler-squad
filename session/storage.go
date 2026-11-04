@@ -296,6 +296,9 @@ type Storage struct {
 	// gate is the engine and denial reporter GatedTransition decides with; nil
 	// means unwired and every caller gets the legacy (Off) answer.
 	gate atomic.Pointer[transitionGate]
+
+	// prMaintenance is the lifecycle of RunPRStartupMaintenance (service bootstrap only).
+	prMaintenance prMaintenanceState
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
