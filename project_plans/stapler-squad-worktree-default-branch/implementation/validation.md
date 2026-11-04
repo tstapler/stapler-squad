@@ -45,7 +45,7 @@ All test names below were confirmed present by grep at the file and line given (
 | REQ-4 | `Makefile:658` | `make test` | Integration | Error path: triage procedure (C-4b) if red; a red run is never reported as pass |
 | REQ-5 | `session/vc/main_test.go:12` | `TestMain` (relocates `TMPDIR` to `/tmp/ssq-vc-test-*` when `isJujutsuRepo`/`isGitRepo` of `os.TempDir()`) | Unit | Happy path: `go test ./session/vc` exits 0 with `TMPDIR` under `~/.jj` (C-5a) |
 | REQ-5 | `session/vc/main_test.go:12` | `TestMain` | Unit | Control path: also exits 0 with `TMPDIR=/tmp` (C-5b), so the fix is not specific to one env |
-| REQ-5 | `session/vc/main_test.go` | `TestMain` re-check of the relocated dir | Unit | Error path (latent, plan Task 1.3b): ancestor probe C-5c expects no VCS dir at `/`, `/tmp` |
+| REQ-5 | `session/vc/main_test.go` | `TestMain` re-check of the relocated dir | Unit | Error path (latent, plan Task T-AC9-6): ancestor probe C-5c expects no VCS dir at `/`, `/tmp` |
 | REQ-6 | `session/tymux/session_test.go:702` | `TestTymuxGRPCSession_ActivityConcurrentPolls` | Unit | Happy path: 8 pollers, exit 0 under `-race -count=20` (C-6a) |
 | REQ-6 | `session/tymux/session_test.go:722` | same test, `assert.EqualValues(t, 1, updates.Load(), ...)` | Unit | Error path / non-vacuity: with zero updates the test fails (C-6b) |
 | REQ-7 | live log (command check) | n/a | Integration | Happy path: window filter returns 0 (C-7c) |
@@ -54,7 +54,7 @@ All test names below were confirmed present by grep at the file and line given (
 
 ## Runnable Checks (exact command, expected output)
 
-Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d685c4b1a423cca3/logs` (NOT `~/.stapler-squad/logs/`, stale since Sep 5). `RESTART=2026-11-04T12:27:48` (service `ActiveEnterTimestamp`; recompute with C-7a if the service restarted again).
+Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d685c4b1a423cca3/logs` (NOT `~/.stapler-squad/logs/`, stale since Sep 5). `RESTART=2026-11-04T12:27:48-08:00` (the one restart-instant literal; service `ActiveEnterTimestamp`, which `systemctl` prints as `2026-11-04 12:27:48 PST`; recompute with C-7a if the service restarted again). `EVIDENCE_DIR=project_plans/stapler-squad-worktree-default-branch/implementation/evidence/`.
 
 ### REQ-1, REQ-2 (regression guards)
 
@@ -79,10 +79,11 @@ Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d68
 
 | ID | Command | Expected |
 |----|---------|----------|
-| C-4pre | `systemctl --user show stapler-squad -p ActiveEnterTimestamp`; `uptime`; `free -g`; `export STAPLER_SQUAD_TMUX_SOCKET=ssq-verify-1` | BEFORE capture recorded (expected `2026-11-04 12:27:48 PST`); load1 <= `nproc`; available >= 8 GiB, else abort |
+| C-4pre | `systemctl --user show stapler-squad -p ActiveEnterTimestamp -p MainPID`; `uptime`; `free -g`; `export STAPLER_SQUAD_TMUX_SOCKET=ssq-verify-1`; `grep -rn 'STAPLER_SQUAD_TMUX_SOCKET\|EnvSocketVar' session/tmux/tmux.go` (const at `session/tmux/tmux.go:653`) plus a grep of the tmux-using test packages (`session`, `session/tmux`, `session/mux`) showing they resolve the socket through `ResolveSocket`/`EnvSocketVar` | BEFORE capture of `ActiveEnterTimestamp` (expected `2026-11-04 12:27:48 PST`) and `MainPID` recorded; load1 <= `nproc`; available >= 8 GiB, else abort; grep shows tmux-using packages honor the env var, else the `make test` run is not isolated from the live tmux server and must not start |
+| C-4mon | Background monitor started with C-4a (see plan T-AC9-2): every 60 s sample `uptime` load1 and `free -g` available | No sample with load1 > `nproc*1.5` or available < 4 GiB; on breach the run is aborted and C-4pre re-baselined, never reported as pass |
 | C-4a | `unset npm_config_user_agent; mkdir -p ~/.cache/tmp/ssq-ac9 && bash -o pipefail -c 'make test > ~/.cache/tmp/ssq-ac9/make-test.log 2>&1'; echo "exit=$?"` with `TMPDIR=/home/tstapler/.cache/tmp` | `exit=0`; `tail -n 5` of the log shows gotestsum `DONE <N> tests` with 0 failures (user-reported prior run: 5433 + 14638 tests, 0 fail, EXIT=0, VERIFIED by caller, not re-run here) |
 | C-4a2 | `grep -c '^--- FAIL\|^FAIL' ~/.cache/tmp/ssq-ac9/make-test.log` (full log, not a tail) | `0` (grep exits 1 with count 0; that is the pass condition) |
-| C-4post | `systemctl --user show stapler-squad -p ActiveEnterTimestamp` | AFTER capture equals the BEFORE capture; if it differs, the restart instant moved: re-baseline and re-run C-3b/C-3c and C-7a..C-7e. A prior `make test` run already gave EXIT=0 (5433 + 14638 tests) with the timestamp unchanged |
+| C-4post | `systemctl --user show stapler-squad -p ActiveEnterTimestamp -p MainPID` | AFTER capture of both fields equals the BEFORE capture (a changed `MainPID` means a restart even if the timestamp is somehow equal); if it differs, the restart instant moved: re-baseline and re-run C-3b/C-3c and C-7a..C-7e. A prior `make test` run already gave EXIT=0 (5433 + 14638 tests) with the timestamp unchanged |
 | C-4b | Only if C-4a is non-zero: for each failing test `go test <pkg> -run <Test> -count=3 -race`, then `gh run list --repo tstapler/stapler-squad --branch main --limit 5` | Note records fails-in-isolation yes/no, fails-on-main yes/no, and a "fails because X" sentence; AC9 stays unreported until green |
 
 ### REQ-5 (vc hermeticity)
@@ -97,7 +98,7 @@ Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d68
 
 | ID | Command | Expected |
 |----|---------|----------|
-| C-6a | `go test ./session/tymux -run TestTymuxGRPCSession_ActivityConcurrentPolls -race -count=20 -timeout=10m -v 2>&1 \| tail -n 15` | Exit 0; 20 PASS iterations, no `DATA RACE` |
+| C-6a | Run only AFTER C-4a finishes, and after a fresh `uptime`/`free -g` re-check meeting the C-4pre thresholds (never concurrent with `make test` on the live host): `go test ./session/tymux -run TestTymuxGRPCSession_ActivityConcurrentPolls -race -count=20 -timeout=10m -v 2>&1 \| tail -n 15` | Exit 0; 20 PASS iterations, no `DATA RACE` |
 | C-6b | `sed -n 700,724p session/tymux/session_test.go` (or Read) | `assert.EqualValues(t, 1, updates.Load(), ...)` still follows `wg.Wait()` (VERIFIED at line 722 when written) |
 
 ### REQ-7 (AC11)
@@ -106,14 +107,14 @@ Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d68
 |----|---------|----------|
 | C-7a | Run after C-4post (final restart instant): `systemctl --user show stapler-squad -p ActiveEnterTimestamp`; `ls -la $LOGDIR/staplersquad.log` | Restart instant noted (use the newest one if it moved); log mtime within minutes, so it is the live file |
 | C-7b (negative control) | `zcat $LOGDIR/staplersquad-2026-11-04T13-51-53.139.log.gz \| jq -Rc 'fromjson? \| select(((.err // .error // "")\|tostring)\|test("does not support extension\|unknown extension";"i")) \| .time' \| sed -n '1p;$p'` | Prints a first/last pair, both before the restart instant. VERIFIED while writing: `2026-11-04T10:32:03...` and `2026-11-04T12:24:23...`. `plan.md` now quotes the same pair; the check is "non-empty pair before restart" |
-| C-7c (window) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48") \| select(((.err // .error // "")\|tostring)\|test("does not support extension\|unknown extension";"i")) \| .time' $LOGDIR/staplersquad.log \| wc -l` | `0`. VERIFIED while writing: `0`. Repeat over any `.gz` newer than the restart; each must print 0 lines |
+| C-7c (window) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48-08:00") \| select(((.err // .error // "")\|tostring)\|test("does not support extension\|unknown extension";"i")) \| .time' $LOGDIR/staplersquad.log \| wc -l` | `0`. VERIFIED while writing: `0`. Repeat over any `.gz` newer than the restart; each must print 0 lines |
 | C-7d (window length) | `jq -Rr 'fromjson? \| .time' $LOGDIR/staplersquad.log \| tail -n 1` | Last record time minus restart instant is the window length; state it. Pre-fix rate was 9802 `failed to check git status` hits in one rotated file (plan, VERIFIED at planning), so a regression would be loud |
 | C-7e1 (positive control) | `go test ./session -run TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension -count=1 -v` | Exit 0, `--- PASS`, no `--- SKIP` (`session/repo_path_test.go:598`) |
 | C-7e2 (positive control) | `go test ./session/git -run 'Succeeds_When_RepoHasWorktreeConfigExtension' -count=1 -v` | Exit 0, `--- PASS` for every matched test, no `--- SKIP` |
-| C-7e3 (supplementary only) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48") \| select(.msg\|test("set base commit SHA\|found existing worktree for branch\|connected to existing worktree")) \| del(.program) \| {time,msg}' $LOGDIR/staplersquad.log \| head` | The `2026-11-04T15:25:17` record is WEAK (initBaseCommitSHA/merge-base, not the default-branch resolve path) and never satisfies the positive control by itself |
-| C-7h (evidence copy) | `sha256sum $LOGDIR/staplersquad-2026-11-04T13-51-53.139.log.gz` after copying it into the evidence dir | Hash recorded in `evidence.md`; copy hash equals source hash |
+| C-7e3 (supplementary only) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48-08:00") \| select(.msg\|test("set base commit SHA\|found existing worktree for branch\|connected to existing worktree")) \| del(.program) \| {time,msg}' $LOGDIR/staplersquad.log \| head` | The `2026-11-04T15:25:17` record is WEAK (initBaseCommitSHA/merge-base, not the default-branch resolve path) and never satisfies the positive control by itself |
+| C-7h (evidence copy) | `cp $LOGDIR/staplersquad-2026-11-04T13-51-53.139.log.gz $EVIDENCE_DIR/ && (cd $EVIDENCE_DIR && sha256sum *.gz > SHA256SUMS)`; compare with `sha256sum` of the source | Hash recorded in `evidence.md`; copy hash equals source hash. Commit only `SHA256SUMS` (and `evidence.md`), never the `.gz` |
 | C-7i (time format) | `jq -Rr 'fromjson? \| .time' $LOGDIR/staplersquad.log \| head -n 1` | Offset is `-08:00` and matches the restart instant's zone before the lexical comparison in C-7c is trusted |
-| C-7f (noise explained) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48") \| select(.msg=="creating session" or .msg=="tmux session created successfully") \| select(.program\|tostring\|test("does not support extension")) \| .msg' $LOGDIR/staplersquad.log \| wc -l` | Non-zero is fine (plan: 6): prompt echoes in `program`. Shows why a raw `grep worktreeconfig` is wrong, and the C-7c filter excludes them |
+| C-7f (noise explained) | `jq -Rc 'fromjson? \| select(.time >= "2026-11-04T12:27:48-08:00") \| select(.msg=="creating session" or .msg=="tmux session created successfully") \| select(.program\|tostring\|test("does not support extension")) \| .msg' $LOGDIR/staplersquad.log \| wc -l` | Non-zero is fine (plan: 6): prompt echoes in `program`. Shows why a raw `grep worktreeconfig` is wrong, and the C-7c filter excludes them |
 | C-7g (foreign extension) | `git config --get-regexp '^extensions\.'`; `git --version` | Lists only `extensions.worktreeconfig` (git 2.53.0 per plan). Any other extension is a separate bug to file, not an AC11 failure |
 
 ## UX Acceptance Tests
@@ -136,7 +137,7 @@ N/A (no Migration Plan in `plan.md`).
 | Go (scoped) | `go test ./session/git ./session -run 'WorktreeConfig\|Resolve(Origin\|Local)BranchSHA' -coverprofile=cover.out && go tool cover -func=cover.out \| grep -E 'ops.go.*Resolve(Origin\|Local)BranchSHA'` | Both functions > 0%, happy and error branches hit (no new code, so repo-wide 80% is not re-gated here) |
 
 - Every requirement has at least one runnable check above (REQ-1..REQ-7: 7/7).
-- AC9 is accepted only if C-4a exits 0, C-4a2 = 0 over the full log, and C-4pre/C-4post show an unchanged `ActiveEnterTimestamp`.
+- AC9 is accepted only if C-4a exits 0, C-4a2 = 0 over the full log, and C-4pre/C-4post show an unchanged `ActiveEnterTimestamp` and `MainPID`, and C-4mon shows no breach.
 - AC11 is accepted only if C-7b is non-empty, C-7c = 0, and BOTH C-7e1 and C-7e2 pass (not skipped); C-7e3 alone never suffices. Zero matches without these controls is reported as unproven. Evidence is committed and pushed before `report_progress`.
-- If a check is red, report the AC as `fail` with the reason; do not edit product code except per plan Tasks 1.3a/1.3b.
+- If a check is red, report the AC as `fail` with the reason; do not edit product code except per plan Tasks T-AC9-5/T-AC9-6.
 - Not covered by a deterministic check: AC11 depends on organic post-restart traffic; if no qualifying positive control exists after a later restart, use the plan's Story 1.2.3 fallback (needs a free backlog WIP slot).
