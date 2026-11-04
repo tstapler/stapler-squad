@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,11 +155,12 @@ func TestStatusEnumValues(t *testing.T) {
 
 func TestTildeExpansionInNewInstance(t *testing.T) {
 	t.Parallel()
-	// Get home directory for comparison
-	homeDir, err := os.UserHomeDir()
+	// ResolveSessionPath expands "~" through the passwd entry, not $HOME (which Bazel and CI override).
+	usr, err := user.Current()
 	if err != nil {
-		t.Fatalf("Failed to get home directory: %v", err)
+		t.Fatalf("Failed to get current user: %v", err)
 	}
+	homeDir := usr.HomeDir
 
 	tests := []struct {
 		name             string
@@ -223,11 +225,12 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 
 func TestMigrationOfCorruptedPaths(t *testing.T) {
 	t.Parallel()
-	// Get home directory for comparison
-	homeDir, err := os.UserHomeDir()
+	// ResolveSessionPath expands "~" through the passwd entry, not $HOME (which Bazel and CI override).
+	usr, err := user.Current()
 	if err != nil {
-		t.Fatalf("Failed to get home directory: %v", err)
+		t.Fatalf("Failed to get current user: %v", err)
 	}
+	homeDir := usr.HomeDir
 
 	tests := []struct {
 		name           string

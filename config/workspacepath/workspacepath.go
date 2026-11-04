@@ -14,8 +14,12 @@ import (
 )
 
 // IsTestMode detects if the current process is a go test/benchmark binary, by
-// inspecting os.Args the same way config.IsTestMode() does (Priority 3).
+// inspecting os.Args the same way config.IsTestMode() does (Priority 3), or a
+// Bazel test (its binary is named <pkg>_test, not <pkg>.test, so argv has no ".test").
 func IsTestMode() bool {
+	if os.Getenv("TEST_TMPDIR") != "" && os.Getenv("TEST_SRCDIR") != "" {
+		return true
+	}
 	for _, arg := range os.Args {
 		if strings.Contains(arg, ".test") ||
 			strings.Contains(arg, "-test.") ||

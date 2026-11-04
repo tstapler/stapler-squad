@@ -851,6 +851,7 @@ go_test(
         "//jules:types.go",
         "//session/detection:testdata",
         "//session/testdata:all",
+        "//session/tokens:testdata",
     ],
     embed = [":session"],
     deps = [

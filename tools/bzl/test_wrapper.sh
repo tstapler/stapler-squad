@@ -3,7 +3,8 @@
 # process, the private environment the Epic 0 census (S8/S9) showed tests need:
 #   HOME under TEST_TMPDIR with a .gitconfig identity (else every git-committing test fails),
 #   a private short TMUX_TMPDIR so tmux never reaches the default server socket,
-#   tmux/gh/go on PATH (Bazel's test PATH is /usr/bin:/bin).
+#   tmux/gh/go on PATH (Bazel's test PATH is /usr/bin:/bin),
+#   a UTF-8 LANG (tmux sanitises tabs in -F output otherwise).
 # It sets no STAPLER_SQUAD_TMUX_SOCKET and no TMPDIR: tests that assert their own socket
 # names break under a global socket, and Bazel 9.3.1 already forces a short private /tmp.
 # Knobs: SSQ_TEST_EXTRA_PATH (colon list searched for host tools, via --test_env),
@@ -32,6 +33,9 @@ export HOME="$home"
 tmux_dir=$(mktemp -d /tmp/ssq-tmux.XXXXXX) || exit 2
 export TMUX_TMPDIR="$tmux_dir"
 unset TMUX TMUX_PANE
+# Bazel's clean env has no locale; tmux then prints "_" for the tab in `-F` formats (session/mux
+# ScanByUserOptions splits on it), so give it a UTF-8 locale.
+export LANG="${LANG:-C.UTF-8}"
 
 bin="$tmp/hostbin"
 mkdir -p "$bin"
