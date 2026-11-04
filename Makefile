@@ -1115,6 +1115,10 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
 
+.PHONY: plan-check-session-multi-pr
+plan-check-session-multi-pr: ## Validate the session-multi-pr-tracking plan's task dependency table
+	python3 scripts/plan-check/session_multi_pr_table.py
+
 ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty-web vs tests/terminal-conformance/ (docs/how-to/vt-conformance-runbook.md)
 	cd web-app && bunx jest --no-coverage src/lib/terminal/__tests__/conformance src/lib/terminal/__tests__/ghosttyAdapter.test.ts
 
