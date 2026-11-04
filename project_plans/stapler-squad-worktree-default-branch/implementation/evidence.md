@@ -42,3 +42,20 @@ Limits: no new session was started on a worktreeConfig repo in the window, so th
 ## Follow-up (not filed)
 
 The fork still rejects `objectformat`, `compatobjectformat`, `refstorage`, `relativeworktrees` and `submodulepathconfig` (allow-list in `repository_extensions.go`). This repo has only `extensions.worktreeconfig` (`git 2.53.0`), so the plan's trigger for filing a follow-up item was not met. A repo using one of those would fail the same way with a different extension name.
+
+## Review round 1 additions (verdict PARTIAL)
+
+Reviewer gaps: fork tests live outside the repo, `make lint` not re-run, AC 11 log check not valid evidence. Addressed:
+
+- **AC 10, `make lint`** (VERIFIED, from HEAD): `make lint` exit 0, ends `custom lint: ok`, `shellcheck: ok`, `0 issues.`
+- **AC 1, 2, 3, 6, fork tests** (VERIFIED): the pinned fork source was copied from the module cache (`$(go env GOMODCACHE)/github.com/tstapler/go-git/v5@v5.19.3-ssq.3`) to a scratch dir and run: `go test ./ -run 'TestVerifyExtensions|TestOpenRepo_should_Succeed_When_V0RepoHasWorktreeConfigExtension' -count=1 -v` -> `--- PASS: TestVerifyExtensions` (subtests include `repositoryformatversion=0: allows worktreeConfig` [AC 1], `repositoryformatversion=1: allows worktreeConfig` [AC 2], `repositoryformatversion=0: allows partialClone and preciousObjects` [AC 3], `worktreeConfig does not mask an invalid extension`) and `--- PASS: TestOpenRepo_should_Succeed_When_V0RepoHasWorktreeConfigExtension` [AC 6].
+- **AC 8** (VERIFIED): `go test ./session/git/backend/gogit -run TestReadEnrichment_RejectsIncludesAndUnsupported -count=1 -v` result recorded in the review request.
+- **AC 11 is not checkable at the path the AC names.** `~/.stapler-squad/logs/staplersquad.log` was last written Sep 5, so a `grep -c` there returns 0 no matter which binary runs; that count is vacuous. The service that handles session creation logs to `~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/staplersquad.log`. Reproduce the real check:
+
+```
+D=~/.stapler-squad/workspaces/d685c4b1a423cca3/logs; R=2026-11-04T12:27:48-08:00
+F='fromjson? | select(.time >= $r) | select(((.err // .error // "")|tostring)|test("does not support extension|unknown extension";"i")) | {time,msg,err}'
+jq -Rc --arg r "$R" "$F" $D/staplersquad.log | wc -l                                   # 0
+zcat $D/staplersquad-2026-11-04T13-51-53.139.log.gz | jq -Rc --arg r "$R" "$F" | wc -l   # 0
+zcat $D/staplersquad-2026-11-04T13-51-53.139.log.gz | jq -Rr 'fromjson? | select(((.err // .error // "")|tostring)|test("does not support extension";"i")) | .time' | sed -n '1p;$p'   # negative control: 10:32:03 ... 12:24:23
+```
