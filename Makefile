@@ -933,7 +933,7 @@ $(LINTER_BIN): $(LINTER_SRC)
 # excluded outright since scanning them just re-lints scripts already
 # covered by their own branch). Includes scripts/ssq-hook-handler, which has
 # no .sh extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+SHELL_SCRIPTS := $(shell find . -type d \( -name third_party -o -name node_modules -o -path './.git' -o -path './.claude/worktrees' \) -prune -o -type f \( -name '*.sh' -o -name ssq-hook-handler \) -print)
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
