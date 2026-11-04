@@ -73,7 +73,7 @@ Run from the worktree root unless noted. `LOGDIR=~/.stapler-squad/workspaces/d68
 | C-3b | `go version -m /home/tstapler/Programming/stapler-squad/stapler-squad \| grep -E 'go-git\|vcs.revision\|vcs.time\|vcs.modified'` | Contains `github.com/tstapler/go-git/v5 v5.19.3-ssq.3`; VERIFIED `vcs.revision=afbc063dd`, `vcs.modified=true` |
 | C-3b2 | `git merge-base --is-ancestor afbc063dd <vcs.revision from C-3b>; echo $?` | `0` (deployed revision descends from, or equals, the fix commit) |
 | C-3c | `systemctl --user show stapler-squad -p ActiveEnterTimestamp -p ExecStart` and `stat -c '%y' /home/tstapler/Programming/stapler-squad/stapler-squad` and `git log -1 --format=%cI afbc063dd` | Fix commit time (`2026-11-04T12:26:40-08:00`) < binary mtime (~12:27:36) < `ActiveEnterTimestamp` (~12:27:48); `ExecStart` path equals the inspected binary |
-| C-3d | `git ls-remote --tags https://github.com/tstapler/go-git v5.19.3-ssq.3` | One line, SHA starts `a328acc1` (INFERRED from plan; re-confirm on run) |
+| C-3d | `git ls-remote --tags https://github.com/tstapler/go-git v5.19.3-ssq.3` | One line, SHA starts `a328acc1` (VERIFIED (adversarial review) from plan; re-confirm on run) |
 
 ### REQ-4 (AC9)
 
