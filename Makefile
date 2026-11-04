@@ -1139,7 +1139,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: $(if $(filter bazel,$(BUILD_SYSTEM)),sync,) ci ready-bazel-guards proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows gazelle-check buildifier-check gen-freshness ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites; BUILD_SYSTEM=bazel adds make sync first and the gazelle-check, buildifier-check and gen-freshness Bazel gates at the end)
+ready: $(if $(filter bazel,$(BUILD_SYSTEM)),sync,) ci ready-bazel-guards proto-breaking ready-complexity-gate ready-test-inversions ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows gazelle-check buildifier-check gen-freshness ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites; BUILD_SYSTEM=bazel adds make sync first and the gazelle-check, buildifier-check and gen-freshness Bazel gates at the end)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
@@ -1160,6 +1160,10 @@ setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward p
 
 test-tymux-pin: ## Test tools/ci/check-tymux-pin.sh against a local fixture remote (no network)
 	tools/ci/check-tymux-pin_test.sh
+
+.PHONY: ready-test-inversions
+ready-test-inversions: ## Fail on a new test-layering inversion (a package's tests importing a package that depends on it); the allowlist only shrinks
+	go run ./tools/bzl/scoping inversions --allow tools/bzl/scoping/inversions-allowed.txt
 
 ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \

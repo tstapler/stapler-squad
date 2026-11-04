@@ -225,6 +225,7 @@ func runT9(args []string, stdout io.Writer) int {
 func runInversions(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("inversions", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print JSON")
+	allow := fs.String("allow", "", "allowlist file of known inversions (a ratchet: new ones fail, resolved ones must be removed)")
 	root := fs.String("root", workspace(), "repository root")
 	if fs.Parse(args) != nil {
 		return 2
@@ -235,6 +236,9 @@ func runInversions(args []string, stdout io.Writer) int {
 		return 1
 	}
 	inv := m.Inversions()
+	if *allow != "" {
+		return ratchetInversions(*root, *allow, inv, stdout)
+	}
 	if *asJSON {
 		_ = json.NewEncoder(stdout).Encode(inv)
 	}
@@ -244,6 +248,25 @@ func runInversions(args []string, stdout io.Writer) int {
 		}
 	}
 	if len(inv) > 0 {
+		return 1
+	}
+	return 0
+}
+
+func ratchetInversions(root, allowFile string, inv []Inversion, stdout io.Writer) int {
+	b, err := os.ReadFile(filepath.Join(root, allowFile))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	violations, stale := Ratchet(inv, ParseAllowlist(string(b)))
+	for _, v := range violations {
+		fmt.Fprintf(stdout, "new inversion: tests of %s import %s, which depends on %s\n", v.Pkg, v.Imported, v.Pkg)
+	}
+	for _, s := range stale {
+		fmt.Fprintf(stdout, "stale allowlist entry (resolved, delete it from %s): %s %s\n", allowFile, s.Pkg, s.Imported)
+	}
+	if len(violations)+len(stale) > 0 {
 		return 1
 	}
 	return 0

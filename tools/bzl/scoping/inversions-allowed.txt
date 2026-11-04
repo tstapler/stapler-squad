@@ -1,0 +1,6 @@
+# Known test-layering inversions (tools/bzl/scoping inversions --allow). A ratchet: only delete lines.
+# Blocked by the unexported test hook session.SetAllowImplausibleAddressesForTest (session/export_test.go):
+# claim_gossip_convergence_test.go, claim_two_host_integration_test.go, host_advertisement_convergence_test.go
+# cannot leave package session without exporting a production setter (ADR-010 forbids API changes).
+session server/auth
+session server/services

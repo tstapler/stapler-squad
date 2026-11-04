@@ -166,3 +166,38 @@ func (m *Model) Inversions() []Inversion {
 	})
 	return out
 }
+
+// ParseAllowlist reads "pkg imported" lines ('#' comments and blanks ignored).
+func ParseAllowlist(s string) []Inversion {
+	var out []Inversion
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		if f := strings.Fields(line); len(f) == 2 {
+			out = append(out, Inversion{Pkg: f[0], Imported: f[1]})
+		}
+	}
+	return out
+}
+
+// Ratchet compares found inversions with the allowlist: new ones are violations, and allowlisted ones that no
+// longer exist are stale (the list may only shrink).
+func Ratchet(found, allowed []Inversion) (violations, stale []Inversion) {
+	have, ok := map[Inversion]bool{}, map[Inversion]bool{}
+	for _, f := range found {
+		have[f] = true
+	}
+	for _, a := range allowed {
+		ok[a] = true
+		if !have[a] {
+			stale = append(stale, a)
+		}
+	}
+	for _, f := range found {
+		if !ok[f] {
+			violations = append(violations, f)
+		}
+	}
+	return violations, stale
+}

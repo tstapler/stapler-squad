@@ -142,3 +142,18 @@ func TestPrintT9(t *testing.T) {
 		t.Fatalf("inversions must fail T9d: %s", out.String())
 	}
 }
+
+func TestRatchet(t *testing.T) {
+	found := []Inversion{{"core", "svc"}, {"a", "b"}}
+	allowed := ParseAllowlist("core svc # known\n\nx y\n")
+	violations, stale := Ratchet(found, allowed)
+	if len(violations) != 1 || violations[0] != (Inversion{"a", "b"}) {
+		t.Fatalf("violations = %v, want the new a->b inversion", violations)
+	}
+	if len(stale) != 1 || stale[0] != (Inversion{"x", "y"}) {
+		t.Fatalf("stale = %v, want the resolved x->y entry", stale)
+	}
+	if v, s := Ratchet(found, ParseAllowlist("core svc\na b")); len(v)+len(s) != 0 {
+		t.Fatalf("exact allowlist must pass, got %v %v", v, s)
+	}
+}
