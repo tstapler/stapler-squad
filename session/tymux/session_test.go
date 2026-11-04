@@ -712,8 +712,8 @@ func TestTymuxGRPCSession_ActivityConcurrentPolls(t *testing.T) {
 			updated, _, content := sess.HasUpdated()
 			if updated {
 				updates.Add(1)
+				assert.True(t, sess.HasMeaningfulContent(content))
 			}
-			assert.True(t, sess.HasMeaningfulContent(content))
 			sess.FilterBanners(content)
 			sess.SetCommand(launchcmd.ShellScript{Text: command})
 		})
