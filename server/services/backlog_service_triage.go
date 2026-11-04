@@ -394,20 +394,6 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 	))
 }
 
-// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
-// headless triage path. The orphan guard uses this prefix to identify sessions that have no
-// live tmux process and can be safely tombstoned on re-trigger.
-// headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
-const (
-	headlessReReviewUUIDPrefix = "headless-re-review-"
-
-	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
-	// forms for callers outside this package that must not treat a synthetic
-	// headless ItemSession UUID as a tmux session.
-	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
-	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
-)
-
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
 // against a call that never stops producing output, since headless.idleTimeout
 // (session/headless/pool.go) is the primary, much faster defense against a
@@ -3072,7 +3058,7 @@ func (s *BacklogService) TriggerReReview(
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
 				log.Warn("[TriggerReReview] branch drift blocked review", "item", item.ID, "branch", wt.BranchName, "summary", blockedSummary)
-				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
@@ -3167,7 +3153,7 @@ Do not modify the code. Only write the review verdict.
 		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
 		if workSessionDiff == "" && !codebaseWorkDirExists {
 			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
-			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, blockedSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
@@ -3270,7 +3256,7 @@ Do not modify the code. Only write the review verdict.
 		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
 			reviewPath = "codebase-read-degraded"
 			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
-			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, capSummary)
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, capSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
@@ -3316,7 +3302,7 @@ Do not modify the code. Only write the review verdict.
 			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
 				reviewPath = "codebase-read-degraded"
 				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
-				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, timeoutSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, timeoutSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
@@ -3332,12 +3318,12 @@ Do not modify the code. Only write the review verdict.
 			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
 			// changes the returned error: every step here is best-effort/log-and-continue.
 			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
-			capturePath := s.captureHeadlessFailure(headlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			capturePath := s.captureHeadlessFailure(HeadlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
 			log.Error("[TriggerReReview] headless re-review call failed", "item", item.ID, "errType", errType, "capture", capturePath, "error", callErr)
 			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, session.ItemSessionData{
 				ItemID:      item.ID,
-				SessionUUID: headlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionUUID: HeadlessReReviewUUIDPrefix + uuid.New().String(),
 				SessionRole: session.SessionRoleReview,
 				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
 			}); failCreateErr != nil {
@@ -3370,7 +3356,7 @@ Do not modify the code. Only write the review verdict.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 
-		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
+		reviewSessionUUID := HeadlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
 			ItemID:                 item.ID,
 			SessionUUID:            reviewSessionUUID,
@@ -3638,7 +3624,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
 		// regardless, to prevent a genuinely hung or leaked call from blocking
 		// re-trigger indefinitely.
-		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
+		isHeadless := strings.HasPrefix(is.SessionUUID, HeadlessTriageUUIDPrefix)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
 		var live bool
 		if isHeadless {

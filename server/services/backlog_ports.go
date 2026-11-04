@@ -303,3 +303,17 @@ const reasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
 // reasonNameChangesRequested has no manual-nudge counterpart, so a
 // changes-requested-only steer never suppresses a thread nudge.
 const reasonNameChangesRequested = "CHANGES_REQUESTED"
+
+// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
+// headless triage path. The orphan guard uses this prefix to identify sessions that have no
+// live tmux process and can be safely tombstoned on re-trigger.
+// headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
+const (
+	headlessReReviewUUIDPrefix = "headless-re-review-"
+
+	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
+	// forms for callers outside this package that must not treat a synthetic
+	// headless ItemSession UUID as a tmux session.
+	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
+	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
+)
