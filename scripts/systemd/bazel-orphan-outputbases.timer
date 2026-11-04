@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily cleanup of orphan Bazel output bases
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
