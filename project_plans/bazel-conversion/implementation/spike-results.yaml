@@ -51,3 +51,7 @@
   verdict: Pass
   path: Bazel 9.3.1 default hermetic /tmp (linux-sandbox -M _hermetic_tmp -m /tmp, TMPDIR forced to /tmp); no flag needed; the without-arm is a bind under the long TEST_TMPDIR (cannot be switched off)
   cost: S
+- spike: S15
+  verdict: FallbackWorkaround
+  path: "otel_weave rule (tools/bzl/otel_weave.bzl + otel_weave.sh): unsandboxed local action, no remote cache, runs the pinned otelc through scripts/otel-auto-build.sh in a private copy of the checkout; Bazel supplies the Go SDK, generated proto/ent, web dist and embed staging, but the weave itself is non-hermetic (module resolution, host go cache); windows cross-builds stay on //:stapler-squad_plain"
+  cost: M

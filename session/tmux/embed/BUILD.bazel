@@ -8,5 +8,8 @@ copy_file(
     src = "//tools/bzl/tmux:tmux_bin",
     out = "tmux",
     is_executable = True,
-    visibility = ["//session/tmux:__pkg__"],
+    visibility = [
+        "//:__pkg__",  # otel_weave genrule stages it
+        "//session/tmux:__pkg__",
+    ],
 )

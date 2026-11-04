@@ -26,7 +26,7 @@ platform(
 go_cross_binary(
     name = "stapler-squad_windows_amd64.exe",
     platform = ":windows_amd64",
-    target = "//:stapler-squad",
+    target = "//:stapler-squad_plain",  # uninstrumented: the otelc weave cannot cross-compile under Bazel
 )
 
 alias(
@@ -59,7 +59,7 @@ alias(
 go_cross_binary(
     name = "stapler-squad_windows_arm64.exe",
     platform = ":windows_arm64",
-    target = "//:stapler-squad",
+    target = "//:stapler-squad_plain",  # uninstrumented: the otelc weave cannot cross-compile under Bazel
 )
 
 alias(

@@ -88,8 +88,11 @@ jobs:
       - name: Generate protos and stub web UI
         uses: ./.github/actions/prepare-stub
 
-      - name: Build release binary (single target, CGO_ENABLED=0)
-        run: goreleaser build --snapshot --clean --single-target --id stapler-squad
+      - name: Install otelc (the released binary is otelc-woven)
+        run: go install go.opentelemetry.io/otelc/tool/cmd/otelc@v1.0.1
+
+      - name: Build release binary (single target, CGO_ENABLED=0, otelc-woven)
+        run: goreleaser build --snapshot --clean --single-target --parallelism 1 --id stapler-squad
 
       - name: Locate built binary
         id: locate

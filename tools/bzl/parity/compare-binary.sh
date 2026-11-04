@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P5 binary parity: the Bazel `--config=release` //:stapler-squad against the `go build` command that
+# P5 binary parity: the Bazel `--config=release` //:stapler-squad_plain against the `go build` command that
 # `make build-embedded-tymux` runs (taken from `make -n`, so the tags and LDFLAGS are Make's own).
 #
 # Checks (exit 0 iff all pass):
@@ -29,17 +29,18 @@ cleanup=()
 trap 'for f in "${cleanup[@]:-}"; do [ -n "$f" ] && rm -rf "$f"; done' EXIT
 
 bz() { tools/bazel build --jobs="${BAZEL_JOBS:-4}" --local_resources=memory="${BAZEL_MEM:-3000}" --config=release "$@"; }
-bz //:stapler-squad //session/tmux/embed:tmux_staged //session/tymux/embed:tymuxd_staged //server/web:dist_staged
+bz //:stapler-squad_plain //session/tmux/embed:tmux_staged //session/tymux/embed:tymuxd_staged //server/web:dist_staged
 # bazel-bin is a symlink to the LAST invocation's config, so resolve the release output dir explicitly.
 bin=$(tools/bazel info --config=release bazel-bin 2>/dev/null)
-bazel_bin=$bin/stapler-squad_/stapler-squad
+bazel_bin=$bin/stapler-squad_plain_/stapler-squad_plain
 tmux_staged=$bin/session/tmux/embed/tmux
 tymuxd_staged=$bin/session/tymux/embed/tymuxd
 
 ref=${REF_BINARY:-}
 if [ -z "$ref" ]; then
   ref=$scratch/stapler-squad.make
-  cmd=$(make -n build-embedded-tymux 2>/dev/null | grep -E '^\s*go build .*-tags' | tail -1)
+  # Plain-vs-plain: strip the otelc weave wrapper, so this compares //:stapler-squad_plain with the same go build.
+  cmd=$(make -n build-embedded-tymux 2>/dev/null | grep -E '^\s*(\./scripts/otel-auto-build\.sh )?go build .*-tags' | tail -1 | sed -E 's#^\s*(\./scripts/otel-auto-build\.sh )?##')
   [ -n "$cmd" ] || { echo "compare-binary: no go build line in make -n build-embedded-tymux" >&2; exit 2; }
   cmd=${cmd//-o stapler-squad ./-o $ref .}
   if [ ! -f gen/proto/go/session/v1/session.pb.go ] || [ ! -f session/ent/ent.go ]; then

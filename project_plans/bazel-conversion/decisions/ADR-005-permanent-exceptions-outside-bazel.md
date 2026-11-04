@@ -9,14 +9,15 @@ Permanent exceptions (documented in `docs/reference/bazel-targets-and-configs.md
 
 | Item | Why it stays | Interface to Bazel |
 |---|---|---|
-| otel auto-instrumentation variant (`build-otel-auto*`, tag `otelcauto`) | `otelc` rewrites the Go toolchain build; no Bazel analogue | Runs on `go build` after `make sync`; guard that the main build is unaffected |
 | macOS codesign, TCC identity | Keychain access, non-sandboxable | `install-service`/`make _codesign-binary` signs a copy of the Bazel output at a stable path |
 | Diff-based and history-based gates: `dupl --new-from-rev`, gocyclo/gocognit/funlen/revive new-code gate, `proto-breaking`, jscpd threshold, actionlint, shellcheck | Need git history or whole-tree scans | Wrapped; run after `make sync` |
 | golangci-lint | Needs a normal Go tree | Wrapped; the 17 custom analyzers may move to `nogo` (Story 8.4) with the wrapped `make lint-custom` retained until the retention window ends |
 | release-please, website/demo deploy workflows, benchmarks/pprof, harness (RealClaude) tests | Not build-graph concerns | Unchanged |
-| goreleaser | Keeps its own `CGO_ENABLED=0 go build` (Task 3.7a, "Goreleaser decision" below): `builder: prebuilt` is GoReleaser Pro only | Parity check via `goreleaser-check.yml` |
+| goreleaser | Keeps its own `CGO_ENABLED=0 go build`, routed through the otelc weave shim `scripts/goreleaser-go-tool.sh` (Task 3.7a, "Goreleaser decision" below): `builder: prebuilt` is GoReleaser Pro only | Parity check via `goreleaser-check.yml` |
 | Homebrew `Formula/stapler-squad.rb` | Written by goreleaser (`brews.directory: Formula`) from release assets | Stays goreleaser-owned; Task 3.7c snapshot dry run asserts asset names, URLs and sha256 match |
 | Feature registry (`docs/registry/features/*.json`, `make registry-generate`) | Committed scan-derived artifact, not gitignored codegen | Stays a make target; CI fails on a non-empty `git diff -- docs/registry` (ADR-002 item 6, Task 2.4c) |
+
+**otel auto-instrumentation is not an exception any more (owner decision 2026-11-03, PROVISIONAL on branch `sdd/bazel-otel-default`).** The one `stapler-squad` binary is always the `otelc`-woven build, in make, Bazel and releases; the opt-in `stapler-squad-otel` split, `build-otel-auto*` and `otel-auto-isolation-guard` are retired. Under Bazel the default `//:stapler-squad` is an `otel_weave` rule (`tools/bzl/otel_weave.bzl`): a **non-hermetic** local action (spike S15, verdict FallbackWorkaround) that runs the pinned `otelc` through `scripts/otel-auto-build.sh` in a private copy of the checkout. Bazel still supplies the Go SDK, generated proto/ent, the web dist, embed staging and the change triggers. Unavoidably non-hermetic: module resolution and the host Go cache. It is never remote-cached, and Windows cross builds use the uninstrumented `//:stapler-squad_plain`.
 
 **Windows (owner decision 2026-11-01): cross-compile only.** `windows_amd64` binaries via a platform transition (`go_cross_binary`); no Windows tests under Bazel; windows-only packages carry `target_compatible_with` so `//...` on Linux/macOS excludes them. This corrects `research/architecture.md` section 3, which said "dropped".
 
@@ -37,3 +38,7 @@ Revisit only if the owner buys GoReleaser Pro; then switch to `builder: prebuilt
 
 - "Bazel is the build of record" means the repo's binaries and tests; the table above is the complete list of exceptions. Adding to it requires amending this ADR.
 - Installing/running the live service never goes through `bazel run` (CLAUDE.md rule on `:8543`).
+
+## Changelog
+
+- 2026-11-03: otel auto-instrumentation removed from the permanent-exception table; the single `stapler-squad` binary is always `otelc`-woven (make, Bazel `//:stapler-squad` via the S15 `otel_weave` action, GoReleaser). Supersedes the "opt-in, structurally isolated" decision in `project_plans/go-auto-instrumentation/decisions/ADR-003-structural-opt-in-separate-binary.md`. Owner decision, provisional on branch `sdd/bazel-otel-default`.

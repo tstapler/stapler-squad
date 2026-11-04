@@ -1,6 +1,6 @@
 # ADR-003: Contain the auto-instrumented build structurally (separate target + separate binary), not with a runtime flag
 
-**Status**: Accepted
+**Status**: Superseded 2026-11-03 by owner decision (provisional, branch `sdd/bazel-otel-default`): there is one `stapler-squad` binary and it is always the otelc-woven build, in make, Bazel and releases. `build-otel-auto*`, `stapler-squad-otel` and `otel-auto-isolation-guard` are retired. See `project_plans/bazel-conversion/decisions/ADR-005-permanent-exceptions-outside-bazel.md` (changelog). Original text kept below as history.
 **Date**: 2026-08-21
 **Deciders**: SDD Phase 3 planning
 

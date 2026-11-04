@@ -1,6 +1,6 @@
 # ADR-005: Adopt `otelc` auto-instrumentation as default once named preconditions hold — not yet, not never
 
-**Status**: Accepted
+**Status**: Accepted; the "not yet" verdict was overridden 2026-11-03 by an owner decision to make the woven build the only build (provisional, branch `sdd/bazel-otel-default`). The preconditions and the operational risks recorded below (build-time cost, slow SIGTERM shutdown, woven `go test` load) were accepted by that decision, not resolved.
 **Date**: 2026-08-22
 **Deciders**: SDD Phase 6 planning
 

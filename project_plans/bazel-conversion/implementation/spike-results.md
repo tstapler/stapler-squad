@@ -629,3 +629,28 @@ None required. Epic 4 inputs: (a) decide a test HOME fixture (gitconfig), (b) pu
 `bash tools/bzl/parity/shard-union.sh //server/services:services_test` exits 0 and prints `SHARD UNION EQUAL n=5225` (VERIFIED: the sorted passing-name sets of the sharded run, 4 shards via `--test_sharding_strategy=explicit`, and the unsharded run, `=disabled`, are identical; `shard_1_of_4` .. `shard_4_of_4` directories exist). Sharded wall time 47.0 s, unsharded 141.6 s. Both runs still report failing tests (the `cwd` class, fixed in Story 4.10), so the comparison is by passing names. With the Story 4.1b wrapper (tmux, gh and go on PATH) the S8 `shard-timeout` abort of shard 2 no longer occurs.
 
 `bash tools/bzl/parity/shard-union.sh --filter-semantics` prints `filter: passthrough unanchored`: `--test_filter=TestLiveState` ran `TestLiveStateError` and its subtests (so it is not anchored), and `--test_filter='TestIsolatedHome|TestShortTempDir'` ran both tests (the value reaches Go as a regular expression, like `go test -run`). Task 8.2e can map `RUN=` to `--test_filter` unchanged.
+
+## S15 otel-auto under Bazel (2026-11-03, Bazel 9.3.1, branch `sdd/bazel-otel-default`)
+
+**Verdict: FallbackWorkaround** (row in `spike-results.yaml`). Question: can the owner decision "the one binary is always otelc-woven" hold under Bazel, so that the default `bazel build //:stapler-squad` yields the instrumented binary?
+
+Approaches considered:
+
+| Approach | Outcome |
+|---|---|
+| `go_binary` with the otelc toolexec through rules_go `gc_goopts`/`gotags` | Not attempted: otelc needs `otelc setup` first, which writes `otel.instrumentation.go` and `otelc.runtime.go` into the source tree and rewrites `go.mod`; a `go_binary` compiles declared sources only. |
+| `genrule` | Superseded by the rule below: a genrule has no clean access to the Go SDK or stamp file. |
+| Custom rule `otel_weave` (`tools/bzl/otel_weave.bzl` + `otel_weave.sh`): local, unsandboxed action that copies the checkout to `~/.cache/ssq-otel/src`, overlays Bazel's generated proto/ent code, web dist and embed staging, and runs `scripts/otel-auto-build.sh go build` with the Bazel Go SDK on PATH | **Chosen; works.** |
+
+Evidence (VERIFIED, commands run in `stapler-squad.worktrees/bazel-otel-default`):
+
+- `BAZEL_REAL=$(command -v bazelisk) tools/bazel build --config=agent --jobs=4 --local_resources=memory=3000 //:stapler-squad` exited 0: `Elapsed time: 67.448s ... 3 processes: 1536 action cache hit, 2 internal, 1 local` (cold otelc and Go cache, host load average 16 to 22).
+- `strings -a bazel-bin/stapler-squad | grep -c 'go.opentelemetry.io/otelc'` printed 523; the live uninstrumented `./stapler-squad` of the main checkout printed 0.
+- With `--stamp --workspace_status_command=tools/bzl/workspace_status.sh` the action passes the same `-X main.version=... buildinfo.*` ldflags `make` uses (the log line shows `2.8.0-274-g94b898cbb-dirty`, branch, commit, worktree).
+- `bazel-bin/stapler-squad version` logs `OpenTelemetry initialized ... instrumentation_name: go.opentelemetry.io/otelc` at startup, so the weave is live.
+- `git status --short go.mod go.sum` printed nothing after every Bazel build: the rewrite happens in the private copy.
+- `bazel run //:gazelle -- -mode=diff` proposes no new `go_binary` for the main package after the rename of the plain target to `stapler-squad_plain`.
+
+Non-hermetic (why this is not `Pass`): the action is `local`/`no-sandbox`/`no-remote`/`no-cache`/`requires-network`; `otelc` bumps and resolves modules from the host module cache or network; the source copy is the live checkout (Go changes still re-trigger it through the `:stapler-squad_lib` input); `otelc` itself is `go install`ed into `~/.cache/ssq-otel` at the pinned v1.0.1, not a Bazel repository. The private Go cache reached 4.6 GB across the stamped and unstamped variants; `otel_weave.sh` now drops it past 2 GB.
+
+Not verified: `--config=release` / `embed_tmux` staging through the rule (needs the tmux and tymuxd builds; wiring mirrors ADR-007's selects), macOS (`CGO_LDFLAGS` Info.plist branch lives only in the Makefile), and Windows (cross builds use `//:stapler-squad_plain`, which is uninstrumented).

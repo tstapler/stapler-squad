@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -207,18 +207,18 @@ build: stapler-squad ## Build the Go application
 # to build the binary Playwright's global-setup spawns — relying on this
 # target's own dependency chain (server/web/dist) is what keeps e2e runs from
 # serving a stale frontend after only web-app/src changes.
-stapler-squad: ensure-tools proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary
-	@echo "Building Go application..."
+stapler-squad: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary (always the otelc auto-instrumented build)
+	@echo "Building Go application (otelc auto-instrumented)..."
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
-		go build -ldflags "$(LDFLAGS)" -o stapler-squad .
+		$(OTEL_BUILD) go build -ldflags "$(LDFLAGS)" -o stapler-squad .
 	@# Verify Info.plist was actually embedded (catches silent CGO_ENABLED=0 failures)
 	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
 		(echo "ERROR: Info.plist was not embedded. Ensure CGO_ENABLED=1 and try again." && exit 1)
 else
-	go build -ldflags "$(LDFLAGS)" -o stapler-squad .
+	$(OTEL_BUILD) go build -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
-	@echo "✅ stapler-squad built successfully"
+	@echo "✅ stapler-squad built successfully (otelc auto-instrumented)"
 
 # Install web-app Bun dependencies when bun.lock changes. Delegates to
 # tools/shared-node-modules, which symlinks node_modules into a dir shared
@@ -353,12 +353,12 @@ install-hooks: ## Build and install ssq-hooks + ssq-hook-handler to ~/.local/bin
 	@# on hook errors") and no notification is ever sent.
 	install -m 0755 scripts/ssq-notify ~/.local/bin/ssq-notify
 
-build-mux: ensure-tools ## Build the claude-mux PTY multiplexer binary
-	@echo "Building claude-mux..."
-	go build -o claude-mux ./cmd/claude-mux
-	@echo "✅ claude-mux built to ./claude-mux"
+build-mux: ensure-tools ## Build the ssq-mux PTY multiplexer binary (Bazel: //cmd/ssq-mux)
+	@echo "Building ssq-mux..."
+	go build -o ssq-mux ./cmd/ssq-mux
+	@echo "✅ ssq-mux built to ./ssq-mux"
 
-install-mux: ensure-tools ## Build and install claude-mux to ~/.local/bin
+install-mux: ensure-tools ## Build and install ssq-mux to ~/.local/bin
 	@./scripts/install-mux.sh
 
 # ── Pinned tmux binary (for test isolation) ────────────────────────────────
@@ -436,14 +436,14 @@ fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rust
 build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
 	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
 
-build-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
+build-embedded: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
-		go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
+		$(OTEL_BUILD) go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
 		(echo "ERROR: Info.plist was not embedded in embedded build." && exit 1)
 else
-	go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
+	$(OTEL_BUILD) go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux"
 
@@ -452,44 +452,33 @@ endif
 # CI/release artifacts depending on -tags embed_tmux alone are unaffected.
 # Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
 # tymuxd embedding doesn't touch TCC entitlement plumbing.
-build-embedded-tymux: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+build-embedded-tymux: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
-		go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+		$(OTEL_BUILD) go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
 	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
 		(echo "ERROR: Info.plist was not embedded in embedded build." && exit 1)
 else
-	go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+	$(OTEL_BUILD) go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux + tymuxd"
 
-# build-otel-auto: opt-in, structurally isolated build path (go-auto-instrumentation
-# project, project_plans/go-auto-instrumentation/). Never a prerequisite of build,
-# ci, ready, quick-check, pre-commit, or install-service — see otel-auto-isolation-guard
-# below, which fails ci if that ever changes. -tags embed_tmux is supported here
-# (Spike A passed for -tags; see spike-verdicts.md) via build-otel-auto-embedded.
-# No macOS CGO_LDFLAGS/Info.plist branch yet — deferred, see plan.md Unresolved
-# Question 6.
-build-otel-auto: ensure-tools sync server/web/dist ## Build stapler-squad-otel with otelc compile-time auto-instrumentation (opt-in — see project_plans/go-auto-instrumentation)
-	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
-	./scripts/otel-auto-build.sh go build -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
-	@echo "✅ stapler-squad built with otelc auto-instrumentation → ./stapler-squad-otel"
+# The one stapler-squad binary is always built with otelc compile-time auto-instrumentation
+# (owner decision, ADR-005 amendment; project_plans/go-auto-instrumentation). Every
+# `go build` of the shipped binary goes through scripts/otel-auto-build.sh, which weaves,
+# builds, and restores go.mod/go.sum. Tests stay on plain `go test` (a woven test run is a
+# machine-load risk); otel-auto-test below is the one designed woven test path.
+OTEL_BUILD := ./scripts/otel-auto-build.sh
+OTELC_VERSION := v1.0.1
 
-build-otel-auto-embedded: ensure-tools sync server/web/dist build-tmux-embed ## Build stapler-squad-otel with tmux bundled + otelc auto-instrumentation (opt-in)
-	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
-	./scripts/otel-auto-build.sh go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
-	@echo "✅ stapler-squad built with embedded tmux + otelc auto-instrumentation → ./stapler-squad-otel"
+.PHONY: ensure-otelc
+ensure-otelc: ## Install the pinned otelc tool if missing (external binary, not a go.mod dependency)
+	@which otelc >/dev/null 2>&1 || [ -x "$$(go env GOPATH)/bin/otelc" ] || (echo "Installing otelc $(OTELC_VERSION)..." && go install go.opentelemetry.io/otelc/tool/cmd/otelc@$(OTELC_VERSION))
 
-otel-auto-isolation-guard: ## Prove build-otel-auto is unreachable from ci/ready/quick-check/pre-commit/install-service (Story 2.1.3)
-	@./scripts/otel-auto-isolation-guard.sh
-
-otel-auto-isolation-guard-selftest: ## Prove the Isolation Guard's own detection logic actually fires (injects a deliberate leak into a temp Makefile copy)
-	@./scripts/otel-auto-isolation-guard.sh --self-test
-
-otel-auto-smoke: ## Verify stapler-squad-otel actually emits a db.system span (Collector Smoke Test; needs a local OTLP collector on :4317)
+otel-auto-smoke: ## Verify the built ./stapler-squad actually emits a db.system span (Collector Smoke Test; needs a local OTLP collector on :4317)
 	@./scripts/otel-auto-smoke.sh
 
-otel-auto-smoke-suppression: ## Verify stapler-squad-otel emits nothing when OTEL_ENABLED=false (Suppression Smoke Test; needs a local OTLP collector on :4317)
+otel-auto-smoke-suppression: ## Verify ./stapler-squad emits nothing when OTEL_ENABLED=false (Suppression Smoke Test; needs a local OTLP collector on :4317)
 	@./scripts/otel-auto-smoke.sh --suppression
 
 # otel-auto-test: the only repeatable way to run
@@ -502,10 +491,9 @@ otel-auto-smoke-suppression: ## Verify stapler-squad-otel emits nothing when OTE
 # can't just call otel-auto-build.sh with the test packages directly (a
 # genuine `otelc setup` chicken-and-egg failure when the rule-implementation
 # package itself is a setup target). go.mod/go.sum end up byte-identical to
-# HEAD afterward, same as build-otel-auto. Never a prerequisite of
-# ci/ready/quick-check/pre-commit/install-service — see
-# otel-auto-isolation-guard, which fails ci if that ever changes.
-otel-auto-test: ensure-tools ## Run instrumentation/otelc/safeexec + telemetry tests under the otelcauto build tag (opt-in — see project_plans/go-auto-instrumentation)
+# HEAD afterward, same as the stapler-squad build. Never a prerequisite of
+# ci/ready/quick-check/pre-commit/install-service (woven test runs are a load risk).
+otel-auto-test: ensure-tools ensure-otelc ## Run instrumentation/otelc/safeexec + telemetry tests under the otelcauto build tag (not part of ci)
 	@./scripts/otel-auto-test.sh
 	@echo "✅ otelc auto-instrumentation hook tests passed"
 
@@ -1083,7 +1071,7 @@ tidy: ensure-tools ## Tidy and verify go modules
 # Cleanup
 clean: ## Clean build artifacts and temporary files
 	go clean
-	rm -f stapler-squad claude-mux coverage.out coverage.html benchmark_results.txt
+	rm -f stapler-squad ssq-mux coverage.out coverage.html benchmark_results.txt
 	rm -rf analysis_results/
 
 clean-tools: ## Remove all installed development tools (use with caution)
@@ -1099,7 +1087,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/

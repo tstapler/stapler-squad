@@ -94,13 +94,13 @@ json_get() {
 # (e.g. "ttys003") so that multiple Claude instances in the same directory are treated
 # as distinct sessions rather than being collapsed into one notification group.
 get_session_id() {
-    # Check environment variable first (explicit override from claude-mux)
+    # Check environment variable first (explicit override from ssq-mux)
     if [[ -n "${CS_SESSION_ID:-}" ]]; then
         echo "$CS_SESSION_ID"
         return
     fi
 
-    # Check for mux-injected tmux session name (claude-mux integration)
+    # Check for mux-injected tmux session name (ssq-mux integration)
     if [[ -n "${CS_MUX_TMUX_SESSION:-}" ]]; then
         echo "$CS_MUX_TMUX_SESSION"
         return
@@ -412,7 +412,7 @@ send_notification() {
         args+=(-d "node_version=$NODE_VERSION")
     fi
 
-    # Add claude-mux context for deep linking and session correlation
+    # Add ssq-mux context for deep linking and session correlation
     if [[ -n "${CS_MUX_SOCKET_PATH:-}" ]]; then
         args+=(-d "mux_socket=$CS_MUX_SOCKET_PATH")
     fi
