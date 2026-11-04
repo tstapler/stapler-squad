@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Spike S1 (Task 0.3b): byte-compare Bazel-built Go proto output with the `make proto-gen` (buf generate)
-# Go half, after gofmt. Usage: compare-proto.sh [gopb|buf|ts]
-#   gopb  go_proto_library + connect compiler (Task 0.3a targets)
-#   buf   buf generate as a Bazel action with local pinned plugins (Task 0.3d target)
+# P4 parity: byte-compare Bazel-built proto output with `make proto-gen` (buf generate), after gofmt.
+# Usage: compare-proto.sh [buf|ts]   (default buf)
+#   buf   //proto/session/v1:gen_go (buf generate with local pinned plugins) vs the Go half of buf.gen.yaml
 #   ts    //tools/bzl/proto:gen_ts (Task 0.6e) vs the TS plugin of buf.gen.yaml (no formatter is applied by
 #         `make proto-gen`); reference plugin: PROTOC_GEN_ES=<path> or web-app/node_modules/.bin/protoc-gen-es.
 #         Deltas are only those listed in tools/bzl/parity/allowed-deltas.txt (paths relative to the gen root).
@@ -11,6 +10,8 @@
 set -u
 mode=${1:-buf}
 cd "$(git rev-parse --show-toplevel)" || exit 2
+# Without a `bazel` on PATH, use the repo wrapper over bazelisk.
+command -v bazel >/dev/null || bazel() { BAZEL_REAL=${BAZEL_REAL:-$(command -v bazelisk)} tools/bazel "$@"; }
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/compare-proto.XXXXXX"); trap 'rm -rf "$tmp"' EXIT
 if [ "$mode" = ts ]; then
   ref=${PROTO_REF_DIR:-}
@@ -42,9 +43,8 @@ if [ -z "$ref" ]; then
   buf generate proto --template buf.gen.go-only.yaml -o "$ref" || { echo "compare-proto: reference generation failed" >&2; exit 2; }
 fi
 case "$mode" in
-  gopb) scan='sessionv1*_go_proto_'; targets=(//proto/session/v1:sessionv1_go_proto //proto/session/v1:sessionv1connect_go_proto); groups=(--output_groups=go_generated_srcs) ;;
   buf)  scan='gen'; targets=(//proto/session/v1:gen_go); groups=() ;;
-  *) echo "usage: $0 [gopb|buf|ts]" >&2; exit 2 ;;
+  *) echo "usage: $0 [buf|ts]" >&2; exit 2 ;;
 esac
 bazel build --config=agent --keep_going --sandbox_default_allow_network=false "${groups[@]}" "${targets[@]}" 2>&1 | tail -3; [ "${PIPESTATUS[0]}" = 0 ] || echo "compare-proto: bazel build reported failures (continuing with what built)" >&2
 out=$tmp/bazel/gen/proto/go/session/v1; mkdir -p "$out/sessionv1connect"

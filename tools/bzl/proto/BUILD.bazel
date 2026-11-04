@@ -1,5 +1,5 @@
-# Spike S1 (Story 0.3, Task 0.3a): connect-go as a rules_go proto compiler.
-load("@rules_go//proto:compiler.bzl", "go_proto_compiler")
+# Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
+# gazelle:ignore
 load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
 
 alias(
@@ -8,16 +8,7 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-go_proto_compiler(
-    name = "connect_go",
-    options = ["paths=source_relative"],
-    plugin = ":protoc_gen_connect_go",
-    suffix = ".connect.go",
-    visibility = ["//visibility:public"],
-    deps = ["@com_connectrpc_connect//:connect"],
-)
-
-# Spike S1-ts (Task 0.6e): web-app/src/gen as a tree artifact, protoc-gen-es from @web_node_modules.
+# web-app/src/gen as a tree artifact, protoc-gen-es from @web_node_modules.
 buf_gen_ts(
     name = "gen_ts",
     srcs = ["//proto/session/v1:protos"],
