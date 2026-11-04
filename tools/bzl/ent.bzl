@@ -59,7 +59,7 @@ def _dep(imp):
             return label + imp[len(p) + 1:]
     fail("ent_packages: no label mapping for import %s; add it to _EXTERNAL" % imp)
 
-def ent_packages(name, packages, entc, flags, packages_file, schema_srcs):
+def ent_packages(name, packages, entc, flags, packages_file, schema_srcs, visibility = None):
     """Declares ent_gen(name) and one go_library per generated package.
 
     Args:
@@ -69,9 +69,10 @@ def ent_packages(name, packages, entc, flags, packages_file, schema_srcs):
       flags: file holding the `ent generate` flags (ent_flags.txt).
       packages_file: packages.bzl as a file, so a stale listing fails the action.
       schema_srcs: the schema .go files.
+      visibility: of the ent_gen target (the generated libraries are always public).
     """
     outs = [(d + "/" if d != "." else "") + f for d, fs, _ in packages for f in fs]
-    ent_gen(name = name, entc = entc, flags = flags, packages = packages_file, schema_srcs = schema_srcs, outs = outs)
+    ent_gen(name = name, entc = entc, flags = flags, packages = packages_file, schema_srcs = schema_srcs, outs = outs, visibility = visibility)
     for d, fs, imports in packages:
         lib = "ent" if d == "." else d
         go_library(
