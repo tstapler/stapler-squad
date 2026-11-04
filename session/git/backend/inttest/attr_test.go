@@ -1,4 +1,4 @@
-package backend_test
+package inttest
 
 import "go.opentelemetry.io/otel/attribute"
 

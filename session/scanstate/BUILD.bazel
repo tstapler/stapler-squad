@@ -25,13 +25,9 @@ alias(
 
 go_test(
     name = "scanstate_test",
-    srcs = [
-        "position_test.go",
-        "store_test.go",
-    ],
+    srcs = ["position_test.go"],
     embed = [":scanstate"],
     deps = [
-        "//session",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

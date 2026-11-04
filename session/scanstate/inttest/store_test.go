@@ -1,4 +1,4 @@
-package scanstate_test
+package inttest
 
 import (
 	"context"

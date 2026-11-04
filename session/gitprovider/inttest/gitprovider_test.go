@@ -1,4 +1,4 @@
-package gitprovider_test
+package inttest
 
 import (
 	"context"

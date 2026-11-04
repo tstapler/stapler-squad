@@ -155,14 +155,6 @@ func TestWithIsolatedStateDir_ReleasesLockOnSuccessiveCalls(t *testing.T) {
 	}
 }
 
-// WithFakeHome and WithIsolatedStateDir re-export the helpers above for this
-// directory's external services_test package, which cannot see unexported
-// identifiers but shares the same test binary (and therefore must share the
-// same mutexes).
-func WithFakeHome(t *testing.T) string { t.Helper(); return withFakeHome(t) }
-
-func WithIsolatedStateDir(t *testing.T) string { t.Helper(); return withIsolatedStateDir(t) }
-
 // envLock is a mutex plus a record of which test holds it, so the holder (and
 // its subtests) can re-enter instead of deadlocking on a lock it already owns.
 type envLock struct {

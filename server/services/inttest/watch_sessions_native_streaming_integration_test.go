@@ -1,9 +1,9 @@
-// Package services_test (an external test package, not services) is
+// Package inttest (moved out of server/services's external services_test package, ADR-010 Tier 0) is
 // required here because this test exercises server.StartRemote and
 // server.NewServerWithDeps directly -- the server package already imports
 // server/services, so an internal (package services) test file in this
 // directory cannot import server without creating a build cycle.
-package services_test
+package inttest
 
 import (
 	"context"
@@ -162,7 +162,7 @@ func sessionIDFromEvent(ev *sessionv1.SessionEvent) string {
 // upgrade request at all; StreamingWSBridge.Handler forwards any non-upgrade
 // request straight to the wrapped Connect handler, see ws_stream_bridge_test.go).
 func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_CalledThroughStartRemoteTLSListener(t *testing.T) {
-	services.WithIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	// NewServerWithDeps installs process-wide MCP proof globals that outlive
 	// the server; left set, they make later launch commands reference a proof
 	// config file instead of inlining the MCP URL (breaks -count>1 reruns of
@@ -187,9 +187,9 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// hermeticity pattern (see withFakeHome in home_env_test_helper_test.go,
 	// used by session_service_test.go and others), reimplemented here rather
 	// than reused because that helper is unexported to package services and
-	// this file must stay in the external services_test package (see the
+	// this file must stay outside package services (see the
 	// package doc comment above) to avoid an import cycle with server.
-	services.WithFakeHome(t)
+	withFakeHome(t)
 
 	// wireDepsIntoServer (invoked synchronously below via NewServerWithDeps)
 	// unconditionally starts PRStatusPoller.Start (server.go, no nil guard --

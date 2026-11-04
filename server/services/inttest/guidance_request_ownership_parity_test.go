@@ -1,10 +1,10 @@
-// Package services_test (an external test package, not services) is required
+// Package inttest (moved out of server/services's external services_test package, ADR-010 Tier 0) is required
 // here because this test exercises server/mcp's ResolveItemLinkViaMCPAdapter
 // directly — server/mcp already imports server/services (backlogHandlers.backlogSvc),
 // so an internal (package services) test file in this directory cannot import
 // server/mcp without creating a build cycle. Same reasoning as
 // watch_sessions_native_streaming_integration_test.go's package doc comment.
-package services_test
+package inttest
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package deliverygate_test
+package inttest
 
 import (
 	"bytes"
