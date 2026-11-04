@@ -7,6 +7,8 @@
 //	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
+//	scoping budget    [--file F] [--base REF]   per-package size/import caps (ratchet); --init a,b prints caps from the tree
+//	scoping boundaries [--file F]               packages that must not depend (transitively) on others
 package main
 
 import (
@@ -334,6 +336,10 @@ func main() {
 		os.Exit(runRelocate(os.Args[2:], os.Stdout))
 	case "deps":
 		os.Exit(runDeps(os.Args[2:], os.Stdout))
+	case "budget":
+		os.Exit(runBudget(os.Args[2:], os.Stdout))
+	case "boundaries":
+		os.Exit(runBoundaries(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
 	default:
