@@ -165,7 +165,6 @@ otel_weave_hermetic(
 otel_weave_hermetic(
     name = "stapler-squad",
     ent = ["//tools/bzl/ent:ent_gen"],
-    extra_libs = ["//instrumentation/otelc/safeexec"],
     gen = ["//proto/session/v1:gen_go"],
     go_tags = select({
         ":embed_tmux_and_tymux": [
