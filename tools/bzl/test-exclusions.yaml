@@ -2,12 +2,6 @@
 # Mechanism: the BUILD target carries tags = ["manual"]  # keep   (Gazelle preserves it).
 # sandbox_class values: cwd, home, tmpdir-socket, exec-host-binary, network, runtime-caller, shard-timeout
 exclusions:
-  - target: //tuitest/integration/claude_squad:claude_squad_test
-    sandbox_class: none # not a sandbox failure: pre-existing, also fails under go
-    owner: tstapler
-    issue: https://github.com/tstapler/stapler-squad/issues/1422
-    reason: >-
-      Build fixed by adding the missing requires to tuitest/go.mod (`cd tuitest && go vet ./...` now passes). The test itself is stale and is expected to fail outside Bazel too (INFERRED from the source, not run): it launches `go run .` from the repo root and waits for the text "Claude Squad", which no non-test Go source prints any more (TUI replaced by the web UI), and nothing in the Makefile or CI runs tuitest. Needs an owner decision to rewrite or delete (not done here).
   - target: //tools/bzl/spike:spike_test
     sandbox_class: tmpdir-socket
     owner: tstapler

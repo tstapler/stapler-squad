@@ -16,7 +16,7 @@ set -euo pipefail
 R="$BZL_REPO_ROOT"
 [[ "${1:-}" == --repo ]] && R="$2"
 g() { git -C "$R" "$@"; }
-nested='^project_plans/|^tools/lint/|^tools/scanner/|^tuitest/'
+nested='^project_plans/|^tools/lint/|^tools/scanner/'
 echo "tracked_go_files: $(g ls-files '*.go' | wc -l)"
 echo "tracked_test_files: $(g ls-files '*_test.go' | wc -l)"
 echo "test_packages: $(g ls-files '*_test.go' | xargs -n1 dirname | sort -u | wc -l)"

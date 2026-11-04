@@ -55,7 +55,6 @@ specific *kind of record*, not general documentation:
 | `docs/reviews/` | Point-in-time review writeups |
 | `docs/project_plans/` (and top-level `project_plans/`) | SDD workflow artifacts (requirements/research/plan/validation docs per project) |
 | `docs/archive/` | Retired docs kept for history |
-| `docs/tui-test-project/` | A specific test project's own docs |
 | Flat top-level `docs/*.md` files (e.g. `docs/gap-analysis.md`, `docs/PROFILING.md`) | Historical, point-in-time documents predating this hierarchy — not retroactively migrated |
 
 None of these are touched by the Diataxis hierarchy above, and historical

@@ -14,7 +14,6 @@ _HOST_COUPLED = {
     "server/services": ["exec-host-binary"],
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],
-    "tuitest/integration/claude_squad": ["exec-host-binary"],
 }
 
 _EXTERNAL = "external"  # tag-reason: host-coupled result must rerun, never cache (pre-mortem #3) (#1423)
