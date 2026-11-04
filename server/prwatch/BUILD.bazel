@@ -41,7 +41,6 @@ alias(
 
 go_test(
     name = "prwatch_test",
-    tags = ["manual"],  # keep
     srcs = [
         "catchup_test.go",
         "classify_test.go",
@@ -74,6 +73,7 @@ go_test(
         "watchset_test.go",
     ],
     embed = [":prwatch"],
+    tags = ["manual"],  # keep
     deps = [
         "//config",
         "//executor/safeexec",

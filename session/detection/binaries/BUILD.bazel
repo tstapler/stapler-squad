@@ -25,7 +25,6 @@ alias(
 
 go_test(
     name = "binaries_test",
-    tags = ["manual"],  # keep
     srcs = [
         "agy_test.go",
         "aider_test.go",
@@ -36,6 +35,7 @@ go_test(
         "pi_test.go",
     ],
     embed = [":binaries"],
+    tags = ["manual"],  # keep
     deps = [
         "//session/detection/dtypes",
         "@com_github_stretchr_testify//assert",

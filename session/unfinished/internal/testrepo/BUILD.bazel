@@ -30,8 +30,8 @@ alias(
 
 go_test(
     name = "testrepo_test",
-    tags = ["manual"],  # keep
     srcs = ["testrepo_test.go"],
+    tags = ["manual"],  # keep
     deps = [
         ":testrepo",
         "//session/git/native",

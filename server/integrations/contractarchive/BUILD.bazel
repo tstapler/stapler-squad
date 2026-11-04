@@ -16,9 +16,9 @@ alias(
 
 go_test(
     name = "contractarchive_test",
-    tags = ["manual"],  # keep
     srcs = ["archive_test.go"],
     embed = [":contractarchive"],
+    tags = ["manual"],  # keep
     deps = [
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

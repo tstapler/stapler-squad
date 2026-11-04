@@ -61,7 +61,6 @@ alias(
 
 go_test(
     name = "git_test",
-    tags = ["manual"],  # keep
     srcs = [
         "diff_test.go",
         "drift_test.go",
@@ -88,6 +87,7 @@ go_test(
         "worktree_test.go",
     ],
     embed = [":git"],
+    tags = ["manual"],  # keep
     deps = [
         "//executor/safeexec",
         "//session/git/backend",

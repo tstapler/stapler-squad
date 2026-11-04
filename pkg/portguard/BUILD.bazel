@@ -17,9 +17,9 @@ alias(
 
 go_test(
     name = "portguard_test",
-    tags = ["manual"],  # keep
     srcs = ["portguard_test.go"],
     embed = [":portguard"],
+    tags = ["manual"],  # keep
     deps = [
         "//executor/safeexec",
         "//testutil/wait",

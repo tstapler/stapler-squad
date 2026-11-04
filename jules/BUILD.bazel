@@ -28,7 +28,6 @@ alias(
 
 go_test(
     name = "jules_test",
-    tags = ["manual"],  # keep
     srcs = [
         "client_test.go",
         "errors_test.go",
@@ -39,6 +38,7 @@ go_test(
         "types_test.go",
     ],
     embed = [":jules"],
+    tags = ["manual"],  # keep
     deps = [
         "//executor/safeexec",
         "//log",

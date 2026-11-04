@@ -84,7 +84,6 @@ alias(
 
 go_test(
     name = "clihelp_test",
-    tags = ["manual"],  # keep
     srcs = [
         "capwriter_test.go",
         "loginpath_test.go",
@@ -98,6 +97,7 @@ go_test(
         "runner_test.go",
     ],
     embed = [":clihelp"],
+    tags = ["manual"],  # keep
     deps = [
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
