@@ -152,14 +152,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/home"
           printf '[user]\n\tname = Bazel Test\n\temail = test@example.invalid\n' > "$RUNNER_TEMP/home/.gitconfig"
 
-      - name: Build and test the generated-independent subset
+      # Full graph on a clean checkout: no generation step precedes it (Task 2.6a). Failures left are
+      # Epic 3/4 items listed in tools/bzl/test-exclusions.yaml.
+      - name: Build the full graph
         run: |
-          sed 's#^#//#;s#$#/...#' tools/bzl/no-gen-packages.txt > "$RUNNER_TEMP/targets.txt"
+          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            --keep_going --build_event_json_file=bep.json --profile=profile.gz //...
+
+      - name: Test the full graph
+        run: |
           bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
-            --keep_going --build_event_json_file=bep.json --profile=profile.gz \
+            --keep_going \
             --test_env=HOME="$RUNNER_TEMP/home" --sandbox_writable_path="$RUNNER_TEMP/home" \
-            --test_env=GO_TEST_WRAP_TESTV=1 \
-            --target_pattern_file="$RUNNER_TEMP/targets.txt"
+            --test_env=GO_TEST_WRAP_TESTV=1 //...
 
       # Windows is cross-compile only (ADR-005): build both goreleaser windows arches and check the
       # PE header; the windows-only probe must be reported incompatible, not failed (Task 6.1b).

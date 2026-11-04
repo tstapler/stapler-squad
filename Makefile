@@ -470,12 +470,12 @@ endif
 # (Spike A passed for -tags; see spike-verdicts.md) via build-otel-auto-embedded.
 # No macOS CGO_LDFLAGS/Info.plist branch yet — deferred, see plan.md Unresolved
 # Question 6.
-build-otel-auto: ensure-tools proto-gen ent-gen server/web/dist ## Build stapler-squad-otel with otelc compile-time auto-instrumentation (opt-in — see project_plans/go-auto-instrumentation)
+build-otel-auto: ensure-tools sync server/web/dist ## Build stapler-squad-otel with otelc compile-time auto-instrumentation (opt-in — see project_plans/go-auto-instrumentation)
 	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
 	./scripts/otel-auto-build.sh go build -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
 	@echo "✅ stapler-squad built with otelc auto-instrumentation → ./stapler-squad-otel"
 
-build-otel-auto-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad-otel with tmux bundled + otelc auto-instrumentation (opt-in)
+build-otel-auto-embedded: ensure-tools sync server/web/dist build-tmux-embed ## Build stapler-squad-otel with tmux bundled + otelc auto-instrumentation (opt-in)
 	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
 	./scripts/otel-auto-build.sh go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
 	@echo "✅ stapler-squad built with embedded tmux + otelc auto-instrumentation → ./stapler-squad-otel"

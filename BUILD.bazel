@@ -116,9 +116,28 @@ go_library(
     ],
 )
 
+config_setting(
+    name = "stamped",
+    values = {"stamp": "1"},
+)
+
+# main.version and the buildinfo fields mirror Makefile's LDFLAGS. Only set when stamping (the
+# {KEY} placeholders are workspace-status values); unstamped builds keep the "dev" defaults.
+# runtime.godebugDefault carries go.mod's `godebug netdns=go`, which rules_go does not read (Task 3.4d).
 go_binary(
     name = "stapler-squad",
     embed = [":stapler-squad_lib"],
+    x_defs = select({
+        ":stamped": {
+            "runtime.godebugDefault": "netdns=go",
+            "main.version": "{STABLE_GIT_VERSION}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Version": "{STABLE_GIT_VERSION}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Branch": "{STABLE_GIT_BRANCH}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Commit": "{STABLE_GIT_COMMIT}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Worktree": "{STABLE_GIT_WORKTREE}",
+        },
+        "//conditions:default": {"runtime.godebugDefault": "netdns=go"},
+    }),
     visibility = ["//visibility:public"],
 )
 

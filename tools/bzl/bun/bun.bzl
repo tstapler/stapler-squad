@@ -67,14 +67,17 @@ bun_install = repository_rule(
     },
 )
 
+# The action is not sandboxed (exec_tags), so $PWD is shared by every bun_dist: work and HOME dirs are
+# per output path (target AND configuration: //... builds the same target under several configs),
+# or two concurrent actions delete each other's tree.
 _SCRIPT = r"""
 set -eu
 T0=$(date +%s.%N)
 ROOT=$PWD
 export PATH="$ROOT/$(dirname {node}):$ROOT/$(dirname {bun}):/usr/bin:/bin"
-export HOME="$ROOT/_home"; mkdir -p "$HOME"
+export HOME="$ROOT/_home_{wid}"; mkdir -p "$HOME"
 export WEB_MINIFY={minify}
-W="$ROOT/_work"; chmod -R u+w "$W" 2>/dev/null || true; rm -rf "$W"; mkdir -p "$W/node_modules"
+W="$ROOT/_work_{wid}"; chmod -R u+w "$W" 2>/dev/null || true; rm -rf "$W"; mkdir -p "$W/node_modules"
 # Copy (not symlink) sources: bun resolves realpath and would otherwise walk up from the real
 # source tree to the host's web-app/node_modules.
 tar -chf - -T "{manifest}" | tar -xf - -C "$W" --strip-components=1
@@ -107,6 +110,7 @@ def _bun_dist_impl(ctx):
         outputs.append(log)
         prefix = "/home/linuxbrew/.linuxbrew/bin/strace -f -qq -y -s 512 -e trace=socket,connect,openat,open,stat,newfstatat,lstat,access,readlink,readlinkat,mkdir,mkdirat,rename,renameat,renameat2,unlink,unlinkat,rmdir,chdir,execve,symlink,symlinkat,link,linkat,truncate,chmod,utimensat -o $ROOT/" + log.path + " "
     script = _SCRIPT.format(
+        wid = out.path.replace("/", "_"),
         node = ctx.file.node.path,
         bun = ctx.file.bun.path,
         minify = ctx.attr.minify,
