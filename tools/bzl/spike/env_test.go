@@ -21,7 +21,7 @@ func TestEnv(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".gitconfig")); err != nil {
 		t.Errorf(".gitconfig: %v", err)
 	}
-	if os.Getenv("TMPDIR") != "/tmp" || len(os.TempDir()) > 20 {
+	if !strings.HasPrefix(os.Getenv("TMPDIR"), "/tmp") || len(os.TempDir()) > 30 {
 		t.Errorf("TMPDIR %q not short", os.Getenv("TMPDIR"))
 	}
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") != "bazel-test" {

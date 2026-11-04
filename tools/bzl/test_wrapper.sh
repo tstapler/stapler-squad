@@ -5,8 +5,10 @@
 #   a private short TMUX_TMPDIR so tmux never reaches the default server socket,
 #   tmux/gh/go on PATH (Bazel's test PATH is /usr/bin:/bin),
 #   a UTF-8 LANG (tmux sanitises tabs in -F output otherwise).
-# It sets no STAPLER_SQUAD_TMUX_SOCKET and no TMPDIR: tests that assert their own socket
-# names break under a global socket, and Bazel 9.3.1 already forces a short private /tmp.
+# It sets no STAPLER_SQUAD_TMUX_SOCKET: tests that assert their own socket names break under a
+# global one. TMPDIR is pinned to a short private dir because a Bazel server started with TMPDIR
+# under $HOME makes unsandboxed tests inherit it (session/vc then walks up to ~/.jj, unix-socket
+# paths overflow).
 # Knobs: SSQ_TEST_EXTRA_PATH (colon list searched for host tools, via --test_env),
 #        SSQ_TEST_HOST_TOOLS (space list, default "tmux gh go").
 set -u
@@ -33,6 +35,8 @@ export HOME="$home"
 tmux_dir=$(mktemp -d /tmp/ssq-tmux.XXXXXX) || exit 2
 export TMUX_TMPDIR="$tmux_dir"
 unset TMUX TMUX_PANE
+tmp_dir=$(mktemp -d /tmp/ssq-tmp.XXXXXX) || exit 2
+export TMPDIR="$tmp_dir"
 # Bazel's clean env has no locale; tmux then prints "_" for the tab in `-F` formats (session/mux
 # ScanByUserOptions splits on it), so give it a UTF-8 locale.
 export LANG="${LANG:-C.UTF-8}"
@@ -50,6 +54,7 @@ export PATH="$bin:$PATH"
 cleanup() {
   # TMUX_TMPDIR is private (set above), so this reaches only this process's tmux servers.
   case "$tmux_dir" in /tmp/ssq-tmux.*) tmux kill-server >/dev/null 2>&1 || true; rm -rf "$tmux_dir" ;; esac
+  case "$tmp_dir" in /tmp/ssq-tmp.*) rm -rf "$tmp_dir" ;; esac
 }
 child=""
 trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; fi' TERM INT
