@@ -74,7 +74,7 @@ ROOT=$PWD
 export PATH="$ROOT/$(dirname {node}):$ROOT/$(dirname {bun}):/usr/bin:/bin"
 export HOME="$ROOT/_home"; mkdir -p "$HOME"
 export WEB_MINIFY={minify}
-W="$ROOT/_work"; rm -rf "$W"; mkdir -p "$W/node_modules"
+W="$ROOT/_work"; chmod -R u+w "$W" 2>/dev/null || true; rm -rf "$W"; mkdir -p "$W/node_modules"
 # Copy (not symlink) sources: bun resolves realpath and would otherwise walk up from the real
 # source tree to the host's web-app/node_modules.
 tar -chf - -T "{manifest}" | tar -xf - -C "$W" --strip-components=1
@@ -115,7 +115,7 @@ def _bun_dist_impl(ctx):
         allowlist = ctx.file.allowlist.path,
         out = out.path,
         prefix = prefix,
-        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$ROOT/" + ctx.file.gen.path + "/.\" \"$W/src/gen/\"\n") if ctx.file.gen else "",
+        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$ROOT/" + ctx.file.gen.path + "/.\" \"$W/src/gen/\"; chmod -R u+w \"$W/src/gen\"\n") if ctx.file.gen else "",
     )
     ctx.actions.run_shell(
         mnemonic = "BunWebBuild",
@@ -170,7 +170,7 @@ def _bun_jest_test_impl(ctx):
         nm = ctx.file.node_modules.short_path,
         manifest = manifest.short_path,
         tests = " ".join(ctx.attr.tests),
-        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$(rp " + ctx.file.gen.short_path + ")/.\" \"$W/src/gen/\"\n") if ctx.file.gen else "",
+        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$(rp " + ctx.file.gen.short_path + ")/.\" \"$W/src/gen/\"; chmod -R u+w \"$W/src/gen\"\n") if ctx.file.gen else "",
     ), is_executable = True)
     rf = ctx.runfiles(files = ctx.files.srcs + [manifest, ctx.file.node, ctx.file.bun, ctx.file.node_modules] + ([ctx.file.gen] if ctx.file.gen else []))
     return [DefaultInfo(executable = script, runfiles = rf)]
