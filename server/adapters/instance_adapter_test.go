@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -568,4 +569,39 @@ func TestInstanceToProto_LeavesContextHealthUnspecifiedWhenNeverComputed(t *test
 	require.NotNil(t, proto)
 	require.Equal(t, sessionv1.ContextHealth_CONTEXT_HEALTH_UNSPECIFIED, proto.ContextHealth)
 	require.Equal(t, "", proto.ContextHealthReason)
+}
+
+func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t *testing.T) {
+	linkedInst := func(program string) *session.Instance {
+		inst := &session.Instance{Title: "t", Program: program}
+		inst.SetHistoryInfo("uuid-1", "/projects/p/uuid-1.jsonl")
+		return inst
+	}
+	tests := []struct {
+		name          string
+		inst          *session.Instance
+		blob          *artifacts.SessionArtifactsBlob
+		wantState     string
+		wantSupported bool
+	}{
+		{"non-claude program has no transcript", &session.Instance{Title: "t", Program: "aider"}, nil, "not_linked", false},
+		{"claude not yet linked", &session.Instance{Title: "t", Program: "claude"}, nil, "not_linked", true},
+		{"linked awaiting first scan", linkedInst("claude"), nil, "scanning", true},
+		{"scanned with nothing", linkedInst("claude"), &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateNoneFound}, "none_found", true},
+		{"scanned with data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateHasData}, "has_data", true},
+		{"failed keeps data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateFailed}, "failed", true},
+		{"legacy blob without state derives it", linkedInst("claude"), &artifacts.SessionArtifactsBlob{}, "none_found", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// SetArtifacts needs a running actor loop, so blob rows exercise the mapping directly.
+			got := InstanceToProto(tt.inst, nil).GetArtifacts()
+			if tt.blob != nil {
+				got = artifactsToProto(tt.blob, true, tt.inst.SupportsTranscript)
+			}
+			require.NotNil(t, got)
+			require.Equal(t, tt.wantState, got.GetScanState())
+			require.Equal(t, tt.wantSupported, got.GetTranscriptSupported())
+		})
+	}
 }

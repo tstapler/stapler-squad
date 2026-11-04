@@ -3,7 +3,9 @@ package artifacts
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +15,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 )
+
+// keepOffset tells mergeAndPersist to leave the stored scan offset unchanged.
+const keepOffset int64 = -1
 
 const (
 	maxScannerTokenSize = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
@@ -47,6 +52,10 @@ type ArtifactExtractor struct {
 	// titleMu serializes mergeAndPersist calls for the same session title,
 	// preventing lost-update races when multiple JSONL files belong to the same session.
 	titleMu sync.Map // key: title string, value: *sync.Mutex
+
+	// verified holds titles whose stored blob is known to carry a scan state, so
+	// an unchanged transcript needs no re-check (key: title, value: struct{}).
+	verified sync.Map
 
 	// storeFn is called with (sessionTitle, jsonBlob) after each successful scan.
 	storeFn func(title, blob string) error
@@ -88,7 +97,7 @@ func NewArtifactExtractor(
 	ae.queue = scanqueue.New(qc, ae.scanFile)
 	if ae.states != nil {
 		ae.writer = scanstate.NewWriter(ae.states, func(_ string, t trackedPos) (scanstate.Record, error) {
-			return scanstate.Record{Position: t.Position, State: []byte(t.owner)}, nil
+			return scanstate.Record{Position: t.Position, State: encodeOwner(t)}, nil
 		})
 	}
 	return ae
@@ -126,6 +135,24 @@ func (ae *ArtifactExtractor) FlushState(ctx context.Context) error {
 type trackedPos struct {
 	scanstate.Position
 	owner string
+	// verified: the owner's stored blob carried a scan state when this position
+	// was recorded, so an unchanged file needs no re-check. Positions persisted
+	// before scan states existed lack it and are re-checked once.
+	verified bool
+}
+
+const verifiedMarker = "\x00verified"
+
+func encodeOwner(t trackedPos) []byte {
+	if t.verified {
+		return []byte(t.owner + verifiedMarker)
+	}
+	return []byte(t.owner)
+}
+
+func decodeOwner(state []byte) (owner string, verified bool) {
+	owner, verified = strings.CutSuffix(string(state), verifiedMarker)
+	return owner, verified
 }
 
 func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
@@ -141,7 +168,7 @@ func (ae *ArtifactExtractor) tracked(filePath string) (trackedPos, bool) {
 }
 
 func (ae *ArtifactExtractor) setPosition(filePath, owner string, p scanstate.Position) {
-	t := trackedPos{Position: p, owner: owner}
+	t := trackedPos{Position: p, owner: owner, verified: ae.stateVerified(owner)}
 	ae.posMu.Lock()
 	ae.positions[filePath] = t
 	delete(ae.restored, filePath) // freshly scanned: not a stale restored row
@@ -175,7 +202,8 @@ func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
 		if ok && cur.Offset > rec.Offset {
 			continue
 		}
-		ae.positions[path] = trackedPos{Position: rec.Position, owner: string(rec.State)}
+		owner, verified := decodeOwner(rec.State)
+		ae.positions[path] = trackedPos{Position: rec.Position, owner: owner, verified: verified}
 		ae.restored[path] = struct{}{}
 	}
 	ae.posMu.Unlock()
@@ -201,9 +229,6 @@ func (ae *ArtifactExtractor) Start(ctx context.Context, historyDir string) {
 // OnHistoryFileChanged is the HistoryLinker callback — filters and enqueues.
 func (ae *ArtifactExtractor) OnHistoryFileChanged(filePath string) {
 	if !strings.HasSuffix(filePath, ".jsonl") {
-		return
-	}
-	if strings.HasPrefix(filepath.Base(filePath), "agent-") {
 		return
 	}
 	ae.enqueue(filePath)
@@ -253,6 +278,8 @@ func (ae *ArtifactExtractor) titleLock(title string) *sync.Mutex {
 // with existing artifacts, enforces dedup and caps, then returns the merged blob.
 // This ensures prior scan results are never lost on overwrite.
 // Serialized per title via titleLock to prevent lost-update races (C-1).
+// newOffset == keepOffset keeps the stored offset: a subagent transcript's own
+// offset must not replace the parent conversation's, which SeedOffsets reads.
 func (ae *ArtifactExtractor) mergeAndPersist(
 	title string,
 	newOffset int64,
@@ -270,18 +297,22 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 			existing = &SessionArtifactsBlob{}
 		}
 	}
-	mergedCmds := dedupCommands(append(existing.Commands, newCommands...))
-	if len(mergedCmds) > maxCommands {
-		mergedCmds = mergedCmds[:maxCommands]
+	if newOffset == keepOffset {
+		newOffset = existing.ScanOffsetBytes
 	}
-	return &SessionArtifactsBlob{
+	blob := &SessionArtifactsBlob{
 		PRURLs:          dedup(append(existing.PRURLs, newPRURLs...)),
 		CommitSHAs:      dedup(append(existing.CommitSHAs, newCommitSHAs...)),
-		ExternalURLs:    cap50(dedup(append(existing.ExternalURLs, newExternalURLs...))),
-		Commands:        mergedCmds,
+		ExternalURLs:    capNewest(dedup(append(existing.ExternalURLs, newExternalURLs...)), maxExternalURLs),
+		Commands:        capNewest(dedupCommands(append(existing.Commands, newCommands...)), maxCommands),
 		ScanOffsetBytes: newOffset,
 		LastScannedAt:   time.Now().UTC(),
 	}
+	blob.ScanState = ScanStateNoneFound
+	if blob.HasData() {
+		blob.ScanState = ScanStateHasData
+	}
+	return blob
 }
 
 func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir string) {
@@ -297,7 +328,7 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 		if d.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(path, ".jsonl") && !strings.HasPrefix(d.Name(), "agent-") {
+		if strings.HasSuffix(path, ".jsonl") {
 			ae.posMu.Lock()
 			delete(ae.restored, path)
 			ae.posMu.Unlock()
@@ -362,9 +393,112 @@ func dedup(ss []string) []string {
 	return out
 }
 
-func cap50(ss []string) []string {
-	if len(ss) > maxExternalURLs {
-		return ss[:maxExternalURLs]
+// capNewest keeps the last n items: callers append in discovery order, so the tail is the newest.
+func capNewest[T any](items []T, n int) []T {
+	if len(items) > n {
+		return items[len(items)-n:]
 	}
-	return ss
+	return items
+}
+
+func isSubagentFile(filePath string) bool {
+	return strings.HasPrefix(filepath.Base(filePath), "agent-")
+}
+
+// parentTranscript maps a subagent transcript to its parent conversation file.
+// Claude Code nests them as <project>/<conv-uuid>/subagents/agent-X.jsonl; older
+// layouts put agent-X.jsonl beside the parent and name the parent in the
+// first entry's sessionId.
+func parentTranscript(filePath string) (string, bool) {
+	dir := filepath.Dir(filePath)
+	if filepath.Base(dir) == "subagents" {
+		convDir := filepath.Dir(dir)
+		return convDir + ".jsonl", true
+	}
+	f, err := os.Open(filePath) // #nosec G304 -- same enumerated transcript path scanFile opens
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	var first struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(f, maxScannerTokenSize)).Decode(&first); err != nil || first.SessionID == "" {
+		return "", false
+	}
+	return filepath.Join(dir, first.SessionID+".jsonl"), true
+}
+
+// ownerOf resolves the session that owns filePath; sub reports a subagent
+// transcript, whose findings belong to its parent conversation's session.
+func (ae *ArtifactExtractor) ownerOf(filePath string) (title string, sub, ok bool) {
+	if !isSubagentFile(filePath) {
+		title, ok = ae.lookupTitle(filePath)
+		return title, false, ok
+	}
+	parent, ok := parentTranscript(filePath)
+	if !ok {
+		return "", true, false
+	}
+	title, ok = ae.lookupTitle(parent)
+	return title, true, ok
+}
+
+func (ae *ArtifactExtractor) stateVerified(title string) bool {
+	if title == "" {
+		return false
+	}
+	_, ok := ae.verified.Load(title)
+	return ok
+}
+
+// stateRecorded reports whether title's stored blob already carries a usable
+// scan state, remembering a positive answer so the check runs once per title.
+func (ae *ArtifactExtractor) stateRecorded(title string) bool {
+	if ae.stateVerified(title) {
+		return true
+	}
+	raw, err := ae.readFn(title)
+	if err != nil || raw == "" {
+		return false
+	}
+	var b SessionArtifactsBlob
+	if json.Unmarshal([]byte(raw), &b) != nil || b.ScanState == "" || b.ScanState == ScanStateFailed {
+		return false
+	}
+	ae.verified.Store(title, struct{}{})
+	return true
+}
+
+// markFailed records a failed scan while keeping the last good data. Best
+// effort: a failure to record it is only logged.
+func (ae *ArtifactExtractor) markFailed(filePath, title string) {
+	ae.verified.Delete(title)
+	ae.posMu.Lock()
+	if t, ok := ae.positions[filePath]; ok {
+		t.verified = false
+		ae.positions[filePath] = t
+	}
+	ae.posMu.Unlock()
+	mu := ae.titleLock(title)
+	mu.Lock()
+	defer mu.Unlock()
+	existing := &SessionArtifactsBlob{}
+	if raw, err := ae.readFn(title); err == nil && raw != "" {
+		if json.Unmarshal([]byte(raw), existing) != nil {
+			existing = &SessionArtifactsBlob{}
+		}
+	}
+	failed := *existing
+	failed.ScanState = ScanStateFailed
+	failed.LastScannedAt = time.Now().UTC()
+	encoded, err := json.Marshal(&failed)
+	if err != nil {
+		return
+	}
+	if err := ae.storeFn(title, string(encoded)); err != nil {
+		log.Warn("[ArtifactExtractor] persist failed state failed", "session", title, "err", err)
+		return
+	}
+	ae.OnScanComplete(title, &failed)
 }

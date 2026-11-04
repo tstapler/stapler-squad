@@ -423,6 +423,12 @@ message SessionArtifacts {
   repeated string external_urls = 3;
   // When the JSONL file was last successfully scanned.
   google.protobuf.Timestamp last_scanned_at = 4;
+  // Outcome of the last transcript scan: "not_linked", "scanning", "none_found",
+  // "has_data" or "failed". Empty from servers that predate this field.
+  string scan_state = 5;
+  // False for programs that never get a transcript (non-Claude), so the UI can
+  // say so instead of "waiting for transcript link".
+  bool transcript_supported = 6;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.
