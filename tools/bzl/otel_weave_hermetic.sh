@@ -29,7 +29,9 @@ apply_overlay() { # DEST_DIR MANIFEST
 
 go_bin=$(abs "$2")
 [ -x "$go_bin" ] || { echo "otel_weave_hermetic: no go binary at $go_bin" >&2; exit 1; }
-work=$exec_root/_otel_work
+# A fixed work path keeps the Go build IDs byte-reproducible (a per-sandbox path leaks into them); Bazel's hermetic
+# /tmp is empty and private to the action, so use it when it is, else fall back to a path inside the exec root.
+if [ -w /tmp ] && [ -z "$(ls -A /tmp)" ]; then work=/tmp/ssq-otel-work; else work=$exec_root/_otel_work; fi
 rm -rf "$work"
 mkdir -p "$work/home" "$work/tmp" "$work/gocache"
 # No HOME state, no GOFLAGS, no host module cache, no network: a failure here means a missing declared input.
