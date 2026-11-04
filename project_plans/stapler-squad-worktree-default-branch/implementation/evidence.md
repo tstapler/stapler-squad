@@ -59,3 +59,47 @@ jq -Rc --arg r "$R" "$F" $D/staplersquad.log | wc -l                            
 zcat $D/staplersquad-2026-11-04T13-51-53.139.log.gz | jq -Rc --arg r "$R" "$F" | wc -l   # 0
 zcat $D/staplersquad-2026-11-04T13-51-53.139.log.gz | jq -Rr 'fromjson? | select(((.err // .error // "")|tostring)|test("does not support extension";"i")) | .time' | sed -n '1p;$p'   # negative control: 10:32:03 ... 12:24:23
 ```
+
+## Verbatim log tails (unedited)
+
+Both commands ran to completion in this session. Command lines and exit codes are quoted from the shell; log lines are unedited `tail` output (no filtering, no truncation).
+
+### make test (run 2): `bash -c 'make test > ~/.cache/tmp/ssq-ac9/make-test.log 2>&1; echo "exit=$?" >> ...'`, TMPDIR=/home/tstapler/.cache/tmp, STAPLER_SQUAD_TMUX_SOCKET unset
+
+```
+
+=== SKIP: session/unfinished/gogitstore TestMmapIndex_MatchesCopyBasedLoader_ByteForByte (0.00s)
+    mmapindex_test.go:52: skipped under -short: see BenchmarkMmapIndex_LoadVsCopyBased for on-demand coverage of this path
+
+=== SKIP: session/unfinished/gogitstore TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash (0.00s)
+    mmapindex_test.go:334: skipped under -short: crash-detection subprocess can't share the parent's fixture cache, so this always pays a full from-scratch build
+
+=== SKIP: session/unfinished/gogitstore TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore (0.00s)
+    registry_eviction_test.go:360: skipped under -short: too slow for make test/quick-check
+
+=== SKIP: tests/demo TestRecordDemo (0.00s)
+    demo_test.go:25: Set RECORD_DEMO=1 to record demo video
+
+DONE 14638 tests, 39 skipped in 154.836s
+exit=0
+```
+The `exit=0` line above was appended by the run script from `$?` after `make test` finished. Full-log failure count: `grep -c '^--- FAIL\|^FAIL\|^=== FAIL'` = 0.
+
+### make lint: `make lint > ~/.cache/tmp/ssq-ac9/make-lint.log 2>&1; echo "make lint EXIT=$?"` printed `make lint EXIT=0` (shell output; the log itself has no exit line)
+
+```
+✅ Proto files unchanged, skipping generation
+✅ ent schema unchanged, skipping generation
+Building web UI with Bun (WEB_MINIFY=0)...
+web-build: ok (unminified, 2839 ms) -> out
+Copying built files to server/web/dist...
+✅ Web UI built and copied successfully
+Running custom lint...
+ok  	github.com/tstapler/stapler-squad/tools/lint/norawgitcli	0.788s
+custom lint: ok
+Running shellcheck on 67 first-party shell script(s)...
+shellcheck: ok
+0 issues.
+```
+
+Run 1 of `make test` (with the socket variable exported) failed with exit=2 and 10 failures; its log is at `~/.cache/tmp/ssq-ac9/run1-with-env/make-test.log` on this host only.
