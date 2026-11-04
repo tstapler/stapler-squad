@@ -104,6 +104,8 @@ type tymuxGRPCSession struct {
 	// restarts, so a failed follow-up capture falls back to "alive" instead of the cached DEAD.
 	restartIsPending bool
 
+	// captureReviveMu serializes capture-triggered revives so concurrent resyncs revive once.
+	captureReviveMu sync.Mutex
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
 
@@ -1237,14 +1239,39 @@ func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uin
 	if paneID == "" {
 		return nil, errSessionNotStarted
 	}
-	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(&v1.CapturePaneRequest{
-		PaneId:           paneID,
-		ScrollbackOffset: scrollbackOffset,
-	}))
+	req := &v1.CapturePaneRequest{PaneId: paneID, ScrollbackOffset: scrollbackOffset}
+	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID) {
+		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+	}
 	if err != nil {
 		return nil, classifyRPCError("CapturePane", err)
 	}
 	return resp.Msg, nil
+}
+
+// reviveDeadPaneForCapture respawns a pane tymuxd restored from disk without a screen (capture
+// answers FAILED_PRECONDITION), the same revival the reconnect loop does on errPaneDead. It
+// never revives a view-only session, a FAILED/STOPPED pane (operator-only), or a pane whose
+// restart policy is already bringing it back. Reports whether a retry is worthwhile.
+func (s *tymuxGRPCSession) reviveDeadPaneForCapture(ctx context.Context, paneID string) bool {
+	s.mu.RLock()
+	viewOnly := s.viewOnly
+	s.mu.RUnlock()
+	if viewOnly || s.closing.Load() {
+		return false
+	}
+	if state, ok := s.paneLifecycleState(ctx, paneID); ok && (isTerminalPaneState(state) || isRestartPending(state)) {
+		return isRestartPending(state)
+	}
+	s.captureReviveMu.Lock()
+	defer s.captureReviveMu.Unlock()
+	if err := s.reviveAfterRestart(ctx); err != nil {
+		log.Warn("tymux: ReviveSession failed after capture hit a dead pane", "pane_id", paneID, "err", err)
+		return false
+	}
+	log.Info("tymux: revived dead pane after capture failed", "pane_id", paneID)
+	return true
 }
 
 // rowsToPlainText concatenates each row's Cell.text (one grapheme cluster

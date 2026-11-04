@@ -200,7 +200,9 @@ func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVe
 func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
-	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +210,9 @@ func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, err
 }
 
 func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {
-	resp, err := NewRealTransport(cfg.Addr).ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return 0, err
 	}

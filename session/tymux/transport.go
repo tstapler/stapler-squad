@@ -77,6 +77,15 @@ var _ attachStream = (*connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEv
 // return type to the other.
 type grpcTransport struct {
 	client tymuxv1connect.TymuxServiceClient
+	http   *http.Client
+}
+
+// closeIdle drops the pooled h2c connections so a one-shot caller does not
+// leave a socket open on tymuxd per call.
+func (t *grpcTransport) closeIdle() {
+	if t.http != nil {
+		t.http.CloseIdleConnections()
+	}
 }
 
 func (t *grpcTransport) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -165,7 +174,18 @@ func NewRealTransport(addr string) rpcTransport {
 	if sharedDaemonBlockedInTest(addr) {
 		addr = deadLoopbackAddr
 	}
-	return &grpcTransport{client: newTymuxClient(newH2CClient(), addr)}
+	hc := newH2CClient()
+	return &grpcTransport{client: newTymuxClient(hc, addr), http: hc}
+}
+
+// newProbeTransport is NewRealTransport for one-shot calls: the returned
+// release func must be deferred, or each probe leaks a connection to tymuxd.
+func newProbeTransport(addr string) (rpcTransport, func()) {
+	t := NewRealTransport(addr)
+	if g, ok := t.(*grpcTransport); ok {
+		return t, g.closeIdle
+	}
+	return t, func() {}
 }
 
 // newTymuxClient builds the generated client with gRPC framing (tymuxd is a

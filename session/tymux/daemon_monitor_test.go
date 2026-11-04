@@ -3,6 +3,9 @@ package tymux
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func startDaemonMonitorTest(ctx context.Context, m daemonMonitor) <-chan struct{} {
@@ -163,4 +168,51 @@ func TestDaemonMonitor_HealthyProbeResetsFailureThreshold(t *testing.T) {
 		cancel()
 		<-done
 	})
+}
+
+func TestCheckDaemonHealthy_ReleasesConnections(t *testing.T) {
+	var open atomic.Int32
+	// An empty, successful gRPC ListSessions reply, so the client connection ends up idle
+	// (a protocol error would make the client close it and hide the leak).
+	srv := httptest.NewUnstartedServer(h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/grpc")
+		w.Header().Set("Trailer", "Grpc-Status")
+		_, _ = w.Write([]byte{0, 0, 0, 0, 0})
+		w.Header().Set("Grpc-Status", "0")
+	}), &http2.Server{}))
+	srv.Listener = &countingListener{Listener: srv.Listener, open: &open} // h2c hijacks conns, so ConnState can't count them
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	cfg := DaemonConfig{Addr: srv.URL}
+	for range 5 {
+		require.True(t, checkDaemonHealthy(context.Background(), cfg))
+	}
+	require.Eventually(t, func() bool { return open.Load() == 0 }, 2*time.Second, 10*time.Millisecond,
+		"probes must not leave connections open on the daemon")
+}
+
+type countingListener struct {
+	net.Listener
+	open *atomic.Int32
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.open.Add(1)
+	return &countingConn{Conn: c, open: l.open}, nil
+}
+
+type countingConn struct {
+	net.Conn
+	open *atomic.Int32
+	once sync.Once
+}
+
+func (c *countingConn) Close() error {
+	c.once.Do(func() { c.open.Add(-1) })
+	return c.Conn.Close()
 }

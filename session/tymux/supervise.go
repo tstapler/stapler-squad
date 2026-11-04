@@ -122,7 +122,8 @@ type TymuxdReady struct {
 func checkDaemonHealthy(ctx context.Context, cfg DaemonConfig) bool {
 	healthCtx, cancel := context.WithTimeout(ctx, daemonHealthCheckTimeout)
 	defer cancel()
-	transport := NewRealTransport(cfg.Addr)
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
 	_, err := transport.ListSessions(healthCtx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	return err == nil
 }

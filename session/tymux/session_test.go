@@ -1397,3 +1397,46 @@ func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalStat
 	assert.Empty(t, data)
 	assert.False(t, altScreen)
 }
+
+func TestCapturePane_RevivesRestoredPaneWithoutScreen(t *testing.T) {
+	var captures, revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if atomic.AddInt32(&captures, 1) == 1 {
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+	assert.EqualValues(t, 2, atomic.LoadInt32(&captures))
+}
+
+func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
+	var revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.viewOnly = true
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.Error(t, err)
+	assert.Zero(t, atomic.LoadInt32(&revives))
+}
