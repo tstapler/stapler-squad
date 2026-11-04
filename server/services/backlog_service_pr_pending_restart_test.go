@@ -121,7 +121,7 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 		itemID string
 		reason domain.StuckReason
 	}
-	var remaining []key
+	remaining := make([]key, 0, len(open))
 	for _, row := range open {
 		remaining = append(remaining, key{row.ItemID, row.Reason})
 	}
