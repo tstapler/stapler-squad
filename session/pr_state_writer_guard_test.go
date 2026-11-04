@@ -197,7 +197,7 @@ func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t
 // ---- the artifact scan never creates a session PR (U-128) ------------------------
 
 func TestOnScanComplete_ShouldNeverCreateSessionPR_WhenFlagOff(t *testing.T) {
-	path := filepath.Join(moduleRoot(t), "server", "dependencies.go")
+	path := filepath.Join(moduleRoot(t), "server", "artifact_scan_complete.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	require.NoError(t, err)
 
@@ -207,7 +207,7 @@ func TestOnScanComplete_ShouldNeverCreateSessionPR_WhenFlagOff(t *testing.T) {
 			handler = fn
 		}
 	}
-	require.NotNil(t, handler, "server/dependencies.go no longer defines artifactScanCompleteHandler; update this guard")
+	require.NotNil(t, handler, "server/artifact_scan_complete.go no longer defines artifactScanCompleteHandler; update this guard")
 
 	banned := map[string]bool{
 		"AttachPR": true, "AttachScannedPR": true, "SetGitHubPR": true, "SetGitHubPRNumber": true,
