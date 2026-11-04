@@ -81,7 +81,6 @@ http_archive(
 # release), a `host_tool` repository per binary that selects the matching archive, and a repository rule
 # that runs `bun install --frozen-lockfile`. Keep these versions equal to .tool-versions.
 _BUN_VERSION = "1.4.3"
-
 _NODE_VERSION = "24.13.1"
 
 _BUN_ARCHIVES = {
