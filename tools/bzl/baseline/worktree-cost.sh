@@ -60,7 +60,7 @@ trap cleanup EXIT
 results=()
 for ((i = 1; i <= RUNS; i++)); do
   require_quiet_host
-  TMP="$(mktemp -d /tmp/bzlwc.XXXXXX)"
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/bzlwc.XXXXXX")"
   load="$(loadavg1)"; mem="$(mem_used_gb)"
   git -C "$BZL_REPO_ROOT" worktree add --quiet --detach "$TMP/wt" "$REF"
   env_prefix=()

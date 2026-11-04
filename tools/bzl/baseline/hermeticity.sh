@@ -77,7 +77,7 @@ fi
 need git; need make; need go
 require_quiet_host
 
-D="$(mktemp -d /tmp/bzlh.XXXXXX)"
+D="$(mktemp -d "${TMPDIR:-/tmp}/bzlh.XXXXXX")"
 trap 'rm -rf "$D"' EXIT
 fresh_clone() { git clone --quiet --no-hardlinks "$BZL_REPO_ROOT" "$1"; }
 
