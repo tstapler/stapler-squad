@@ -79,9 +79,13 @@ if [ -n "$(get STABLE_GIT_VERSION)" ]; then
 fi
 
 cd "$src"
-"$go_bin" build -mod=readonly -o "$work/otelc" go.opentelemetry.io/otelc/tool/cmd/otelc
-export GOFLAGS="-mod=readonly '-toolexec=$work/otelc toolexec'"
-[ -n "$goos" ] && export GOOS=$goos GOARCH=$goarch CGO_ENABLED=0
-buildargs=(-tags "${tags:+$tags,}otelcauto")
+mkdir -p "$work/bin"
+"$go_bin" build -mod=readonly -o "$work/bin/otelc" go.opentelemetry.io/otelc/tool/cmd/otelc
+# By name on PATH, not by path: cmd/go hashes the toolexec string into action IDs, so a sandbox path would make the binary differ per run.
+export PATH=$work/bin:$PATH
+export GOFLAGS="-mod=readonly -trimpath '-toolexec=otelc toolexec'"
+# Cross-compile (--platforms): the target OS/arch come from rules_go; cgo is off, as for the plain Windows build.
+if [ "$goos/$goarch" != "$("$go_bin" env GOHOSTOS)/$("$go_bin" env GOHOSTARCH)" ]; then export GOOS=$goos GOARCH=$goarch CGO_ENABLED=0; fi
+buildargs=(-buildvcs=false -tags "${tags:+$tags,}otelcauto")
 [ -n "$ldflags" ] && buildargs+=(-ldflags "$ldflags")
 "$go_bin" build "${buildargs[@]}" -o "$out" .

@@ -62,7 +62,7 @@ def _weave_impl(ctx):
     modcache = ctx.attr.modcache.files.to_list()[0]
     ctx.actions.run(
         executable = ctx.file.script,
-        arguments = ["weave", go.sdk.go.path, out.path, ",".join(ctx.attr.go_tags), ctx.info_file.path, modcache.path, manifest.path, overlay.path] + ctx.attr.goos_goarch,
+        arguments = ["weave", go.sdk.go.path, out.path, ",".join(ctx.attr.go_tags), ctx.info_file.path, modcache.path, manifest.path, overlay.path, go.mode.goos, go.mode.goarch],
         inputs = depset(
             [manifest, overlay, modcache, ctx.info_file] + ctx.files.overlay + ctx.files.gen + ctx.files.ent + ctx.files.web + [f for l in ctx.attr.stage for f in l.files.to_list()],
             transitive = [_sdk_inputs(go), _closure_files(ctx)],
@@ -93,7 +93,6 @@ otel_weave_hermetic = rule(
         "gen": attr.label_list(allow_files = True),
         "extra_libs": attr.label_list(providers = [GoArchive], doc = "Packages only the weave imports (the otelc custom rule)."),
         "go_tags": attr.string_list(),
-        "goos_goarch": attr.string_list(doc = "Optional [GOOS, GOARCH] to cross-compile (CGO off)."),
         "lib": attr.label(mandatory = True, providers = [GoArchive]),
         "modcache": attr.label(mandatory = True),
         "stage": attr.label_keyed_string_dict(allow_files = True),
