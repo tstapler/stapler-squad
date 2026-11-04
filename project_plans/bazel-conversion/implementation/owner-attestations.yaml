@@ -1,0 +1,78 @@
+# Owner decisions captured by interview (AskUserQuestion) on 2026-11-03.
+# Source of truth for gate decisions; scripts read this file, they never write it.
+# status: recorded = owner answered; pending = owner action or measurement still needed.
+interview_date: 2026-11-03
+economic_gate:
+  decision: continue
+  date: 2026-11-03
+  reason: >-
+    EG5 trips (RA2 0.987 > 0.60: e2e is ~1974 of 2601 s of the critical path). Owner chose to
+    continue; Epic 12 (selective e2e, ADR-009, spike S14) is the answer to RA2 and S14 will measure it.
+  status: recorded
+lockfile_policy:
+  decision: commit MODULE.bazel.lock + bazel-lockfile-merge driver + automatic regeneration
+  status: recorded
+  pending: >-
+    S13 stays Fail until the GitHub-side merge-driver experiment runs on a scratch repo chosen by the
+    owner (no repo named yet; the agent must not create one without being told which).
+s4_verdict:
+  decision: keep Pass
+  status: recorded
+  note: >-
+    Pass relies on pinned Bun 1.4.3 / Node 24.13.1 / BUN_INSTALL_GLOBAL_STORE=0; the default
+    `make web-build` is nondeterministic against that reference (174 of 380 files differ). Owner accepted.
+nogo_story_8_4:
+  decision: build per-analyzer twin libraries for all analyzers in Epic 8
+  status: recorded
+oom_policy:
+  decision: OOMPolicy=continue plus the Task 0.2i protect drop-in (zz-oom-protect.conf)
+  status: recorded
+  pending: owner runs the drop-in and daemon-reload/restart (agents do not touch the live unit)
+adr_004_failure_policy:
+  decision: confirm timeout + retries + circuit breaker (fallback flag is a no-op for a cache-only setup)
+  status: recorded
+proto_and_lint:
+  decision: pin buf plugins locally and fix all 72 buf lint findings now
+  status: recorded
+  pending: >-
+    fix work not yet done; the ratchet baseline tools/bzl/proto/buf-lint-baseline.txt lists the 72 and
+    must shrink to 0 as they are fixed
+test_exclusion_issues:
+  decision: one GitHub issue per SandboxClass
+  status: recorded
+  issues:
+    cwd: https://github.com/tstapler/stapler-squad/issues/1421
+    none: https://github.com/tstapler/stapler-squad/issues/1422
+    exec-host-binary: https://github.com/tstapler/stapler-squad/issues/1423
+    runtime-caller: https://github.com/tstapler/stapler-squad/issues/1424
+    tmpdir-socket: https://github.com/tstapler/stapler-squad/issues/1425
+  note: filed 2026-11-03; entries in tools/bzl/test-exclusions.yaml now link to them
+targets:
+  decision: accept the plan's proposal formulas for T1-T9 and EG1-EG5
+  status: recorded
+  pending: >-
+    targets_confirmed is NOT set: values are not yet computed into tools/bzl/baseline/targets.yaml;
+    owner reviews the computed values afterwards and may amend any row.
+remote_cache_s10:
+  decision: start with disk cache only; defer the onyx remote cache
+  status: recorded
+  pending: S10 and S10-redaction have no verdict; EG1/EG2 are measured against the local disk cache until the remote tier exists
+adr_010_policy:
+  decision: >-
+    all tiers may be executed by agents; agents merge when CI passes, making sure there is proper test
+    coverage at all layers
+  status: recorded
+  note: >-
+    Applies to Epic 13 refactors. Tier B/C refactors still need characterization tests before the move;
+    this is the owner's stated condition. No freeze windows.
+defaults:
+  decision: accept as proposed
+  status: recorded
+  values:
+    soak_runs_N: 30
+    soak_consecutive_green_K: 10
+    queue_timeout_seconds: 900
+    waiver_expiry_days: 90
+    waiver_reason_min_chars: 20
+    cache_write_policy: bazel-cache-write only for main push and protected branches (D-PROTECT-WRITE)
+    go_mod_bump_to_bazel_resolved_versions: allowed

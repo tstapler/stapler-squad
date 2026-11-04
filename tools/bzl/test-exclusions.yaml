@@ -5,113 +5,108 @@ exclusions:
   - target: //tools/lint/silenttransition:silenttransition_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file; Epic 4 class sweep (SandboxClass cwd) fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file; Epic 4 class sweep (SandboxClass cwd) fixes at source
     reason: >-
-      TestSilentTransition_OperatorCallerSetMatchesRegistry parses
-      ../../../session/transition_callers.go, a repo file outside this package's runfiles
-      (needs a Bazel package over //session, which does not exist until Epic 1).
+      TestSilentTransition_OperatorCallerSetMatchesRegistry parses ../../../session/transition_callers.go, a repo file outside this package's runfiles (needs a Bazel package over //session, which does not exist until Epic 1).
   - target: //tuitest/integration/claude_squad:claude_squad_test
-    sandbox_class: none  # not a sandbox failure: pre-existing, also fails under go
+    sandbox_class: none # not a sandbox failure: pre-existing, also fails under go
     owner: tstapler
-    issue: UNFILED
+    issue: https://github.com/tstapler/stapler-squad/issues/1422
     reason: >-
-      Imports github.com/tstapler/stapler-squad/testutil/wait and github.com/linkdata/deadlock,
-      neither of which tuitest/go.mod requires, so `cd tuitest && go vet ./...` already fails
-      ("no required module provides package github.com/linkdata/deadlock"). Under Bazel it also
-      needs //testutil/wait, which exists after Epic 1.
+      Imports github.com/tstapler/stapler-squad/testutil/wait and github.com/linkdata/deadlock, neither of which tuitest/go.mod requires, so `cd tuitest && go vet ./...` already fails ("no required module provides package github.com/linkdata/deadlock"). Under Bazel it also needs //testutil/wait, which exists after Epic 1.
   - target: //config/clihelp:clihelp_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens testdata/help/*.txt; Gazelle excludes **/testdata and generates no data attribute, so the files are not in runfiles.
   - target: //executor:executor_test
     sandbox_class: exec-host-binary
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1423 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Builds testdata/helper with exec "go"; Bazel's test PATH is /usr/bin:/bin and has no go toolchain.
   - target: //github:github_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens testdata/pr_info_parity/** and testdata/session_snapshot.json, absent from runfiles (8 failing tests in the S8 census, same cause).
   - target: //jules:jules_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       golden_test.go reads testdata/*.json, absent from runfiles.
   - target: //pkg/changelog:changelog_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       TestParse_RealChangelog opens ../../CHANGELOG.md, a repo-root file outside the package runfiles.
   - target: //pkg/portguard:portguard_test
     sandbox_class: runtime-caller
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1424 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       TestEnsureReleased_* match the helper by process name containing "portguard.test" (the go test binary name); Bazel names it portguard_test, so 0 processes match and the port stays bound.
   - target: //server/integrations/contractarchive:contractarchive_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Reads ../../../contracts/webhook-management/v1/** fixtures, not in runfiles.
   - target: //server/prwatch:prwatch_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens testdata/status_text.golden (absent from runfiles); two more tests also exec "go" (exec-host-binary), cwd is the primary class.
   - target: //server/prwatch/inbox:inbox_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens testdata/*.json webhook fixtures, absent from runfiles.
   - target: //session/detection/binaries:binaries_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens ../../testdata/panes/** fixtures, absent from runfiles.
   - target: //session/git:git_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       TestScaffoldingExcludePatterns_MatchGitignore reads ../../.gitignore; two CreatePR tests also need the gh binary (exec-host-binary), cwd is the primary class.
   - target: //session/git/native:native_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens testdata/golden_conflict_*.txt, absent from runfiles.
   - target: //session/tymux:tymux_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       metrics_guard_test.go globs *.go and ../backend_*.go source files; none exist in the sandbox cwd (guard scanned no attribute keys).
   - target: //session/unfinished/gogitstore:gogitstore_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Opens ../gogit_vcs_reader.go and walks for go.mod with go/build; source files and go.mod are not in runfiles.
   - target: //session/unfinished/internal/testrepo:testrepo_test
     sandbox_class: cwd
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1421 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Locates go.mod ("go.mod not found") to resolve imports with go/build; go.mod is not in runfiles.
   - target: //tools/bzl/spike:spike_test
     sandbox_class: tmpdir-socket
     owner: tstapler
-    issue: UNFILED  # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    issue: https://github.com/tstapler/stapler-squad/issues/1425 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Gazelle merged the manual-only sock_long_test.go into this target; it binds a unix socket under TEST_TMPDIR (171 bytes > 108 limit). Intentional S9 negative probe, not a product test.
