@@ -1,1 +1,4 @@
-exports_files(["public-allowlist.json"], visibility = ["//visibility:public"])
+exports_files(
+    ["public-allowlist.json"],
+    visibility = ["//visibility:public"],
+)

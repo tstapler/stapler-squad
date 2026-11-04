@@ -70,4 +70,10 @@ go_test(
 )
 
 # Read by web-app Jest suites that cross-check the client allow-lists (//web-app:jest repo_data).
-exports_files(["client_metrics.go", "client_pages.json"], visibility = ["//web-app:__pkg__"])
+exports_files(
+    [
+        "client_metrics.go",
+        "client_pages.json",
+    ],
+    visibility = ["//web-app:__pkg__"],
+)

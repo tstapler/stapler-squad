@@ -30,6 +30,7 @@ def _bun_install_impl(rctx):
     bun = rctx.path(rctx.attr.bun)
     node = rctx.path(rctx.attr.node)
     home = rctx.getenv("HOME")
+
     # Mirror web-app/ layout inside the repo so `file:./eslint-plugin-*` and patches resolve.
     for f in [rctx.attr.package_json, rctx.attr.bun_lock, rctx.attr.bunfig]:
         rctx.file(f.name, rctx.read(f))
