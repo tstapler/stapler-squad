@@ -8,7 +8,7 @@
 For each Epic 0 spike with a missing upstream capability, cost both paths in the spike result (cost classes, `ESTIMATION.md`) and choose by this order:
 
 1. **Upstream already supports it** (maybe on a newer pin): bump the pin.
-2. **Workaround** if it is hermetic, cacheable, and its repo-owned Starlark stays within the cap (all repo-owned `.bzl` and macros together at most 500 lines, enforced in CI by Story 11.7).
+2. **Workaround** if it is hermetic, cacheable, and its repo-owned Starlark stays within the cap (all repo-owned `.bzl` and macros together at most 750 lines, enforced in CI by Story 11.7).
 3. **Fork** when the workaround is non-hermetic, defeats caching, or its per-upgrade maintenance cost (cost class per Bazel/rules bump) exceeds the fork's rebase cost, and the patch is at most about 200 lines.
 4. A fork is always paired with an upstream PR or issue link in `docs/reference/bazel-forks.md`, lives under `github.com/tstapler/<rules repo>`, is pinned by commit through `git_override`/`archive_override` (like the `tstapler/go-git` replace), and has a removal condition ("drop when upstream release X ships").
 5. Custom Gazelle Go extensions are written only after directives plus a macro demonstrably fail, and then with a Go unit test (`research/build-vs-buy.md` section 3). This is a sequencing preference inside the owner's allowance (requirements.md Constraints: write custom Gazelle extensions "where a pattern repeats"), not a prohibition: spike S11 keeps the extension as its pre-decided fallback.
@@ -29,3 +29,4 @@ Spike verdicts (Story 0.14) fill in measured classes and the choice.
 
 - Every fork adds a pinned dependency to track in the scheduled upgrade-canary job (Story 11.8).
 - The owner must create the fork repository for any Fork verdict (wall-clock blocker, listed in the plan).
+- Changelog 2026-11-03: the cap was raised from 500 to 750 lines by the owner. It is our own maintainability bound, not a Bazel limit; the surface stood at 574 lines after the hermetic otel weave and the forbidden_deps test landed. Logic that does not need Starlark still belongs in scripts.

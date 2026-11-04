@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Cap the repo-owned Starlark surface (ADR-008, Task 11.7a): all tracked .bzl files, macros included, may total
-# at most STARLARK_LIMIT lines (default 500). Generated files (a "DO NOT EDIT" line in the first 5 lines) and
+# at most STARLARK_LIMIT lines (default 750). Generated files (a "DO NOT EDIT" line in the first 5 lines) and
 # vendored trees are not repo-owned and are not counted.
 # Env: STARLARK_LIMIT, STARLARK_ROOT (a git work tree; default: this repo).
 set -eu
 root="${STARLARK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-limit="${STARLARK_LIMIT:-500}"
+limit="${STARLARK_LIMIT:-750}"
 cd "$root"
 total=0
 report=""

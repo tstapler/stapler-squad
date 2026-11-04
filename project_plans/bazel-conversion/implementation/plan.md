@@ -96,7 +96,7 @@ Within approach A, the sequence follows the owner's strangler path: foundations/
 | Spike outcomes | Sum type `SpikeVerdict` with pre-decided `FallbackPath` | type-driven-design | Free-form "we'll see" | No spike can end undecided |
 | Lint gates | Anti-corruption layer: wrapped tools consume `SyncGen` output; `nogo` for pure analyzers | Evans (ACL) | Port everything to Bazel | golangci-lint and diff gates need a normal tree and git history |
 | Test environment fixes | Fix once at the source (`reporoot.Find()`, env defaults), not per test | Pragmatic Programmer (DRY) | Tag everything `local`/`no-sandbox` | Repo policy: fix flakes, do not defer |
-| Starlark surface | Bounded: macros of at most about 30 lines, repo-owned `.bzl` capped at 500 lines | build-vs-buy section 3 | Custom Gazelle extension / repository rules by default | Custom Gazelle code fails silently |
+| Starlark surface | Bounded: macros of at most about 30 lines, repo-owned `.bzl` capped at 750 lines | build-vs-buy section 3 | Custom Gazelle extension / repository rules by default | Custom Gazelle code fails silently |
 | Enumerated configs/modes | Sealed set of `TagConfig` names and `BUILD_SYSTEM` values, validated by a test | type-driven-design | Free strings | Prevents unknown-config drift |
 
 ---
