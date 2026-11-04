@@ -770,6 +770,9 @@ jobs:
       - name: Set up the tymux fidelity oracle (xterm.js via Bun)
         uses: ./.github/actions/setup-fidelity-oracle
 
+      # Per-process RSS in the job log (the -race runs of heavy packages are the memory/time risk).
+      - uses: tstapler/gha-actions/mem-sampler@a4cb933590e4470b66a09c970e9002e65b6803c4 # v0.1.0
+
       - name: Run affected-package tests
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
@@ -787,7 +790,7 @@ jobs:
             echo "$1"
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "Running the full suite instead (this job is the only Go test gate on a PR)."
-              TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=22m \
+              TMUX_BIN="$(pwd)/bin/tmux" mem-sampler --out ci-mem-head/metrics.json --label test-affected -- gotestsum --format github-actions -- -race -short -timeout=22m \
                 -coverprofile=coverage.affected.out -covermode=atomic ./...
             else
               echo "Nothing to narrow -- test-tmux/test-rest (main-only) already cover the full suite."
@@ -839,8 +842,17 @@ jobs:
           # of package paths that must word-split into separate `go test`
           # arguments, not one quoted string.
           # shellcheck disable=SC2086
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=15m \
+          TMUX_BIN="$(pwd)/bin/tmux" mem-sampler --out ci-mem-head/metrics.json --label test-affected -- gotestsum --format github-actions -- -race -short -timeout=15m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
+
+      - name: Report CI memory
+        if: always()
+        uses: tstapler/gha-actions/mem-sampler/report@a4cb933590e4470b66a09c970e9002e65b6803c4 # v0.1.0
+        with:
+          metrics: ci-mem-head/metrics.json
+          title: CI memory (Go affected-package tests)
+          tag: ci-memory-test-affected
+          baseline-cache: 'false'  # PR-only signal: main runs the full suite in other jobs
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
       # against a per-PR, per-affected-packages-only profile (it would swing
