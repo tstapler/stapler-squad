@@ -73,7 +73,9 @@ build:embed_tymux --//tools/bzl/flags:embed_tymux=true
 build:sinkguard --@rules_go//go/config:tags=sinkguard
 build:gitoracle --@rules_go//go/config:tags=gitoracle
 build:integration --@rules_go//go/config:tags=integration
-# Race needs cgo, so it turns off the pure-Go default (build:linux pure arrives in Task 1.1c).
+# Linux builds are pure Go (no cgo sqlite driver left; ADR-006). Auto-applied by Bazel on Linux hosts.
+build:linux --@rules_go//go/config:pure
+# Race needs cgo and a host C compiler, so it turns off the pure-Go default (ADR-006).
 build:race --@rules_go//go/config:pure=false
 build:race --@rules_go//go/config:race
 # release == embed_tymux, repeated rather than `--config=embed_tymux` (no spike-verified row for
