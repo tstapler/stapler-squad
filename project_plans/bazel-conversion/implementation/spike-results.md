@@ -80,6 +80,8 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 | --run_under | spike-verified | `bazel help build --long` 9.3.1: `--run_under (a prefix in front of command; default: see description)`; applies to `bazel test` (Task 4.1b: `//tools/bzl:test_wrapper`; `env_test` passes with it and fails without it, with `--run_under=/usr/bin/env`) |
 | --shutdown_on_low_sys_mem | spike-verified | `bazel help startup_options --long` 9.3.1: `--[no]shutdown_on_low_sys_mem (a boolean; default: "false")` |
 | --experimental_run_in_user_cgroup | spike-verified | `bazel help build --long` 9.3.1: `--[no]experimental_run_in_user_cgroup (a boolean; default: "false")` (not committed; evaluated in E7, Task 0.10g) |
+| --compilation_mode | spike-verified | `bazel help build --long` 9.3.1: `--compilation_mode [-c] (fastbuild, dbg or opt; default: "fastbuild")` (committed only as `build:release --compilation_mode=opt`, Task 3.4b) |
+| --workspace_status_command | spike-verified | `bazel help build --long` 9.3.1: `--workspace_status_command (a path; default: "")` (committed only as `build:release --workspace_status_command=tools/bzl/workspace_status.sh`, Task 3.4a/b) |
 | --local_ram_resources | absent | `grep -cE -- '--local_ram_resources' ` of `bazel help build --long` 9.3.1 prints 0 |
 | --local_cpu_resources | absent | same grep prints 0 |
 | --incompatible_sandbox_hermetic_tmp | absent | same grep prints 0 |
