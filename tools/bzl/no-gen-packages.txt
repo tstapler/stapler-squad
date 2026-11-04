@@ -44,6 +44,7 @@ server/prwatch/inbox
 server/terminal
 server/web
 session/cdp
+session/contexthistory
 session/dbmaint
 session/dbobs
 session/dbpool
@@ -100,9 +101,6 @@ testutil/socket
 testutil/tmuxreap
 testutil/wait
 tools/bzl/spike
-tools/bzl/spike-nogo/clean
-tools/bzl/spike-nogo/seed
 tools/bzl/spike-tags
-tools/bzl/spike-tags/cmd
 tools/scanner-workload/loadsample
 tools/shared-node-modules

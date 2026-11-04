@@ -12,6 +12,8 @@ go list -e -f '{{.ImportPath}}' ./... | while read -r imp; do
   rel=${imp#"$mod"}
   rel=${rel#/}
   [ -n "$rel" ] || continue
+  # Deliberately BUILD-less packages (tools/bzl/no-build-packages.txt) are not Bazel targets.
+  [ -f "$rel/BUILD.bazel" ] || [ -f "$rel/BUILD" ] || continue
   if go list -e -deps -test -f '{{.ImportPath}}' "./$rel" | grep -qE "$mod/(gen/proto/go|session/ent)(/|$)"; then
     continue
   fi
