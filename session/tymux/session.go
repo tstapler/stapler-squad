@@ -38,12 +38,18 @@ const (
 // tymuxGRPCSession is the real TymuxManager implementation, backed by a live
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
-	transport rpcTransport
+	transport    rpcTransport
+	bannerFilter *tmux.BannerFilter
 
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
 	// them, capture/introspection methods and IsAlive/HasSession read them,
 	// and nothing here assumes single-threaded callers.
 	mu sync.RWMutex
+
+	// previousContent is the last successful, banner-filtered activity snapshot.
+	previousContent   string
+	activityRequest   uint64
+	activityPublished uint64
 
 	// command is the program Start() asks tymuxd to spawn, set via SetCommand
 	// before Start(). Nil means tymuxd defaults to $SHELL.
@@ -250,6 +256,7 @@ const (
 func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 	return &tymuxGRPCSession{
 		transport:            transport,
+		bannerFilter:         tmux.NewBannerFilter(),
 		fanout:               NewClientFanout(),
 		abortReconnect:       make(chan struct{}),
 		reconnectMaxAttempts: defaultReconnectMaxAttempts,
@@ -1408,10 +1415,36 @@ func (s *tymuxGRPCSession) GetPanePID() (int32, error) { return 0, ErrNotSupport
 // --- Content helpers ---
 
 func (s *tymuxGRPCSession) HasUpdated() (updated bool, hasPrompt bool, content string) {
-	return false, false, ""
+	s.mu.Lock()
+	s.activityRequest++
+	request := s.activityRequest
+	s.mu.Unlock()
+	content, err := s.CapturePaneContent()
+	if err != nil {
+		return false, false, ""
+	}
+	filtered, _ := s.FilterBanners(content)
+
+	s.mu.Lock()
+	if request < s.activityPublished {
+		s.mu.Unlock()
+		return false, false, ""
+	}
+	s.activityPublished = request
+	updated = filtered != s.previousContent
+	s.previousContent = filtered
+	kind := tmux.ProgramKindOf(s.command)
+	s.mu.Unlock()
+	return updated, tmux.DetectPromptInContent(kind, filtered), content
 }
-func (s *tymuxGRPCSession) FilterBanners(content string) (string, int) { return content, 0 }
-func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool   { return false }
+
+func (s *tymuxGRPCSession) FilterBanners(content string) (string, int) {
+	return s.bannerFilter.FilterBannersFromText(content)
+}
+
+func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool {
+	return s.bannerFilter.HasMeaningfulContent(content)
+}
 
 // --- Streaming (control mode) ---
 

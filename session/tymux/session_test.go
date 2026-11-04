@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -548,6 +549,177 @@ func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	sess := NewTymuxGRPCSession(transport)
 	require.NoError(t, sess.Start(dir))
 	return sess
+}
+
+// activitySession exercises the real manager's capture path without opening an Attach stream.
+func activitySession(t *testing.T, capture func() (*v1.PaneSnapshot, error)) TymuxManager {
+	t.Helper()
+	transport := &fakeTransport{
+		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			assert.Equal(t, testPaneID, req.Msg.GetPaneId())
+			snap, err := capture()
+			if err != nil {
+				return nil, err
+			}
+			return connect.NewResponse(snap), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	return sess
+}
+
+func activitySnapshot(text string) *v1.PaneSnapshot {
+	lines := strings.Split(text, "\n")
+	rows := make([]*v1.Row, 0, len(lines))
+	for _, line := range lines {
+		rows = append(rows, &v1.Row{Cells: []*v1.Cell{{Text: line}}})
+	}
+	return &v1.PaneSnapshot{Grid: rows}
+}
+
+func TestTymuxGRPCSession_ActivitySnapshots(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	var captureErr error
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, captureErr })
+
+	check := func(wantUpdated bool, wantContent string) {
+		t.Helper()
+		updated, prompt, content := sess.HasUpdated()
+		assert.Equal(t, wantUpdated, updated)
+		assert.False(t, prompt)
+		assert.Equal(t, wantContent, content)
+		assert.Equal(t, wantContent != "", sess.HasMeaningfulContent(content))
+	}
+	check(true, "working")
+	check(false, "working")
+	snap = activitySnapshot("finished")
+	check(true, "finished")
+	captureErr = errors.New("capture unavailable")
+	check(false, "")
+	captureErr = nil
+	check(false, "finished")
+	snap = activitySnapshot("more output")
+	check(true, "more output")
+}
+
+func TestTymuxGRPCSession_ActivityFiltersBanners(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	for _, text := range []string{"", "  \n", "14:23 5-Jan-24"} {
+		snap = activitySnapshot(text)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, prompt)
+		if text == "" {
+			assert.False(t, updated, "an initial empty snapshot is not output")
+		}
+		assert.False(t, sess.HasMeaningfulContent(content), "text: %q", text)
+		filtered, removed := sess.FilterBanners(content)
+		assert.Empty(t, strings.TrimSpace(filtered))
+		if text == "14:23 5-Jan-24" {
+			assert.Equal(t, 1, removed)
+		}
+		updated, prompt, content = sess.HasUpdated()
+		assert.False(t, updated, "identical empty/banner snapshots are stable")
+		assert.False(t, prompt)
+		assert.False(t, sess.HasMeaningfulContent(content))
+	}
+	filtered, removed := sess.FilterBanners("working\n14:23 5-Jan-24")
+	assert.Equal(t, "working", filtered)
+	assert.Equal(t, 1, removed)
+	snap = activitySnapshot("working\n14:23 5-Jan-24")
+	updated, _, _ := sess.HasUpdated()
+	assert.True(t, updated)
+	snap = activitySnapshot("working\n14:24 5-Jan-24")
+	updated, _, content := sess.HasUpdated()
+	assert.False(t, updated, "banner-only changes must not publish activity")
+	assert.True(t, sess.HasMeaningfulContent(content))
+}
+
+func TestTymuxGRPCSession_ActivityPrompts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		program string
+		content string
+		prompt  bool
+	}{
+		{"claude", "❯ 1. Yes\n  2. No", true},
+		{"aider", "(Y)es/(N)o/(D)on't ask again", true},
+		{"gemini", "Yes, allow once", true},
+		{"/usr/local/bin/claude", "❯ 1. Yes\n  2. No", true},
+		{"sh", "Yes, allow once", false},
+	} {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return activitySnapshot(tc.content), nil })
+			sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Literal(tc.program)}})
+			updated, prompt, _ := sess.HasUpdated()
+			assert.True(t, updated)
+			assert.Equal(t, tc.prompt, prompt)
+			updated, prompt, _ = sess.HasUpdated()
+			assert.False(t, updated)
+			assert.Equal(t, tc.prompt, prompt, "stable prompts must remain detectable")
+		})
+	}
+}
+
+func TestTymuxGRPCSession_ActivityOutOfOrderCaptures(t *testing.T) {
+	t.Parallel()
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	var calls atomic.Int32
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) {
+		if calls.Add(1) == 1 {
+			close(oldStarted)
+			<-releaseOld
+			return activitySnapshot("old output"), nil
+		}
+		return activitySnapshot("new output"), nil
+	})
+	oldDone := make(chan struct{})
+	go func() {
+		defer close(oldDone)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, updated, "a stale capture must not overwrite a newer snapshot")
+		assert.False(t, prompt)
+		assert.Empty(t, content)
+	}()
+	<-oldStarted
+	updated, prompt, content := sess.HasUpdated()
+	assert.True(t, updated)
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+	close(releaseOld)
+	<-oldDone
+	updated, prompt, content = sess.HasUpdated()
+	assert.False(t, updated, "the newer snapshot remains the baseline")
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+}
+
+func TestTymuxGRPCSession_ActivityConcurrentPolls(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	command, err := launchcmd.NewShellText("claude")
+	require.NoError(t, err)
+	var updates atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			updated, _, content := sess.HasUpdated()
+			if updated {
+				updates.Add(1)
+			}
+			assert.True(t, sess.HasMeaningfulContent(content))
+			sess.FilterBanners(content)
+			sess.SetCommand(launchcmd.ShellScript{Text: command})
+		})
+	}
+	wg.Wait()
+	assert.EqualValues(t, 1, updates.Load(), "one snapshot is published exactly once")
 }
 
 func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
