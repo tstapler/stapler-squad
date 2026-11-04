@@ -46,6 +46,8 @@ jobs:
           bash tools/bzl/check-build-fresh-cheap_test.sh
           bash tools/bzl/doctor_test.sh
           bash tools/bzl/check-make-help.sh
+          bash tools/bzl/check-test-tags_test.sh
+          bash tools/bzl/check-test-tags.sh
 
       # T5 collector for P10 (Task 7.5g): every seeded failure shows a Remedy: line within 20 lines.
       - name: First-error legibility

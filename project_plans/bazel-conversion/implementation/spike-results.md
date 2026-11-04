@@ -75,7 +75,9 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 | --repo_contents_cache | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache (a path; default: see description)` |
 | --repo_contents_cache_gc_max_age | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache_gc_max_age (An immutable length of time.; default: "14d")` |
 | --repository_cache | spike-verified | `bazel help build --long` 9.3.1: `--repository_cache (a path; default: see description)` |
-| --sandbox_default_allow_network | spike-verified | `bazel help build --long` 9.3.1: `--[no]sandbox_default_allow_network (a boolean; default: "true")` (spike S1 uses `=false`; not committed) |
+| --sandbox_default_allow_network | spike-verified | `bazel help build --long` 9.3.1: `--[no]sandbox_default_allow_network (a boolean; default: "true")` (committed as `test --sandbox_default_allow_network=false`, Task 4.1b; loopback still works, S8 census ran with it) |
+| --test_env | spike-verified | `bazel help build --long` 9.3.1: `--test_env (a 'name[=value]' assignment with an optional value part or the special syntax '=name' to unset a variable; may be used multiple times)` (committed only for `STAPLER_SQUAD_INSTANCE=bazel-test`, Task 4.1b) |
+| --run_under | spike-verified | `bazel help build --long` 9.3.1: `--run_under (a prefix in front of command; default: see description)`; applies to `bazel test` (Task 4.1b: `//tools/bzl:test_wrapper`; `env_test` passes with it and fails without it, with `--run_under=/usr/bin/env`) |
 | --shutdown_on_low_sys_mem | spike-verified | `bazel help startup_options --long` 9.3.1: `--[no]shutdown_on_low_sys_mem (a boolean; default: "false")` |
 | --experimental_run_in_user_cgroup | spike-verified | `bazel help build --long` 9.3.1: `--[no]experimental_run_in_user_cgroup (a boolean; default: "false")` (not committed; evaluated in E7, Task 0.10g) |
 | --local_ram_resources | absent | `grep -cE -- '--local_ram_resources' ` of `bazel help build --long` 9.3.1 prints 0 |
@@ -617,3 +619,10 @@ Local-strategy caveat: a `no-sandbox`/`local` test (S4's repo-rule targets) sees
 ### Owner actions
 
 None required. Epic 4 inputs: (a) decide a test HOME fixture (gitconfig), (b) put the tmux/gh directory in the Bazel test PATH or make tests skip, (c) generate `data` for `testdata/`, `scripts/` and the web fixtures, (d) drop the global `STAPLER_SQUAD_TMUX_SOCKET` and `TMPDIR` test env from Task 4.1b.
+
+
+## Task 4.2b: sharding and filter semantics (2026-11-03, Bazel 9.3.1)
+
+`bash tools/bzl/parity/shard-union.sh //server/services:services_test` exits 0 and prints `SHARD UNION EQUAL n=5225` (VERIFIED: the sorted passing-name sets of the sharded run, 4 shards via `--test_sharding_strategy=explicit`, and the unsharded run, `=disabled`, are identical; `shard_1_of_4` .. `shard_4_of_4` directories exist). Sharded wall time 47.0 s, unsharded 141.6 s. Both runs still report failing tests (the `cwd` class, fixed in Story 4.10), so the comparison is by passing names. With the Story 4.1b wrapper (tmux, gh and go on PATH) the S8 `shard-timeout` abort of shard 2 no longer occurs.
+
+`bash tools/bzl/parity/shard-union.sh --filter-semantics` prints `filter: passthrough unanchored`: `--test_filter=TestLiveState` ran `TestLiveStateError` and its subtests (so it is not anchored), and `--test_filter='TestIsolatedHome|TestShortTempDir'` ran both tests (the value reaches Go as a regular expression, like `go test -run`). Task 8.2e can map `RUN=` to `--test_filter` unchanged.

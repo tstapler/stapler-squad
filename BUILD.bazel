@@ -61,6 +61,7 @@ exports_files([
     "buf.yaml",
     "buf.gen.bazel.yaml",
     "buf.gen.bazel-ts.yaml",
+    "go.mod",
 ])
 
 go_library(
