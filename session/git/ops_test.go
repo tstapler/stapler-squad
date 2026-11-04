@@ -347,6 +347,44 @@ func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	assert.Empty(t, sha)
 }
 
+// worktreeConfigClone returns a clone of a fresh origin with
+// extensions.worktreeConfig=true on a core.repositoryformatversion=0 repo (the state
+// `git worktree`/sparse-checkout tooling leaves behind), using a file:// remote.
+func worktreeConfigClone(t *testing.T) (origin, work string) {
+	t.Helper()
+	origin = setupTestRepo(t)
+	work = cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", "file://"+origin)
+	runGit(t, work, "config", "extensions.worktreeConfig", "true")
+	require.Equal(t, "0", strings.TrimSpace(runGit(t, work, "config", "core.repositoryformatversion")))
+	return origin, work
+}
+
+// TestResolveOriginBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension is the
+// regression test for "core.repositoryformatversion does not support extension:
+// worktreeconfig" breaking session creation.
+func TestResolveOriginBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	t.Parallel()
+	origin, work := worktreeConfigClone(t)
+	want := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+
+	sha, err := ResolveOriginBranchSHA(work, "main")
+	require.NoError(t, err)
+	assert.Regexp(t, `^[0-9a-f]{40}$`, sha)
+	assert.Equal(t, want, sha)
+}
+
+func TestResolveLocalBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	t.Parallel()
+	_, work := worktreeConfigClone(t)
+	want := strings.TrimSpace(runGit(t, work, "rev-parse", "main"))
+
+	sha, err := ResolveLocalBranchSHA(work, "main")
+	require.NoError(t, err)
+	assert.Regexp(t, `^[0-9a-f]{40}$`, sha)
+	assert.Equal(t, want, sha)
+}
+
 // TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the
 // hardcoded-"main" bug: a repo whose default branch is "master" (e.g. this repo's own
 // sibling dotfiles project) must still resolve correctly instead of failing every fetch
