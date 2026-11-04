@@ -7,6 +7,8 @@
 # Prerequisite: bazel build //proto/session/v1:gen_go //tools/bzl/ent:ent_gen //server/web:dist_staged
 # (the generated Go and the web dist come from bazel-bin).
 # Usage: GO=/path/to/go tools/bzl/otel_overlay/gen.sh        # CHECK=1 diffs instead of writing
+# Caveat: otelc setup output is order-nondeterministic (go.mod replace order, otelc.runtime.go stub numbering,
+# matched.json order), so CHECK=1 reports false drift until the output is canonicalized (S15b task 6).
 set -euo pipefail
 
 OTELC_VERSION=v1.0.1
@@ -15,9 +17,9 @@ out=$repo/tools/bzl/otel_overlay
 : "${GO:?set GO to the go binary (the rules_go SDK one, so GOROOT matches)}"
 scratch=${SSQ_OTEL_SCRATCH:-$HOME/.cache/tmp/ssq-otel-overlay}
 bin=$(readlink -f "$repo/bazel-bin")
+chmod -R u+w "$scratch" 2>/dev/null || true # the module cache is read-only
 rm -rf "$scratch"
 mkdir -p "$scratch/src" "$scratch/bin" "$scratch/tmp"
-chmod -R u+w "$scratch/mc" 2>/dev/null || true
 
 (cd "$repo" && git ls-files -z --cached --others --exclude-standard \
   | grep -zEv '^(web-app|website|docs|project_plans|third_party|tests|\.claude|tools/bzl/otel_overlay)/' \
