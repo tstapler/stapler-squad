@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -16,7 +17,12 @@ CLEAR = {"s10_second_run_job_s": 1000, "unconverted_jobs_s": 1000, "s10_cold_run
          "make_cold_median_s": 600, "s6_first_cold_s": 900, "s6_second_cold_s": 300, "recosted_cu_m": 31.0}
 
 
+NO_ATT = ("--attestations", os.devnull)
+
+
 def run(measured, inputs, *args):
+    if "--attestations" not in args:
+        args = args + NO_ATT
     with tempfile.TemporaryDirectory() as d:
         mp, ip = os.path.join(d, "m.json"), os.path.join(d, "i.json")
         json.dump(measured, open(mp, "w"))
@@ -52,6 +58,52 @@ class Factors(unittest.TestCase):
         before = open(path).read()
         run(MEASURED, CLEAR)
         self.assertEqual(open(path).read(), before)
+
+
+class OwnerDecision(unittest.TestCase):
+    TRIP = dict(CLEAR)
+    M = dict(MEASURED, ra2_non_go_share=0.987)
+
+    def att(self, decision, extra="", reason="EG5 trips (RA2)."):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "a.yaml")
+        open(p, "w").write("interview_date: x\neconomic_gate:\n  decision: %s\n  date: 2026-11-03\n%s  reason: >-\n    %s\n    more text\n  status: recorded\nother:\n  decision: re-plan\n" % (decision, extra, reason))
+        return ["--attestations", p]
+
+    def test_continue_covers_tripped(self):
+        code, out = run(self.M, self.TRIP, *self.att("continue"))
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[-1], "ECONOMIC GATE: TRIPPED (EG5) - owner decision recorded: continue (2026-11-03)")
+
+    def test_continue_does_not_cover_other_trip(self):
+        code, out = run(self.M, dict(self.TRIP, recosted_cu_m=39.0), *self.att("continue"))
+        self.assertEqual((code, "OWNER DECISION EG4, EG5" in out), (3, True))
+
+    def test_criteria_list_overrides_reason(self):
+        code, _ = run(self.M, self.TRIP, *self.att("continue", extra="  criteria: [EG4]\n"))
+        self.assertEqual(code, 3)
+
+    def test_continue_never_clears_unmeasured(self):
+        code, out = run(self.M, {}, *self.att("continue"))
+        self.assertEqual(code, 4)
+        self.assertIn("not CLEAR", out.splitlines()[-1])
+
+    def test_other_decisions_distinct_codes(self):
+        codes = {d: run(self.M, self.TRIP, *self.att(d))[0] for d in ("re-plan", "pause", "revert")}
+        self.assertEqual(codes, {"re-plan": 5, "pause": 6, "revert": 7})
+
+    def test_no_decision_keeps_exit_3(self):
+        self.assertEqual(run(self.M, self.TRIP)[0], 3)
+
+    def test_midpoint_ignores_decision(self):
+        code, _ = run(MEASURED, {}, "--midpoint", *self.att("continue"))
+        self.assertEqual(code, 4)
+
+    def test_repo_attestation_parses(self):
+        d = eg.load_decision(eg.ATTESTATIONS)
+        self.assertEqual((d["decision"], d["date"]), ("continue", "2026-11-03"))
+        self.assertIn("EG5", d["covers"])
 
 
 class EconomicGate(unittest.TestCase):

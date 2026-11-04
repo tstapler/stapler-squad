@@ -1,5 +1,8 @@
 import importlib.util
+import contextlib
+import io
 import os
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -66,6 +69,27 @@ class CheckSpikeResults(unittest.TestCase):
     def test_parse_quotes_and_comments(self):
         rows = csr.parse_rows('# c\n- spike: S1\n  verdict: Pass # x\n  path: "a: b"\n  cost: M\n')
         self.assertEqual(rows, [{"spike": "S1", "verdict": "Pass", "path": "a: b", "cost": "M"}])
+
+    def test_owner_deferral_is_display_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "owner-attestations.yaml"), "w").write(
+                "interview_date: 2026-11-03\nremote_cache_s10:\n  decision: start with disk cache only; defer the onyx remote cache\n"
+                "  pending: S10 and S10-redaction have no verdict; EG1 measured locally\n")
+            rows = [r for r in good_rows() if r["spike"] not in ("S10", "S10-redaction")]
+            rows = [dict(r, verdict="Fail") if r["spike"] == "S13" else r for r in rows]
+            res = os.path.join(d, "spike-results.yaml")
+            open(res, "w").write("".join("- spike: %s\n  verdict: %s\n  path: p\n  cost: S\n" % (r["spike"], r["verdict"]) for r in rows))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = csr.main(["x", res])
+            text = out.getvalue()
+            self.assertIn("owner-deferred: S10, S10-redaction (disk cache first, 2026-11-03)", text)
+            self.assertIn("MISSING required ids: S10, S10-redaction", text)
+            self.assertIn("BLOCKING (verdict Fail): S13", text)
+            self.assertEqual(code, 1)
+
+    def test_no_attestations_no_deferral_line(self):
+        self.assertIsNone(csr.owner_deferrals("/nonexistent/owner-attestations.yaml"))
 
 
 if __name__ == "__main__":
