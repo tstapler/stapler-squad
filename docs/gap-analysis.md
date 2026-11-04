@@ -1581,3 +1581,715 @@ skip it in future rounds.
 - **file**: `config/config.go`
 - **detail**: NotificationPrefs.PushEnabled is defined in config.go and serialised to config.json, implying it should gate whether web push notifications are sent. However, push_service.go and push_handler.go never read Config.Notifications.PushEnabled — push notifications are delivered to all subscribers regardless of this flag. There is also no proto field or UI control that reads or writes this flag.
 - **fix hint**: In the push delivery path (push_service.go or push_handler.go), call config.LoadConfig() and skip sending if !cfg.Notifications.PushEnabled. Optionally expose the setting via proto + UI, or remove the field if opt-out is intended to be handled exclusively by browser unsubscription.
+
+### GAP-196 — CreateSession silently discards retry_policy_override
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-server-services-session-service-create-g-CreateSession-silently-discards
+- **file**: `server/services/session_service_create.go`
+- **detail**: The proto exposes `CreateSessionRequest.retry_policy_override`, and the session driver resolves `Instance.RetryPolicyOverride` against the global policy. However, `CreateSession` never reads the request field, and `InstanceOptions` has no corresponding option, so a caller's per-session retry settings are silently discarded. In particular, requesting `enabled=false` cannot prevent automatic retries when the global policy enables them.
+- **fix hint**: Add a retry-policy override to InstanceOptions, convert the proto field during CreateSession, and initialize Instance.RetryPolicyOverride before persistence and driver startup. Add a request-to-driver regression test covering an override that disables globally enabled retries.
+
+### GAP-197 — AssignSessionsToProject always reports updated_count=0
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-server-services-project-service-go-AssignSessionsToProject-always-reports
+- **file**: `server/services/project_service.go`
+- **detail**: `AssignSessionsToProjectResponse` declares `updated_count`, but the handler always returns an empty response after the storage operation succeeds. Consequently, even a successful nonempty assignment reports zero updated sessions; the repository currently returns only an error, so no actual count reaches the handler.
+- **fix hint**: Return the number of updated sessions from the repository/storage assignment methods and populate UpdatedCount in the handler; test successful nonempty and empty assignments.
+
+### GAP-198 — GetProviderLimits is implemented but provider quota details have no frontend consumer
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-server-services-session-service-events-g-GetProviderLimits-is-implemented
+- **file**: `server/services/session_service_events.go`
+- **detail**: The generated client exposes GetProviderLimits, and server/services/session_service_events.go:550 implements per-session provider quota, remaining requests/tokens, reset times, and context-window limits. A production frontend identifier scan found neither a caller nor consumers of the quota fields, so these backend diagnostics are unavailable in the UI. This leaves no frontend coverage for the quota-details surface, even though the RPC is already implemented.
+- **fix hint**: Add a useProviderLimits(sessionId) hook and display remaining quota and reset times in the session details panel; test the populated, unavailable, and request-error states.
+
+### GAP-199 — Settings tabs do not synchronize with URL changes or browser history
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Settings-tabs-do
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/app/settings/page.tsx`
+- **detail**: VERIFIED: /Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/app/settings/page.tsx:30-38 reads ?tab= but passes it only as Radix Tabs.defaultValue; tab clicks never update the URL. Consequently, query-only navigation or browser Back/Forward while Settings remains mounted leaves the previously selected panel visible, and refreshing after clicking another tab restores the stale URL-selected panel. A reproduction using the installed React and Radix dependencies printed 'General' both before and after changing defaultValue to 'config-files'; existing Settings tests check initial navigation links rather than this state synchronization.
+- **fix hint**: Control Tabs.Root with a validated query-derived value and update the tab query through the navigation facade in onValueChange; add coverage for query-only navigation, Back/Forward, and refreshing a selected tab.
+
+### GAP-200 — Checkpoint bookmarks are discarded by the ent persistence backend
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Checkpoint-bookmarks-are
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go`
+- **detail**: VERIFIED by source inspection: CreateCheckpoint calls SaveInstances after adding a checkpoint, and ListCheckpoints reads the restored instance's checkpoint list. However, session/ent/schema/session.go has no checkpoint storage, and EntRepository.Create, updateSkipping, and sessionToInstanceData never map Checkpoints or ActiveCheckpoint. Consequently, the persistence call cannot preserve checkpoint bookmarks across a server restart, leaving saved transcript files inaccessible through ListCheckpoints or ForkFromCheckpoint.
+- **fix hint**: Add durable checkpoint storage and map Checkpoints/ActiveCheckpoint through repository create, update, and load; add a repository round-trip test covering a checkpoint and its active ID.
+
+### GAP-201 — Restart-from-session lineage is exposed in proto but never persisted
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Restart-from-session-lineage-is
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent/schema/session.go`
+- **detail**: VERIFIED by source inspection: CreateSession forwards restart_from_session_id into Instance.RestartedFromSessionID, ToInstanceData copies it, and InstanceToProto exposes restarted_from_session_id. The ent Session schema and all repository mappings omit this field, so a server restart removes the source-session relationship from subsequent API responses. This is distinct from checkpoint fork lineage: it breaks the separately implemented restart-from-session flow.
+- **fix hint**: Add a restarted_from_session_id schema field, map it in repository create/update/load, and test that a restarted session retains its source ID after reloading.
+
+### GAP-202 — ReviewVerdict.diff_hash is loaded from storage but dropped from proto responses
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-ReviewVerdictdiffhash-is-loaded
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/backlog_service.go`
+- **detail**: VERIFIED by source inspection: ReviewVerdict.diff_hash is declared in proto/session/v1/backlog.proto:29, stored by the review writers, and loaded into ReviewVerdictSummary by session/ent_repository_backlog.go:187. The ReviewVerdict response constructed by itemSessionToProto at server/services/backlog_service.go:959–970 omits DiffHash, so callers receive an empty value even when the database contains the reviewed diff fingerprint. This concerns diff_hash, not the separately known prompt_hash omission.
+- **fix hint**: Set DiffHash: rv.DiffHash in the response converter and add a converter test with a nonempty persisted diff hash.
+
+### GAP-203 — DirectoryRulesManager erases envVars and cliFlags when saving existing rules
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-DirectoryRulesManager-erases-envVars
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/components/settings/DirectoryRulesManager.tsx`
+- **detail**: The live settings page renders DirectoryRulesManager, and the backend supports persisting and resolving envVars and cliFlags in directory-rule overrides. However, handleEdit loads neither field, and handleSave explicitly sends envVars: {} and cliFlags: "" (DirectoryRulesManager.tsx:102–111,146–155). UpsertDirectoryRule replaces the entire existing rule (server/services/defaults_service.go:295–315), so editing an unrelated setting silently erases those overrides rather than preserving them.
+- **fix hint**: Load envVars and cliFlags into the rule form and round-trip them on save, preserving them even without editor controls. Add a regression test that edits an existing rule's program or tags and verifies its environment variables and CLI flags survive saving and reloading.
+
+### GAP-204 — WorkflowForm omits the concurrency precondition, allowing stale edits to overwrite workflow changes
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-components-workflows-Workflo-WorkflowForm-omits-the
+- **file**: `web-app/src/components/workflows/WorkflowForm.tsx`
+- **detail**: The backend supports optimistic concurrency through expected_updated_at, and useWorkflows forwards it when supplied, but WorkflowForm.protoToFormData drops existing.updatedAt. Editing the same workflow in two tabs therefore submits unconditional updates: the later save can silently overwrite the earlier tab's changes, including its schedule and prompt. VERIFIED by executing the actual form adapter with Bun: hasExpectedUpdatedAt=false; source: [/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/components/workflows/WorkflowForm.tsx:41-56](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/web-app/src/components/workflows/WorkflowForm.tsx#L41-L56).
+- **fix hint**: Include expectedUpdatedAt: w.updatedAt in protoToFormData, handle CodeAborted with a reload/conflict message, and add a form-submit test asserting that the original timestamp reaches updateWorkflow.
+
+### GAP-205 — SpawnShell bypasses worktree isolation when resolving its working directory
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP-session-instance-shells-go-SpawnShell-bypasses-worktree
+- **file**: `session/instance_shells.go`
+- **detail**: VERIFIED by source inspection: SpawnShell falls back to Instance.WorkingDir and then Instance.Path instead of resolving the session's active worktree (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_shells.go:86–105). Instance.Path is the repository root, whereas ActiveDir() resolves the isolated worktree (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_worktree.go:507–513). Consequently, an omitted working_dir opens a worktree session's shell in the shared repository, and the subsequent prefix check can reject an explicitly supplied worktree directory outside that root.
+- **fix hint**: Resolve the default directory from the session's active workspace, apply any relative WorkingDir override against that root, and validate explicit paths against the same workspace using filepath.Rel. Add coverage for a worktree outside the repository root.
+
+### GAP-206 — Deleting a session removes shell records without stopping its sibling shell processes
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-go-Deleting-a-session
+- **file**: `session/instance.go`
+- **detail**: VERIFIED by source inspection: DeleteSession delegates process cleanup to Destroy(), whose teardown closes only the parent process session and never iterates the independent sibling shells (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance.go:2250–2265; /Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_tmux.go:923–936). The repository then deletes the shell records without stopping their processes (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go:1004–1008), removing their UI management handles while their commands can remain running. The orphan sweeper is only a delayed fallback and explicitly does not run for isolated instances (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/orphan_tmux_sweeper.go:15,63–66).
+- **fix hint**: Add sibling-shell teardown to parent deletion before removing shell records, including deletion of sessions absent from the live poller. Cover parent deletion with a running shell and assert that both process sessions and shell watchers terminate.
+
+### GAP-207 — FocusWindow silently ignores pid and project targeting fields
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-server-services-utility-service-go-FocusWindow-silently-ignores
+- **file**: `server/services/utility_service.go`
+- **detail**: Verified by source inspection: FocusWindowRequest declares pid for specific process targeting and project for project-specific IDE activation (proto/session/v1/session.proto:1612–1616). The handler reads only bundle_id and app_name, and WindowActivator.Activate accepts only those application identifiers (server/services/utility_service.go:326–362; server/services/window_activator.go:17–22). Requests specifying different processes or projects therefore take the identical application-level activation path and can report success without targeting the requested window; coverage should exercise two targets within the same application.
+- **fix hint**: Add a handler test that supplies distinct pid/project values for the same application, then either forward supported targeting information through WindowActivator or explicitly reject unsupported targeting instead of silently ignoring it.
+
+### GAP-208 — Shared approval-rule config saving is advertised but disconnected in both frontend and backend
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-components-sessions-Approval-Shared-approval-rule-config
+- **file**: `web-app/src/components/sessions/ApprovalRulesPanel.tsx`
+- **detail**: The approval-rules panel tells users to use “→ Config” or “Save to Config File,” but renders neither action: its RuleBuilderForm invocation never supplies onSaveToConfig, and no production frontend code calls getConfigFileRules or saveRulesToConfigFile. The backend is also disconnected: server/services/session_service.go:873 constructs RulesService with a nil configStore, so both RPCs return CodeUnimplemented even if called directly. Existing shared_rules.yaml files are hot-reloaded, but the advertised in-app creation/export path is unavailable.
+- **fix hint**: Implement and inject ConfigFileRulesRepository into the live RulesService, then add a saveRulesToConfigFile hook and pass it as RuleBuilderForm.onSaveToConfig; cover the advertised config-save flow with an integration test.
+
+### GAP-209 — Files page ignores path-query changes after its initial mount
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Files-page-ignores
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/components/files/LocalFileBrowser.tsx`
+- **detail**: LocalFileBrowser reads `?path=` only into the initial `pathInput` and `currentPath` state (lines 355–357); subsequent query changes never update either value, and directory fetching depends only on `currentPath` (lines 379–403). Navigating between `/files?path=...` URLs without unmounting the page therefore leaves the displayed directory and fetched listing at the previous location. The existing navigation test fixes `useSearchParams` to one value, so it does not cover this same-route navigation surface.
+- **fix hint**: Add a regression test that changes the path query while LocalFileBrowser remains mounted and asserts a new listing request and updated path input; then synchronize directory state and selection with the URL path parameter.
+
+### GAP-210 — Session allowed_tools and permission_mode are discarded during persistence
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-serialization-go-Session-allowedtools-and
+- **file**: `session/instance_serialization.go`
+- **detail**: CreateSession forwards allowed_tools and permission_mode into Instance, and the launch builder uses both flags. Neither field exists in InstanceData or the ent Session schema, and neither is copied by ToInstanceData/FromInstanceData, so reloading a session loses its configured permissions even with JSON storage. A subsequent cold resume rebuilds the command without those flags, potentially making previously unattended sessions block on approval prompts. Verified by reading /Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_serialization.go and session/instance_tmux.go:517–529; no runtime reproduction was performed.
+- **fix hint**: Add AllowedTools and PermissionMode to InstanceData and the ent Session schema, map both serialization directions and repository CRUD, and add a create→persist→reload→launch-command regression test.
+
+### GAP-211 — Ent persistence drops conversation-history provenance and masks lost-history revive outcomes
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-ent-schema-session-go-Ent-persistence-drops
+- **file**: `session/ent/schema/session.go`
+- **detail**: Instance serialization explicitly carries EverHadConversationHistory and LastReviveOutcome, and the proto adapter exposes the latter as revive_outcome. However, the ent Session schema and repository mapping store neither value, so the database round trip drops them. With no recoverable conversation UUID after restart, reviveOutcomeForColdRestore consequently classifies the session as fresh_expected rather than fresh_lost_history, masking the history-loss warning. Verified by reading /Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go:1491–1640 and session/instance.go:1585–1595; no runtime reproduction was performed.
+- **fix hint**: Persist ever_had_conversation_history and last_revive_outcome in ent CRUD mappings, then add a repository round-trip test followed by a cold-restore classification assertion with history recovery unavailable.
+
+### GAP-212 — Automatic archived-session deletion has no retention settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Automatic-archived-session-deletion
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: SessionRetentionConfig exposes enabled and retention_days, and the running sweeper permanently deletes eligible archived sessions using those settings (config/types.go:145–169; server/services/session_retention_sweeper.go:70–114). Neither setting has a proto field, settings RPC, or frontend control, so operators cannot disable automatic deletion or change its retention window through the application. The default is enabled with a 14-day window.
+- **fix hint**: Expose retention enabled/window fields through settings RPCs and add Settings controls; cover read-save-reload and sweeper behavior with explicit disabled/custom-window values.
+
+### GAP-213 — Active capacity guardrails have no configuration RPC or Settings controls
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Active-capacity-guardrails
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: CapacityConfig defines transition mode, warning thresholds, provider fallback priority, role-specific cost budgets, idle-wait limits, and spend-rate alerts (config/types.go:634–684). CapacityMonitor consumes these settings and can stop pipeline sessions when a configured cost budget is exceeded (server/services/capacity_monitor.go:337–355), but the proto and frontend have no corresponding configuration fields or controls. Operators must edit config.json rather than inspect or adjust these active guardrails in Settings; the focused TestCapacityConfig_SpendRate tests passed.
+- **fix hint**: Add get/update capacity-configuration RPCs and a Settings panel, then verify each saved field reaches the running CapacityMonitor rather than only the persisted config.
+
+### GAP-214 — Impossible cron schedules cause missed-fire detection to hang server startup
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP-server-workflows-scheduler-go-Impossible-cron-schedules
+- **file**: `server/workflows/scheduler.go`
+- **detail**: Workflow creation accepts syntactically valid but impossible schedules such as `0 0 31 2 *`; running the configured robfig parser confirmed that parsing succeeds and successive `Next()` calls both return the zero time. In `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/workflows/scheduler.go`, `latestOccurrenceInRange()` never checks for zero or non-advancing results, so its loop never terminates when startup checks that persisted workflow for missed fires. Because `server/server.go:804` calls scheduler startup synchronously, this can block server initialization after restart ([scheduler.go:580–655](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/workflows/scheduler.go#L580-L655)).
+- **fix hint**: Make latestOccurrenceInRange return found=false when Schedule.Next returns zero or fails to advance, then add a regression test using the real parser with `0 0 31 2 *`; also consider rejecting impossible schedules when saving workflows.
+
+### GAP-215 — Shell exit monitoring inherits the completed SpawnShell/RestartShell RPC context
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-shells-go-Shell-exit-monitoring
+- **file**: `session/instance_shells.go`
+- **detail**: SpawnShell and RestartShell pass the unary RPC context into watchShellExit, although the shell outlives that request (session/instance_shells.go:171,314). After the RPC finishes, the watcher returns on context cancellation instead of recording the process's eventual exit; its deferred exitCh close also signals completion while the shell may still be running. Consequently, shell lifecycle tracking can stop immediately after creation or restart, leaving a stale RUNNING status.
+- **fix hint**: Give shell watchers an instance-owned lifecycle context rather than the RPC context, and add a regression test that cancels the creation request before the shell exits.
+
+### GAP-216 — Startup reconciliation hides newly stopped shells instead of restoring their restartable entries
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-shells-go-Startup-reconciliation-hides
+- **file**: `session/instance_shells.go`
+- **detail**: ReconcileShells marks a previously RUNNING shell STOPPED in the database when its tmux session is missing, but deliberately creates no in-memory entry for that branch (session/instance_shells.go:441-481). ListShells reads only ListShellsInMemory, and RestartShell requires the shell to exist in that registry. Thus, after a server restart with a vanished shell process, the persisted shell disappears from the UI and cannot be restarted by ID until another reload reconstructs it as an already-stopped entry.
+- **fix hint**: Register a stopped shell entry with a closed exit channel immediately after reconciling a missing tmux session, and test that ListShells and RestartShell retain access to it.
+
+### GAP-217 — ListBranches cache silently overrides include_remote after the first request
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-server-services-workspace-service-go-ListBranches-cache-silently
+- **file**: `server/services/workspace_service.go`
+- **detail**: The registered ListBranches RPC honors include_remote on a cache miss, but its cache is keyed only by repository path and cache hits never inspect that field. A local-only request followed by include_remote=true therefore omits remote branches for up to five minutes; reversing the calls leaks remote refs into local-only results. Existing coverage exercises each mode on a fresh WorkspaceService rather than switching modes on the same instance; source verification: [workspace_service.go:819–840](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/services/workspace_service.go#L819-L840), absolute path /Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/workspace_service.go.
+- **fix hint**: Include include_remote in the branch-cache key, then add a regression test that calls both modes on the same WorkspaceService in both orders.
+
+### GAP-218 — Claude history git summary fields are declared but never populated
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-server-services-search-service-go-Claude-history-git
+- **file**: `server/services/search_service.go`
+- **detail**: ClaudeHistoryEntry declares git_status_summary, last_commit_message, and diff_file_count, but neither ListClaudeHistory nor GetClaudeHistoryDetail assigns them. The detail handler fetches VCS status into a separate nested field without populating these advertised summary fields, leaving them empty or zero even for an existing worktree. Verified by reading [search_service.go:397–420](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/services/search_service.go#L397-L420) and the proto contract at session.proto:1360–1368; absolute handler path /Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/search_service.go.
+- **fix hint**: Populate the history summary fields from the VCS enrichment result and add a detail-response test with a modified worktree and a known latest commit; if the nested VCS status supersedes them intentionally, deprecate the unused proto fields instead.
+
+### GAP-219 — Claim banner override never calls RecordClaimOverride, losing the server-side audit trail
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Claim-banner-override
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/components/backlog/ItemClaimBanner.tsx`
+- **detail**: VERIFIED: the item-detail claim banner accepts an override reason but only calls console.info and dismisses itself (ItemClaimBanner.tsx:54–58). The dedicated RecordClaimOverride RPC is explicitly intended for this banner in proto/session/v1/backlog.proto:1816–1820, and server/services/backlog_service_claim.go:364–380 implements the server-side audit event, but no frontend hook or component calls it. The existing ItemClaimBanner.test.tsx suite passed all six tests; its override test checks only dismissal, so missing server-side audit recording remains undetected.
+- **fix hint**: Add a recordClaimOverride wrapper to useBacklogService, await it from the banner's override callback before dismissing, and extend the override test to assert the external URL and reason reach the RPC and failures remain visible.
+
+### GAP-220 — Fanout comparison has no reopen action for existing session groups
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-lib-contexts-OmnibarContext--Fanout-comparison-has
+- **file**: `web-app/src/lib/contexts/OmnibarContext.tsx`
+- **detail**: The comparison page supports loading persisted groups through `?groupId=`, but its only navigation caller is the immediate post-creation redirect in `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/contexts/OmnibarContext.tsx:287`. No session-list/detail component consumes the persisted fanout group tags to offer a return link, and there is no group selector on the comparison page; after navigating away, reopening the winner-selection UI requires browser history or manually reconstructing the URL. Verified by inspecting the page and structurally searching navigation call sites at commit f85be71beb63e67069b0d88a6e1fd2bf582cb5c1.
+- **fix hint**: Add a 'Compare variants' action to session details when `fanoutGroupIdOf(session)` returns a group, linking through `fanoutComparisonPath(groupId)`; test reopening an existing group after leaving its creation redirect.
+
+### GAP-221 — Session retry budgets, backoff deadlines, and history are discarded on reload
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Session-retry-budgets
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_serialization.go`
+- **detail**: VERIFIED by source inspection: retry counters, pending deadlines, and history are exposed through InstanceToProto, but InstanceData, ToInstanceData/fromInstanceData, and the ent Session schema contain none of those fields. Reloading a session therefore loses its consumed retry budget, scheduled backoff, and diagnostic history; the driver only restores the configured maximum, not the previous attempts. The missing coverage surface is a save/reload round-trip during a retry episode ([instance_serialization.go:109](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/session/instance_serialization.go#L109), [session_driver.go:1084–1093](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/session/session_driver.go#L1084-L1093)).
+- **fix hint**: Add retry-state fields to InstanceData and the ent schema, map both persistence directions, and test that a partially consumed retry budget and future NextRetryAt survive save/reload.
+
+### GAP-222 — AssignSessionsToProject treats API session UUIDs as titles
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-AssignSessionsToProject-treats-API
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go`
+- **detail**: VERIFIED by source inspection: AssignSessionsToProject forwards the request's session_ids unchanged, but EntRepository resolves each value exclusively with session.Title(title). Session responses expose GetStableID(), which returns the UUID when present, so passing an ID obtained from the session API fails to find an otherwise existing session. Existing service tests exercise validation and an empty assignment list, not assignment using a real session UUID ([ent_repository.go:2298–2309](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/session/ent_repository.go#L2298-L2309), [instance_terminal.go:32](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/session/instance_terminal.go#L32)).
+- **fix hint**: Resolve assignment targets by session UUID, retaining title fallback for legacy sessions, and add a service-to-storage test that assigns a session using the ID returned by the session API.
+
+### GAP-223 — Headless triage cost, fan-out, and concurrency limits have no settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Headless-triage-cost
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Triage execution consumes HeadlessTriageMaxCostUSD, HeadlessTriageMaxTurns, and HeadlessTriageMaxSubagents in server/services/backlog_service_trigger_triage.go:1003–1008, while server/services/backlog_service.go:622 constructs its concurrency semaphore from MaxConcurrentTriage. These operational limits are persisted in config/config.go, but none has a corresponding proto field or frontend settings control. Operators therefore cannot inspect or adjust triage spending, fan-out, or concurrency limits through the application; the concurrency semaphore also requires reconstruction to reflect a changed limit.
+- **fix hint**: Expose the resolved triage budget and concurrency fields through settings RPCs and a settings form; explicitly mark concurrency restart-required or replace the fixed startup semaphore with a resizable limiter.
+
+### GAP-224 — Context-health detection thresholds are consumed at runtime but have no settings RPC or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Context-health-detection-thresholds
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: ContextHealthConfig defines loop-repeat, confusion-phrase, and minimum-sample thresholds in config/types.go:909–918. The live publisher receives these settings in server/dependencies.go:1492–1499, and session/tokens/context_health.go evaluates them to produce session health verdicts, but the proto exposes only the resulting health level and reason—not threshold configuration. No frontend control exposes these thresholds, leaving the visible health signal configurable only through the configuration file.
+- **fix hint**: Add a ContextHealthConfig settings message and get/update handlers, then expose the resolved thresholds in Settings; ensure updates reach the configuration instance captured by the health publisher.
+
+### GAP-225 — Editing a disabled cron trigger silently re-enables its schedule
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-components-sessions-TriggerF-Editing-a-disabled
+- **file**: `web-app/src/components/sessions/TriggerFormModal.tsx`
+- **detail**: The trigger list lets operators disable a cron workflow by setting both enabled and cronEnabled to false, but TriggerFormModal.handleSubmit unconditionally forces both fields back to true for cron triggers—even when editing an existing disabled trigger. Saving an unrelated name or prompt edit therefore re-registers the schedule through UpdateWorkflow and resumes unattended session creation without an explicit enable action ([TriggerFormModal.tsx:258–265](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/web-app/src/components/sessions/TriggerFormModal.tsx#L258-L265); local source: /Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/components/sessions/TriggerFormModal.tsx). The existing forceEnabledTrue Jest test passed, but covers creation only; it does not cover preserving a disabled schedule during edits.
+- **fix hint**: Apply the forced-enabled default only when creating a cron trigger; preserve the loaded enabled and cronEnabled values during edits. Add a regression test that edits a disabled cron trigger's name and asserts both submitted flags remain false.
+
+### GAP-226 — Renaming an autonomous session disconnects its running driver from stop and cleanup operations
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Renaming-an-autonomous
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_update.go`
+- **detail**: Both RenameSession and UpdateSession can change a live session's title, but neither updates the AutonomousOrchestrationService registry, which registers drivers under the original title (/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/autonomous_orchestration_service.go:163–178,278). Subsequent autonomous_mode=false, HibernateSession, and DeleteSession look up the driver using the new title, so they miss the running driver; the driver loop does not independently check AutonomousMode. This leaves automation running after the operator disables it and can allow a second driver when autonomy is re-enabled; this is source-verified, not runtime-reproduced.
+- **fix hint**: Key autonomous drivers and recovery registrations by the stable session UUID instead of mutable titles, updating registration, stop, and completion lookups together. Add a regression covering start autonomy → rename through each RPC → disable autonomy, asserting that the original driver stops and no registry entry remains.
+
+### GAP-227 — ListPromptHistory ignores its limit and bypasses most-recent-first ordering
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-server-services-session-service-delegate-ListPromptHistory-ignores-its
+- **file**: `server/services/session_service_delegates.go`
+- **detail**: VERIFIED by source inspection: ListPromptHistory calls PromptStore.Load() without reading req.Msg, so a request with limit=1 still returns every stored prompt in storage order. The store already provides List(limit), which sorts by most recently used and applies the limit. Existing handler tests exercise only empty requests, leaving this contract uncovered. Source: [/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_delegates.go:860–878](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/services/session_service_delegates.go#L860-L878).
+- **fix hint**: Replace promptStore.Load() with promptStore.List(int(req.Msg.GetLimit())) and add a handler test requesting one entry from a fixture with multiple, differently dated prompts.
+
+### GAP-228 — PromptHistoryEntry.created_at is persisted but never returned by ListPromptHistory
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-server-services-session-service-delegate-PromptHistoryEntrycreatedat-is-persisted
+- **file**: `server/services/session_service_delegates.go`
+- **detail**: VERIFIED by source inspection: PromptHistoryEntry declares created_at, and PromptStore persists CreatedAt when recording a new prompt, but ListPromptHistory omits it from every response. The EntryFieldsPopulated test checks LastUsed but not CreatedAt, allowing this missing field to pass unnoticed. Source: [/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_delegates.go:868–876](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/services/session_service_delegates.go#L868-L876).
+- **fix hint**: Populate CreatedAt from the stored entry, preserving absence for legacy zero timestamps, and extend TestListPromptHistory_EntryFieldsPopulated to verify the timestamp matches storage.
+
+### GAP-229 — Unchecking an existing transition gate never calls its deletion RPC
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-app-settings-backlog-stages--Unchecking-an-existing
+- **file**: `web-app/src/app/settings/backlog-stages/TransitionRow.tsx`
+- **detail**: The gate checkbox updates local state, and StageForm has a deleteTransitionGate RPC path, but onGateUnchecked replaces the gate with emptyGateFormState(), discarding its persisted ID. Saving then skips deletion because persistGateForKind only deletes unchecked gates that still have an ID; the restriction remains active after the UI reports a successful save. Executing these source functions with a persisted gate reproduced checked=false with no ID and zero RPC calls.
+- **fix hint**: Preserve the persisted gate ID when clearing an unchecked gate's configuration, and add a form regression test asserting that unchecking an existing gate calls deleteTransitionGate with that ID.
+
+### GAP-230 — Editing an existing stage transition's destination silently saves the old edge
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-app-settings-backlog-stages--Editing-an-existing
+- **file**: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
+- **detail**: The outgoing-transition target selector remains editable for existing transitions, but persistOneTransition only sends toStageSlug when creating a transition without an ID. Existing rows save their gates without persisting the changed target, and UpdateStageTransitionRequest only supports enabled, not target changes. Executing the existing-row persistence function after changing its target produced no transition RPC, so the displayed edit is lost on reload.
+- **fix hint**: Implement explicit edge replacement for target changes, preserving gate configuration and handling protected-edge rejection, or make existing targets read-only and require Remove/Add; test saving and reloading a changed target.
+
+### GAP-231 — Up Next bypasses the disabled backlog flag and links users into a guarded route
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-web-app-src-app-unfinished-UnfinishedTab-Up-Next-bypasses
+- **file**: `web-app/src/app/unfinished/UnfinishedTab.tsx`
+- **detail**: VERIFIED by source inspection: /Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/app/unfinished/UnfinishedTab.tsx:153-210 always supplies Stuck and Queue panels, and UpNextTabs.tsx:58-100 always renders their tabs without consulting the backlog flag. BacklogQueueSection.tsx:66-83,97-123 still lists backlog items and imports GitHub issues, while its cards link to /backlog, whose route guard redirects users away when that same flag is disabled. Existing queue/tab tests pass (`bunx jest --testPathPatterns='BacklogQueueSection.test.tsx|UpNextTabs.test.tsx' --no-coverage --runInBand`: 20 passed), but do not exercise this disabled-feature navigation boundary.
+- **fix hint**: Filter backlog-dependent Up Next tabs and panels using the backlog flag before mounting them, and normalize a selected ?tab=queue or ?tab=stuck to an available tab when disabled. Add a disabled-flag integration test asserting that backlog panels do not mount, no backlog RPCs run, and no links lead into the guarded route.
+
+### GAP-232 — Pi conversation identity is never persisted, breaking resume after server restart
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Pi-conversation-identity
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_serialization.go`
+- **detail**: `SetPiSessionID` captures the conversation UUID and `buildPiCommand` uses it to add `--session` when restarting pi (`session/instance_pi_status.go:201–214`, `session/instance_tmux.go:575–580`). However, `InstanceData` has no pi-session field, neither serialization direction handles `piSession`, and the ent schema has no corresponding column. A server restart therefore discards the captured UUID, so a subsequent launch cannot resume that conversation through the existing pi launch builder.
+- **fix hint**: Add pi-session identity to InstanceData and the ent persistence schema, then wire both serialization directions and repository create/update/read mappings; cover capture → save → reload → launch with a round-trip test.
+
+### GAP-233 — Ent persistence drops GitHub source reference and cloned-repository provenance
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Ent-persistence-drops
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go`
+- **detail**: Session creation and `ToInstanceData` retain `GitHubSourceRef` and `ClonedRepoPath`, and `InstanceToProto` exposes both to live session cards and the detail view (`session/instance_serialization.go:147–154`, `server/adapters/instance_adapter.go:108–109`). Neither field exists in the ent Session schema or any `EntRepository` mapping, so database-backed reloads replace both values with empty strings. The original GitHub source and cloned-repository provenance disappear from those API/UI surfaces after restarting the server.
+- **fix hint**: Add github_source_ref and cloned_repo_path columns to the Session schema and map them in repository create, update, and sessionToInstanceData; add a repository round-trip test.
+
+### GAP-234 — Unchecked Auto-yes overrides cannot disable inherited auto-approval
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Unchecked-Auto-yes-overrides
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/defaults.go`
+- **detail**: The directory-rule editor sends overrides.autoYes=false when its Auto-yes checkbox is unchecked, and UpsertDirectoryRule persists that value. However, config/defaults.go:84-91 first merges the referenced profile, and mergeProfileInto at lines 140-146 only applies true, so a rule cannot turn off auto-approval inherited from its profile. The same problem affects an explicitly selected profile attempting to override an enabled global default.
+- **fix hint**: Represent autoYes overrides with explicit presence across config and protobuf, expose inherit/on/off in the editors, and add a resolution regression test where a true profile is overridden by an explicit false directory setting.
+
+### GAP-235 — Stale-creation failure threshold has no settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Stale-creation-failure-threshold
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/stale_creation_sweeper.go`
+- **detail**: CreationStale.ThresholdMinutes is defined in config/types.go:334-347 and actively controls when server/services/stale_creation_sweeper.go:85-106 marks a Creating session stale. Neither the protobuf definitions nor the frontend exposes this setting, although the sweeper's comment says Settings changes take effect on the next tick. Operators can change the ordinary stale-session threshold in GlobalDefaultsForm, but cannot adjust this separate creation-failure threshold without editing config.json.
+- **fix hint**: Add creation_stale_threshold_minutes to the defaults read/update messages, wire both conversions in defaults_service.go, and provide a separately labeled GlobalDefaultsForm control with a save/reload test.
+
+### GAP-236 — Diagnose-and-nudge attempt cap is enforced but absent from Settings
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Diagnose-and-nudge-attempt-cap
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Config.DiagnoseNudgeMaxAttempts is persisted and bounded, and session/diagnose_nudge.go reads it when deciding whether further Diagnose & Nudge attempts are allowed. server/services/autonomous_stall_recovery.go:253 also uses it to derive the automatic stall-recovery nudge budget. No protobuf field or frontend control exposes this operational limit, so reaching the cap leaves no supported Settings path to inspect or change it.
+- **fix hint**: Expose the resolved DiagnoseNudgeMaxAttempts value through the global-defaults read/update RPCs and add a bounded Settings control, including a persistence round-trip test.
+
+### GAP-237 — Workflow-created sessions never consume the shared WIP admission budget
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Workflow-created-sessions-never
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/workflows/scheduler.go`
+- **detail**: The scheduler calls the real BacklogService.Admit gate before creating a workflow session, but that gate counts only in-progress/review backlog items and their linked sessions (server/services/backlog_service.go:587–592; server/services/backlog_service_triage.go:1419–1444). Workflow firing creates a standalone session with WorkflowId and never creates or reserves a counted backlog item, so successive workflow runs do not consume this advertised shared WIP budget and continue being admitted when backlog usage is below the limit (server/workflows/scheduler.go:459–503). The scheduler admission tests substitute a fixed boolean gate, leaving this producer/counter integration uncovered.
+- **fix hint**: Add an integration test that fires workflows through the real admission gate with a small WIP limit and verifies a subsequent fire is rejected; then include workflow-created Creating/Active sessions in the shared counter or reserve a counted admission slot before creation.
+
+### GAP-238 — Updating title and auto_approve together creates a duplicate session before the rename fails
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Updating-title-and
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_update.go`
+- **detail**: UpdateSession applies a requested title rename in memory before calling SetAutoApprove, whose persistence callback immediately calls SaveInstances (server/services/session_service_update.go:319). Unlike the program-switch branch, this branch does not flush the pending database rename first: EntRepository.updateSkipping looks up the new title, misses the existing row, and Storage.saveInstancesToRepo falls back to creating another row. The subsequent metadata rename then conflicts with the new row's unique title, leaving duplicate session records after a combined title/auto_approve update.
+- **fix hint**: Flush pending metadata using currentTitle before SetAutoApprove invokes its persistence callback, as the Program branch already does; add a regression test combining title and auto_approve changes.
+
+### GAP-239 — UpdateSession cannot persist clearing the working_dir override
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-UpdateSession-cannot-persist
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go`
+- **detail**: UpdateSessionRequest.working_dir explicitly allows an empty string to clear the override, and UpdateSession forwards that value to SetWorkingDir and UpdateInstanceMetadata. However, EntRepository.UpdateSessionMetadata only writes working_dir when the supplied string is nonempty (session/ent_repository.go:1422), so clearing it changes the live instance but leaves the old database value intact. Reloading the session restores the override that the successful update appeared to remove.
+- **fix hint**: Handle every non-nil workingDir pointer, including the empty string, by clearing or explicitly setting the database field; test persistence after clearing an existing override.
+
+### GAP-240 — WatchSessions reconnect replay bypasses category and status filters
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-WatchSessions-reconnect-replay
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_watch.go`
+- **detail**: WatchSessionsRequest declares category_filter and status_filter, and the handler applies both to initial snapshots and live events. However, the reconnect branch in server/services/session_service_watch.go:34-44 replays EventsSince(after_seq) after checking only Hidden, so reconnecting subscribers receive buffered session events outside their requested category or status. The frontend supplies these filters alongside afterSeq in web-app/src/lib/hooks/useSessionService.ts:1198-1200, making reconnect behavior inconsistent with the same subscription's live stream.
+- **fix hint**: Extract a shared session-event filter predicate and apply it to both replayed and live events; add a reconnect test containing buffered events that do not match category_filter or status_filter.
+
+### GAP-241 — BatchCreateSessions is implemented but has no frontend caller or bulk-creation entrypoint
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-BatchCreateSessions-is-implemented
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useSessionService.ts`
+- **detail**: The generated SessionService exposes batchCreateSessions, and server/services/session_service_crud.go:243 implements bounded concurrency, per-repository serialization, and per-session results. A production-source reference scan found no batchCreateSessions references outside generated bindings; useSessionService only wraps individual createSession calls. The implemented batch-creation capability therefore has no frontend hook or UI entrypoint, independently of the already-known batch request field omissions.
+- **fix hint**: Add a batchCreateSessions wrapper to useSessionService, then connect a bulk-creation UI to its per-session success/error results.
+
+### GAP-242 — Repository frecency suggestions are orphaned; the live picker bypasses their ranking
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Repository-frecency-suggestions
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useRepositorySuggestions.ts`
+- **detail**: useRepositorySuggestions wraps ListSessions and ranks repository paths with the implemented rankPathsByFrecency utility, but its export has no production consumer. The live RepoPathInput instead calls useSessionRepoPaths at web-app/src/components/ui/RepoPathInput.tsx:142, which deduplicates repository roots in updated-at order without frequency scoring. Consequently the frecency-ranking implementation is orphaned and does not affect the actual repository picker.
+- **fix hint**: Move the frecency calculation into the live store-backed useSessionRepoPaths hook, using repoRoot consistently, then remove the unused RPC-backed hook.
+
+### GAP-243 — Authentication redirects discard the requested route and deep-link parameters
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Authentication-redirects-discard
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/config.ts`
+- **detail**: The shared authentication interceptor redirects unauthenticated RPC failures to `/login` without preserving the current pathname or query parameters (`web-app/src/lib/config.ts:37-49`). All successful sign-in and registration paths then navigate to `/`, rather than returning to the requested page (`web-app/src/app/login/page.tsx:22-50`). Executing the interceptor with an expired session at `/backlog?item=example-item` produced `redirectTarget: "/login"`, confirming that item deep links and other routed context are discarded when authentication is required.
+- **fix hint**: Capture the current pathname, search, and hash in a login return-target parameter; have the login page validate it as a same-origin relative URL and navigate there after successful authentication.
+
+### GAP-244 — Pipeline chaining is wired at runtime but has no service API to configure its destination
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Pipeline-chaining-is
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/proto/session/v1/backlog.proto`
+- **detail**: VERIFIED by source inspection: `next_workflow_id` is persisted and writable through `BacklogItemUpdate`, and server startup wires both `ChainFirer` and its recovery reconciler (`session/ent_repository_backlog.go:1296–1299`, `server/dependencies.go:1971–1974`). However, neither `BacklogItem` nor its create/update proto requests expose the destination workflow, and no production caller sets `BacklogItemUpdate.NextWorkflowID`; only tests configure it. Consequently, the running pipeline-chaining machinery cannot be configured through the application's services, and its nil-destination guard prevents it from firing for ordinarily created items.
+- **fix hint**: Add an optional next_workflow_id field and explicit clearing semantics to the backlog update API, validate that the destination workflow exists, and map it through UpdateBacklogItem and the response converter.
+
+### GAP-245 — Session.existing_worktree is persisted but never populated in session responses
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Sessionexistingworktree-is-persisted
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/adapters/instance_adapter.go`
+- **detail**: VERIFIED by source inspection: `Session.existing_worktree` is declared in `types.proto:61–62`, and the ent repository writes and reloads `InstanceData.ExistingWorktree` (`session/ent_repository.go:340–341,1509`). `InstanceToProto` never assigns the corresponding response field, and server references to ExistingWorktree are creation inputs rather than response population. Sessions created against an existing worktree therefore return an empty existing_worktree field despite retaining the value in storage; the newer canonical path fields do not populate this declared field automatically.
+- **fix hint**: Populate Session.ExistingWorktree from the instance's existing-worktree information in InstanceToProto, and add an adapter test covering an existing-worktree session.
+
+### GAP-246 — Repeated no-op dispatch threshold is enforced but has no settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Repeated-no-op-dispatch
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Config.NoopDispatchThreshold is actively loaded by server/server.go:954–955 and used by session/backlog_lifecycle_noop.go:43–84 to flag repeated no-op sessions and block further dispatch. However, no configuration field or setter for this threshold exists in the protobuf API or frontend settings; the exposed REPEATED_NOOP_DISPATCH enum only describes the resulting stuck state. Operators must edit config.json to tune this automation guard.
+- **fix hint**: Add noop_dispatch_threshold to the global-defaults request and response, map it in DefaultsService, and add a Settings control.
+
+### GAP-247 — Analytics-event retention limits have no settings RPC or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Analytics-event-retention-limits
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Config.AnalyticsMaxRows and AnalyticsMaxAgeDays are passed into the running analytics retention enforcer in server/server.go:1267–1272. Neither setting is represented in the protobuf API or frontend, so operators cannot inspect or change these deletion limits through Settings. These govern analytics-event retention, independently of the session-retention configuration.
+- **fix hint**: Expose analytics row-count and age limits through a settings RPC and add corresponding controls; document or implement how changes reach the already-running retention enforcer.
+
+### GAP-248 — Backlog triage model fallback is separate from Background Models settings and cannot be configured in the UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Backlog-triage-model
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/backlog_service_triage_skip.go`
+- **detail**: The triage model fallback reads Config.HeadlessTriageModel in server/services/backlog_service_triage_skip.go:24–48, and TriggerTriage invokes that resolver in backlog_service_trigger_triage.go:461. No protobuf or frontend field exposes headless_triage_model. The existing Background Models API saves only BackgroundModels.Features, Stages, and Effort, so it does not expose this separate model-selection fallback for backlog triage sessions.
+- **fix hint**: Expose HeadlessTriageModel through the Background Models settings API and form, or consolidate this fallback with an existing triage-model setting and update resolveTriageModel accordingly.
+
+### GAP-249 — Resuming a paused session never restarts its deterministic SessionDriver
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Resuming-a-paused
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance.go`
+- **detail**: The deterministic SessionDriver exits when it observes Paused status (session/session_driver.go:575–576). Instance.Resume() restarts the process and ClaudeController but never calls StartSessionDriver (session/instance.go:2441–2544), and UpdateSession's resume branch adds no replacement driver. Consequently, sessions resumed after their driver has exited lose initial-prompt delivery, startup/approval-dialog handling, inactivity/retry monitoring, and terminal PR-URL discovery until another path explicitly starts a driver.
+- **fix hint**: Restart the deterministic SessionDriver after a successful Instance.Resume(), using the resumed workspace path, and add a regression test that pauses until the old driver exits before resuming and checking driver reactivation.
+
+### GAP-250 — TriageResult.chat_history is never persisted or populated for chat-originated triage
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-TriageResultchathistory-is-never
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/backlog_service.go`
+- **detail**: VERIFIED by source inspection: `proto/session/v1/backlog.proto:63–66` declares `TriageResult.chat_history` as the running transcript for chat-originated creation and refinement. However, `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/backlog_service_chat.go:43–86` only forwards messages into item creation or triage feedback, and the `triageResultJSON` decoder and proto conversion in `backlog_service.go:991–1046` neither retain nor populate chat history. Consequently, fetching the item after chat refinements always returns an empty transcript rather than the declared conversation history.
+- **fix hint**: Persist user and assistant chat turns for chat-originated triage, add those turns to `triageResultJSON`, and map them into `sessionv1.TriageResult.ChatHistory` in `itemSessionToProto`; cover creation, refinement, and subsequent item reads with a round-trip test.
+
+### GAP-251 — Creating a backlog item silently drops the form's cost budget threshold
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Creating-a-backlog
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useBacklogService.ts`
+- **detail**: BacklogItemForm.tsx:376–394 includes the entered costBudgetThresholdUsd in its submission, and the live backlog page passes that data to createBacklogItem. However, useBacklogService.ts:969–984 omits the field from CreateBacklogItemRequest, even though server/services/backlog_service_lifecycle.go:222–239 accepts and stores it. A budget entered while creating an item is therefore silently discarded; editing an existing item forwards the same field correctly.
+- **fix hint**: Forward costBudgetThresholdUsd: data.costBudgetThresholdUsd in the createBacklogItem RPC request, and add a hook regression test asserting that an explicitly supplied threshold, including zero, reaches the client.
+
+### GAP-252 — Agent wake rate limits and trigger caps have no settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Agent-wake-rate
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: VERIFIED by source inspection: config.WakeLimitsConfig defines operator overrides for pending-trigger caps, hourly delivery budgets, cron frequency, and other limits (config/config.go:1188–1201). server/wakes_module.go:213 passes these values into the dispatcher, and server/wakes/limits.go:127–146 resolves them into enforced limits. No protobuf fields, settings RPCs, or frontend controls expose these overrides; WakeTriggerService only supports listing, cancellation, and reminder creation, so operators must edit config.json to tune the limits.
+- **fix hint**: Add read/update wake-limit RPCs that return effective clamped values, then expose those fields in Settings and apply updates to the dispatcher.
+
+### GAP-253 — PR-watch feedback policy and actor allowlists have no settings API or UI
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-PR-watch-feedback-policy
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/inbox_pr_watch.go`
+- **detail**: VERIFIED by source inspection: InboxPRWatchConfig contains human_feedback_mode, actor_allowlist, bot filtering, ignored repositories, and polling controls (config/inbox_pr_watch.go:46–63). server/prwatch_module.go:170–208 reads these settings at startup and forwards them to the live consumer, but no protobuf configuration fields, settings RPCs, or frontend controls expose them. Notifications recommend changing the feedback mode or allowlist (server/prwatch/notify.go:466), yet making those changes requires editing config.json and restarting the consumer.
+- **fix hint**: Introduce PR-watch configuration read/update RPCs for feedback policy, allowlists, and ignored repositories, with a Settings form and explicit consumer reload or restart semantics.
+
+### GAP-254 — Workflow enabled=false is persisted but never gates cron execution
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Workflow-enabledfalse-is
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/workflows/scheduler.go`
+- **detail**: WorkflowProto.enabled and Create/UpdateWorkflowRequest.enabled expose a generic trigger activation gate, and WorkflowService persists it. However, the cron repository query and Scheduler.Reload/addCronEntry check only cron_enabled and trigger_type, so creating or updating a cron workflow with enabled=false and cron_enabled=true still schedules sessions. TriggersPanel compensates by writing both flags, but API callers changing enabled alone do not actually disable scheduled execution.
+- **fix hint**: Require wf.Enabled in Reload and addCronEntry, and filter disabled rows in EntWorkflowRepository.ListEnabled; add coverage for disabling a cron workflow through enabled alone.
+
+### GAP-255 — Restarting an unstarted failed session silently skips controller startup
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-go-Restarting-an-unstarted
+- **file**: `session/instance.go`
+- **detail**: VERIFIED by source inspection: Restart explicitly supports unstarted Failed/PermanentlyFailed sessions, but calls StartController before setting started=true (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance.go:2691-2702,2797-2811). StartController returns successfully without creating a controller when started is false (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_controller.go:41-45), and RestartSession never retries controller startup afterward. Consequently, this recovery path reports success while leaving status detection and controller callbacks unwired.
+- **fix hint**: Publish the successfully started lifecycle state before calling StartController, and add a regression test covering Restart of an unstarted Failed/PermanentlyFailed instance with a status manager.
+
+### GAP-256 — Renaming a session leaves its controller registered under the old title
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-instance-actor-setters-go-Renaming-a-session
+- **file**: `session/instance_actor_setters.go`
+- **detail**: VERIFIED by source inspection: UpdateSession renames the instance through SetTitleDirect, whose implementation updates the title, tags, snapshot, and process label but does not rekey the status manager (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_actor_setters.go:563-570). Controllers are registered and looked up by title, so InstanceStatusManager.GetStatus immediately loses the running controller after a rename (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_status.go:94-106,120-128). StopController also unregisters using the new title, leaving the old registration behind.
+- **fix hint**: Add a controller-registration rename operation that moves the existing controller from the old title to the new title without stopping it, and invoke it when applying a title change.
+
+### GAP-257 — Diagnose & Nudge frontend never supplies its target session, disabling all nudges
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Diagnose--Nudge
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useDiagnoseAction.ts`
+- **detail**: The live Diagnose & Nudge action calls useDiagnoseAction, but its request construction sends only itemId and stuckReason; the hook exposes no way to supply nudgeTargetSessionUuid (web-app/src/lib/hooks/useDiagnoseAction.ts:24–27,42–48). The backend immediately rejects nudge eligibility for an empty target and explicitly instructs the diagnostic agent not to nudge (server/services/diagnostic_service.go:154–156,189–192). Consequently, UI-triggered dispatches are always diagnose-only, even when the item has an eligible idle session.
+- **fix hint**: Add a nudgeTargetSessionUuid parameter to dispatchDiagnose and forward it into DispatchDiagnoseRequest; have the stuck-item UI select the intended linked session and pass its UUID through the action callback.
+
+### GAP-258 — Autonomous turn updates bypass the snapshot consumed by Session proto responses
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Autonomous-turn-updates
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/autonomous_orchestration_service.go`
+- **detail**: The autonomous turn callback writes AutonomousTurn and AutonomousMaxTurns directly on the live Instance, then publishes a session-updated event (/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/autonomous_orchestration_service.go:223–231). Event conversion calls InstanceToProto, which reads these values from the immutable published snapshot instead of those raw fields, so the emitted progress can remain stale until another mutation republishes the snapshot. SetAutonomousTurn already updates both fields and republishes the snapshot, but the callback does not use it.
+- **fix hint**: Replace the two direct field assignments in buildTurnCallback with liveInst.SetAutonomousTurn(int32(turn), int32(maxTurns)), and test the callback through event-to-proto conversion.
+
+### GAP-259 — ItemSession verification evidence is persisted and loaded but absent from the public read model
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-ItemSession-verification-evidence
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/backlog_service.go`
+- **detail**: request_review persists verification evidence on ItemSession, and the repository loads it into ItemSessionSummary.VerificationNotes (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository_backlog.go:253). However, proto/session/v1/backlog.proto defines no verification_notes field on ItemSession, and itemSessionToProto drops the loaded evidence. Automated reviewers can consume the evidence, but API clients and the operator UI cannot retrieve the recorded commands and manual checks alongside the review verdict.
+- **fix hint**: Add verification_notes to the ItemSession proto message, regenerate bindings, and populate it from is.VerificationNotes in itemSessionToProto.
+
+### GAP-260 — Escape capture and OSC-redaction preferences have no configuration API or Settings controls
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Escape-capture-and
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Escape capture mode, sampling rate, and OSC-payload redaction are implemented configuration fields in config/config.go:470–487 and consumed when wiring terminal parsers in session/response_stream.go:103–116. None has a proto configuration field, settings RPC, or frontend control; the escape-analytics RPCs only query collected data. Operators therefore cannot disable collection, adjust sampling, or inspect the redaction preference through Settings.
+- **fix hint**: Add get/update escape-capture settings messages for capture level, sampling rate, and redaction, then expose them in Settings; explicitly indicate which changes require recreating streams or restarting the server.
+
+### GAP-261 — Tmux execution-pool capacity settings are consumed at runtime but have no API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Tmux-execution-pool-capacity
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: TmuxExecGateConfig defines shared, resync, and input execution-pool sizes in config/types.go:354–374. The active acquisition paths read these values from configuration in session/tmux/exec_gate.go:49,77,115, but no proto message or settings handler exposes them and no frontend control consumes them. Feature flags can toggle the resync fast lane, but cannot configure its capacity or the other pools.
+- **fix hint**: Introduce get/update tmux execution-gate configuration RPCs with validated slot counts, and add corresponding advanced terminal settings controls.
+
+### GAP-262 — Failed hibernation resume rolls back in memory without persisting or publishing the failure
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Failed-hibernation-resume
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_hibernate.go`
+- **detail**: ResumeHibernatedSession saves and publishes Active immediately after scheduling the asynchronous relaunch (server/services/session_service_lifecycle.go:116–124). If launching fails, rollbackFailedResume only changes the in-memory status and snapshot; it neither persists Hibernated nor publishes a status event (session/instance_hibernate.go:132–136,178–190). A failed resume can therefore leave storage and watching clients reporting Active even though the canonical instance has reverted to Hibernated.
+- **fix hint**: Add an asynchronous resume-completion/failure callback that persists the canonical instance and publishes its final status after rollback; cover launch failure with a service-level test checking storage and WatchSessions events.
+
+### GAP-263 — Browser display and screencast tuning is consumed at runtime but has no settings API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Browser-display-and
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: BrowserPassthroughConfig defines display allocation, resolution, and CDP screencast quality/size/FPS settings in config/types.go:423-475. These values are consumed by session/instance_vnc.go:37-48 and session/instance_cdp.go:57-65, but no protobuf settings message/RPC or frontend control exposes them. The existing browser-passthrough feature toggle only enables the feature; tuning its resource usage or image quality requires editing config.json.
+- **fix hint**: Add browser display/screencast configuration read/update RPCs and a Settings form for resolution, quality, dimensions, and frame-rate limits.
+
+### GAP-264 — Local-listener authentication preference has no settings API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Local-listener-authentication-preference
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: Config.RequireLocalAuth is persisted in config/config.go:253-258 and enforced by local_auth.go:36-54, where it switches the local listener from implicit loopback trust to credential checks. There is no corresponding protobuf configuration field or Settings control, so users cannot inspect or enable this protection through the application. Enabling remote authentication does not expose this separate local-listener preference.
+- **fix hint**: Expose the local-listener authentication preference through a security settings read/update API and UI, explicitly indicating its startup-time application and preserving the authenticated recovery path.
+
+### GAP-265 — Shell exit watcher never updates terminal status when remain-on-exit keeps the pane alive
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Shell-exit-watcher
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_shells.go`
+- **detail**: Shell exit monitoring in /Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_shells.go:202-240 waits for the attach PTY to reach EOF before checking the process exit code. However, /Users/tstapler/code/github.com/tstapler/stapler-squad/session/tmux/tmux_session_start.go configures remain-on-exit globally, so an exited shell leaves its pane and attached client alive; ListShells consequently continues reporting Running instead of Stopped or Error. An isolated tmux reproduction confirmed pane_dead=1 and exit status 7 while the attach process remained running and its drained PTY produced no EOF.
+- **fix hint**: Monitor shell process death independently of PTY EOF, using tmux pane-death events or a cancellable pane_dead/pane_dead_status probe, and publish/persist the terminal shell status when the pane dies.
+
+### GAP-266 — DeleteProject reports success=false after successfully deleting the project
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-DeleteProject-reports-successfalse
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/project_service.go`
+- **detail**: The proto declares `DeleteProjectResponse.success` in `proto/session/v1/session.proto:3595`, but `ProjectService.DeleteProject` returns an empty response after storage deletion succeeds (`server/services/project_service.go:117–120`). The registered SessionService delegate forwards that response unchanged, so successful deletions report `success=false`. The existing success test checks that the project disappears but discards the response, leaving this contract mismatch uncovered.
+- **fix hint**: Return `DeleteProjectResponse{Success: true}` after successful deletion and assert the response flag in `TestDeleteProject_Success`.
+
+### GAP-267 — Hidden-session notification pruning has no frontend caller or cleanup action
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Hidden-session-notification-pruning
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useNotificationHistory.ts`
+- **detail**: VERIFIED by source inspection: the backend implements operator-triggered dry-run/apply pruning of hidden-session notifications, including backup, audit, and preservation of unread actionable rows (`server/services/notification_prune.go:38–95`). No production frontend source references `pruneHiddenSessionNotifications`; `web-app/src/lib/hooks/useNotificationHistory.ts:180–215` exposes only generic history clearing. Operators therefore cannot use the selective cleanup workflow from the UI, despite its generated RPC being available.
+- **fix hint**: Add a prune wrapper to useNotificationHistory and a notification-history action that previews the dry-run result before explicitly applying it.
+
+### GAP-268 — Diagnostic bundle assembly RPC has no frontend inspection entrypoint
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Diagnostic-bundle-assembly
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useDiagnoseAction.ts`
+- **detail**: VERIFIED by source inspection: `AssembleDiagnosticBundle` returns the assembled prompt, compaction status, and estimated token count (`server/services/diagnostic_service.go:72–98`), and DiagnosticService is registered at `server/server.go:672–683`. No production frontend source references `assembleDiagnosticBundle`; the live diagnostic hook imports only the dispatch request and calls `dispatchDiagnose` directly (`web-app/src/lib/hooks/useDiagnoseAction.ts:6–10,42–48`). The read-side diagnostic bundle is consequently unavailable for inspection without dispatching an agent or manually calling the API.
+- **fix hint**: Expose an assembleDiagnosticBundle callback from the diagnostic hook and connect it to a read-only bundle preview in the backlog item diagnostic actions.
+
+### GAP-269 — Settings bypasses Backlog Quota navigation's feature-flag filter
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Settings-bypasses-Backlog
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/app/settings/page.tsx`
+- **detail**: The navigation registry hides Backlog Quota when the `backlog` flag is off (`web-app/src/lib/nav-pages.ts:75`), but the General settings page renders its link unconditionally at lines 107–111. The destination also has no route guard (`web-app/src/app/route-meta.ts:52`), so disabling Backlog removes this entry from DrawerNav and BottomNav while leaving the same settings surface accessible through Settings.
+- **fix hint**: Wrap the Backlog Quota settings link in the existing `flags["backlog"]` condition, matching Backlog Sources and the navigation registry; add a settings-page test with Backlog disabled.
+
+### GAP-270 — Log rotation size, retention, and compression settings have no configuration API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Log-rotation-size
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/config.go`
+- **detail**: VERIFIED: config/config.go:282–289 defines log size, backup-count, age, and compression preferences; main.go:1826–1834 forwards them to logging, and log/log.go:864–870 applies them to the rotating writer. No corresponding configuration fields or update RPC exist in proto/session/v1/, and the Settings components provide no controls, so changing the application's log retention policy requires editing config.json.
+- **fix hint**: Add a log-rotation configuration message with read/update RPCs, then expose its size, backup-count, retention-days, and compression fields in Settings; document whether changes require restart.
+
+### GAP-271 — Handoff-summary transcript budget is consumed at runtime but has no settings API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Handoff-summary-transcript-budget
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/config/types.go`
+- **detail**: VERIFIED: config/types.go:960–962 defines MaxMiddleExcerptTokens, and session/handoff_summary_excerpt.go:103–112 uses it to cap the transcript supplied to handoff-summary generation. The generator reads this configuration in session/handoff_summary_service.go:381, but proto/session/v1/handoff_summary.proto exposes only summary retrieval and generation, with no budget-setting field or RPC; Settings has no matching control. Users cannot adjust this live input-budget setting without editing config.json.
+- **fix hint**: Expose MaxMiddleExcerptTokens through a handoff-summary configuration read/update RPC and add a validated numeric Settings control that reloads the saved value.
+
+### GAP-272 — Chained workflow hop count is sent by the scheduler but discarded by CreateSession
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Chained-workflow-hop
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/session_service_create.go`
+- **detail**: Scheduler.fireTrigger sets CreateSessionRequest.triggered_by_chain_depth for chained workflow runs (server/workflows/scheduler.go:495–503), but CreateSession never consumes it or copies it into InstanceOptions (server/services/session_service_create.go:829–886). The field has no consumer in the non-generated server/session code, so the hop count disappears at session creation rather than propagating to subsequent work. ChainFirer checks BacklogItemData.TriggeredByChainDepth to enforce its depth limit, but this request-to-session path cannot preserve the inherited depth.
+- **fix hint**: Carry req.Msg.TriggeredByChainDepth into persisted session attribution, then propagate that value when creating linked backlog work; add a chained-workflow test that verifies the depth survives creation and reaches the depth-limit check.
+
+### GAP-273 — Remote session execution target is discarded on persistence and reload
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Remote-session-execution
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_serialization.go`
+- **detail**: Remote session creation constructs an SSH-backed ExecutionTarget and passes it into the instance, but InstanceData has no remote-target identity and FromInstanceData does not reconstruct one. An unset target defaults to LocalTarget, so restored sessions lose their SSH runner and subsequent restore/resume operations use the local host rather than the original remote. Verified in server/services/session_service_create.go:575, session/storage.go:26-189, session/instance_serialization.go:320-397, and session/instance.go:924-932.
+- **fix hint**: Persist the remote configuration identity in InstanceData and the ent schema, then resolve credentials and reconstruct its SSH-backed ExecutionTarget before attempting process restoration.
+
+### GAP-274 — Launcher preset extra_args are lost when sessions reload
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Launcher-preset-extraargs
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/storage.go`
+- **detail**: CreateSession forwards extra_args into Instance.ExtraArgs, and buildLaunchCommand appends those arguments when launching the process. However, InstanceData, ToInstanceData, FromInstanceData, and the ent session schema do not carry ExtraArgs, so a server restart loses the selected launcher preset's arguments; later relaunches execute a different command. Verified in server/services/session_service_create.go:857-861, session/instance_tmux.go:395, session/storage.go:26-189, and session/ent/schema/session.go:18-185.
+- **fix hint**: Add ExtraArgs to InstanceData and the ent session schema, wire both serialization directions and repository writes, and add a round-trip test asserting launcher arguments survive reload.
+
+### GAP-275 — CurrentPaneRequest silently ignores lines and include_escapes capture options
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-CurrentPaneRequest-silently-ignores
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/connectrpc_websocket.go`
+- **detail**: VERIFIED by source inspection: /Users/tstapler/code/github.com/tstapler/stapler-squad/proto/session/v1/events.proto:311-317 exposes a line limit and an escape-sequence toggle, but handleCurrentPaneRequest in /Users/tstapler/code/github.com/tstapler/stapler-squad/server/services/connectrpc_websocket.go:2888-2928 reads neither. Its capture path always requests raw pane content and constructs an ANSI snapshot; the full-state-redraw branch also bypasses both options. Consequently, callers requesting a limited capture or include_escapes=false receive a full formatted redraw instead; live browser callers already send lines=50 in /Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useTerminalFlowControl.ts:204-207.
+- **fix hint**: Define whether CurrentPaneRequest supports configurable captures or only authoritative terminal redraws, then either thread lines/include_escapes through both capture branches or explicitly deprecate those fields. Add handler tests covering a positive line limit and include_escapes=false.
+
+### GAP-276 — Legacy Navigation component duplicates live navigation but is only rendered by tests and Storybook
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-web-app-src-components-ui-Navigation-tsx-Legacy-Navigation-component
+- **file**: `web-app/src/components/ui/Navigation.tsx`
+- **detail**: VERIFIED by source inspection: `Navigation.tsx:19-68` implements a separate Sessions/Review Queue/Backlog/Import navigation bar with its own route list and feature-flag filtering. Its only consumers are tests and its Storybook story; the application mounts `CockpitShell`, which renders `DrawerNav` and `BottomNav` (`web-app/src/app/RootShell.tsx:25`, `web-app/src/components/layout/CockpitShell.tsx:77-83`). Consequently, the dedicated Navigation tests exercise an unused implementation rather than the navigation users receive.
+- **fix hint**: Remove the unused Navigation component and its dedicated stylesheet/story, and move any still-useful flag-filtering assertions into DrawerNav and BottomNav tests.
+
+### GAP-277 — Background health checks ignore the persisted disable switch
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Background-health-checks
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/server/server.go`
+- **detail**: VERIFIED by source inspection: config/config.go:295 defines the persisted perform_background_health_checks switch, but its only non-test references are its declaration and default initialization. server/server.go:239–244 starts SessionHealthChecker whenever storage exists without consulting that switch, so configuring false cannot disable background health checks. There is also no proto field or frontend control for this preference.
+- **fix hint**: Gate SessionHealthChecker startup on the loaded PerformBackgroundHealthChecks value and add a regression test proving false suppresses startup; expose the preference through settings if it remains supported.
+
+### GAP-278 — Session environment variables and CLI flags are discarded during persistence and reload
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-storage-go-Session-environment-variables
+- **file**: `session/storage.go`
+- **detail**: VERIFIED by source inspection: CreateSession forwards resolved and explicit environment variables and CLI flags into InstanceOptions ([session_service_create.go:854–855](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/server/services/session_service_create.go#L854-L855)). However, InstanceData has neither field, the serialization and restoration mappings omit both, and the ent Session schema has no corresponding columns ([storage.go:26–189](https://github.com/tstapler/stapler-squad/blob/f85be71beb63e67069b0d88a6e1fd2bf582cb5c1/session/storage.go#L26-L189)). Reloaded instances therefore lose these launch overrides; a subsequent process relaunch cannot reproduce the original environment or CLI options.
+- **fix hint**: Add EnvVars and CLIFlags to InstanceData and the ent Session schema, then wire both directions of Instance serialization and repository persistence; add a round-trip regression test with explicit overrides.
+
+### GAP-279 — Insights TopEntry.token_count is declared but never populated
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-server-services-insights-service-go-Insights-TopEntrytokencount-is
+- **file**: `server/services/insights_service.go`
+- **detail**: `TopEntry.token_count` is declared in `proto/session/v1/insights.proto:236-242`, but both TopEntry builders in `server/services/insights_service.go:929-979` populate only name and activation_count. The live summary response uses these builders for top_skills and top_tools (`server/services/insights_summary_aggregate.go:378-379`), so token_count always reports zero rather than measured usage or an explicit unavailable value.
+- **fix hint**: Determine whether per-skill/tool token attribution is available; populate token_count if it is, or reserve/remove the unsupported field as already done for TopEntry.cost_usd.
+
+### GAP-280 — Single-item remediation reset is wrapped by a hook but has no UI caller
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Single-item-remediation-reset
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/web-app/src/lib/hooks/useStuckBacklogItems.ts`
+- **detail**: The backend implements a targeted ResetStuckRemediation RPC, and useStuckBacklogItems exposes it as resetRemediation, but no production frontend consumer references that action. Parked items have their Retry control disabled in BlockerChip.tsx; the available reset controls in StuckItemsSection.tsx instead reset every parked item, either globally or for an entire reason group. Operators therefore cannot reset one exhausted item's remediation budget without also resetting unrelated parked items.
+- **fix hint**: Connect resetRemediation(itemId, reason) to a per-item Reset action for parked rows in StuckItemsSection or BacklogItemDetail, retaining the existing bulk controls.
+
+### GAP-281 — Terminal PR status survives reload only as a polling-disable flag, losing merged/closed response data
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-session-ent-repository-go-Terminal-PR-status
+- **file**: `session/ent_repository.go`
+- **detail**: The ent schema persists `github_pr_status_terminal`, but not the corresponding PR state or check/review summary; `sessionToInstanceData` restores the terminal flag while leaving those response fields empty (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/ent_repository.go:1559–1564). After reload, ordinary PR polling skips that session because its terminal flag is true (/Users/tstapler/code/github.com/tstapler/stapler-squad/session/pr_status_poller.go:319–320), so merged/closed state remains absent from Session responses unless an out-of-band refresh occurs. The adapter and session cards still consume these fields, losing the terminal PR presentation after a restart.
+- **fix hint**: Persist and restore the terminal PR state alongside `github_pr_status_terminal`, or perform a one-time hydration when restoring a terminal session whose PR state is empty; add a restart round-trip test covering a merged PR.
+
+### GAP-282 — Git backend cohort routing is implemented but has no configuration RPC or Settings controls
+- **status**: open
+- **severity**: medium
+- **fingerprint**: GAP-config-config-go-Git-backend-cohort
+- **file**: `config/config.go`
+- **detail**: Config.GitBackendCohorts selects CLI, go-git, or shadow execution for individual Git operation cohorts (config/config.go:242–245). The production backend consumes this map in session/gitwiring/shared.go:18–20, but no proto field, settings RPC, or frontend control exposes it. Operators must edit config.json and restart to configure the implemented cohort routing; changing ordinary feature flags does not configure this map.
+- **fix hint**: Add a typed cohort-configuration read/update RPC using the existing cohort/mode validation, then expose the supported choices in Settings with an explicit restart-required indicator.
+
+### GAP-283 — Continuous profiling destination has no settings API or UI
+- **status**: open
+- **severity**: low
+- **fingerprint**: GAP-config-config-go-Continuous-profiling-destination
+- **file**: `config/config.go`
+- **detail**: Config.PyroscopeServerAddress is passed into StartContinuousProfiling during startup (main.go:315–323), so continuous profiling has a concrete configuration consumer. However, neither the proto definitions nor the server settings services or frontend expose this address. Enabling or changing the profiling destination requires manually editing config.json and restarting the server.
+- **fix hint**: Expose the profiling destination through a settings read/update RPC and a Settings field that identifies the restart requirement.
+
+### GAP-284 — Checkpoint forks default to directory mode and discard their checkpoint worktree during startup
+- **status**: open
+- **severity**: high
+- **fingerprint**: GAP--Users-tstapler-code-github-com-tstapler-Checkpoint-forks-default
+- **file**: `/Users/tstapler/code/github.com/tstapler/stapler-squad/session/instance_checkpoint.go`
+- **detail**: ForkFromCheckpoint constructs a checkpoint-based GitWorktree and attaches it to the new instance, but its InstanceOptions omit SessionType and ExistingWorktree (session/instance_checkpoint.go:223–270). NewInstance therefore defaults to directory mode, and ForkSession calls Start(true), whose directory setup explicitly clears gitManager's worktree and branch before spawning the process (session/instance.go:1178–1182; session/instance_worktree.go:238–255). Consequently, a worktree-backed checkpoint fork runs in the source repository directory rather than an isolated checkout of the checkpoint commit.
+- **fix hint**: Create and set up the checkpoint worktree before constructing the fork, then initialize the fork as SessionTypeExistingWorktree with its ExistingWorktree path and checkpoint branch so Start(true) preserves it.
