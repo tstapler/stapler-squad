@@ -10,6 +10,7 @@ exports_files([
     "go_test.bzl",
     "go_test_test.bzl",
     "otel_weave.sh",
+    "otel_weave_hermetic.sh",
     "sync_gen.sh",
 ])
 
