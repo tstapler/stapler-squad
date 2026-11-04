@@ -56,7 +56,7 @@ func (i *Instance) AttachPR(ref PRRef, source AttachSource, initial PRInitial) e
 		return ErrZeroPRRef
 	}
 	out, err := sendSyncValue(i, func(s *instanceState) (attachOutcome, error) {
-		view, added, err := attachPRLocked(s.inst, ref, source, initial, time.Now())
+		view, added, err := attachPRLocked(s.inst, ref, source, initial)
 		return attachOutcome{view: view, added: added}, err
 	})
 	if err != nil || !out.added {
@@ -71,8 +71,9 @@ type attachOutcome struct {
 	added bool
 }
 
-func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRInitial, now time.Time) (PRView, bool, error) {
+func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRInitial) (PRView, bool, error) {
 	inst.mu.Lock()
+	now := time.Now() // taken under the lock so AttachedAt order matches slice order
 	if inst.UUID == "" {
 		inst.mu.Unlock()
 		return PRView{}, false, ErrNoSessionUUID
