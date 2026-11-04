@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Maintainer script (needs network and a Go SDK): regenerates this directory, the pre-computed
-# `otelc setup` output that lets //:stapler-squad_otel_hermetic skip `otelc setup` (go mod tidy, module
+# `otelc setup` output that lets //:stapler-squad skip `otelc setup` (go mod tidy, module
 # bumps, build-plan dry run) inside the sandboxed build. Run it whenever go.mod, go.sum, the otelc
 # version or the custom rule (instrumentation/otelc/safeexec) changes, then commit the result.
 #

@@ -9,7 +9,7 @@ copy_file(
     out = "tmux",
     is_executable = True,
     visibility = [
-        "//:__pkg__",  # otel_weave genrule stages it
+        "//:__pkg__",  # the otel weave stages it
         "//session/tmux:__pkg__",
     ],
 )

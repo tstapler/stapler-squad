@@ -2,7 +2,6 @@ load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:go_test.bzl", "go_test")
-load("//tools/bzl:otel_weave.bzl", "otel_weave")
 load("//tools/bzl:otel_weave_hermetic.bzl", "otel_modcache", "otel_weave_hermetic")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
@@ -147,10 +146,6 @@ go_binary(
     }),
 )
 
-# The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment,
-# spike S15). NON-HERMETIC: runs unsandboxed through tools/bzl/otel_weave.sh (needs `go` modules
-# resolvable, writes a build copy under ~/.cache/ssq-otel) and is never remote-cached. The srcs are
-# the change triggers: the compiled Go library (so any Go source change reruns it), go.mod and go.sum.
 config_setting(
     name = "embed_tmux_and_tymux",
     flag_values = {
@@ -159,41 +154,13 @@ config_setting(
     },
 )
 
-otel_weave(
-    name = "stapler-squad",
-    srcs = [
-        "go.mod",
-        "go.sum",
-        ":stapler-squad_lib",
-    ],
-    ent = ["//tools/bzl/ent:ent_gen"],
-    gen = ["//proto/session/v1:gen_go"],
-    go_tags = select({
-        ":embed_tmux_and_tymux": [
-            "embed_tmux",
-            "embed_tymux",
-        ],
-        "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
-        "//conditions:default": [],
-    }),
-    stage = select({
-        ":embed_tmux_and_tymux": {
-            "//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux",
-            "//session/tymux/embed:tymuxd_staged": "session/tymux/embed/tymuxd",
-        },
-        "//tools/bzl/flags:embed_tmux_on": {"//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux"},
-        "//conditions:default": {},
-    }),
-    visibility = ["//visibility:public"],
-    web = "//server/web:dist_staged",
-)
-
-# S15b prototype, NOT the shipped binary: the sandboxed, remote-cacheable woven build (see
-# tools/bzl/otel_weave_hermetic.bzl). Promote by pointing //:stapler-squad at it (spike-results.md S15b).
+# The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment, spike S15b).
+# Sandboxed and remote-cacheable (tools/bzl/otel_weave_hermetic.bzl): declared inputs only, the committed otelc
+# overlay in tools/bzl/otel_overlay, and a go.sum-verified module cache. Stamping comes from --stamp.
 otel_modcache(name = "otel_modcache")
 
 otel_weave_hermetic(
-    name = "stapler-squad_otel_hermetic",
+    name = "stapler-squad",
     ent = ["//tools/bzl/ent:ent_gen"],
     gen = ["//proto/session/v1:gen_go"],
     go_tags = select({

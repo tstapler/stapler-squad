@@ -1,4 +1,4 @@
-"""Sandboxed otelc-woven stapler-squad (spike S15b; the default //:stapler-squad is still otel_weave).
+"""Sandboxed otelc-woven stapler-squad (spike S15b): the rule behind //:stapler-squad.
 
 Declared inputs only: module sources from the :stapler-squad_lib archive closure, Bazel-generated proto/ent/web,
 the committed otelc overlay (tools/bzl/otel_overlay), the Go SDK and a module cache fetched once by a
