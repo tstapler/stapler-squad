@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -383,6 +384,28 @@ func TestResolveLocalBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension(t *t
 	require.NoError(t, err)
 	assert.Regexp(t, `^[0-9a-f]{40}$`, sha)
 	assert.Equal(t, want, sha)
+}
+
+func TestResolveLocalBranchSHA_ReturnsErrRefNotFound_When_BranchMissing(t *testing.T) {
+	t.Parallel()
+	_, work := worktreeConfigClone(t)
+
+	_, err := ResolveLocalBranchSHA(work, "nonexistent")
+	require.ErrorIs(t, err, backend.ErrRefNotFound)
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+// A missing origin branch normally fails at the fetch step; dropping the clone's fetch
+// refspec lets the fetch succeed without creating refs/remotes/origin/<b>, so the
+// failure comes from ResolveRef.
+func TestResolveOriginBranchSHA_ReturnsErrRefNotFound_When_NoRemoteTrackingRef(t *testing.T) {
+	t.Parallel()
+	origin, work := worktreeConfigClone(t)
+	runGit(t, origin, "branch", "feature-x")
+	runGit(t, work, "config", "--unset-all", "remote.origin.fetch")
+
+	_, err := ResolveOriginBranchSHA(work, "feature-x")
+	require.ErrorIs(t, err, backend.ErrRefNotFound)
 }
 
 // TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the
