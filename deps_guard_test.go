@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/internal/testenv"
 )
 
 // TestNoForbiddenDependencies asserts that no banned package is actually compiled
@@ -19,6 +21,7 @@ import (
 // dependency. This guard turns a startup-crash regression into a deterministic,
 // cross-platform test failure instead of a machine-specific SIGSEGV at runtime.
 func TestNoForbiddenDependencies(t *testing.T) {
+	testenv.SkipGoListUnderBazel(t)
 	// import paths that must never re-enter the compiled dependency graph.
 	forbiddenDeps := []string{
 		"github.com/shoenig/go-m1cpu",

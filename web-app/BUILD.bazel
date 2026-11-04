@@ -106,6 +106,7 @@ bun_jest_test(
         "//server/analytics:client_pages.json",
     ],
     shard_count = 4,
+    # tag-reason: web build output not proven byte-reproducible (Story 7.7); placeholder tracker (#1423)
     tags = ["no-remote-cache"],
 )
 

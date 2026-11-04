@@ -143,6 +143,7 @@ bun_dist = rule(
         "minify": attr.string(default = "0"),
         "cmd_prefix": attr.string(default = ""),
         "trace": attr.bool(default = False),
+        # tag-reason: sandboxed action cost 2.6x make (S4); node_modules not proven byte-reproducible (Story 7.7); no per-issue tracker yet, placeholder (#1423)
         "exec_tags": attr.string_list(default = ["no-sandbox", "no-remote-cache"], doc = "S4: no-sandbox because the sandboxed action cost 2.6x make; no-remote-cache because the repository rule's node_modules is not proven byte-reproducible (Story 7.7)."),
     },
 )
