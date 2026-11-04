@@ -153,7 +153,7 @@ Within approach A, the sequence follows the owner's strangler path: foundations/
 | `tools/lint` as a separate module (VERIFIED 8 tracked `go.mod` files: root, `tools/lint`, `tools/scanner`, `tuitest`, 4 stray under `project_plans/**/spikes/*`) | Analyzers unreachable from the main module; `tools/lint` pins its own `golang.org/x/tools` version | **Isolate via seam**: isolated `go_deps` extension usage so the two `x/tools` versions never unify (Task 0.2c checks `bazel mod graph` shows both); `nogo` is a later story (8.4) | Keeps `x/tools` out of the app dependency universe |
 | Root-level stray artifacts (`*.test`, `stapler-squad.bak-*`, `err.log`, `lint_errors_v*.log`) | Pollute globs and Gazelle's root package | **Isolate**: `.bazelignore` plus root BUILD never globs; not cleaned here | Out of scope for cleanup |
 | `project_plans/**/spikes/*/go.mod` (4 stray modules) and `.claude/worktrees`, `worktrees/` | Gazelle/Bazel would walk copies of the repo | **Isolate**: `gazelle:exclude` and `.bazelignore` (Task 0.2a) | Mandatory or N worktrees leak into one graph |
-| otel auto-instrumentation build | Wraps `go build` | **Extend as-is** (PermanentException, ADR-005) | No Bazel analogue |
+| otel auto-instrumentation build | Wraps `go build` | **Replaced 2026-11-03:** the one binary is always otelc-woven; Bazel `//:stapler-squad` is the S15 `otel_weave` action (FallbackWorkaround, non-hermetic); no longer a PermanentException (ADR-005 amended) | `otel_weave` rule |
 
 ---
 
@@ -1374,6 +1374,8 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 - Verify: `bazel build //cmd/... ; echo $?` prints `0`.
 
 #### Story 3.6: otel variant documented as an exception
+**Superseded 2026-11-03 (owner decision, PROVISIONAL, branch `sdd/bazel-otel-default`):** the otel variant is no longer an exception or opt-in. The ACs and tasks below are historical; the replacement is the S15 `otel_weave` action behind `//:stapler-squad` (`docs/reference/bazel-targets-and-configs.md`, ADR-005 changelog).
+
 **As an** agent, **I want** the otel build to keep working unchanged, **so that** the exception is a decision, not an accident.
 **Acceptance Criteria**:
 - *Given* `make sync` has run, *When* `make build-otel-auto` runs, *Then* it still produces `stapler-squad-otel` and `scripts/otel-auto-isolation-guard.sh` exits 0.

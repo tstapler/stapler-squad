@@ -9,6 +9,7 @@ copy_directory(
     name = "dist_staged",
     src = "//web-app:dist",
     out = "dist",
+    visibility = ["//:__pkg__"],  # otel_weave embeds it in the woven build copy
 )
 
 go_library(

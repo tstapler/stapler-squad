@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Build and Run
 
 ```bash
-go build .                  # Build the application
+go build .                  # Plain, uninstrumented build (quick local compile check only)
+make build                  # The real binary: otelc auto-instrumented ./stapler-squad (installs otelc if missing)
 ./stapler-squad             # Run (web server on localhost:8543)
 
 make install-service        # Build web UI + Go binary + install/restart system service (ALWAYS use this)
@@ -341,7 +342,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
 | Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
-| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
+| Compile-time auto-instrumentation (otelc weave: always on in the one `stapler-squad` binary; install/smoke/test recipes) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | Build the web UI: `WEB_BUILD` next/bun, `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |

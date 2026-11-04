@@ -57,7 +57,6 @@ What stays outside Bazel, from [ADR-005](../../project_plans/bazel-conversion/de
 
 | Item | Interface to Bazel |
 |---|---|
-| otel auto-instrumentation (`build-otel-auto*`, tag `otelcauto`) | Runs on `go build` after `make sync`; a guard proves the main build is unaffected |
 | macOS codesign and TCC identity | The install path signs a copy of the Bazel output at a stable path |
 | Diff- and history-based gates (`dupl --new-from-rev`, complexity gate, `proto-breaking`, jscpd, actionlint, shellcheck) | Wrapped; run after `make sync` |
 | golangci-lint and the custom analyzers | Wrapped; `make lint-custom` stays the whole-suite path |
@@ -88,11 +87,10 @@ Reference for the Bazel labels that replace each `make` binary target, the `--co
 
 | `make` target | Output | Bazel label | Notes |
 |---|---|---|---|
-| `build`, `build-embedded`, `build-embedded-tymux` | `stapler-squad` | `//:stapler-squad` | `--config=release` stamps the version and embeds tmux and tymuxd. |
+| `build`, `build-embedded`, `build-embedded-tymux` | `stapler-squad` (otelc-woven) | `//:stapler-squad` | The one shipped binary is always otelc-woven (non-hermetic action, see "otel weave" below). `--config=release` stamps the version and embeds tmux and tymuxd. `//:stapler-squad_plain` is the uninstrumented `go_binary`, used only for Windows cross builds and the parity harness. |
 | `install-hooks` | `ssq-hooks` | `//cmd/ssq-hooks:ssq-hooks` | Makefile passes no ldflags, so no `x_defs`. |
-| `build-mux` | `claude-mux` | none | `cmd/claude-mux` no longer exists, so `make build-mux` fails today. `//cmd/ssq-mux:ssq-mux` is the PTY multiplexer that replaced it. |
+| `build-mux`, `install-mux` | `ssq-mux` | `//cmd/ssq-mux:ssq-mux` | `cmd/claude-mux` was renamed to `cmd/ssq-mux`; `make build-mux` builds `./cmd/ssq-mux` to `./ssq-mux`. |
 | `registry-generate-backend` | `tools/scanner/backend/cmd/scanner` | `//tools/scanner/backend/cmd:cmd` | Bazel names the output `cmd` (the package name); `make` names it `scanner`. Callers use the label, not the path. |
-| `build-otel-auto*` | `stapler-squad-otel` | none | Permanent exception, see below. |
 
 `bazel build //cmd/... //tools/scanner/...` builds every row that has a label.
 
@@ -100,12 +98,14 @@ Reference for the Bazel labels that replace each `make` binary target, the `--co
 
 `--config=release` sets `--stamp`, `--compilation_mode=opt`, `--workspace_status_command=tools/bzl/workspace_status.sh` and the embed flags. The script emits `STABLE_GIT_VERSION`, `STABLE_GIT_BRANCH`, `STABLE_GIT_COMMIT` and `STABLE_GIT_WORKTREE` with the same sanitisers as the Makefile. `//:stapler-squad` maps them to `main.version` and `pkg/buildinfo.{Version,Branch,Commit,Worktree}` through `x_defs`, so a commit that touches no Go file re-runs only the status action and `GoLink`.
 
-`go.mod` declares `godebug netdns=go`. rules_go does not read it, so `//:stapler-squad` sets `runtime.godebugDefault=netdns=go` through `x_defs`. `go version -m` shows no `DefaultGODEBUG` line for a rules_go binary (cmd/go writes that line); `bash tools/bzl/parity/compare-binary.sh` checks the string in the binary instead.
+`go.mod` declares `godebug netdns=go`. rules_go does not read it, so `//:stapler-squad_plain` sets `runtime.godebugDefault=netdns=go` through `x_defs`. `go version -m` shows no `DefaultGODEBUG` line for a rules_go binary (cmd/go writes that line); `bash tools/bzl/parity/compare-binary.sh` checks the string in the binary instead.
 
 ## Parity check
 
-`bash tools/bzl/parity/compare-binary.sh` builds the release binary and the `go build` command `make -n build-embedded-tymux` prints, then compares `version` output, the `go version -m` module set and tags, `netdns=go`, and the embedded tmux and tymuxd bytes. Allowed differences: `CGO_ENABLED` (Linux Bazel builds are pure Go, ADR-006) and the module versions listed in `tools/bzl/parity/allowed-binary-deltas.txt`.
+`bash tools/bzl/parity/compare-binary.sh` builds the uninstrumented release binary (`//:stapler-squad_plain`) and the plain `go build` command (the otelc wrapper is stripped from the line) `make -n build-embedded-tymux` prints, then compares `version` output, the `go version -m` module set and tags, `netdns=go`, and the embedded tmux and tymuxd bytes. Allowed differences: `CGO_ENABLED` (Linux Bazel builds are pure Go, ADR-006) and the module versions listed in `tools/bzl/parity/allowed-binary-deltas.txt`.
 
-## otel variant: permanent exception
+## otel weave: the default binary (spike S15, FallbackWorkaround)
 
-`make build-otel-auto` and `build-otel-auto-embedded` keep using `go build` through `otelc` (ADR-005: `otelc` rewrites the Go toolchain build and has no Bazel analogue). Both now depend on `sync` instead of `proto-gen ent-gen`: `make sync` generates `gen/` and `session/ent` with `make` (`BUILD_SYSTEM=make`) or `bazel run //:sync-gen` (`BUILD_SYSTEM=bazel`), so the otel build works with either. `scripts/otel-auto-isolation-guard.sh` still proves no default target reaches it.
+`//:stapler-squad` is an `otel_weave` rule (`tools/bzl/otel_weave.bzl`, `tools/bzl/otel_weave.sh`), not a `go_binary`: the shipped binary is always `otelc` auto-instrumented (ADR-005 amendment). The action copies the checkout to `~/.cache/ssq-otel/src`, overlays the Bazel-built proto and ent code, the web dist and any embed staging, and runs `scripts/otel-auto-build.sh go build` with the Bazel Go SDK and a pinned `otelc` (installed into `~/.cache/ssq-otel` on first use). The real tree's `go.mod` and `go.sum` are never touched.
+
+Non-hermetic parts: it runs unsandboxed (`local`, `no-sandbox`, `no-remote`, `no-cache`, `requires-network`), `otelc` bumps and resolves modules from the host module cache or network, and the source copy comes from the live checkout. The compiled `:stapler-squad_lib`, `go.mod`, `go.sum`, generated code and the web dist are declared inputs, so any Go change reruns it. Set `SSQ_OTEL_SCRATCH` to move the scratch directory; the private Go cache is dropped past 2 GB. Windows cross builds (`tools/bzl/windows`) use the uninstrumented `//:stapler-squad_plain`, because the weave cannot cross-compile under Bazel.

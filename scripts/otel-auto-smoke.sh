@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Collector Smoke Test (default) / Suppression Smoke Test (--suppression) for
-# the opt-in otelc auto-instrumentation build — turns Spike B.2's and Spike
+# the otelc auto-instrumented stapler-squad build — turns Spike B.2's and Spike
 # D's one-time manual checks into a repeatable script, so a future otelc
 # upgrade can neither silently stop weaving (default mode) nor silently
 # start exporting when telemetry is off (--suppression). Runs its own OTLP
-# collector (Docker, :4317/:4318) and its own stapler-squad-otel process(es)
+# collector (Docker, :4317/:4318) and its own stapler-squad process(es)
 # under STAPLER_SQUAD_INSTANCE=claude-otel-smoke on the manual dev port block
 # (CLAUDE.md) — everything spawned is torn down by a trap on every exit path.
 # Background: project_plans/go-auto-instrumentation/implementation/spike-verdicts.md
@@ -33,7 +33,7 @@ INSTANCE="claude-otel-smoke"
 COLLECTOR_CONTAINER="otelcol-smoke"
 BATCH_WAIT=8 # default BatchSpanProcessor export interval (Spike B/D)
 
-BINARY="./stapler-squad-otel"
+BINARY="./stapler-squad"
 MODE="default"
 SELF_TEST="false"
 WITH_SUBPROCESS="false"
@@ -66,7 +66,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [ ! -x "$BINARY" ]; then
-  echo "✗ $BINARY not found or not executable. Build it first: make build-otel-auto" >&2
+  echo "✗ $BINARY not found or not executable. Build it first: make build" >&2
   exit 1
 fi
 
