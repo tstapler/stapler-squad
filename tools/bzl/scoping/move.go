@@ -319,6 +319,11 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 }
 
 func (m *mover) apply() error {
+	for from, up := range m.rename {
+		if _, taken := m.declared[up]; taken {
+			return fmt.Errorf("capitalising %s would collide with the existing declaration %s: use that symbol (or rename one) before moving", from, up)
+		}
+	}
 	m.renameEverywhere()
 	paths := make([]string, 0, len(m.files))
 	for p, fe := range m.files {
