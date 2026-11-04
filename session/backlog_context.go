@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -34,6 +35,36 @@ func truncateField(s string, maxLen int) string {
 		return s[:maxLen] + " [truncated]"
 	}
 	return s
+}
+
+// canonicalIssueURL returns the canonical https URL for a GitHub issue URL, or
+// "" when rawURL is not one. Rebuilding it from the parsed parts keeps free-form
+// ExternalURL text out of the agent's instructions.
+func canonicalIssueURL(rawURL string) string {
+	ref, err := github.ParseGitHubRefWithHosts(rawURL, nil)
+	if err != nil || ref.Type != github.RefTypeIssue {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/%s/%s/issues/%d", ref.Host, ref.Owner, ref.Repo, ref.IssueNumber)
+}
+
+// closingKeywordWithRepo returns "Closes #<N>" when issueURL is a GitHub issue
+// in the same repository as prRemoteURL, else "". Cross-repo issues get no
+// keyword: GitHub's bare "#N" only resolves in-repo, and a full-URL keyword
+// would close an issue in a repo this PR doesn't belong to.
+func closingKeywordWithRepo(issueURL, prRemoteURL string) string {
+	issue, err := github.ParseGitHubRefWithHosts(issueURL, nil)
+	if err != nil || issue.Type != github.RefTypeIssue {
+		return ""
+	}
+	remote, err := github.ParseGitHubRefWithHosts(prRemoteURL, nil)
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(issue.Host, remote.Host) || !strings.EqualFold(issue.Owner, remote.Owner) || !strings.EqualFold(issue.Repo, remote.Repo) {
+		return ""
+	}
+	return fmt.Sprintf("Closes #%d", issue.IssueNumber)
 }
 
 // buildAcChecklist renders a numbered checklist from AC criteria.
@@ -290,7 +321,15 @@ func buildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 		}
 	}
 
+	issueURL := canonicalIssueURL(item.ExternalURL)
+	if issueURL != "" {
+		fmt.Fprintf(&sb, "\nLinked GitHub Issue: %s\n", issueURL)
+	}
 	sb.WriteString("--- END BACKLOG ITEM DATA ---\n\n")
+	if issueURL != "" {
+		// Outside the inert-data fence: this is an instruction, not item data.
+		fmt.Fprintf(&sb, "When opening a pull request, include this exact line in the PR body: Fixes %s\n\n", issueURL)
+	}
 
 	// Deliberately priorSessions here, not the EndedAt-filtered "ended" local
 	// above: escalationNotice must match AutoReopenAfterFailedReview's own
