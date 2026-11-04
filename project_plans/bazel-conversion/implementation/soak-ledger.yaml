@@ -1,0 +1,10 @@
+# Soak ledger (Story 7.6): one row per Bazel PR run, appended by the soak job.
+# Rule (tools/bzl/soak, `soak-check`): over the last soak_runs_n runs, zero unattributed failures, zero
+# bazel-real failures in the last soak_consecutive_green_k runs, and PARITY: PASS.
+# Failure attribution: flake (needs bug: BUG-<n>) | bazel-real | infra | generated-file-race (reported
+# separately, driven to zero by Story 7.8). Values below are the owner-confirmed defaults (owner-attestations.yaml).
+schema: 1
+soak_runs_n: 30
+soak_consecutive_green_k: 10
+queue_timeout_seconds: 900
+runs: []

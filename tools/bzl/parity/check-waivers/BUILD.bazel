@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "check-waivers_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/check-waivers",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/bzl/parity/waivers"],
+)
+
+go_binary(
+    name = "check-waivers",
+    embed = [":check-waivers_lib"],
+    visibility = ["//visibility:public"],
+)

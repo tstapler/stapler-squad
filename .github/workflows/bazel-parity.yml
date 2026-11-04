@@ -1,0 +1,66 @@
+name: Bazel parity
+
+# PROVISIONAL (Story 7.5, Task 7.5c). Runs the P1-P10 gate (tools/bzl/parity/run-all) and saves the report.
+# Disk cache only: the remote cache is deferred (owner decision, owner-attestations.yaml remote_cache_s10).
+# P8 and the waiver list come from owner-attestations.yaml, so the job that reads it runs in the GitHub
+# environment `bazel-owner-attest` (required reviewer = the owner; approval is the signature) and first checks
+# that the last commit touching the file was authored by the identity in tools/bzl/owner.txt.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bazel-parity
+  cancel-in-progress: false
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: bazel-owner-attest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Attestation was last changed by the owner
+        run: |
+          [ -f tools/bzl/owner.txt ] || { echo "::error::tools/bzl/owner.txt is missing (owner action: put the owner commit email in it)"; exit 1; }
+          owner=$(grep -v '^#' tools/bzl/owner.txt | head -n 1 | tr -d '[:space:]')
+          read -r author sig < <(git log -1 --format='%ae %G?' -- project_plans/bazel-conversion/implementation/owner-attestations.yaml)
+          if [ "$author" != "$owner" ] && [ "$sig" != "G" ]; then
+            echo "::error::owner-attestations.yaml was last changed by $author (signature $sig), not the owner"; exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Build the parity tools
+        run: bazel build --config=ci //tools/bzl/parity/... //tools/ci/bazel-trend //tools/bzl/manual-instance
+
+      - name: Run the parity gate
+        run: |
+          set -o pipefail
+          bazel-bin/tools/bzl/parity/run-all/run-all_/run-all -bazel-bin bazel-bin | tee parity-report.txt
+          { echo '### Parity gate'; echo '```'; cat parity-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-parity-report
+          path: parity-report.txt
+          if-no-files-found: warn
