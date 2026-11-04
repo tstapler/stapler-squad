@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -433,6 +434,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
+	s.hydrateSessionPRs(ctx, dataSlice)
 	instances := make([]*Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
@@ -513,6 +515,70 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	}
 
 	return instances, nil
+}
+
+// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// the Instance (and so its first snapshot) is built: one bulk read of links+states
+// (and one of tombstones) instead of a query per session. A legacy PR number with
+// neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
+// leave the legacy columns alone. If the bulk read fails, every legacy number is
+// treated as unrepresented (protected) rather than guessed at.
+func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
+	uuids := make([]string, 0, len(rows))
+	for i := range rows {
+		if rows[i].UUID != "" {
+			uuids = append(uuids, rows[i].UUID)
+		}
+	}
+	var links map[string][]PRView
+	var tombs map[string][]PRRef
+	var loadErr error
+	if len(uuids) > 0 {
+		if links, loadErr = s.repo.ListBySessionUUIDs(ctx, uuids); loadErr == nil {
+			tombs, loadErr = s.repo.ListSessionTombstonesByUUIDs(ctx, uuids)
+		}
+		if loadErr != nil {
+			log.Warn("LoadInstances: failed to bulk-load session PR links; protecting legacy PR numbers", "err", loadErr)
+		}
+	}
+	for i := range rows {
+		d := &rows[i]
+		if loadErr == nil {
+			d.PRs = sortedByAttach(links[d.UUID])
+			d.HasPRLinks = len(d.PRs) > 0
+		}
+		d.LegacyPRUnrepresented = legacyPRUnrepresented(*d, tombs[d.UUID], loadErr != nil)
+	}
+}
+
+// legacyPRUnrepresented: the session's scalar number is neither a link nor tombstoned.
+// An unbuildable ref (no owner/repo) can never become a link, so it stays protected.
+func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) bool {
+	if d.GitHubPRNumber <= 0 {
+		return false
+	}
+	if unknown {
+		return true
+	}
+	ref, err := sessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
+	if err != nil {
+		return true
+	}
+	if containsRef(tombstones, ref) {
+		return false
+	}
+	for _, v := range d.PRs {
+		if v.Ref == ref {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedByAttach(prs []PRView) []PRView {
+	out := slices.Clone(prs)
+	slices.SortStableFunc(out, func(a, b PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
+	return out
 }
 
 // ListInstanceData returns raw InstanceData from the repository without constructing

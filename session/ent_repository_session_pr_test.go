@@ -53,16 +53,23 @@ func countLinks(t *testing.T, repo *EntRepository) int {
 
 type countingDriver struct {
 	dialect.Driver
-	n *atomic.Int64
+	n     *atomic.Int64
+	match func(query string) bool // nil counts every statement
+}
+
+func (d countingDriver) count(q string) {
+	if d.match == nil || d.match(q) {
+		d.n.Add(1)
+	}
 }
 
 func (d countingDriver) Exec(ctx context.Context, q string, args, v any) error {
-	d.n.Add(1)
+	d.count(q)
 	return d.Driver.Exec(ctx, q, args, v)
 }
 
 func (d countingDriver) Query(ctx context.Context, q string, args, v any) error {
-	d.n.Add(1)
+	d.count(q)
 	return d.Driver.Query(ctx, q, args, v)
 }
 
@@ -71,21 +78,21 @@ func (d countingDriver) Tx(ctx context.Context) (dialect.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return countingTx{Tx: tx, n: d.n}, nil
+	return countingTx{Tx: tx, c: d}, nil
 }
 
 type countingTx struct {
 	dialect.Tx
-	n *atomic.Int64
+	c countingDriver
 }
 
 func (t countingTx) Exec(ctx context.Context, q string, args, v any) error {
-	t.n.Add(1)
+	t.c.count(q)
 	return t.Tx.Exec(ctx, q, args, v)
 }
 
 func (t countingTx) Query(ctx context.Context, q string, args, v any) error {
-	t.n.Add(1)
+	t.c.count(q)
 	return t.Tx.Query(ctx, q, args, v)
 }
 
@@ -93,9 +100,15 @@ func (t countingTx) Query(ctx context.Context, q string, args, v any) error {
 // counts every SQL statement, and returns the count.
 func countStatements(t *testing.T, repo *EntRepository, fn func()) int64 {
 	t.Helper()
+	return countStatementsMatching(t, repo, nil, fn)
+}
+
+// countStatementsMatching counts only the statements match accepts (nil: all).
+func countStatementsMatching(t *testing.T, repo *EntRepository, match func(string) bool, fn func()) int64 {
+	t.Helper()
 	var n atomic.Int64
 	orig := repo.client
-	repo.client = ent.NewClient(ent.Driver(countingDriver{Driver: repo.driver, n: &n}))
+	repo.client = ent.NewClient(ent.Driver(countingDriver{Driver: repo.driver, n: &n, match: match}))
 	defer func() { repo.client = orig }()
 	fn()
 	return n.Load()
