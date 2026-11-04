@@ -1,4 +1,5 @@
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Task 0.7a: tmux 3.8 from the release tarball (ships `configure`), libevent and ncurses from BCR.
 configure_make(
@@ -33,4 +34,20 @@ genrule(
     outs = ["tmux"],
     cmd = "cp $(location :tmux_build_dir) $@",
     executable = True,
+    visibility = ["//session/tmux/embed:__pkg__"],
 )
+
+sh_test(
+    name = "hermetic_test",
+    srcs = ["hermetic_test.sh"],
+    args = [
+        "$(location :tmux_bin)",
+        "$(location :PIN)",
+    ],
+    data = [
+        ":PIN",
+        ":tmux_bin",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+exports_files(["PIN"])

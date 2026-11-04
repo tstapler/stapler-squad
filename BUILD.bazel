@@ -38,8 +38,6 @@ load("//tools/bzl:go_test.bzl", "go_test")
 # gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect //proto/session/v1:sessionv1connect_go
 # The S12 nogo twin library (tools/bzl/spike-nogo:norawgitcli_rootdeps) reuses norawgitcli's importpath.
 # gazelle:resolve go github.com/tstapler/stapler-squad/tools/lint/norawgitcli //tools/lint/norawgitcli:norawgitcli
-# server/web/fixture (S3 spike) reuses server/web's importpath.
-# gazelle:resolve go github.com/tstapler/stapler-squad/server/web //server/web:web
 
 gazelle(name = "gazelle")
 

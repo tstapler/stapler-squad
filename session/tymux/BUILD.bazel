@@ -26,6 +26,10 @@ go_library(
         "transport.go",
         "version.go",
     ],
+    embedsrcs = select({
+        "//tools/bzl/flags:embed_tymux_on": ["//session/tymux/embed:tymuxd_staged"],
+        "//conditions:default": [],
+    }),  # keep: ADR-007 staging, hand-maintained (Gazelle cannot see the generated embed file)
     importpath = "github.com/tstapler/stapler-squad/session/tymux",
     visibility = ["//visibility:public"],
     deps = [

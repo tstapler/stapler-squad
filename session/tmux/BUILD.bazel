@@ -43,6 +43,10 @@ go_library(
         "zombie_reaper_windows.go",
     ],
     cgo = True,
+    embedsrcs = select({
+        "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
+    }),  # keep: ADR-007 staging, hand-maintained (Gazelle cannot see the generated embed file)
     importpath = "github.com/tstapler/stapler-squad/session/tmux",
     visibility = ["//visibility:public"],
     deps = [
