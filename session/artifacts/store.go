@@ -502,3 +502,24 @@ func (ae *ArtifactExtractor) markFailed(filePath, title string) {
 	}
 	ae.OnScanComplete(title, &failed)
 }
+
+// RescanSession drops the stored scan position of the session's transcript and
+// its subagent transcripts and queues them for a scan from the top. It touches
+// only this session's files, so other sessions keep their positions.
+func (ae *ArtifactExtractor) RescanSession(historyFile string) {
+	if historyFile == "" {
+		return
+	}
+	paths := []string{historyFile}
+	subs, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(historyFile, ".jsonl"), "subagents", "agent-*.jsonl"))
+	paths = append(paths, subs...)
+	ae.posMu.Lock()
+	for _, p := range paths {
+		delete(ae.positions, p)
+		delete(ae.restored, p)
+	}
+	ae.posMu.Unlock()
+	for _, p := range paths {
+		ae.enqueue(p)
+	}
+}

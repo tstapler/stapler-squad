@@ -1932,6 +1932,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				}
 			}
 		}
+		sessionService.SetArtifactRescanner(artifactExtractor)
 		historyLinker.RegisterFileCallback(artifactExtractor.OnHistoryFileChanged)
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))
 		artifactExtractor.Start(context.Background(), historyDir)

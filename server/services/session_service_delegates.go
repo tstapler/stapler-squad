@@ -577,6 +577,19 @@ func (s *SessionService) ClearConversationState(
 	return s.checkpointSvc.ClearConversationState(ctx, req)
 }
 
+// RescanSessionArtifacts resets a session's transcript scan position and queues a scan.
+func (s *SessionService) RescanSessionArtifacts(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RescanSessionArtifactsRequest],
+) (*connect.Response[sessionv1.RescanSessionArtifactsResponse], error) {
+	return s.artifactSvc.RescanSessionArtifacts(ctx, req)
+}
+
+// SetArtifactRescanner wires the artifact extractor behind RescanSessionArtifacts.
+func (s *SessionService) SetArtifactRescanner(r ArtifactRescanner) {
+	s.artifactSvc.SetRescanner(r)
+}
+
 // ListPathCompletions returns filesystem entries matching the given path prefix.
 func (s *SessionService) ListPathCompletions(
 	ctx context.Context,

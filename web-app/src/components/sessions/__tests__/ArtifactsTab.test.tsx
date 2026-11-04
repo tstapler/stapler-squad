@@ -5,6 +5,12 @@ import { ArtifactsTab, SCAN_SLOW_AFTER_MS } from "../ArtifactsTab";
 import { SessionArtifactsSchema } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
+const mockAnnounce = jest.fn();
+jest.mock("@/lib/hooks/useAnnounce", () => ({
+  ...jest.requireActual("@/lib/hooks/useAnnounce"),
+  useAnnounce: () => ({ announce: mockAnnounce, announceArrival: jest.fn() }),
+}));
+
 type ArtifactsInit = MessageInitShape<typeof SessionArtifactsSchema>;
 
 function makeSession(artifactsFields?: ArtifactsInit): Session {
@@ -21,6 +27,7 @@ function makeArtifacts(a: {
   externalUrls?: string[];
   scanState?: string;
   transcriptSupported?: boolean;
+  lastScannedAt?: { seconds: bigint; nanos: number };
 }): Session["artifacts"] {
   return a as unknown as Session["artifacts"];
 }
@@ -179,12 +186,64 @@ describe("ArtifactsTab", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
-    describe("slow scan escape (UX-S7-4)", () => {
+    describe("manual rescan (UX-S7-2)", () => {
+    const at = (n: number) => ({ seconds: BigInt(n), nanos: 0 });
+    const noneFound = (n: number) =>
+      makeSession(makeArtifacts({ scanState: "none_found", lastScannedAt: at(n) }));
+
+    beforeEach(() => mockAnnounce.mockClear());
+
+    it("ArtifactsTab_should_disableRescanAndAnnounceResult_When_rescanCompletes", async () => {
+      const onRescan = jest.fn().mockResolvedValue(undefined);
+      const { rerender } = render(<ArtifactsTab session={noneFound(100)} onRescan={onRescan} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+      const busy = await screen.findByRole("button", { name: /Rescanning/ });
+      expect(busy).toBeDisabled();
+      expect(busy).toHaveAttribute("aria-busy", "true");
+      fireEvent.click(busy); // double click is ignored
+      expect(onRescan).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <ArtifactsTab
+          session={makeSession(makeArtifacts({
+            scanState: "has_data",
+            prUrls: ["https://github.com/o/r/pull/1"],
+            lastScannedAt: at(200),
+          }))}
+          onRescan={onRescan}
+        />
+      );
+      expect(await screen.findByRole("button", { name: "Rescan" })).toBeEnabled();
+      expect(mockAnnounce).toHaveBeenCalledWith("Scan finished: 1 artifact", "polite", "artifacts-rescan");
+    });
+
+    it("ArtifactsTab_should_announceNoArtifacts_When_rescanFindsNothing", async () => {
+      const { rerender } = render(<ArtifactsTab session={noneFound(100)} onRescan={jest.fn().mockResolvedValue(undefined)} />);
+      fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+      await screen.findByRole("button", { name: /Rescanning/ });
+      rerender(<ArtifactsTab session={noneFound(300)} onRescan={jest.fn()} />);
+      await screen.findByRole("button", { name: "Rescan" });
+      expect(mockAnnounce).toHaveBeenCalledWith("No artifacts found", "polite", "artifacts-rescan");
+    });
+
+    it("ArtifactsTab_should_showAlertAndReenableRescan_When_rescanRpcFails", async () => {
+      const onRescan = jest.fn().mockRejectedValue(new Error("boom"));
+      render(<ArtifactsTab session={noneFound(100)} onRescan={onRescan} />);
+      fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Rescan failed: boom");
+      expect(screen.getAllByRole("button", { name: "Rescan" })[0]).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    });
+  });
+
+  describe("slow scan escape (UX-S7-4)", () => {
       beforeEach(() => jest.useFakeTimers());
       afterEach(() => jest.useRealTimers());
 
       it("ArtifactsTab_should_offerRescanAndCancelWaiting_When_scanningOver60s", () => {
-        const onRescan = jest.fn();
+        const onRescan = jest.fn().mockResolvedValue(undefined);
         render(<ArtifactsTab session={makeSession(makeArtifacts({ scanState: "scanning" }))} onRescan={onRescan} />);
         expect(screen.queryByText(/Taking longer than usual/)).not.toBeInTheDocument();
         act(() => { jest.advanceTimersByTime(SCAN_SLOW_AFTER_MS - 1); });

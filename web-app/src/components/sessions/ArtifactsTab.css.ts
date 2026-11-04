@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "../../styles/theme-contract.css";
 
 export const container = style({
@@ -117,6 +117,7 @@ export const actionButton = style({
   fontSize: vars.fontSize.sm,
   selectors: {
     "&:hover": { textDecoration: "underline" },
+    "&:disabled": { cursor: "progress", textDecoration: "none", opacity: 0.7 },
   },
 });
 
@@ -131,4 +132,19 @@ export const alert = style({
   color: vars.color.errorText,
   borderRadius: "6px",
   overflowWrap: "anywhere",
+});
+
+const spin = keyframes({ to: { transform: "rotate(360deg)" } });
+
+export const spinner = style({
+  display: "inline-block",
+  width: "14px",
+  height: "14px",
+  marginRight: vars.space["2"],
+  border: "2px solid currentColor",
+  borderTopColor: "transparent",
+  borderRadius: "50%",
+  verticalAlign: "middle",
+  animation: `${spin} 0.8s linear infinite`,
+  "@media": { "(prefers-reduced-motion: reduce)": { animation: "none" } },
 });

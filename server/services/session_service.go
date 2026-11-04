@@ -274,6 +274,9 @@ type SessionService struct {
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *CheckpointService
 
+	// artifactSvc handles RescanSessionArtifacts.
+	artifactSvc *ArtifactService
+
 	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
 	prCreationSvc *PRCreationService
 
@@ -987,6 +990,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		artifactSvc:                 &ArtifactService{},
 		featureFlagSvc:              NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
@@ -1026,6 +1030,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire CheckpointService's instance-load fallback to this service's own
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
+	svc.artifactSvc.findInstance = svc.findInstance
 
 	// Construct prCreationSvc with the shared storage/eventBus and a bound
 	// findInstance method value (narrow dependency, not the whole SessionService —

@@ -1,16 +1,18 @@
 // +feature: session-artifacts
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session, SessionArtifacts } from "@/gen/session/v1/types_pb";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { formatRelativeTime } from "@/lib/utils/datetime";
+import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useRescanArtifacts } from "@/lib/hooks/useRescanArtifacts";
 import * as styles from "./ArtifactsTab.css";
 
 interface ArtifactsTabProps {
   session: Session;
-  /** Starts a rescan; the Rescan/Retry buttons render only when provided. */
-  onRescan?: () => void;
+  /** Replaces the rescan RPC (tests); must reject on failure. */
+  onRescan?: () => Promise<void> | void;
 }
 
 type ScanState = "not_linked" | "scanning" | "none_found" | "has_data" | "failed";
@@ -134,19 +136,72 @@ function StatusLine({ artifacts }: { artifacts: SessionArtifacts | undefined }) 
   );
 }
 
-function ActionButton({ label, onClick }: { label: string; onClick?: () => void }) {
+function ActionButton({ label, onClick, busy = false }: { label: string; onClick?: () => void; busy?: boolean }) {
   if (!onClick) return null;
   return (
-    <button type="button" className={styles.actionButton} onClick={onClick}>
+    <button
+      type="button"
+      className={styles.actionButton}
+      onClick={onClick}
+      disabled={busy}
+      aria-busy={busy}
+    >
       {/* analytics-exempt */}
-      {label}
+      {busy && <span className={styles.spinner} aria-hidden="true" />}
+      {busy ? "Rescanning..." : label}
     </button>
   );
 }
 
-export function ArtifactsTab({ session, onRescan }: ArtifactsTabProps) {
+function scanKey(a: SessionArtifacts | undefined): string {
+  return a?.lastScannedAt ? `${a.lastScannedAt.seconds}.${a.lastScannedAt.nanos}` : "";
+}
+
+function describeResult(a: SessionArtifacts | undefined): string {
+  const n = (a?.prUrls?.length ?? 0) + (a?.commitShas?.length ?? 0) + (a?.externalUrls?.length ?? 0);
+  return n > 0 ? `Scan finished: ${n} artifact${n === 1 ? "" : "s"}` : "No artifacts found";
+}
+
+/**
+ * Tracks one rescan: pending from the click until the server publishes a new
+ * scan timestamp (every rescan stamps one), then announces the result.
+ */
+function useRescan(artifacts: SessionArtifacts | undefined, rescanRpc: () => Promise<void> | void) {
+  const { announce } = useAnnounce();
+  const key = scanKey(artifacts);
+  const [pending, setPending] = useState<{ baseline: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const latest = useRef(artifacts);
+  latest.current = artifacts;
+
+  useEffect(() => {
+    if (pending && key !== pending.baseline) {
+      announce(describeResult(latest.current), "polite", "artifacts-rescan");
+      setPending(null);
+    }
+  }, [key, pending, announce]);
+
+  const start = useCallback(async () => {
+    if (pending) return;
+    setError(null);
+    setPending({ baseline: key });
+    try {
+      await rescanRpc();
+    } catch (err) {
+      setPending(null);
+      setError(err instanceof Error ? err.message : "Rescan failed");
+    }
+  }, [pending, key, rescanRpc]);
+
+  return { rescanning: pending !== null, error, start, clearError: () => setError(null) };
+}
+
+export function ArtifactsTab({ session, onRescan: onRescanOverride }: ArtifactsTabProps) {
   const artifacts = session.artifacts;
   const state = resolveState(artifacts);
+  const rescanRpc = useRescanArtifacts(session.id);
+  const rescan = useRescan(artifacts, onRescanOverride ?? rescanRpc);
+  const onRescan = rescan.start;
   const [slow, setSlow] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [alertDismissed, setAlertDismissed] = useState(false);
@@ -160,11 +215,21 @@ export function ArtifactsTab({ session, onRescan }: ArtifactsTabProps) {
     return () => clearTimeout(id);
   }, [state]);
 
+  const rescanError = rescan.error && (
+    <div role="alert" className={styles.alert}>
+      <span>Rescan failed: {rescan.error}</span>
+      <div className={styles.actions}>
+        <ActionButton label="Retry" onClick={onRescan} busy={rescan.rescanning} />
+        <ActionButton label="Dismiss" onClick={rescan.clearError} />
+      </div>
+    </div>
+  );
+
   const header = (
     <div className={styles.header}>
       <StatusLine artifacts={artifacts} />
       {(state === "none_found" || state === "has_data") && (
-        <ActionButton label="Rescan" onClick={onRescan} />
+        <ActionButton label="Rescan" onClick={onRescan} busy={rescan.rescanning} />
       )}
     </div>
   );
@@ -190,9 +255,10 @@ export function ArtifactsTab({ session, onRescan }: ArtifactsTabProps) {
     if (slow && !cancelled) {
       return (
         <div className={styles.emptyState} role="status">
+          {rescanError}
           <span>Taking longer than usual.</span>
           <div className={styles.actions}>
-            <ActionButton label="Rescan" onClick={onRescan} />
+            <ActionButton label="Rescan" onClick={onRescan} busy={rescan.rescanning} />
             <ActionButton label="Cancel waiting" onClick={() => setCancelled(true)} />
           </div>
         </div>
@@ -219,6 +285,7 @@ export function ArtifactsTab({ session, onRescan }: ArtifactsTabProps) {
   if (state === "none_found") {
     return (
       <div className={styles.container}>
+        {rescanError}
         {header}
         <div className={styles.emptyState}>
           <span>No artifacts found in this session&apos;s conversation history.</span>
@@ -238,11 +305,12 @@ export function ArtifactsTab({ session, onRescan }: ArtifactsTabProps) {
             Scan failed.{artifacts && hasContent(artifacts) ? " Showing the last good results." : ""}
           </span>
           <div className={styles.actions}>
-            <ActionButton label="Retry" onClick={onRescan} />
+            <ActionButton label="Retry" onClick={onRescan} busy={rescan.rescanning} />
             <ActionButton label="Dismiss" onClick={() => setAlertDismissed(true)} />
           </div>
         </div>
       )}
+      {rescanError}
       {header}
       {artifacts && hasContent(artifacts) ? (
         <ArtifactLists artifacts={artifacts} />

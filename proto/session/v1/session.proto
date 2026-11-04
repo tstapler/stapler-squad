@@ -300,6 +300,11 @@ service SessionService {
   // loop with "No conversation found" errors.
   rpc ClearConversationState(ClearConversationStateRequest) returns (ClearConversationStateResponse) {}
 
+  // RescanSessionArtifacts resets the session's transcript scan position and
+  // queues a fresh artifact scan (the Artifacts tab's Rescan button). It works in
+  // any session state; the result arrives as a SessionUpdatedEvent(["artifacts"]).
+  rpc RescanSessionArtifacts(RescanSessionArtifactsRequest) returns (RescanSessionArtifactsResponse) {}
+
   // File Viewer RPCs
 
   // ListFiles returns the immediate children of a directory in a session's worktree.
@@ -3716,6 +3721,18 @@ message ClearConversationStateRequest {
 message ClearConversationStateResponse {
   bool success = 1;
   string message = 2;
+}
+
+// RescanSessionArtifactsRequest names the session whose transcript to rescan.
+message RescanSessionArtifactsRequest {
+  // Session identifier (title or stable UUID).
+  string id = 1;
+}
+
+// RescanSessionArtifactsResponse reports whether a scan was queued.
+message RescanSessionArtifactsResponse {
+  // False when the session has no linked transcript, so there was nothing to scan.
+  bool scan_started = 1;
 }
 
 // ============================================================================
