@@ -29,6 +29,9 @@ type MoveSpec struct {
 	ToDir   string
 	Files   []string
 	DryRun  bool
+	// Lower moves a cluster the staying files depend on (a test-support package): staying files are re-pointed at
+	// the new package instead of reported, and a moved file that uses a stay-behind symbol is an error.
+	Lower bool
 }
 
 type edit struct {
@@ -303,6 +306,16 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 		return
 	}
 	switch {
+	case m.spec.Lower && m.moved[path] && !m.moved[decl]:
+		m.notes = append(m.notes, fmt.Sprintf("ERROR: %s (moved) uses stay-behind symbol %s: a lower package cannot import its origin", filepath.Base(path), id.Name))
+	case m.spec.Lower && !m.moved[path] && m.moved[decl]:
+		name := id.Name
+		if !id.IsExported() {
+			name = capitalise(name)
+			m.rename[id.Name] = name
+		}
+		fe.edits = append(fe.edits, edit{off(id.Pos()), off(id.End()), m.newName + "." + name})
+		fe.addImp[m.newPath] = ""
 	case m.moved[path] && !m.moved[decl]:
 		name := id.Name
 		if !id.IsExported() {
@@ -319,6 +332,11 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 }
 
 func (m *mover) apply() error {
+	for _, n := range m.notes {
+		if strings.HasPrefix(n, "ERROR: ") {
+			return fmt.Errorf("%s", strings.TrimPrefix(n, "ERROR: "))
+		}
+	}
 	for from, up := range m.rename {
 		if _, taken := m.declared[up]; taken {
 			return fmt.Errorf("capitalising %s would collide with the existing declaration %s: use that symbol (or rename one) before moving", from, up)

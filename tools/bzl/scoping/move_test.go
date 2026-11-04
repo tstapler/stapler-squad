@@ -101,3 +101,29 @@ func TestMoveRefusesCapitalisationCollision(t *testing.T) {
 		t.Fatal("sat.go must stay in place when the move is refused")
 	}
 }
+
+// TestMoveLowerRepointsStayingFiles: a helper cluster that the staying files use is moved with --lower semantics, and
+// its capitalised symbol and the staying callers (test and non-test) are re-pointed.
+func TestMoveLowerRepointsStayingFiles(t *testing.T) {
+	if os.Getenv("TEST_TMPDIR") != "" {
+		t.Skip("needs the host go and git toolchains, unavailable in the Bazel sandbox")
+	}
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/m\n\ngo 1.21\n")
+	write(t, root, "core/core.go", "package core\n\nfunc Run() int { return double(2) }\n")
+	write(t, root, "core/util.go", "package core\n\nfunc double(n int) int { return n * 2 }\n")
+	write(t, root, "core/core_test.go", "package core\n\nimport \"testing\"\n\nfunc TestRun(t *testing.T) {\n\tif Run() != 4 || double(1) != 2 {\n\t\tt.Fatal(\"bad\")\n\t}\n}\n")
+	run(t, root, "git", "init", "-q")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-q", "-m", "init")
+	var out strings.Builder
+	if err := RunMove(MoveSpec{Root: root, FromDir: "core", ToDir: "core/util", Files: []string{"util.go"}, Lower: true}, &out); err != nil {
+		t.Fatalf("RunMove: %v\n%s", err, out.String())
+	}
+	run(t, root, "go", "build", "./...")
+	run(t, root, "go", "vet", "./...")
+	run(t, root, "go", "test", "./...")
+	if body, _ := os.ReadFile(filepath.Join(root, "core/core.go")); !strings.Contains(string(body), "util.Double(2)") {
+		t.Fatalf("staying caller not re-pointed:\n%s", body)
+	}
+}

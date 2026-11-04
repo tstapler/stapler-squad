@@ -3,49 +3,23 @@ package main
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // DepsReport lists, for each named declaration, the other package-level declarations of the same package that it
-// references transitively (syntactic; a local variable that shadows a package-level name is counted, so it errs high).
+// references transitively (go/types resolved).
 // It answers "can this test helper leave the package without dragging the package's types along".
 type DepsReport struct {
 	Decl     string
 	File     string
 	Closure  []string // "name (file)" of every transitively referenced package-level declaration
 	TestOnly bool     // every referenced declaration is declared in a _test.go file
-}
-
-func collectTopLevel(dir string) (map[string]string, map[string][]ast.Node, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", dir, err)
-	}
-	files := map[string]string{}
-	nodes := map[string][]ast.Node{}
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", e.Name(), err)
-		}
-		if strings.HasSuffix(f.Name.Name, "_test") {
-			continue
-		}
-		for _, d := range f.Decls {
-			addTopLevel(d, e.Name(), files, nodes)
-		}
-	}
-	return files, nodes, nil
 }
 
 func addTopLevel(d ast.Decl, file string, files map[string]string, nodes map[string][]ast.Node) {
@@ -56,8 +30,7 @@ func addTopLevel(d ast.Decl, file string, files map[string]string, nodes map[str
 			nodes[d.Name.Name] = append(nodes[d.Name.Name], d)
 			return
 		}
-		// A method belongs to its receiver type: referencing the type pulls the method bodies in.
-		rt := recvTypeName(d.Recv.List[0].Type)
+		rt := recvTypeName(d.Recv.List[0].Type) // referencing the type pulls its method bodies in
 		nodes[rt] = append(nodes[rt], d)
 	case *ast.GenDecl:
 		for _, s := range d.Specs {
@@ -69,11 +42,33 @@ func addTopLevel(d ast.Decl, file string, files map[string]string, nodes map[str
 	}
 }
 
-// DeclDeps computes the transitive same-package references of each named declaration.
-func DeclDeps(dir string, decls []string) ([]DepsReport, error) {
-	files, nodes, err := collectTopLevel(dir)
+// DeclDeps computes the transitive same-package references of each named declaration, resolved with go/types
+// (a local variable never counts as a package-level reference).
+func DeclDeps(root, dir string, decls []string) ([]DepsReport, error) {
+	cfg := &packages.Config{
+		Dir: root, Tests: true,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+	}
+	pkgs, err := packages.Load(cfg, "./"+dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load %s: %w", dir, err)
+	}
+	var p *packages.Package
+	for _, c := range pkgs {
+		if !strings.HasSuffix(c.PkgPath, "_test") && strings.HasSuffix(c.ID, ".test]") {
+			p = c // the package plus its in-package _test.go files
+		}
+	}
+	if p == nil {
+		return nil, fmt.Errorf("no test variant of %s loaded", dir)
+	}
+	files := map[string]string{}     // top-level name -> file
+	nodes := map[string][]ast.Node{} // top-level name -> declaring nodes (methods attach to their receiver type)
+	for _, f := range p.Syntax {
+		base := filepath.Base(p.Fset.Position(f.Pos()).Filename)
+		for _, d := range f.Decls {
+			addTopLevel(d, base, files, nodes)
+		}
 	}
 	var out []DepsReport
 	for _, d := range decls {
@@ -87,12 +82,16 @@ func DeclDeps(dir string, decls []string) ([]DepsReport, error) {
 			queue = queue[1:]
 			for _, n := range nodes[cur] {
 				ast.Inspect(n, func(x ast.Node) bool {
-					if id, ok := x.(*ast.Ident); ok && !seen[id.Name] {
-						if _, top := files[id.Name]; top {
-							seen[id.Name] = true
-							queue = append(queue, id.Name)
-						}
+					id, ok := x.(*ast.Ident)
+					if !ok {
+						return true
 					}
+					obj := p.TypesInfo.Uses[id]
+					if obj == nil || obj.Pkg() != p.Types || obj.Parent() != p.Types.Scope() || seen[id.Name] {
+						return true
+					}
+					seen[id.Name] = true
+					queue = append(queue, id.Name)
 					return true
 				})
 			}
@@ -130,7 +129,7 @@ func runDeps(args []string, stdout io.Writer) int {
 		fmt.Fprintln(os.Stderr, "usage: scoping deps --dir DIR --decls a,b,c")
 		return 2
 	}
-	rep, err := DeclDeps(filepath.Join(root, dir), strings.Split(decls, ","))
+	rep, err := DeclDeps(root, dir, strings.Split(decls, ","))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

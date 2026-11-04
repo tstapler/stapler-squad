@@ -25,6 +25,7 @@ type RelocateSpec struct {
 	ToFile      string   // destination file name inside Dir (created when absent)
 	Decls       []string // "Name" for a func/type/const/var, "Type.Method" for one method
 	WithMethods bool     // also move every method of each listed type
+	AnyKind     bool     // allow declarations to cross between _test.go and non-test files
 	DryRun      bool
 }
 
@@ -82,7 +83,7 @@ func RunRelocate(spec RelocateSpec, out io.Writer) error {
 		if len(found) == 0 {
 			continue
 		}
-		if isTestFile(n) != destTest {
+		if !spec.AnyKind && isTestFile(n) != destTest {
 			return fmt.Errorf("%s declares %s: test and non-test declarations cannot be relocated into %s", n, found[0].name, spec.ToFile)
 		}
 		srcs[n] = src

@@ -264,6 +264,7 @@ func runMove(args []string, stdout io.Writer) int {
 	fs.StringVar(&spec.ToDir, "to", "", "new package directory, relative to the root")
 	fs.StringVar(&spec.Root, "root", workspace(), "repository root")
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
+	fs.BoolVar(&spec.Lower, "lower", false, "the staying files depend on the cluster (test-support package): re-point them instead of reporting")
 	if fs.Parse(args) != nil || spec.FromDir == "" || spec.ToDir == "" || *files == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping move --from DIR --to DIR --files a.go,b.go [--dry-run]")
 		return 2
@@ -283,6 +284,7 @@ func runRelocate(args []string, stdout io.Writer) int {
 	fs.StringVar(&spec.Dir, "dir", "", "package directory, relative to the root")
 	fs.StringVar(&spec.ToFile, "to", "", "destination file name inside --dir (created when absent)")
 	fs.StringVar(&spec.Root, "root", workspace(), "repository root")
+	fs.BoolVar(&spec.AnyKind, "any-kind", false, "allow moving declarations between _test.go and non-test files")
 	fs.BoolVar(&spec.WithMethods, "with-methods", false, "also move every method of each listed type")
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
 	if fs.Parse(args) != nil || spec.Dir == "" || spec.ToFile == "" || *decls == "" {
