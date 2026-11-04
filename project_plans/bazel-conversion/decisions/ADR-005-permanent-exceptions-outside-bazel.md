@@ -14,13 +14,24 @@ Permanent exceptions (documented in `docs/reference/bazel-targets-and-configs.md
 | Diff-based and history-based gates: `dupl --new-from-rev`, gocyclo/gocognit/funlen/revive new-code gate, `proto-breaking`, jscpd threshold, actionlint, shellcheck | Need git history or whole-tree scans | Wrapped; run after `make sync` |
 | golangci-lint | Needs a normal Go tree | Wrapped; the 17 custom analyzers may move to `nogo` (Story 8.4) with the wrapped `make lint-custom` retained until the retention window ends |
 | release-please, website/demo deploy workflows, benchmarks/pprof, harness (RealClaude) tests | Not build-graph concerns | Unchanged |
-| goreleaser | Decision deferred to spike 3.7a: feed it Bazel binaries if `builder: prebuilt` is available, else keep its own `CGO_ENABLED=0 go build` and record it here as a permanent exception | Parity check via `goreleaser-check.yml` |
+| goreleaser | Keeps its own `CGO_ENABLED=0 go build` (Task 3.7a, "Goreleaser decision" below): `builder: prebuilt` is GoReleaser Pro only | Parity check via `goreleaser-check.yml` |
 | Homebrew `Formula/stapler-squad.rb` | Written by goreleaser (`brews.directory: Formula`) from release assets | Stays goreleaser-owned; Task 3.7c snapshot dry run asserts asset names, URLs and sha256 match |
 | Feature registry (`docs/registry/features/*.json`, `make registry-generate`) | Committed scan-derived artifact, not gitignored codegen | Stays a make target; CI fails on a non-empty `git diff -- docs/registry` (ADR-002 item 6, Task 2.4c) |
 
 **Windows (owner decision 2026-11-01): cross-compile only.** `windows_amd64` binaries via a platform transition (`go_cross_binary`); no Windows tests under Bazel; windows-only packages carry `target_compatible_with` so `//...` on Linux/macOS excludes them. This corrects `research/architecture.md` section 3, which said "dropped".
 
 **Amended by ADR-009 (Proposed, 2026-11-02)**: Playwright e2e is no longer outside the build graph; execution and selection move into Bazel (Epic 12). Everything in the table above still stays outside Bazel. What remains outside for e2e is only the pinned Playwright browser image, `bun install` of `tests/e2e`, and the nightly-only visual/perf/secondary-browser projects.
+
+## Goreleaser decision (Task 3.7a, spike run 2026-11-03)
+
+Decision (goreleaser): keep-go-build
+
+Evidence:
+- `builder: prebuilt` is documented under the Pro heading: the page <https://goreleaser.com/customization/builds/prebuilt/> opens with "GoReleaser Pro" (fetched 2026-11-03). `.goreleaser.yaml` is `version: 2.9` and `goreleaser-check.yml` and `release.yml` use the OSS `goreleaser/goreleaser-action@v6` with no license key, so consuming Bazel binaries would need a paid license, an owner decision this plan does not make.
+- The cross-compile half is available without goreleaser: `go_cross_binary` already produces `windows_amd64` (Epic 6, `tools/bzl/windows/BUILD.bazel`), so a later switch to Bazel-built release binaries is technically possible once a Pro license exists.
+- Goreleaser builds all three binaries (`stapler-squad`, `ssq-mux`, `ssq-hooks`) for 3 OS x 2 arch with `CGO_ENABLED=0`; the OSS path keeps that unchanged, so the CGO=0 guard in `goreleaser-check.yml` stays valid and Task 3.7b reduces to this exception note.
+
+Revisit only if the owner buys GoReleaser Pro; then switch to `builder: prebuilt` fed from `//:stapler-squad` cross builds and amend this ADR.
 
 ## Consequences
 
