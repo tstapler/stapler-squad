@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 import "session/v1/backlog.proto";
 
 // DiagnosticService backs the "Diagnose & Nudge" backlog action (backlog
