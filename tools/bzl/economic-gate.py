@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Economic abort / re-plan decision gate (Task 0.14e), criteria EG1-EG5.
+
+Exit 0 CLEAR, 3 OWNER DECISION (a criterion tripped), 4 nothing tripped but
+some criterion is UNMEASURED. Never writes owner-attestations.yaml and never
+picks a decision. Unmeasured inputs are never assumed.
+
+Measurements not available from measured.json (S6/S10 timings, re-costed CU)
+come from a JSON file (--inputs, default spike-measurements.json beside
+spike-results.yaml). Keys: s10_second_run_job_s, unconverted_jobs_s,
+s10_cold_run_s, s6_first_cold_s, s6_second_cold_s, make_cold_median_s,
+recosted_cu_m; midpoint: mid_t1_ratio, mid_second_cold_s, mid_first_cold_s,
+mid_edit_test_s, baseline_edit_test_s.
+"""
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+IMPL = os.path.join(HERE, "..", "..", "project_plans", "bazel-conversion", "implementation")
+MEASURED = os.path.join(HERE, "baseline", "measured.json")
+VERIFIED_CU_M = 30.50  # plan.md header: verified total
+EG1_X, EG2_X, EG3_FIRST_X, EG3_SECOND_X, EG4_X, EG5_LIMIT = 1.10, 1.5, 3.0, 2.0, 1.25, 0.60
+
+UNMEASURED = "UNMEASURED"
+
+
+def num(d, k):
+    v = d.get(k)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _result(cid, status, detail):
+    return {"id": cid, "status": status, "detail": detail}
+
+
+def _need(cid, missing):
+    return _result(cid, UNMEASURED, "missing input(s): " + ", ".join(missing))
+
+
+def eg1(m, i):
+    b, s, u = num(m, "ci_p50_s"), num(i, "s10_second_run_job_s"), num(i, "unconverted_jobs_s")
+    miss = [n for n, v in (("baseline ci_p50_s", b), ("S10 s10_second_run_job_s", s), ("unconverted_jobs_s", u)) if v is None]
+    if miss:
+        return _need("EG1", miss)
+    proj, lim = s + u, EG1_X * b
+    return _result("EG1", "TRIP" if proj > lim else "CLEAR", "projected ttg p50 %.0f s vs limit %.0f s (1.10 x %.0f)" % (proj, lim, b))
+
+
+def eg2(m, i):
+    b, c = num(m, "ci_p50_s"), num(i, "s10_cold_run_s")
+    miss = [n for n, v in (("baseline ci_p50_s", b), ("S10 s10_cold_run_s", c)) if v is None]
+    if miss:
+        return _need("EG2", miss)
+    lim = EG2_X * b
+    return _result("EG2", "TRIP" if c > lim else "CLEAR", "cold CI %.0f s vs limit %.0f s (1.5 x %.0f)" % (c, lim, b))
+
+
+def eg3(m, i):
+    make = num(i, "make_cold_median_s") or num(m, "cold_worktree_wall_s")
+    first, second = num(i, "s6_first_cold_s"), num(i, "s6_second_cold_s")
+    miss = [n for n, v in (("make cold median (baseline-worktree.json)", make), ("S6 s6_first_cold_s", first), ("S6 s6_second_cold_s", second)) if v is None]
+    if miss:
+        return _need("EG3", miss)
+    l1, l2 = EG3_FIRST_X * make, EG3_SECOND_X * (0.60 * make)
+    trips = []
+    if first > l1:
+        trips.append("first cold %.0f > %.0f" % (first, l1))
+    if second > l2:
+        trips.append("second cold %.0f > %.0f" % (second, l2))
+    return _result("EG3", "TRIP" if trips else "CLEAR", "; ".join(trips) or "first %.0f <= %.0f, second %.0f <= %.0f" % (first, l1, second, l2))
+
+
+def eg4(m, i):
+    c = num(i, "recosted_cu_m")
+    if c is None:
+        return _need("EG4", ["recosted_cu_m (CU total re-costed with chosen fallback paths)"])
+    lim = EG4_X * VERIFIED_CU_M
+    return _result("EG4", "TRIP" if c > lim else "CLEAR", "re-costed %.2fM CU vs limit %.2fM (1.25 x %.2fM)" % (c, lim, VERIFIED_CU_M))
+
+
+def eg5(m, i):
+    ra1, ra2 = num(m, "ra1_median_fanout"), num(m, "ra2_non_go_share")
+    miss = [n for n, v in (("ra1_median_fanout", ra1), ("ra2_non_go_share", ra2)) if v is None]
+    if miss:
+        return _need("EG5", miss)
+    trips = []
+    if ra1 > EG5_LIMIT:
+        trips.append("RA1 %.3f > %.2f" % (ra1, EG5_LIMIT))
+    if ra2 > EG5_LIMIT:
+        trips.append("RA2 %.3f > %.2f" % (ra2, EG5_LIMIT))
+    return _result("EG5", "TRIP" if trips else "CLEAR", "; ".join(trips) or "RA1 %.3f, RA2 %.3f both <= %.2f" % (ra1, ra2, EG5_LIMIT))
+
+
+def mid_t1(m, i):
+    r, ra1 = num(i, "mid_t1_ratio"), num(m, "ra1_median_fanout")
+    if r is None or ra1 is None:
+        return _need("T1", ["mid_t1_ratio (replay)"] if r is None else ["ra1_median_fanout"])
+    lim = min(0.30, 1.5 * ra1)
+    return _result("T1", "TRIP" if r > lim else "CLEAR", "affected ratio %.3f vs target %.3f" % (r, lim))
+
+
+def mid_t3(m, i):
+    s, f = num(i, "mid_second_cold_s"), num(i, "mid_first_cold_s")
+    if s is None or f is None:
+        return _need("T3", [k for k, v in (("mid_second_cold_s", s), ("mid_first_cold_s", f)) if v is None])
+    return _result("T3", "TRIP" if s > 0.25 * f else "CLEAR", "second %.0f s vs 0.25 x first = %.0f s" % (s, 0.25 * f))
+
+
+def mid_t4(m, i):
+    e, b = num(i, "mid_edit_test_s"), num(i, "baseline_edit_test_s") or num(m, "warm_one_pkg_test_s")
+    if e is None or b is None:
+        return _need("T4", [k for k, v in (("mid_edit_test_s", e), ("baseline warm one-package test", b)) if v is None])
+    lim = max(1.25 * b, b + 5)
+    return _result("T4", "TRIP" if e > lim else "CLEAR", "latency %.1f s vs limit %.1f s" % (e, lim))
+
+
+def evaluate(m, i, midpoint=False):
+    fns = (mid_t1, mid_t3, mid_t4) if midpoint else (eg1, eg2, eg3, eg4, eg5)
+    return [f(m, i) for f in fns]
+
+
+def verdict(results):
+    """Return (exit_code, headline). A trip is decisive even if others are unmeasured."""
+    tripped = [r["id"] for r in results if r["status"] == "TRIP"]
+    unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
+    if tripped:
+        return 3, "ECONOMIC GATE: OWNER DECISION " + ", ".join(tripped)
+    if unmeasured:
+        return 4, "ECONOMIC GATE: INCOMPLETE (UNMEASURED " + ", ".join(unmeasured) + "); not CLEAR"
+    return 0, "ECONOMIC GATE: CLEAR"
+
+
+def load_json(path, required):
+    if not os.path.exists(path):
+        if required:
+            raise SystemExit("ERROR: %s not found" % path)
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--midpoint", action="store_true", help="evaluate T1, T3, T4 (Story 2.7)")
+    ap.add_argument("--measured", default=MEASURED)
+    ap.add_argument("--inputs", default=os.path.join(IMPL, "spike-measurements.json"))
+    a = ap.parse_args(argv)
+    m = load_json(a.measured, True)
+    i = load_json(a.inputs, False)
+    results = evaluate(m, i, a.midpoint)
+    for r in results:
+        print("  %-3s %-10s %s" % (r["id"], r["status"], r["detail"]))
+    evaluable = [r["id"] for r in results if r["status"] != UNMEASURED]
+    unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
+    print("evaluable: %s; unmeasured: %s" % (", ".join(evaluable) or "none", ", ".join(unmeasured) or "none"))
+    code, headline = verdict(results)
+    print(headline)
+    if code == 3:
+        print("Epics 1-11 stay unreleased until owner-attestations.yaml records economic_gate: {decision, date, reason}; this script never selects a decision.")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
