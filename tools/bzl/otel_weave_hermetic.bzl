@@ -1,103 +1,53 @@
-"""Sandboxed otelc-woven stapler-squad (spike S15b; the default //:stapler-squad is still otel_weave).
-
-Declared inputs only: module sources from the :stapler-squad_lib archive closure, Bazel-generated proto/ent/web,
-the committed otelc overlay (tools/bzl/otel_overlay), the Go SDK and a module cache fetched once by a
-go.sum-verified `go mod download`. See tools/bzl/otel_weave_hermetic.sh.
-"""
+"""Sandboxed otelc-woven stapler-squad (spike S15b); path logic lives in otel_weave_hermetic.sh."""
 
 load("@rules_go//go:def.bzl", "GoArchive", "go_context")
 
-_MODULE = "github.com/tstapler/stapler-squad"
-_OVERLAY = "tools/bzl/otel_overlay/"
-_ENT = "tools/bzl/ent/"
-_PROTO = "proto/session/v1/"
-
-def _sdk_inputs(go):
-    return depset([go.sdk.go, go.sdk.root_file], transitive = [go.sdk.libs, go.sdk.srcs, go.sdk.tools, go.sdk.headers])
-
-def _line(dest, f):
-    return "%s\t%s" % (dest, f.path)
-
-def _overlay_manifest(ctx):
-    out = ctx.actions.declare_file(ctx.label.name + ".overlay.tsv")
-    ctx.actions.write(out, "".join([_line(f.short_path[len(_OVERLAY):], f) + "\n" for f in ctx.files.overlay]))
-    return out
-
-def _modcache_impl(ctx):
+def _impl(ctx):
     go = go_context(ctx)
-    tree = ctx.actions.declare_file(ctx.label.name + ".tar")
-    manifest = _overlay_manifest(ctx)
-    ctx.actions.run(
-        executable = ctx.file.script,
-        arguments = ["modcache", go.sdk.go.path, tree.path, manifest.path],
-        inputs = depset([manifest] + ctx.files.overlay, transitive = [_sdk_inputs(go)]),
-        outputs = [tree],
-        mnemonic = "OtelModcache",
-        execution_requirements = {"requires-network": "1"},  # the one fetch; go.sum-verified, then cached
-    )
-    return DefaultInfo(files = depset([tree]))
+    weave = ctx.attr.mode == "weave"
+    out = ctx.actions.declare_file(ctx.label.name + ("" if weave else ".tar"))
+    closure = depset(transitive = [x[GoArchive].transitive for x in ctx.attr.libs]).to_list()
+    srcs = [f for d in closure if d.importpath.startswith("github.com/tstapler/stapler-squad") for f in list(d.srcs) + list(d._embedsrcs) if f.is_source]
+    groups = [("--overlay", ctx.files.overlay), ("--src", srcs), ("--gen", ctx.files.gen), ("--ent", ctx.files.ent), ("--web", ctx.files.web), ("--stage", ctx.files.stage), ("--tag", ctx.attr.go_tags), ("--modcache", ctx.files.modcache), ("--status", [ctx.info_file] if weave else []), ("--target", [go.mode.goos + "/" + go.mode.goarch] if weave else [])]
+    args = ctx.actions.args().use_param_file("@%s", use_always = True).set_param_file_format("multiline")
+    args.add_all([ctx.attr.mode, go.sdk.go, out])
+    files = []
+    for flag, items in groups:
+        args.add_all(items, before_each = flag)
+        files += [f for f in items if type(f) == "File"]
+    sdk = depset([go.sdk.go, go.sdk.root_file] + files, transitive = [go.sdk.libs, go.sdk.srcs, go.sdk.tools, go.sdk.headers])
+    reqs = {"no-remote-exec": "1"} if weave else {"requires-network": "1"}  # the weave is sandboxed and remote-cacheable; the modcache fetch is go.sum-verified
+    ctx.actions.run(executable = ctx.file.script, arguments = [args], outputs = [out], inputs = sdk, execution_requirements = reqs, mnemonic = "OtelWeaveHermetic" if weave else "OtelModcache")
+    return DefaultInfo(files = depset([out]), executable = out)  # executable only satisfies the rule type; the modcache tar is never run
 
-def _closure_files(ctx):
-    archives = [l[GoArchive].transitive for l in [ctx.attr.lib] + ctx.attr.extra_libs]
-    return depset([f for d in depset(transitive = archives).to_list() if d.importpath.startswith(_MODULE) for f in list(d.srcs) + list(d._embedsrcs)])
-
-def _sources(ctx):
-    lines = [_line(f.short_path, f) for f in _closure_files(ctx).to_list() if f.is_source]
-    for f in ctx.files.gen:
-        lines.append(_line("gen/proto/go/session/v1/" + f.path.split("/gen/proto/go/session/v1/")[1], f))
-    for f in ctx.files.ent:
-        if f.short_path.startswith(_ENT) and f.extension == "go":
-            lines.append(_line("session/ent/" + f.short_path[len(_ENT):], f))
-    lines.append(_line("server/web/dist", ctx.files.web[0]))  # a directory: the script copies with cp -R
-    for label, dest in ctx.attr.stage.items():
-        lines.append(_line(dest, label.files.to_list()[0]))
-    return lines
-
-def _weave_impl(ctx):
-    go = go_context(ctx)
-    out = ctx.actions.declare_file(ctx.label.name)
-    manifest = ctx.actions.declare_file(ctx.label.name + ".src.tsv")
-    ctx.actions.write(manifest, "".join([l + "\n" for l in _sources(ctx)]))
-    overlay = _overlay_manifest(ctx)
-    modcache = ctx.attr.modcache.files.to_list()[0]
-    ctx.actions.run(
-        executable = ctx.file.script,
-        arguments = ["weave", go.sdk.go.path, out.path, ",".join(ctx.attr.go_tags), ctx.info_file.path, modcache.path, manifest.path, overlay.path, go.mode.goos, go.mode.goarch],
-        inputs = depset(
-            [manifest, overlay, modcache, ctx.info_file] + ctx.files.overlay + ctx.files.gen + ctx.files.ent + ctx.files.web + [f for l in ctx.attr.stage for f in l.files.to_list()],
-            transitive = [_sdk_inputs(go), _closure_files(ctx)],
-        ),
-        outputs = [out],
-        mnemonic = "OtelWeaveHermetic",
-        progress_message = "Weaving (sandboxed) %s" % ctx.label.name,
-        execution_requirements = {"no-remote-exec": "1"},  # sandboxed + remote-cacheable; run locally
-    )
-    return DefaultInfo(files = depset([out]), executable = out)
-
-_COMMON = {
-    "overlay": attr.label(default = "//tools/bzl/otel_overlay:overlay", allow_files = True),
-    "script": attr.label(allow_single_file = True, default = "//tools/bzl:otel_weave_hermetic.sh"),
-    "_go_context_data": attr.label(default = "@rules_go//:go_context_data"),
-}
-
-otel_modcache = rule(
-    implementation = _modcache_impl,
-    attrs = _COMMON,
+otel_weave_hermetic = rule(
+    implementation = _impl,
+    attrs = {
+        "ent": attr.label_list(allow_files = True),
+        "gen": attr.label_list(allow_files = True),
+        "go_tags": attr.string_list(),
+        "libs": attr.label_list(providers = [GoArchive]),
+        "mode": attr.string(default = "weave", values = ["weave", "modcache"]),
+        "modcache": attr.label(allow_single_file = True),
+        "overlay": attr.label(default = "//tools/bzl/otel_overlay:overlay", allow_files = True),
+        "script": attr.label(allow_single_file = True, default = "//tools/bzl:otel_weave_hermetic.sh"),
+        "stage": attr.label_list(allow_files = True),
+        "web": attr.label(allow_single_file = True),
+        "_go_context_data": attr.label(default = "@rules_go//:go_context_data"),
+    },
+    executable = True,
     toolchains = ["@rules_go//go:toolchain"],
 )
 
-otel_weave_hermetic = rule(
-    implementation = _weave_impl,
-    attrs = dict(_COMMON, **{
-        "ent": attr.label_list(allow_files = True),
-        "gen": attr.label_list(allow_files = True),
-        "extra_libs": attr.label_list(providers = [GoArchive], doc = "Packages only the weave imports (the otelc custom rule)."),
-        "go_tags": attr.string_list(),
-        "lib": attr.label(mandatory = True, providers = [GoArchive]),
-        "modcache": attr.label(mandatory = True),
-        "stage": attr.label_keyed_string_dict(allow_files = True),
-        "web": attr.label(mandatory = True, allow_single_file = True),
-    }),
-    executable = True,
-    toolchains = ["@rules_go//go:toolchain"],
+def _cross_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(output = out, target_file = ctx.attr.target[0][DefaultInfo].files.to_list()[0])
+    return DefaultInfo(files = depset([out]))
+
+_platform_tx = transition(implementation = lambda _settings, attr: {"//command_line_option:platforms": str(attr.platform)}, inputs = [], outputs = ["//command_line_option:platforms"])
+
+# Builds `target` for `platform`: the weave reads the target GOOS/GOARCH from rules_go.
+otel_cross_binary = rule(
+    implementation = _cross_impl,
+    attrs = {"platform": attr.label(mandatory = True), "target": attr.label(cfg = _platform_tx, mandatory = True)},
 )

@@ -3,8 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
 load("//tools/bzl:go_test.bzl", "go_test")
-load("//tools/bzl:otel_weave.bzl", "otel_weave")
-load("//tools/bzl:otel_weave_hermetic.bzl", "otel_modcache", "otel_weave_hermetic")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_weave_hermetic")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
 # gazelle:go_naming_convention import_alias
@@ -126,8 +125,7 @@ config_setting(
     values = {"stamp": "1"},
 )
 
-# Uninstrumented go_binary: kept only for the Windows cross-build targets (a woven binary cannot be
-# cross-compiled by the otel_weave action) and the P5 parity harness. It is not shipped. The
+# Uninstrumented go_binary: kept only for the P5 parity harness. It is not shipped. The
 # shipped binary is //:stapler-squad below. main.version and the buildinfo fields mirror Makefile's LDFLAGS. Only set when stamping (the
 # {KEY} placeholders are workspace-status values); unstamped builds keep the "dev" defaults.
 # runtime.godebugDefault carries go.mod's `godebug netdns=go`, which rules_go does not read (Task 3.4d).
@@ -148,10 +146,6 @@ go_binary(
     }),
 )
 
-# The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment,
-# spike S15). NON-HERMETIC: runs unsandboxed through tools/bzl/otel_weave.sh (needs `go` modules
-# resolvable, writes a build copy under ~/.cache/ssq-otel) and is never remote-cached. The srcs are
-# the change triggers: the compiled Go library (so any Go source change reruns it), go.mod and go.sum.
 config_setting(
     name = "embed_tmux_and_tymux",
     flag_values = {
@@ -160,41 +154,16 @@ config_setting(
     },
 )
 
-otel_weave(
-    name = "stapler-squad",
-    srcs = [
-        "go.mod",
-        "go.sum",
-        ":stapler-squad_lib",
-    ],
-    ent = ["//tools/bzl/ent:ent_gen"],
-    gen = ["//proto/session/v1:gen_go"],
-    go_tags = select({
-        ":embed_tmux_and_tymux": [
-            "embed_tmux",
-            "embed_tymux",
-        ],
-        "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
-        "//conditions:default": [],
-    }),
-    stage = select({
-        ":embed_tmux_and_tymux": {
-            "//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux",
-            "//session/tymux/embed:tymuxd_staged": "session/tymux/embed/tymuxd",
-        },
-        "//tools/bzl/flags:embed_tmux_on": {"//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux"},
-        "//conditions:default": {},
-    }),
-    visibility = ["//visibility:public"],
-    web = "//server/web:dist_staged",
+# The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment, spike S15b).
+# Sandboxed and remote-cacheable (tools/bzl/otel_weave_hermetic.bzl): declared inputs only, the committed otelc
+# overlay in tools/bzl/otel_overlay, and a go.sum-verified module cache. Stamping comes from --stamp.
+otel_weave_hermetic(
+    name = "otel_modcache",
+    mode = "modcache",
 )
 
-# S15b prototype, NOT the shipped binary: the sandboxed, remote-cacheable woven build (see
-# tools/bzl/otel_weave_hermetic.bzl). Promote by pointing //:stapler-squad at it (spike-results.md S15b).
-otel_modcache(name = "otel_modcache")
-
 otel_weave_hermetic(
-    name = "stapler-squad_otel_hermetic",
+    name = "stapler-squad",
     ent = ["//tools/bzl/ent:ent_gen"],
     extra_libs = ["//instrumentation/otelc/safeexec"],
     gen = ["//proto/session/v1:gen_go"],
@@ -206,15 +175,18 @@ otel_weave_hermetic(
         "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
         "//conditions:default": [],
     }),
-    lib = ":stapler-squad_lib",
+    libs = [
+        ":stapler-squad_lib",
+        "//instrumentation/otelc/safeexec",
+    ],
     modcache = ":otel_modcache",
     stage = select({
-        ":embed_tmux_and_tymux": {
-            "//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux",
-            "//session/tymux/embed:tymuxd_staged": "session/tymux/embed/tymuxd",
-        },
-        "//tools/bzl/flags:embed_tmux_on": {"//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux"},
-        "//conditions:default": {},
+        ":embed_tmux_and_tymux": [
+            "//session/tmux/embed:tmux_staged",
+            "//session/tymux/embed:tymuxd_staged",
+        ],
+        "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
     web = "//server/web:dist_staged",

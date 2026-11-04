@@ -1,6 +1,7 @@
 # Hand-written (HandBuildFile). Windows is cross-compile only, never tested under Bazel (ADR-005).
 load("@rules_go//go:def.bzl", "go_cross_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_cross_binary")
 
 platform(
     name = "windows_amd64",
@@ -23,10 +24,10 @@ platform(
 # .goreleaser.yaml builds windows/{amd64,arm64} for all three binaries, so all six are here. The
 # .exe suffix on the real target puts the artifact at bazel-bin/.../<name>.exe; the alias keeps
 # the suffix-free label that the plan and CI use.
-go_cross_binary(
+otel_cross_binary(
     name = "stapler-squad_windows_amd64.exe",
     platform = ":windows_amd64",
-    target = "//:stapler-squad_plain",  # uninstrumented: the otelc weave cannot cross-compile under Bazel
+    target = "//:stapler-squad",
 )
 
 alias(
@@ -56,10 +57,10 @@ alias(
     actual = ":ssq-hooks_windows_amd64.exe",
 )
 
-go_cross_binary(
+otel_cross_binary(
     name = "stapler-squad_windows_arm64.exe",
     platform = ":windows_arm64",
-    target = "//:stapler-squad_plain",  # uninstrumented: the otelc weave cannot cross-compile under Bazel
+    target = "//:stapler-squad",
 )
 
 alias(

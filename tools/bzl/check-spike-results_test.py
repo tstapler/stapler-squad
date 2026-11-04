@@ -55,6 +55,14 @@ class CheckSpikeResults(unittest.TestCase):
         _, errs = csr.check(rows)
         self.assertEqual(len([e for e in errs if e.startswith("S15:")]), 2)
 
+    def test_optional_s15b_accepted_and_needs_path_when_fallback(self):
+        rows = good_rows() + [{"spike": "S15b", "verdict": "FallbackWorkaround", "path": "p", "cost": "M"}]
+        _, errs = csr.check(rows)
+        self.assertEqual(errs, [])
+        rows = good_rows() + [{"spike": "S15b", "verdict": "FallbackWorkaround"}]
+        _, errs = csr.check(rows)
+        self.assertEqual(len([e for e in errs if e.startswith("S15b:")]), 2)
+
     def test_parse_quotes_and_comments(self):
         rows = csr.parse_rows('# c\n- spike: S1\n  verdict: Pass # x\n  path: "a: b"\n  cost: M\n')
         self.assertEqual(rows, [{"spike": "S1", "verdict": "Pass", "path": "a: b", "cost": "M"}])
