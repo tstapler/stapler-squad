@@ -24,6 +24,17 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 
 **Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
 
+### Bazel (build of record)
+
+Bazel is the build of record (provisional until cutover); native `go build`/`go vet`/`go test` and gopls stay supported after `make sync` for editor tooling and quick loops, but a native result is not authoritative.
+
+- Invoke Bazel only through `tools/bazel` (Bazelisk runs it; it queues host-wide slots and caps memory). Skill: `bazel-stapler-squad`.
+- `make gazelle` after any import or file add/remove; never hand-edit Gazelle-managed `BUILD.bazel` (rule: `.claude/rules/bazel-build-files.md`).
+- `make sync` generates `gen/` and `session/ent` for plain go/gopls; Bazel needs no generated code.
+- `make bazel-doctor` first when something looks wrong; error states: `docs/how-to/troubleshoot-bazel.md`.
+- Never `bazel run //:stapler-squad` against `:8543`; use the manual-instance recipe below.
+- Docs: `docs/how-to/build-with-bazel.md`, `docs/how-to/set-up-bazel-worktree-caches.md`, `docs/how-to/first-build-in-a-fresh-worktree.md`, `docs/reference/bazel-targets-and-configs.md`, `docs/explanation/why-bazel.md`.
+
 ### Profiling
 
 ```bash
@@ -391,3 +402,10 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
+| Bazel build of record: build, test, add a dependency, regenerate BUILD files | `docs/how-to/build-with-bazel.md`, `bazel-stapler-squad` skill |
+| Bazel shared caches, `user.bazelrc`, idle shutdown, orphan output-base timer | `docs/how-to/set-up-bazel-worktree-caches.md` |
+| First Bazel build in a fresh worktree (cold time, queue, where state lands) | `docs/how-to/first-build-in-a-fresh-worktree.md` |
+| Bazel error states and remedies (11 states, same text as the wrapper hints) | `docs/how-to/troubleshoot-bazel.md` |
+| Protect the live service from a Bazel memory spike (owner-run) | `docs/how-to/protect-live-service-from-bazel.md` |
+| Bazel configs, TagConfigs, make-to-bazel map, PermanentExceptions | `docs/reference/bazel-targets-and-configs.md` |
+| Why Bazel (drivers, supersession of the ci-speed ADR) | `docs/explanation/why-bazel.md` |
