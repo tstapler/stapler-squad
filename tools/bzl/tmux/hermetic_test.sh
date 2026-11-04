@@ -11,4 +11,4 @@ fi
 want="tmux $(sed -n 's/^tag=//p' "$pin")"
 got="$("$tmux" -V)"
 [ "$got" = "$want" ] || { echo "version '$got' != pinned '$want'" >&2; exit 1; }
-echo "ok: $got, NEEDED: $(echo $needed)"
+echo "ok: $got, NEEDED: ${needed//$'\n'/ }"
