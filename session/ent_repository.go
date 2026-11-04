@@ -1013,6 +1013,13 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to delete shells: %w", err)
 	}
 
+	// PR links and detach tombstones are keyed by the session uuid, not an FK.
+	if sess.UUID != "" {
+		if err := deleteOwnerPRRows(ctx, tx, SessionPROwner(sess.UUID)); err != nil {
+			return err
+		}
+	}
+
 	// Finally delete the session
 	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)

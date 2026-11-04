@@ -1711,6 +1711,10 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		}
 	}
 
+	if err := deleteOwnerPRRows(ctx, tx, ItemPROwner(parsedID.String())); err != nil {
+		return fmt.Errorf("delete backlog item: %w", err)
+	}
+
 	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
