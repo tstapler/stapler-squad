@@ -6,6 +6,9 @@ export const boardWrapper = style({
   flexDirection: "column",
   flex: 1,
   minHeight: 0,
+  // Without this the flex child grows to its columns' intrinsic width and the
+  // inner overflowX scroller never engages.
+  minWidth: 0,
 });
 
 export const boardToolbar = style({
@@ -18,6 +21,7 @@ export const board = style({
   display: "flex",
   gap: vars.space["4"],
   overflowX: "auto",
+  overflowY: "auto",
   padding: `0 ${vars.space["4"]} ${vars.space["4"]}`,
   minHeight: "400px",
   flex: 1,
