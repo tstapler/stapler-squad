@@ -1467,45 +1467,40 @@ func (t *TmuxSession) filterStatusLine(content string) string {
 
 // detectPromptInContent checks if the given content contains a prompt from the configured program
 func (t *TmuxSession) detectPromptInContent(content string) bool {
-	switch t.programKind {
+	return DetectPromptInContent(t.programKind, content)
+}
+
+// DetectPromptInContent reports whether content contains an approval prompt for kind.
+func DetectPromptInContent(kind ProgramKind, content string) bool {
+	switch kind {
 	case KindClaude:
-		// Claude Code approval dialogs have a distinctive pattern:
-		// An arrow selector (❯) followed by numbered options (1., 2., 3.)
-		// This is more reliable than checking for specific text that might change.
-		//
-		// Example:
-		// ❯ 1. Yes
-		//   2. Yes, allow all edits during this session (shift+tab)
-		//   3. No, and tell Claude what to do differently (esc)
-
-		// Check for the arrow selector with numbered option pattern
-		// Look for: arrow (❯) followed by number and period (1., 2., etc.) on subsequent lines
-		if strings.Contains(content, "❯") {
-			// If we have the arrow, check for numbered options nearby
-			// Split into lines and look for the pattern
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				if strings.Contains(line, "❯") {
-					// Found the arrow, check next few lines for numbered options
-					for j := i; j < i+5 && j < len(lines); j++ {
-						trimmed := strings.TrimSpace(lines[j])
-						// Check for numbered options (1., 2., 3., etc.)
-						if len(trimmed) > 0 && (trimmed[0] >= '1' && trimmed[0] <= '9') &&
-							len(trimmed) > 1 && trimmed[1] == '.' {
-							return true
-						}
-					}
-				}
-			}
-		}
-
-		// Fallback: Check for legacy patterns in case the UI changes
-		return strings.Contains(content, "No, and tell Claude what to do differently") ||
+		return hasClaudeApprovalOptions(content) ||
+			strings.Contains(content, "No, and tell Claude what to do differently") ||
 			strings.Contains(content, "Yes, allow all edits during this session")
 	case KindAider:
 		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	case KindGemini:
 		return strings.Contains(content, "Yes, allow once")
+	}
+	return false
+}
+
+func hasClaudeApprovalOptions(content string) bool {
+	if !strings.Contains(content, "❯") {
+		return false
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "❯") {
+			continue
+		}
+		// Numbered choices within five lines of the selector identify an approval dialog.
+		for _, option := range lines[i:min(i+5, len(lines))] {
+			trimmed := strings.TrimSpace(option)
+			if len(trimmed) > 1 && trimmed[0] >= '1' && trimmed[0] <= '9' && trimmed[1] == '.' {
+				return true
+			}
+		}
 	}
 	return false
 }
