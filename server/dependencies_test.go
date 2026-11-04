@@ -23,9 +23,11 @@ import (
 	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	serverevents "github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -667,4 +669,26 @@ func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLI
 	require.NotNil(t, provider, "status must show the non-loopback state")
 	assert.Equal(t, prwatch.InboxStateNonLoopback, provider().InboxState)
 	assert.NotNil(t, deps.SessionService, "the server still boots")
+}
+
+// The scan handler used to seed the legacy PR number from the first PR URL it found.
+// ADR-004: a URL the scanner merely found is not polled, so no link and no number
+// change appear, whatever the session already holds.
+func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
+	for name, held := range map[string]int{"session with no PR": 0, "session holding #11": 11} {
+		t.Run(name, func(t *testing.T) {
+			inst := &session.Instance{Title: "scan-no-seed", UUID: "uuid-scan-no-seed", GitHubOwner: "acme", GitHubRepo: "app"}
+			if held > 0 {
+				inst.GitHubPRNumber = held
+			}
+			handler := artifactScanCompleteHandler(func() []*session.Instance { return []*session.Instance{inst} }, serverevents.NewEventBus(4))
+
+			handler("scan-no-seed", &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
+
+			gh := inst.Snapshot().GitHub
+			assert.Empty(t, gh.PRs)
+			assert.Equal(t, held, gh.GitHubPRNumber)
+			assert.NotNil(t, inst.Snapshot().Artifacts, "the blob is still attached")
+		})
+	}
 }

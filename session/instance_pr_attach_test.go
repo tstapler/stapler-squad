@@ -345,3 +345,17 @@ func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T)
 	assert.True(t, inst.PRPersistPending(), "no row yet: the first full save writes the link")
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
 }
+
+func TestInstanceToSession_ShouldMapActivePR_WhenSessionHoldsSeveral(t *testing.T) {
+	inst := newPRTestInstance(t)
+	r11 := mustPRRef(t, "", "acme", "app", 11)
+	require.NoError(t, inst.AttachPR(r11, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	inst.MarkPRTerminal(r11, PRStateMerged)
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+
+	s := InstanceToSession(inst)
+
+	require.NotNil(t, s.Git)
+	assert.Equal(t, 12, s.Git.PRNumber)
+	assert.Equal(t, "https://github.com/acme/app/pull/12", s.Git.PRURL)
+}

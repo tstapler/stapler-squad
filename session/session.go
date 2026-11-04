@@ -250,12 +250,14 @@ func InstanceToSession(i *Instance) *Session {
 		Prompt:    i.Prompt,
 	}
 
-	// Populate Git context if relevant fields are set
-	if i.Branch != "" || i.GitHubPRNumber > 0 || i.GitHubOwner != "" {
+	// Populate Git context if relevant fields are set. The PR is the session's
+	// active PR, read from the published snapshot rather than the raw scalars.
+	prGH := i.Snapshot().GitHub
+	if i.Branch != "" || prGH.GitHubPRNumber > 0 || i.GitHubOwner != "" {
 		s.Git = &GitContext{
 			Branch:    i.Branch,
-			PRNumber:  i.GitHubPRNumber,
-			PRURL:     i.GitHubPRURL,
+			PRNumber:  prGH.GitHubPRNumber,
+			PRURL:     prGH.GitHubPRURL,
 			Owner:     i.GitHubOwner,
 			Repo:      i.GitHubRepo,
 			SourceRef: i.GitHubSourceRef,

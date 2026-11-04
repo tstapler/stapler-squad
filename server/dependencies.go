@@ -1907,31 +1907,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			},
 			artifactOpts...,
 		)
-		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
-			// Take a snapshot to avoid a data race with concurrent AddInstance calls (M-5 fix).
-			snapshot := historyLinker.Instances()
-			for _, inst := range snapshot {
-				if inst.Title == title {
-					inst.SetArtifacts(blob)
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"artifacts"}))
-					// Feed discovered PR URLs to the PR status poller if not already set.
-					if !inst.HasGitHubPR() {
-						for _, prURL := range blob.PRURLs {
-							if ref, err := session.ParseGitHubURL(prURL); err == nil && ref.PRNumber > 0 {
-								if err := storage.UpdateInstancePRNumber(inst.Title, ref.PRNumber); err != nil {
-									log.Warn("ArtifactExtractor: failed to update PR number", "session", inst.Title, "err", err)
-								} else {
-									// Update in-memory state so HasGitHubPR() reflects the change (M-3 fix).
-									inst.SetGitHubPRNumber(ref.PRNumber)
-								}
-								break
-							}
-						}
-					}
-					break
-				}
-			}
-		}
+		artifactExtractor.OnScanComplete = artifactScanCompleteHandler(historyLinker.Instances, eventBus)
 		sessionService.SetArtifactRescanner(artifactExtractor)
 		historyLinker.RegisterFileCallback(artifactExtractor.OnHistoryFileChanged)
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))
@@ -2250,5 +2226,21 @@ func deferToReconcile(inst *session.Instance) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// artifactScanCompleteHandler attaches a finished artifact scan to its session and
+// announces it. It never writes the session's PR: a PR URL the scanner merely found
+// is not polled (ADR-004), so the PR set changes only through AttachPR callers.
+func artifactScanCompleteHandler(instances func() []*session.Instance, bus *events.EventBus) func(string, *artifacts.SessionArtifactsBlob) {
+	return func(title string, blob *artifacts.SessionArtifactsBlob) {
+		// Snapshot the list to avoid a data race with concurrent AddInstance calls (M-5 fix).
+		for _, inst := range instances() {
+			if inst.Title == title {
+				inst.SetArtifacts(blob)
+				bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"artifacts"}))
+				return
+			}
+		}
 	}
 }
