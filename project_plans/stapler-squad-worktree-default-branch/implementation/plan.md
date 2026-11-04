@@ -22,7 +22,7 @@ Evidence labels: VERIFIED = command run or file read while planning (2026-11-04)
 | `err field` | The `err` / `error` key of a JSON log record | The only place the real failure appears; `program` holds prompt echoes |
 | `prompt echo` | A log record (msg `creating session`, `tmux session created successfully`) whose `program` field embeds the backlog description text | Contains the error phrase verbatim, so a raw grep false-positives |
 | `negative control` | Proof the AC11 filter CAN match: pre-fix records in rotated logs (err field, last hit `2026-11-04T12:24:23`, first `10:32:03` in `staplersquad-2026-11-04T13-51-53.139.log.gz`) | VERIFIED |
-| `positive control` | Proof the guarded code path ran post-restart on a worktreeConfig repo without error | WEAK candidate only (adversarial review: that record comes from initBaseCommitSHA/MergeBase, worktree_ops.go:271, not the default-branch resolve path); strengthen with the worktreeconfig test in session/repo_path_test.go or a real new-worktree session start. Weak record: `2026-11-04T15:25:17` "set base commit SHA for branch to merge-base" for this branch |
+| `positive control` | Proof the guarded code path succeeds on a worktreeConfig repo | The two named tests: `TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension` (`session/repo_path_test.go:598`, must not be skipped) and the `session/git` `Succeeds_When_RepoHasWorktreeConfigExtension` tests. The `2026-11-04T15:25:17` "set base commit SHA ... merge-base" record is NOT sufficient (it comes from initBaseCommitSHA/MergeBase, `worktree_ops.go:271`, not the default-branch resolve path); it may be cited only as supplementary |
 | `contaminated TMPDIR` | A temp dir with a `.jj`/`.git` ancestor (here `TMPDIR=/home/tstapler/.cache/tmp`, under `~/.jj`) | Triggers the `session/vc` host-dependence; running `make test` under it is the worst case |
 | `foreign extension` | Any `extensions.*` other than the allow-list (`objectformat`, `refstorage`, `relativeworktrees`, ...) | Still rejected by the fork; a different bug, not an AC11 failure |
 
@@ -77,6 +77,7 @@ Epic 1 (AC9)                         Epic 2 (AC11)                    Epic 3
 1.2a tymux -race x20 (parallel)                                 v               v
 1.2b vc under both TMPDIRs                              2.3a positive ctrl --> 3.1a evidence note
         |                                                                          |
+        +--> 2.1a/2.1b P2 re-run (after make test end-capture) --> 2.2a/2.2b
         +--> (red? 1.3a triage --> 1.3b fix) --------------------------------------+--> 3.1b report_progress
 ```
 Epics 1 and 2 are independent and can run as parallel agents (one agent runs `make test`, which is CPU/tmux heavy; the other only reads logs).
@@ -94,19 +95,27 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 **As a** maintainer, **I want** `make test` to exit 0 from a clean build at HEAD, **so that** AC9 is closed with evidence rather than inference.
 **Acceptance Criteria**:
 - `make test` exits 0 with `TMPDIR` set to a contaminated dir.
-  - *Given* a repo checkout at `a80d6614c` with `TMPDIR=/home/tstapler/.cache/tmp` (under `~/.jj`), *When* `bash -o pipefail -c 'make test 2>&1 | tail -n 200 > $SCRATCH/make-test.tail'` runs, *Then* exit status is `0` and the tail shows no `FAIL` lines from `session/vc` or `session/tymux`.
+  - *Given* a repo checkout at HEAD with `TMPDIR=/home/tstapler/.cache/tmp` (under `~/.jj`), *When* `bash -o pipefail -c 'make test > ~/.cache/tmp/ssq-ac9/make-test.log 2>&1'; echo "exit=$?"` runs, *Then* pass evidence is exit code `0` AND `grep -c '^--- FAIL\|^FAIL' <full log>` equals `0` over the whole log (not `tail -n 200`, which can hide an early failure).
+  - Prior art: `make test` already ran once at `EXIT=0` (5433 + 14638 tests) with `ActiveEnterTimestamp` unchanged (`2026-11-04 12:27:48 PST`); that run is context, not a substitute for the recorded run here.
 - The run is not satisfied by a stale sentinel or subset target.
   - *Given* the Makefile target `test` (`Makefile:658`), *When* the run is recorded, *Then* the note names the literal command `make test` (not `test-affected`) and shows gotestsum's final `DONE <N> tests` summary line.
 **Files**: none changed. Evidence only.
 
 ##### Task 1.1a: Prerequisites and load check (XS)
-- `unset npm_config_user_agent` (web-app Bun guard); `uptime`, `free -g` (abort and wait if load is high or `/tmp` tmpfs is near full: memory notes record OOM restarts from heavy scratch); `echo $TMPDIR` and `ls ~/.jj` to record that the contaminated case is in effect.
-- `make build` (generates `gen/` and `session/ent/*`, gitignored; `make test` has `proto-gen` as a prerequisite but `make build` also proves lint passes).
+- Live-service guards (this host runs the live service and backlog work):
+  - `list_backlog_items`: in_progress count must be within the WIP cap of 2; otherwise wait.
+  - Numeric abort thresholds: `uptime` load1 > `nproc` -> abort and wait; `free -g` available < 8 GiB -> abort and wait; `/tmp` tmpfs near full -> abort (memory notes record OOM restarts from heavy scratch).
+  - `export STAPLER_SQUAD_TMUX_SOCKET=ssq-verify-1` so tests never touch the live tmux server; keep scratch on disk (`~/.cache/tmp/ssq-ac9/`), not tmpfs `/tmp`.
+  - Capture BEFORE: `systemctl --user show stapler-squad -p ActiveEnterTimestamp` (expected `2026-11-04 12:27:48 PST`).
+- `unset npm_config_user_agent` (web-app Bun guard); `echo $TMPDIR` and `ls ~/.jj` to record that the contaminated case is in effect.
+- `make build` (generates `gen/` and `session/ent/*`, gitignored; also proves lint passes). If `make build` fails on lint for a non-test reason, report it as a separate finding and do NOT mask it (no skipping lint, no editing around it); AC9 proceeds only via `make test`'s own prerequisites, and the finding is recorded in `evidence.md`.
 - Files: none.
 
 ##### Task 1.1b: Run `make test` and record result (S)
 - Run in the background with a log on disk (not `/tmp`): `mkdir -p ~/.cache/tmp/ssq-ac9 && bash -o pipefail -c 'make test > ~/.cache/tmp/ssq-ac9/make-test.log 2>&1'; echo "exit=$?" >> ~/.cache/tmp/ssq-ac9/make-test.log`. Two serialized gotestsum phases, each with `-timeout=20m` (`Makefile:673-674`).
-- Record: `tail -n 40`, the `exit=` line, and `grep -c '^--- FAIL\|^FAIL' <log>`.
+- Record: `tail -n 40`, the `exit=` line, and `grep -c '^--- FAIL\|^FAIL' <log>` over the full log (must be 0; pass = exit 0 AND count 0).
+- Capture AFTER: `systemctl --user show stapler-squad -p ActiveEnterTimestamp`. If it differs from the BEFORE value, the service restarted mid-run: re-baseline the AC11 restart instant (Task 2.1b) and re-run Epic 1.2 against it.
+- Recovery if a live session drops during the run: `resume_session` for each affected session (check `list_sessions`), and `tmux -L <socket> list-sessions` against the live socket to confirm sessions survive; record the incident in `evidence.md`. Do not run `make install-service`.
 - If exit is 0: go to Story 1.2.1. If non-zero: Task 1.3a.
 - Files: none (log in `~/.cache/tmp/ssq-ac9/`).
 
@@ -114,7 +123,7 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 **As a** maintainer, **I want** the `session/vc` and `session/tymux` fixes shown to work under repetition and under both temp-dir environments, **so that** one lucky green run is not mistaken for a fix.
 **Acceptance Criteria**:
 - tymux concurrent-poll test is stable and not vacuous.
-  - *Given* `TestTymuxGRPCSession_ActivityConcurrentPolls` (8 pollers, one shared `PaneSnapshot`), *When* `go test ./session/tymux -run TestTymuxGRPCSession_ActivityConcurrentPolls -race -count=20 -timeout=10m` runs, *Then* it exits 0 and each iteration enforces `assert.EqualValues(t, 1, updates.Load())` (VERIFIED present at `session/tymux/session_test.go:~726`, so the moved `HasMeaningfulContent` assertion cannot pass with zero updates).
+  - *Given* `TestTymuxGRPCSession_ActivityConcurrentPolls` (8 pollers, one shared `PaneSnapshot`), *When* `go test ./session/tymux -run TestTymuxGRPCSession_ActivityConcurrentPolls -race -count=20 -timeout=10m` runs, *Then* it exits 0 and each iteration enforces `assert.EqualValues(t, 1, updates.Load())` (VERIFIED present at `session/tymux/session_test.go:722`, so the moved `HasMeaningfulContent` assertion cannot pass with zero updates).
 - vc tests pass under both a contaminated and a clean temp dir.
   - *Given* `session/vc/main_test.go` `TestMain`, *When* `go test ./session/vc -count=1` runs once with `TMPDIR=/home/tstapler/.cache/tmp` and once with `TMPDIR=/tmp`, *Then* both exit 0.
 **Files**: none changed (read `session/tymux/session_test.go`, `session/vc/main_test.go`).
@@ -153,6 +162,8 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 **Acceptance Criteria**:
 - Deployed binary carries `ssq.3`.
   - *Given* `deployed binary` at `/home/tstapler/Programming/stapler-squad/stapler-squad`, *When* `go version -m <path> | grep go-git`, *Then* output includes `github.com/tstapler/go-git/v5 v5.19.3-ssq.3` (VERIFIED at planning time).
+- Deployed binary's `vcs.revision` descends from the fix commit.
+  - *Given* `go version -m <path>` (VERIFIED: `vcs.revision=afbc063dd`, `vcs.modified=true`), *When* `git merge-base --is-ancestor afbc063dd <vcs.revision>` runs (trivially true when equal), *Then* exit 0; the note records `vcs.modified=true` (uncommitted changes in the build tree) as a caveat, with `ssq.3` in the embedded module list as the load-bearing proof.
 - Binary started after it was built and after the fix commit.
   - *Given* the service `ActiveEnterTimestamp`, *When* compared with `stat -c %y <path>` and `git log -1 --format=%cI afbc063dd`, *Then* build mtime (12:27:36) is later than the commit time (`2026-11-04T12:26:40-08:00`) and earlier than the restart instant (12:27:48).
 - The pin cannot silently regress.
@@ -160,7 +171,8 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 **Files**: none changed.
 
 ##### Task 2.1a: Binary provenance (XS)
-- `go version -m /home/tstapler/Programming/stapler-squad/stapler-squad | grep -E 'go-git|vcs.revision|vcs.time'`; `stat -c '%y' /home/tstapler/Programming/stapler-squad/stapler-squad`.
+- `go version -m /home/tstapler/Programming/stapler-squad/stapler-squad | grep -E 'go-git|vcs.revision|vcs.time|vcs.modified'`; `stat -c '%y' /home/tstapler/Programming/stapler-squad/stapler-squad`.
+- Assert the `vcs.revision` (VERIFIED `afbc063dd`) descends from `afbc063dd`: `git merge-base --is-ancestor afbc063dd <vcs.revision>`; record `vcs.modified=true`.
 - Files: none.
 
 ##### Task 2.1b: Restart instant and live log path (XS)
@@ -176,7 +188,7 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 **As a** maintainer, **I want** a filter that ignores prompt echoes and matches only real errors, validated against known-bad history, **so that** zero means zero.
 **Acceptance Criteria**:
 - Filter detects the old failure (negative control).
-  - *Given* rotated log `staplersquad-2026-11-04T13-51-53.139.log.gz` (pre-fix records), *When* `zcat <file> | jq -Rc 'fromjson? | select(((.err // .error // "")|tostring)|test("does not support extension|unknown extension";"i")) | .time' | sed -n '1p;$p'`, *Then* it prints a first/last pair (VERIFIED: `2026-11-04T10:34:39` and `12:11:05`), proving the filter can match.
+  - *Given* rotated log `staplersquad-2026-11-04T13-51-53.139.log.gz` (pre-fix records), *When* `zcat <file> | jq -Rc 'fromjson? | select(((.err // .error // "")|tostring)|test("does not support extension|unknown extension";"i")) | .time' | sed -n '1p;$p'`, *Then* it prints a first/last pair (VERIFIED: `2026-11-04T10:32:03` and `2026-11-04T12:24:23`), proving the filter can match.
 - Filter ignores prompt echoes.
   - *Given* the post-restart `creating session` / `tmux session created successfully` records whose `program` field embeds the backlog text (VERIFIED: 3+3 in the current file), *When* the same filter runs on `staplersquad.log` with `.time >= "2026-11-04T12:27:48"`, *Then* it returns 0 lines.
 - Window has no real errors, in any extension.
@@ -185,29 +197,39 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
   - *Given* pre-fix rate of the same error (VERIFIED: 9802 `failed to check git status` hits in `staplersquad-2026-11-02T12-52-06.943.log.gz`), *When* the window length is computed (`restart instant` to last log record), *Then* the note states the window length and that at the pre-fix rate a regression would have produced many hits.
 **Files**: none changed.
 
-##### Task 2.2a: Negative control (XS)
+##### Task 2.2a: Negative control, evidence copy and time-format check (XS)
+- Preserve the rotated log: `cp ~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/staplersquad-2026-11-04T13-51-53.139.log.gz $EVIDENCE_DIR/ && sha256sum` it, and record the hash in `evidence.md` (rotation or cleanup could otherwise destroy the negative-control source).
+- Confirm the log `.time` field format and offset before any lexical comparison: print one record's `.time` (expected `-08:00` offset) and check it matches the restart instant's zone (`ActiveEnterTimestamp` 12:27:48 PST = `2026-11-04T12:27:48-08:00`). If the offsets differ, normalize before comparing.
 - Run the `zcat ... | jq` command above on `staplersquad-2026-11-04T13-51-53.139.log.gz`; also `zcat ... | jq -Rc 'fromjson? | select(tostring|test("does not support extension";"i")) | to_entries | map(select(.value|tostring|test("does not support extension";"i"))|.key)|join(",")' | sort | uniq -c` to confirm which keys hold the phrase (VERIFIED: `err`, `error`, `program`).
 - Files: none.
 
 ##### Task 2.2b: Window search (XS)
+- Sequencing: run this AFTER the `make test` end-capture of `ActiveEnterTimestamp` (Task 1.1b AFTER), or re-run it then, so the restart instant used is the final one.
 - Current file: `jq -Rc 'fromjson? | select(.time >= "2026-11-04T12:27:48") | select(((.err // .error // "")|tostring)|test("does not support extension|unknown extension";"i")) | {time,msg,err}' ~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/staplersquad.log`.
 - Same filter over `zcat ~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/staplersquad-2026-11-04T13-51-53.139.log.gz` (and any newer `.gz`). Do NOT rely on the bare word `worktreeconfig` (branch/session names contain it).
 - Also record `grep -c` of the raw phrase restricted to msg types `creating session` / `tmux session created successfully` to show the echo noise is explained (VERIFIED: 6).
 - Files: none.
 
 #### Story 1.2.3: Positive control on a worktreeConfig repo
-**As a** maintainer, **I want** evidence that a session on a worktreeConfig repo started and resolved its base branch under the deployed binary, **so that** the zero count reflects exercised code.
+**As a** maintainer, **I want** evidence that the default-branch/worktree path succeeds on a worktreeConfig repo, **so that** the zero count reflects exercised code.
 **Acceptance Criteria**:
-- A post-restart success record exists for a worktreeConfig repo.
-  - *Given* branch `backlog/stapler-squad-fix-worktreeconfig-extension-compat` in a `worktreeConfig repo`, *When* the log is searched for `msg == "set base commit SHA for branch to merge-base"` with `.time >= restart instant`, *Then* at least one record exists (VERIFIED: `2026-11-04T15:25:17`, `sha":"5d3b16ed"`, `with_branch":"main"`), and no `err`-field match for the same branch within the window.
+- Named test runs pass and are not skipped.
+  - *Given* HEAD, *When* `go test ./session -run TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension -count=1 -v` runs (`session/repo_path_test.go:598`), *Then* exit 0 and the output shows `--- PASS` (not `--- SKIP`).
+  - *Given* HEAD, *When* `go test ./session/git -run 'Succeeds_When_RepoHasWorktreeConfigExtension' -count=1 -v` runs, *Then* exit 0 and `--- PASS` for each matched test.
+- The window filter finds nothing real.
+  - *Given* the jq filter of Story 1.2.2, *When* run with `.time >= ActiveEnterTimestamp`, *Then* 0 real hits.
+- The weak record is supplementary only.
+  - *Given* the `2026-11-04T15:25:17` `set base commit SHA for branch to merge-base` record (`sha":"5d3b16ed"`, `with_branch":"main"`), *Then* it is NOT sufficient on its own: it comes from initBaseCommitSHA/MergeBase, not the default-branch resolve path.
 - The repo really has the extension.
   - *Given* the repo common dir (`git rev-parse --git-common-dir`), *When* `git config --get-regexp '^extensions\.|repositoryformatversion'`, *Then* output includes `extensions.worktreeconfig true` and `core.repositoryformatversion 0`.
-- Fallback when no qualifying record exists.
-  - *Given* no post-restart record from a worktreeConfig repo (e.g. after a later restart), *When* a session is created on this repo through the normal backlog/UI path (respecting the 2-session WIP cap), *Then* a new `set base commit SHA`/`connected to existing worktree` record appears and the window filter still returns 0.
+- Optional real-session control.
+  - *Given* the in_progress count is under the 2-session WIP cap, *When* a session is created on this repo via the normal path, *Then* a new `set base commit SHA`/`connected to existing worktree` record appears and the filter still returns 0. Otherwise the two named test runs suffice.
 **Files**: none changed.
 
-##### Task 2.3a: Positive control (XS)
-- `jq -Rc 'fromjson? | select(.time >= "2026-11-04T12:27:48") | select(.msg|test("set base commit SHA|found existing worktree for branch|connected to existing worktree")) | del(.program)' <live log>` (and the 13-51 `.gz`); `git config --get-regexp 'extensions|repositoryformatversion'` from this worktree.
+##### Task 2.3a: Positive control (S)
+- Run both named test commands above; record exit codes and `--- PASS`/`--- SKIP` lines.
+- Supplementary: `jq -Rc 'fromjson? | select(.time >= "2026-11-04T12:27:48-08:00") | select(.msg|test("set base commit SHA|found existing worktree for branch|connected to existing worktree")) | del(.program)' <live log>` (and the 13-51 `.gz`); `git config --get-regexp 'extensions|repositoryformatversion'` from this worktree.
+- Gate: AC11 is reportable only if both named tests passed (not skipped) and the jq filter returned 0 real hits.
 - Files: none.
 
 ##### Task 2.3b: Extension survey for the discriminator note (XS)
@@ -224,6 +246,9 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
   - *Given* Tasks 1.1b, 1.2a/b, 2.1a-c, 2.2a/b, 2.3a/b complete, *When* `project_plans/stapler-squad-worktree-default-branch/implementation/evidence.md` is written, *Then* it holds one section per AC with each command, its exit code or count, and a VERIFIED/INFERRED label.
 - Criteria reported only when proven.
   - *Given* `make test` exit `0` and window filter count `0` with controls satisfied, *When* `report_progress` runs for item `9c33e913-0aa0-4eeb-b6a0-ee33f15ad8a8` with `criteria_index=8` (AC9) and `criteria_index=10` (AC11, 0-indexed per the `backlog:done-N` skills), *Then* both read back as passing via `get_backlog_item` (mutation read back, not assumed). If a control is unmet, that AC is reported as `fail` with the reason.
+- AC11 `report_progress` message content.
+  - *Given* the AC11 report, *Then* the message states (a) the log-path reinterpretation: the live log is `~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/`, not `~/.stapler-squad/logs/` named in the requirement; (b) the window length (restart instant to last record); (c) the evidence: both named tests passed, filter 0 hits, negative control pair.
+  - *And* `evidence.md` is committed and pushed BEFORE `report_progress` is called, so the message can cite a retrievable path.
 **Files**: `project_plans/stapler-squad-worktree-default-branch/implementation/evidence.md` (new, justified: durable evidence trail requested by the AC wording "after deploying").
 
 ##### Task 3.1a: Write the evidence note (S)
@@ -231,7 +256,9 @@ Epics 1 and 2 are independent and can run as parallel agents (one agent runs `ma
 - Files: `project_plans/stapler-squad-worktree-default-branch/implementation/evidence.md`.
 
 ##### Task 3.1b: Report to backlog (XS)
-- Call `report_progress` for AC9 (index 8) and AC11 (index 10) with the evidence summary; then `get_backlog_item` to read back status. Commit the plan artifacts and `evidence.md` (stage only these files; no `git add -A`; `git status` first: `research/` is currently untracked).
+- Order: (1) commit and push the plan artifacts and `evidence.md` first (stage only these files; no `git add -A`; `git status` first: `research/` is currently untracked); (2) then call `report_progress` for AC9 (index 8) and AC11 (index 10); (3) `get_backlog_item` to read back status.
+- AC11 gate: only if Task 2.3a's named tests passed (not skipped) and the filter returned 0 real hits since the final `ActiveEnterTimestamp`. The message must state the log-path reinterpretation, the window length, and that evidence (see Story 1.3.1).
+- If Task 2.1a/2.1b are re-run (P2 re-run after any restart or after `make test`), do it before this task.
 - Files: `project_plans/stapler-squad-worktree-default-branch/` (add).
 
 ---
@@ -249,13 +276,14 @@ Weights per `ESTIMATION.md`: CU = in + 1.25·cache_write + 0.1·cache_read + 5·
 | 1.2.2 controlled search | 2.2a-b XS | ~50k | 5% | ~60k |
 | 1.2.3 positive control | 2.3a-b XS | ~40k | 5% | ~50k |
 | 1.3.1 close-out | 3.1a S, 3.1b XS | ~70k | 15% (writes the note) | ~100k |
-| **Subtotal** | 17 tasks (2 conditional) | ~300k (+100k if triggered) | | ~385k (+150k) |
-| Verification multiplier | x1.5 for review of evidence note | | | ~580k |
+| amendment work | extra `go test` runs (repo_path_test, session/git), `systemctl` before/after captures, WIP/load/free pre-checks, rotated-log copy + sha256, P2 re-run of 2.1a/2.1b before 3.1b | ~45k | 5% | ~55k |
+| **Subtotal** | 17 tasks (2 conditional) + amendment work | ~345k (+100k if triggered) | | ~440k (+150k) |
+| Verification multiplier | x1.5 for review of evidence note | | | ~660k |
 
-- **Size band**: Small (<= 0.5M) to low Medium if the conditional defect path triggers.
-- **Critical path (agent waves)**: 2 waves. Wave 1: Epic 1.1 (one agent: `make test`) in parallel with Epic 1.2 (one agent: log work). Wave 2: Epic 1.3 close-out. A third wave only if Task 1.3a/b triggers.
+- **Size band**: low Medium (~0.66M CU with amendments, ~0.8M if the conditional defect path triggers).
+- **Critical path (agent waves)**: 2 waves. Wave 1: Epic 1.1 (one agent: pre-checks, `make test`, before/after captures) in parallel with the Epic 1.2 work that does not depend on the final restart instant (provenance, pin, named positive-control tests). Wave 2: P2 re-run of 2.1a/2.1b plus the 2.2a/2.2b window search after the `make test` end-capture. Wave 3: Epic 1.3 close-out (commit and push `evidence.md`, then `report_progress`). A fourth wave only if Task 1.3a/b triggers.
 - **Overrun checkpoint**: if spend exceeds the table value by > 25% for completed stories, pause and report the delta with its cause (informational).
-- **Wall-clock blockers**: (1) `make test` duration, two serialized gotestsum phases with 20m timeouts each (owner: none, machine time; avoid running concurrently with other tmux-heavy work or Bazel JVMs on this tmpfs-/tmp host). (2) AC11 needs organic or triggered session traffic on a worktreeConfig repo after the restart instant; already satisfied (15:25:17 record) but the fallback in Story 1.2.3 needs a free backlog WIP slot (owner: the operator).
+- **Wall-clock blockers**: (1) `make test` duration, two serialized gotestsum phases with 20m timeouts each (owner: none, machine time; avoid running concurrently with other tmux-heavy work or Bazel JVMs on this tmpfs-/tmp host). (2) AC11 needs organic or triggered session traffic on a worktreeConfig repo after the restart instant; the named tests in Story 1.2.3 supply the positive control deterministically; the optional real-session control needs a free backlog WIP slot (owner: the operator).
 
 ## Flagged choices
 1. Filter AC11 on structured `err`/`error` fields, not the word `worktreeconfig`: the branch and session names contain it (9492 false hits VERIFIED).
@@ -266,7 +294,4 @@ Weights per `ESTIMATION.md`: CU = in + 1.25·cache_write + 0.1·cache_read + 5·
 
 ## Pre-mortem P1 amendments (phase 4)
 
-Binding on Task 1.1a, Story 1.2.3 and Task 3.1b; they override anything above that conflicts.
-
-- **P1 #1 (AC11 zero count proves nothing).** Required positive controls before reporting AC11: (a) `go test ./session -run TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension -count=1 -v` exits 0 and the test is not skipped (`session/repo_path_test.go:598`); (b) `go test ./session/git -run 'Succeeds_When_RepoHasWorktreeConfigExtension' -count=1 -v` exits 0; (c) a real new-worktree session start on a worktreeConfig repo, only if under the 2-session WIP cap, else (a)+(b) suffice. The `15:25:17` "set base commit SHA" record is WEAK (it comes from `initBaseCommitSHA`/`MergeBase`, not the default-branch resolve path). Task 3.1b calls `report_progress` for AC11 only after (a)+(b) pass and the err-field jq filter returns 0 real hits since `ActiveEnterTimestamp`.
-- **P1 #2 (`make test` on the live-service host).** Task 1.1a pre-checks: `list_backlog_items` in_progress count within the WIP cap, `uptime`, `free -g`; scratch on disk (not tmpfs `/tmp`); export a unique `STAPLER_SQUAD_TMUX_SOCKET` for the run; capture `systemctl --user show stapler-squad -p ActiveEnterTimestamp` before and after and abort and re-baseline AC11's window if it changed. Already observed once: `make test` ran at EXIT=0 and `ActiveEnterTimestamp` stayed `2026-11-04 12:27:48 PST`.
+Folded into the task and story bodies above; this section is a pointer only. P1 #1 (AC11 positive controls) -> Story 1.2.3, Task 2.3a, Task 3.1b. P1 #2 (`make test` on the live-service host) -> Task 1.1a, Task 1.1b, Story 1.1.1.
