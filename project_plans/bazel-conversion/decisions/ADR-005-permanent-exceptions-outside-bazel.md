@@ -20,6 +20,8 @@ Permanent exceptions (documented in `docs/reference/bazel-targets-and-configs.md
 
 **Windows (owner decision 2026-11-01): cross-compile only.** `windows_amd64` binaries via a platform transition (`go_cross_binary`); no Windows tests under Bazel; windows-only packages carry `target_compatible_with` so `//...` on Linux/macOS excludes them. This corrects `research/architecture.md` section 3, which said "dropped".
 
+**Amended by ADR-009 (Proposed, 2026-11-02)**: Playwright e2e is no longer outside the build graph; execution and selection move into Bazel (Epic 12). Everything in the table above still stays outside Bazel. What remains outside for e2e is only the pinned Playwright browser image, `bun install` of `tests/e2e`, and the nightly-only visual/perf/secondary-browser projects.
+
 ## Consequences
 
 - "Bazel is the build of record" means the repo's binaries and tests; the table above is the complete list of exceptions. Adding to it requires amending this ADR.

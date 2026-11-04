@@ -27,6 +27,8 @@ The pain numbers are recorded by Task 0.1f in the "Measured pain" section of `pr
 
 ## Priority rationale (RICE; every input UNVERIFIED until Task 0.1g)
 
+*Pointer (2026-11-02, not a rescore)*: the measured RA2 of 0.987 (e2e is most of the critical path) is why ADR-009 and Epic 12 add selective e2e; the scores below are unchanged and are re-scored at Task 0.1g.
+
 RICE = Reach x Impact x Confidence / Effort. Reach is agent sessions per week that build or test (estimate, scale 100 = this repo's current order of magnitude), Impact uses the 0.25/0.5/1/2/3 scale, Confidence is a probability, Effort is the verified CU total in millions from the plan's Effort estimate (Effort for Go-only is Epics 0, 1, 2 and 4 with the same x1.75 multiplier).
 
 | Option | Reach | Impact | Confidence | Effort (M CU) | RICE | Note |
