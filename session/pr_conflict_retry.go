@@ -56,7 +56,7 @@ func (g *conflictRetryLedger) take(itemID string, now time.Time, interval time.D
 	switch {
 	case s.grants >= conflictRetryMaxAttempts:
 		return conflictRetryExhausted
-	case s.grants > 0 && now.Sub(s.last) < interval:
+	case !s.last.IsZero() && now.Sub(s.last) < interval:
 		return conflictRetryThrottled
 	}
 	s.grants++

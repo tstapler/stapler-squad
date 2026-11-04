@@ -1619,7 +1619,11 @@ func TestReconcilePRPending_ConflictOnly_FailedSpawnIsRefunded(t *testing.T) {
 
 	for i := 0; i < conflictRetryMaxAttempts+3; i++ {
 		listener.ReconcilePRPending(ctx, storage.repo)
-		clock.Add(conflictRetryInterval)
+		require.Equal(t, i+1, spawner.callCount)
+		clock.Add(time.Minute)
+		listener.ReconcilePRPending(ctx, storage.repo)
+		require.Equal(t, i+1, spawner.callCount, "failed starts retain their cooldown")
+		clock.Add(conflictRetryInterval - time.Minute)
 	}
 	assert.Equal(t, conflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
 	assert.NotContains(t, n.titles(), "Auto-rework paused", "no \"survived N sessions\" notice when no session ran")

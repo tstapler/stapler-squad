@@ -71,6 +71,22 @@ func TestConflictRetryLedger_RefundKeepsThrottleButReturnsTheGrant(t *testing.T)
 	g.refund("missing") // no entry: no-op
 }
 
+func TestConflictRetryLedger_FirstRefundKeepsThrottle(t *testing.T) {
+	t.Parallel()
+	var g conflictRetryLedger
+	now := time.Unix(1_000_000, 0)
+	if g.take("a", now, time.Hour, 6) != conflictRetryGranted {
+		t.Fatal("first attempt must be granted")
+	}
+	g.refund("a")
+	if g.take("a", now.Add(time.Minute), time.Hour, 6) != conflictRetryThrottled {
+		t.Fatal("refunding the first failed spawn must preserve its cooldown")
+	}
+	if g.take("a", now.Add(time.Hour), time.Hour, 6) != conflictRetryGranted {
+		t.Fatal("failed startup must recover automatically after the cooldown")
+	}
+}
+
 func TestConflictRetryLedger_RowAttemptsDroppingReArmsAnExhaustedItem(t *testing.T) {
 	var g conflictRetryLedger
 	now := time.Unix(1_000_000, 0)
