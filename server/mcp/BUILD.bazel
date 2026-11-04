@@ -122,6 +122,7 @@ go_test(
         "wake_tools_identity_test.go",
         "wake_tools_rig_test.go",
     ],
+    data = glob(["*.go"]),
     embed = [":mcp"],
     deps = [
         "//config",

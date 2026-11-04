@@ -58,6 +58,7 @@ go_test(
         "spend_rate_test.go",
         "store_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":tokens"],
     deps = [
         "//config",

@@ -19,7 +19,7 @@ import (
 func scriptServicePatternRegex(t *testing.T) *regexp.Regexp {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	repoRoot := filepath.Join(callerDir(file), "..", "..", "..")
 	scriptPath := filepath.Join(repoRoot, "tools", "scanner", "list-backend-protos.sh")
 
 	content, err := os.ReadFile(scriptPath)

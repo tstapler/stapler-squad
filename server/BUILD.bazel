@@ -241,6 +241,7 @@ go_test(
         "ws_unary_chain_test.go",
         "ws_unary_origin_test.go",
     ],
+    data = glob(["*.go"]),
     embed = [":server"],
     deps = [
         "//config",

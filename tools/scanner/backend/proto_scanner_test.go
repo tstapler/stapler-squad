@@ -8,7 +8,7 @@ import (
 
 func testdataPath(name string) string {
 	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "testdata", name)
+	return filepath.Join(callerDir(file), "testdata", name)
 }
 
 func TestScanProto_ThreeMethods(t *testing.T) {
@@ -100,7 +100,7 @@ func TestScanProto_RealLikeFixture(t *testing.T) {
 // validate-registry.sh to diverge. Add new methods to methodToID whenever this fails.
 func TestScanProto_NoUnmappedMethods(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	repoRoot := filepath.Join(callerDir(file), "..", "..", "..")
 	protoPath := filepath.Join(repoRoot, "proto", "session", "v1", "session.proto")
 
 	features, err := ScanProto(protoPath)

@@ -214,6 +214,14 @@ go_test(
         "walkers_oracle_test.go",
         "watcher_test.go",
     ],
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]) + [
+        "//session/unfinished/gogitstore:go_sources",
+        "//session/unfinished/internal/testrepo:go_sources",
+        "//session/unfinished/repostate:go_sources",
+    ],
     embed = [":unfinished"],
     deps = [
         "//config",

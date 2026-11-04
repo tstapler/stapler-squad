@@ -13,19 +13,12 @@ package server
 
 import (
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestWireDeps_SetNotificationStoreBeforeStartSubscriber(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	serverGoPath := filepath.Join(filepath.Dir(thisFile), "server.go")
-	src, err := os.ReadFile(serverGoPath)
+	src, err := os.ReadFile("server.go") // go test and Bazel both run in the package directory
 	if err != nil {
 		t.Fatalf("could not read server.go: %v", err)
 	}
