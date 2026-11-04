@@ -27,6 +27,7 @@ def _buf_gen_ts_impl(ctx):
             out = out.path,
         ),
         use_default_shell_env = False,
+        # tag-reason: buf plugin output not proven byte-reproducible across hosts; placeholder tracker (#1423)
         execution_requirements = {"no-remote-cache": "1"},
     )
     return [DefaultInfo(files = depset([out]))]
