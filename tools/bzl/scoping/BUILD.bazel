@@ -7,11 +7,16 @@ go_library(
         "golist.go",
         "main.go",
         "model.go",
+        "move.go",
         "replay.go",
         "t9.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/scoping",
     visibility = ["//visibility:private"],
+    deps = [
+        "@org_golang_x_tools//go/ast/astutil",
+        "@org_golang_x_tools//go/packages",
+    ],
 )
 
 go_binary(
@@ -22,6 +27,9 @@ go_binary(
 
 go_test(
     name = "scoping_test",
-    srcs = ["scoping_test.go"],
+    srcs = [
+        "move_test.go",
+        "scoping_test.go",
+    ],
     embed = [":scoping_lib"],
 )
