@@ -54,3 +54,14 @@ func TestRunPrintsEightLinesAndFailsOnFixture(t *testing.T) {
 		t.Fatalf("%q", out.String())
 	}
 }
+
+func TestMeasurementsIgnoreMetaObject(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "m.json")
+	if err := os.WriteFile(p, []byte(`{"T1":0.2,"_meta":{"T4":{"status":"UNMEASURED","reason":"NOT QUIET"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := loadMeasurements(p)
+	if err != nil || len(m) != 1 || m["T1"] != 0.2 {
+		t.Fatalf("%v %v", m, err)
+	}
+}

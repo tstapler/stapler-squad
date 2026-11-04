@@ -1,0 +1,1 @@
+{"ci_p50_s": 600, "ci_per_workflow": [{"workflow": "bazel.yml", "p50_s": 500}, {"workflow": "lint.yml", "p50_s": 500}]}

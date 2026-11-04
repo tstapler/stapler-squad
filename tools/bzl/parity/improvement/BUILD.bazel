@@ -6,7 +6,10 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/improvement",
     visibility = ["//visibility:private"],
-    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+    deps = [
+        "//tools/bzl/parity/collect",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
 )
 
 go_binary(

@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "ghci",
+    srcs = ["ghci.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/ghci",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ghci_test",
+    srcs = ["ghci_test.go"],
+    data = glob(["testdata/**"]),  # keep
+    embed = [":ghci"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ghci",
+    visibility = ["//visibility:public"],
+)

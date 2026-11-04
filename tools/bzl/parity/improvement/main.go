@@ -1,19 +1,19 @@
 // Command improvement evaluates the T1-T8 improvement rows of the parity gate (Task 7.5g).
 //
 // Targets come from tools/bzl/baseline/targets.yaml; measurements come from a JSON object keyed by target row
-// id (e.g. {"T1": 0.25, "T2-partial-ttg": 2100}), produced by the collectors (affected-targets replay,
+// id (e.g. {"T1": 0.25, "T2-partial-ttg": 2100}; non-numeric keys such as "_meta" are ignored), produced by the collectors (affected-targets replay,
 // bazel-trend, worktree-cost, ...). A row with no measurement or no target value is UNMEASURED, never PASS.
 // Exit 1 when any row FAILs or a gating row (T1-T5, T7, T8) is UNMEASURED.
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
 
+	"github.com/tstapler/stapler-squad/tools/bzl/parity/collect"
 	"gopkg.in/yaml.v3"
 )
 
@@ -87,14 +87,7 @@ func loadTargets(path string) ([]target, error) {
 	return f.Targets, nil
 }
 
-func loadMeasurements(path string) (map[string]float64, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	m := map[string]float64{}
-	return m, json.Unmarshal(raw, &m)
-}
+func loadMeasurements(path string) (map[string]float64, error) { return collect.Numbers(path) }
 
 // Evaluate returns PASS/FAIL/UNMEASURED per T<n>: FAIL beats UNMEASURED beats PASS across a group's rows.
 func Evaluate(rows []target, m map[string]float64) map[string]string {
