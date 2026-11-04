@@ -1,0 +1,4 @@
+ERROR: Repository '@@gazelle++go_deps+com_example_nosuch' is not defined
+INFO: Elapsed time: 0.082s
+INFO: 0 processes.
+ERROR: Build did NOT complete successfully

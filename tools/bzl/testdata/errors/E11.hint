@@ -1,0 +1,1 @@
+!! bazel-hint: the remote cache REJECTED our credentials (HTTP 401/403 or expired), so the shared cache is not being used. Remedy: refresh the credential ('make bazel-doctor' names which one); builds stay correct but slow.

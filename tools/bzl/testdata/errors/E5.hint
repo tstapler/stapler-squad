@@ -1,0 +1,1 @@
+bazel-hint: the disk is full. Remedy: run 'bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh' first (dry run: lists orphan output bases, the disk cache size against its GC cap, and stale /tmp test directories, with sizes; removes nothing), review the list, re-run it with --apply, then retry.
