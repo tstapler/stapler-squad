@@ -1,0 +1,6 @@
+{"builds": [
+ {"label": "first-cold", "exit": 0, "wall_s": 200, "load_pre": 0.9, "load_post": 1.0, "quiet_at_start": true},
+ {"label": "second-1", "exit": 0, "wall_s": 14, "load_pre": 1.0, "load_post": 1.1, "quiet_at_start": true},
+ {"label": "second-2", "exit": 0, "wall_s": 16, "load_pre": 1.0, "load_post": 1.1, "quiet_at_start": true},
+ {"label": "second-3", "exit": 0, "wall_s": 15, "load_pre": 1.0, "load_post": 1.1, "quiet_at_start": true}
+]}

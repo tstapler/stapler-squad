@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "collect-improvement_lib",
+    srcs = [
+        "main.go",
+        "rest.go",
+        "t1.go",
+        "t2.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/collect-improvement",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/bzl/parity/collect",
+        "//tools/bzl/parity/ghci",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_binary(
+    name = "collect-improvement",
+    embed = [":collect-improvement_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "collect-improvement_test",
+    srcs = ["improvement_test.go"],
+    data = glob(["testdata/**"]),  # keep
+    embed = [":collect-improvement_lib"],
+    deps = [
+        "//tools/bzl/parity/collect",
+        "//tools/bzl/parity/ghci",
+    ],
+)
