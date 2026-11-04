@@ -48,8 +48,9 @@ func newPRTestInstance(t *testing.T) *Instance {
 
 func attachNumbers(t *testing.T, inst *Instance) []int {
 	t.Helper()
-	var out []int
-	for _, v := range inst.Snapshot().GitHub.PRs {
+	prs := inst.Snapshot().GitHub.PRs
+	out := make([]int, 0, len(prs))
+	for _, v := range prs {
 		out = append(out, v.Ref.Number())
 	}
 	return out
