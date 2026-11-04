@@ -106,7 +106,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildFallbackPRBody(tt.item, origin)
+			got := buildFallbackPRBody(tt.item, origin, "")
 			for _, want := range tt.wantContains {
 				require.Contains(t, got, want)
 			}
@@ -128,7 +128,7 @@ func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 		Description: "<script>alert(1)</script>" + strings.Repeat("a", 2000),
 	}
 
-	got := buildFallbackPRBody(item, PRFooterOrigin{BaseURL: "https://ssq.example.com"})
+	got := buildFallbackPRBody(item, PRFooterOrigin{BaseURL: "https://ssq.example.com"}, "")
 
 	require.NotContains(t, got, "<script>")
 	require.Contains(t, got, "[truncated]")
@@ -205,7 +205,7 @@ func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 	t.Parallel()
 
 	item := &BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
-	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID})
+	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID}, "")
 
 	require.Contains(t, got, "Backlog item: "+item.ID)
 	require.Contains(t, got, testHostID.String())
@@ -218,7 +218,7 @@ func TestAppendBacklogFooter(t *testing.T) {
 
 	item := &BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	origin := PRFooterOrigin{BaseURL: "https://ssq.example.com", HostID: testHostID, Hostname: "onyx.lan"}
-	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item)
+	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item, "")
 
 	require.True(t, strings.HasPrefix(got, "## Summary\n\nBody text.\n\nBacklog item: https://ssq.example.com/backlog?item="+item.ID))
 	require.Contains(t, got, testHostID.String())
@@ -545,4 +545,37 @@ func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReass
 
 	require.ErrorIs(t, err, ErrPreconditionFailed)
 	assert.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
+}
+
+func TestPRBodies_ClosingKeyword(t *testing.T) {
+	t.Parallel()
+	const issue = "https://github.com/acme/widget/issues/42"
+	tests := []struct {
+		name, externalURL, remote string
+		wantCloses                bool
+	}{
+		{"same repo", issue, "https://github.com/acme/widget.git", true},
+		{"cross repo", issue, "https://github.com/other/project.git", false},
+		{"no external URL", "", "https://github.com/acme/widget.git", false},
+		{"remote unknown", issue, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			item := &BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
+			bodies := map[string]string{
+				"fallback": buildFallbackPRBody(item, PRFooterOrigin{}, tt.remote),
+				"drafted":  appendBacklogFooter("## Summary\n\nBody.\n", PRFooterOrigin{}, item, tt.remote),
+			}
+			for path, body := range bodies {
+				if tt.wantCloses {
+					require.Contains(t, body, "Closes #42", path)
+					require.NotContains(t, body, "Closes "+issue, path+": must be the bare #N form")
+				} else {
+					require.NotContains(t, body, "Closes", path)
+					require.NotContains(t, body, "Related:", path)
+				}
+			}
+		})
+	}
 }
