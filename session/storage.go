@@ -920,6 +920,11 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 	return err
 }
 
+// ListPRMirrors returns the stored legacy PR columns by session uuid.
+func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
+	return s.repo.ListPRMirrors(ctx)
+}
+
 // UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
 // the PR status poller is its only production caller.
 func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {

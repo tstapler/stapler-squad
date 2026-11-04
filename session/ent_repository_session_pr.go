@@ -963,3 +963,25 @@ func (r *EntRepository) ResetVerifyCounters(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// ListPRMirrors returns the stored legacy PR columns of every session that has a
+// uuid, keyed by uuid: one narrow query for the mirror reconciler.
+func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
+	var rows []struct {
+		UUID     string `json:"uuid"`
+		URL      string `json:"github_pr_url"`
+		Number   int    `json:"github_pr_number"`
+		Terminal bool   `json:"github_pr_status_terminal"`
+	}
+	err := r.client.Session.Query().Where(entsession.UUIDNEQ("")).
+		Select(entsession.FieldUUID, entsession.FieldGithubPrURL, entsession.FieldGithubPrNumber, entsession.FieldGithubPrStatusTerminal).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("list pr mirrors: %w", err)
+	}
+	out := make(map[string]PRMirror, len(rows))
+	for _, row := range rows {
+		out[row.UUID] = PRMirror{URL: row.URL, Number: row.Number, Terminal: row.Terminal}
+	}
+	return out, nil
+}

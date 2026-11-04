@@ -335,3 +335,84 @@ func (i *Instance) persistTerminalClear() {
 		log.Warn("clear stored PR terminal flag failed; the next save retries", "session", title, "err", err)
 	}
 }
+
+// mirrorOutcome is the result of reconciling one session's legacy PR scalars.
+type mirrorOutcome int
+
+const (
+	mirrorInSync mirrorOutcome = iota
+	mirrorCorrected
+	mirrorUnrepresentedSkipped
+)
+
+// prMirrorPersister is the storage seam the reconciler persists through.
+type prMirrorPersister interface {
+	PersistPRMirror(sessionUUID, url string, number int, terminal bool) error
+}
+
+// ReconcilePRMirror makes the legacy scalars equal the ActivePR projection. The
+// in-memory fields are fixed through the actor, silently; the outcome is drift
+// only when the stored columns (stored, nil when unknown) differ from the
+// projection, or, without a stored value, when the in-memory fields did. A session
+// whose legacy number is unrepresented and untombstoned is left alone (counted by
+// the caller). A stored URL that is merely empty is not drift.
+func (i *Instance) ReconcilePRMirror(stored *PRMirror, p prMirrorPersister) mirrorOutcome {
+	out, _ := sendSyncValue(i, func(s *instanceState) (mirrorOutcome, error) {
+		return reconcilePRMirrorLocked(s.inst, stored), nil
+	})
+	if out == mirrorCorrected {
+		i.persistPRMirrorFromSnapshot(p)
+	}
+	return out
+}
+
+func reconcilePRMirrorLocked(inst *Instance, stored *PRMirror) mirrorOutcome {
+	inst.mu.Lock()
+	if inst.LegacyPRUnrepresented && inst.GitHubPRNumber > 0 {
+		inst.mu.Unlock()
+		return mirrorUnrepresentedSkipped
+	}
+	m, ok := ProjectLegacyPRMirror(inst.PRs, inst.Branch)
+	if !ok {
+		inst.mu.Unlock()
+		return mirrorInSync
+	}
+	want := PRMirror{URL: m.URL, Number: m.Number, Terminal: m.Terminal}
+	rawDrift := (PRMirror{URL: inst.GitHubPRURL, Number: inst.GitHubPRNumber, Terminal: inst.GitHubPRStatusTerminal}) != want
+	drift := rawDrift
+	if stored != nil {
+		drift = mirrorDiffers(*stored, want)
+	}
+	if rawDrift {
+		publishPRSetLocked(inst, inst.GitHubPRNumber)
+	} else {
+		inst.mu.Unlock()
+	}
+	if drift {
+		return mirrorCorrected
+	}
+	return mirrorInSync
+}
+
+func mirrorDiffers(stored, want PRMirror) bool {
+	if stored.Number != want.Number || stored.Terminal != want.Terminal {
+		return true
+	}
+	return stored.URL != "" && stored.URL != want.URL
+}
+
+// persistPRMirrorFromSnapshot writes the snapshot's legacy scalars, serialized with
+// AttachPR's persist so an older mirror never lands after a newer one.
+func (i *Instance) persistPRMirrorFromSnapshot(p prMirrorPersister) {
+	i.prPersistMu.Lock()
+	defer i.prPersistMu.Unlock()
+	snap := i.Snapshot()
+	if snap.UUID == "" {
+		return
+	}
+	g := snap.GitHub
+	err := p.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal)
+	if err != nil && !errors.Is(err, ErrSessionNotPersisted) {
+		log.Warn("persist reconciled PR mirror failed; the next pass retries", "session", snap.Title, "err", err)
+	}
+}

@@ -224,6 +224,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.joinAfterCancel(serverCtx, deps.PRStatusPoller.Wait)
 	log.Info("PRStatusPoller started")
 
+	if deps.Storage != nil {
+		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler.Start(serverCtx)
+		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
+	}
+
 	if deps.StopPRMaintenance != nil {
 		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
 	}
