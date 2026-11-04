@@ -1,0 +1,8 @@
+INFO: Analyzed target //config:all (0 packages loaded, 0 targets configured).
+ERROR: /w/config/BUILD.bazel:3:11: GoCompilePkg config/config.a failed: (Exit 1): builder failed: error executing GoCompilePkg command
+compilepkg: missing strict dependencies:
+	/w/config/zz_fixture.go: import of "strings"
+No dependencies were provided.
+Check that imports in Go sources match importpath attributes in deps.
+INFO: Elapsed time: 2.1s, Critical Path: 0.9s
+ERROR: Build did NOT complete successfully

@@ -151,3 +151,6 @@ website/public/clips/
 user.bazelrc
 /bazel-*
 /.bazel-out
+.bazel-logs/
+# Captured Bazel failure fixtures are test data, not logs
+!tools/bzl/testdata/errors/**/*.log

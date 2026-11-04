@@ -1,0 +1,5 @@
+ERROR: Skipping '//proto/session/v1:nosuch_go_proto': no such target '//proto/session/v1:nosuch_go_proto': target 'nosuch_go_proto' not declared in package 'proto/session/v1' defined by /w/proto/session/v1/BUILD.bazel
+ERROR: no such target '//proto/session/v1:nosuch_go_proto': target 'nosuch_go_proto' not declared in package 'proto/session/v1' defined by /w/proto/session/v1/BUILD.bazel
+INFO: Elapsed time: 0.101s
+INFO: 0 processes.
+ERROR: Build did NOT complete successfully

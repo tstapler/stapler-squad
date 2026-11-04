@@ -52,6 +52,7 @@
   status: proposal
   doc: state-2
   when: "no such package '@@gazelle[+][+]go_deps|repository .* not found"
+  when: "[Rr]epository '@@gazelle[+][+]go_deps.* is not defined"
   hint: "bazel-hint: a Go dependency is not wired into MODULE.bazel. Remedy: run 'go get <module> && go mod tidy && make gazelle && bazel mod tidy'."
 - id: E3
   source: go
