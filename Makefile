@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -1064,7 +1064,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard pr-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -1198,6 +1198,18 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
+
+# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
+# Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
+pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance*.go and session/session_pr_*.go
+	@echo "pr-field-guard: scanning for direct PR field writes..."
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance*.go' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
+	    | xargs -r grep -EnH '\b(inst|instance|liveInst)\.(GitHubPRNumber|GitHubPRURL|GitHubPRStatusTerminal|GitHubOwner|GitHubRepo) = [^=]' \
+	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	    echo "❌ pr-field-guard: direct PR field write found — route through AttachPR / the actor setters (session-multi-pr-tracking)"; \
+	    exit 1; \
+	fi
+	@echo "✅ pr-field-guard: no direct PR field writes"
 
 ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
 	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."

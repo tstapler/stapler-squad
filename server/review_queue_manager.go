@@ -550,7 +550,7 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 	if inst == nil {
 		return
 	}
-	if inst.GitHubPRURL != "" {
+	if inst.Snapshot().GitHub.GitHubPRURL != "" {
 		return // already has a PR — nothing to do
 	}
 	stableID := inst.GetStableID()
