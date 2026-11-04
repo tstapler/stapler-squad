@@ -10,6 +10,7 @@ Go `BUILD.bazel` rules are generated. After changing imports or adding or removi
 - **Directives.** `# gazelle:` lines live in the root `BUILD.bazel`; changing one needs owner review (`/BUILD.bazel` is in CODEOWNERS).
 - **`.bazelrc`.** Do not change `--jobs`, `--local_resources` or memory flags without reading the `bazel-perf` skill's memory math; `bash tools/bzl/check-bazelrc.sh` validates flag names.
 - **No Bazel-only source changes** (new `//go:build bazel` files, source edits that only the Bazel build needs) until Epic 10 of `project_plans/bazel-conversion`.
+- **Drift remedy** (also the line for the backlog dispatcher prompt): `make gazelle && bazel mod tidy && make sync`. `tools/ci/bazel-gates` applies it in CI, and `bazel-main-repair`/`bazel-autofix` push it; repair PRs carry the label `generated-file-race`.
 - `MODULE.bazel` edits: use `bazel mod tidy`, never hand-edit `MODULE.bazel.lock`.
 
 ## Why

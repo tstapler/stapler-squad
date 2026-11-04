@@ -3,6 +3,8 @@
 
 Rows are {spike, verdict, path, cost}. Stdlib only (no PyYAML on the host).
 """
+import os
+import re
 import sys
 from collections import Counter
 
@@ -12,6 +14,32 @@ OPTIONAL = ["S14", "S15", "S15b"]
 VERDICTS = ("Pass", "FallbackWorkaround", "FallbackFork", "Fail")
 FALLBACKS = ("FallbackWorkaround", "FallbackFork")
 DEFAULT = "project_plans/bazel-conversion/implementation/spike-results.yaml"
+ATTESTATIONS = "owner-attestations.yaml"  # beside the results file; display only, never changes the verdict
+
+
+def owner_deferrals(path):
+    """Return (spike ids, label, date) for a recorded owner deferral, or None. Display only."""
+    if not os.path.exists(path):
+        return None
+    sec, date, found = None, "", {}
+    with open(path) as f:
+        for raw in f:
+            if re.match(r"^\S", raw):
+                sec = raw.split(":", 1)[0]
+                m = re.match(r"^interview_date:\s*(\S+)", raw)
+                date = m.group(1) if m else date
+            elif sec == "remote_cache_s10":
+                m = re.match(r"^\s+(decision|pending):\s*(.*)$", raw.rstrip())
+                if m:
+                    found[m.group(1)] = m.group(2)
+    decision = found.get("decision", "")
+    if "defer" not in decision and "disk cache" not in decision:
+        return None
+    ids = [i for i in re.findall(r"S\d+(?:-redaction)?", found.get("pending", "")) if i in REQUIRED]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return None
+    return ids, "disk cache first" if "disk cache" in decision else decision, date
 
 
 def _scalar(v):
@@ -99,6 +127,9 @@ def main(argv):
     missing = [s for s in REQUIRED if per_id[s] == "MISSING"]
     if missing:
         print("MISSING required ids: %s" % ", ".join(missing))
+    deferred = owner_deferrals(os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS))
+    if deferred:
+        print("owner-deferred: %s (%s, %s)" % (", ".join(deferred[0]), deferred[1], deferred[2]))
     ok = not errors
     print("RESULT: %s" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1

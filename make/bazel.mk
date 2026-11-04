@@ -210,13 +210,12 @@ test-delivery-guards: gen-gate
 	done
 
 test-affected: gen-gate
-	@echo "[build-system=bazel] bazel test <labels of the packages scripts/test-affected.py selects vs $(or $(BASE),origin/main)>"
-	@set -e; pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
-	if [ -z "$$pkgs" ]; then echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
-	elif [ "$$pkgs" = "__ALL__" ]; then echo "A change vs $(or $(BASE),origin/main) can't be safely narrowed -- running every test target"; \
-		bash tools/bzl/run-bazel-test.sh --test_arg=-test.short //...; \
-	else labels=$$(printf '%s\n' "$$pkgs" | sed -e 's#^github.com/tstapler/stapler-squad/*##' -e 's#.*#//&:all#'); \
-		echo "Affected labels:"; echo "$$labels"; \
+	@echo "[build-system=bazel] bazel test <labels tools/ci/affected-targets selects vs $(or $(BASE),origin/main)>"
+	$(call bzl_build,,//tools/ci/affected-targets)
+	@set -e; sel="$$(BAZEL_REAL=$$(command -v bazelisk || command -v bazel) bazel-bin/tools/ci/affected-targets/affected-targets_/affected-targets -bazel tools/bazel -base $(or $(BASE),origin/main))"; \
+	labels=$$(printf '%s\n' "$$sel" | grep '^//' || true); \
+	if [ -z "$$labels" ]; then echo "No targets affected by changes vs $(or $(BASE),origin/main)"; \
+	else echo "Affected labels:"; echo "$$labels"; \
 		bash tools/bzl/run-bazel-test.sh --test_arg=-test.short $$labels; fi
 
 endif

@@ -1,0 +1,17 @@
+# GlobalInputs (plan glossary): a change to any of these selects //... in tools/ci/affected-targets.
+# One glob per line; '**' crosses directories, '*' does not. Superset of baseline/global-inputs.seed.txt.
+MODULE.bazel
+MODULE.bazel.lock
+.bazelrc*
+.bazelversion
+.bazelignore
+BUILD.bazel
+WORKSPACE*
+tools/bzl/**
+tools/bazel
+go.mod
+go.sum
+proto/**
+buf.yaml
+buf.gen.yaml
+.golangci.yml

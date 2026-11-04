@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Economic abort / re-plan decision gate (Task 0.14e), criteria EG1-EG5.
 
-Exit 0 CLEAR, 3 OWNER DECISION (a criterion tripped), 4 nothing tripped but
-some criterion is UNMEASURED. Never writes owner-attestations.yaml and never
-picks a decision. Unmeasured inputs are never assumed.
+Exit codes:
+  0  CLEAR, or every tripped criterion is covered by a recorded `continue`
+     decision and nothing is UNMEASURED
+  3  a criterion tripped and no recorded decision covers it (OWNER DECISION)
+  4  nothing uncovered tripped but some criterion is UNMEASURED (never CLEAR)
+  5  recorded decision is `re-plan`    6  `pause`    7  `revert`
+A decision covers the criteria in its optional `criteria:` list, else the EGn
+ids named in its `reason`. Only criteria that actually TRIPPED are covered; a
+decision never turns UNMEASURED into CLEAR. owner-attestations.yaml is read
+only, never written, and this script never picks a decision. Decisions apply
+to the EG gate only, not --midpoint.
 
 Measurements not available from measured.json (S6/S10 timings, re-costed CU)
 come from a JSON file (--inputs, default spike-measurements.json beside
@@ -27,6 +35,36 @@ TARGETS = os.path.join(HERE, "baseline", "targets.yaml")
 EG1_X, EG2_X, EG3_FIRST_X, EG3_SECOND_X, EG4_X, EG5_LIMIT = 1.10, 1.5, 3.0, 2.0, 1.25, 0.60
 
 UNMEASURED = "UNMEASURED"
+ATTESTATIONS = os.path.join(IMPL, "owner-attestations.yaml")
+DECISION_EXIT = {"re-plan": 5, "pause": 6, "revert": 7}
+
+
+def load_decision(path):
+    """Read the top-level economic_gate block: {decision, date, covers} or None (no PyYAML needed)."""
+    if not os.path.exists(path):
+        return None
+    block, in_block, key = {}, False, None
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if re.match(r"^\S", line):
+                in_block, key = line.startswith("economic_gate:"), None
+                continue
+            if not in_block or not line.strip() or line.lstrip().startswith("#"):
+                continue
+            m = re.match(r"^  (\w+):\s*(.*)$", line)
+            if m:
+                key = m.group(1)
+                val = m.group(2).split(" #", 1)[0].strip()
+                block[key] = "" if val in (">", ">-", "|", "|-") else val
+            elif key:
+                block[key] = (block[key] + " " + line.strip()).strip()
+    decision = block.get("decision", "").strip()
+    if not decision:
+        return None
+    listed = re.findall(r"EG\d", block.get("criteria", ""))
+    covers = set(listed or re.findall(r"EG\d", block.get("reason", "")))
+    return {"decision": decision, "date": block.get("date", "unknown"), "covers": covers}
 
 
 def load_factors(path):
@@ -167,6 +205,24 @@ def verdict(results):
     return 0, "ECONOMIC GATE: CLEAR"
 
 
+def apply_decision(code, results, dec):
+    """Map the plain verdict code through a recorded owner decision; returns (code, headline or None)."""
+    tripped = [r["id"] for r in results if r["status"] == "TRIP"]
+    if code != 3 or dec is None:
+        return code, None
+    label = "TRIPPED (%s) - owner decision recorded: %s (%s)" % (", ".join(tripped), dec["decision"], dec["date"])
+    if dec["decision"] == "continue":
+        if not set(tripped) <= dec["covers"]:
+            return 3, None
+        unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
+        if unmeasured:
+            return 4, "ECONOMIC GATE: " + label + "; INCOMPLETE (UNMEASURED " + ", ".join(unmeasured) + "); not CLEAR"
+        return 0, "ECONOMIC GATE: " + label
+    if dec["decision"] in DECISION_EXIT:
+        return DECISION_EXIT[dec["decision"]], "ECONOMIC GATE: " + label
+    return 3, None
+
+
 def load_json(path, required):
     if not os.path.exists(path):
         if required:
@@ -181,6 +237,7 @@ def main(argv=None):
     ap.add_argument("--midpoint", action="store_true", help="evaluate T1, T3, T4 (Story 2.7)")
     ap.add_argument("--measured", default=MEASURED)
     ap.add_argument("--targets", default=TARGETS)
+    ap.add_argument("--attestations", default=ATTESTATIONS)
     ap.add_argument("--inputs", default=os.path.join(IMPL, "spike-measurements.json"))
     a = ap.parse_args(argv)
     apply_factors(a.targets)
@@ -193,6 +250,9 @@ def main(argv=None):
     unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
     print("evaluable: %s; unmeasured: %s" % (", ".join(evaluable) or "none", ", ".join(unmeasured) or "none"))
     code, headline = verdict(results)
+    if not a.midpoint:
+        code, decided = apply_decision(code, results, load_decision(a.attestations))
+        headline = decided or headline
     print(headline)
     if code == 3:
         print("Epics 1-11 stay unreleased until owner-attestations.yaml records economic_gate: {decision, date, reason}; this script never selects a decision.")

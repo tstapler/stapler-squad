@@ -1153,6 +1153,8 @@ setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward p
 	@echo "git hooks: core.hooksPath=$$(git config core.hooksPath)"
 	git config merge.bazel-lockfile-merge.name "Merge driver for the Bazel lockfile (MODULE.bazel.lock)"
 	git config merge.bazel-lockfile-merge.driver "scripts/git-merge-bazel-lock.sh %O %A %B"
+	git config merge.bazel-regen.name "Merge driver for BUILD.bazel (keep ours, rerun Gazelle after the merge)"
+	git config merge.bazel-regen.driver "go run ./tools/bzl/merge-bazel-regen %O %A %B %P"
 	@scripts/git-merge-bazel-lock.sh --check || echo "WARNING: jq 1.5+ is required by the MODULE.bazel.lock merge driver"
 	@echo "note: these git config entries are per clone; re-run 'make setup-git' after every fresh git clone"
 
