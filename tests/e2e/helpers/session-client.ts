@@ -33,6 +33,7 @@ export interface CreateSessionOptions {
   oneOff?: boolean;
   prompt?: string;
   autoYes?: boolean;
+  backendOverride?: 'tmux' | 'tymux';
 }
 
 export interface Session {
@@ -111,6 +112,7 @@ export class SessionClient {
       oneOff: opts.oneOff,
       prompt: opts.prompt,
       autoYes: opts.autoYes,
+      backendOverride: opts.backendOverride,
     });
     return resp.session;
   }

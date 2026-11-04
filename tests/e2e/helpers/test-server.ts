@@ -102,6 +102,9 @@ const MAX_START_ATTEMPTS = 3;
 
 export class TestServer {
   private process: ChildProcess | null = null;
+  private daemon: ChildProcess | null = null;
+  private daemonDir: string | null = null;
+  private daemonPort = 0;
   private config: TestServerConfig;
   // Set when start() had to prepare its own assets, so stop() cleans them up.
   private ownedAssets: SharedAssets | null = null;
@@ -138,6 +141,31 @@ export class TestServer {
       this.ownedAssets = await prepareSharedAssets();
       this.config.assets = this.ownedAssets;
     }
+    // Start (and own) a private daemon instead of inheriting a developer's
+    // TYMUXD_ADDR or sharing the constant e2e-local instance's daemon port.
+    const daemonBinary = process.env.TYMUXD_BIN || path.join(projectRoot, 'session/tymux/embed/tymuxd');
+    try {
+      this.daemonPort = await findFreePort();
+      this.daemonDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ssq-e2e-tymux-'));
+      await fs.promises.chmod(this.daemonDir, 0o700);
+      if (fs.existsSync(daemonBinary)) {
+      this.daemon = spawn(daemonBinary, [], {
+        env: { ...process.env, XDG_STATE_HOME: this.daemonDir, TYMUXD_ADDR: `127.0.0.1:${this.daemonPort}`, TYMUXD_SOCKET_PATH: path.join(this.daemonDir, 'd.sock') },
+        stdio: 'ignore',
+      });
+      let daemonError: Error | undefined;
+      this.daemon.on('error', err => { daemonError = err; });
+      await this.waitForPort(this.daemonPort);
+      if (daemonError) throw daemonError;
+      if (this.daemon.exitCode !== null || this.daemon.signalCode !== null) throw new Error('Private tymuxd exited during startup');
+      // tymuxd speaks HTTP/2 gRPC, not HTTP/1 health endpoints. The first
+      // backend-pinned CreateSession verifies protocol readiness end to end.
+      }
+    } catch (err) {
+      await this.stopDaemon();
+      if (this.ownedAssets) { await cleanupSharedAssets(this.ownedAssets); this.ownedAssets = null; }
+      throw err;
+    }
     const autoPort = this.config.port === 0;
     const autoRemotePort = this.config.remoteAuth && this.config.remotePort === 0;
     for (let attempt = 1; ; attempt++) {
@@ -149,6 +177,7 @@ export class TestServer {
       } catch (err) {
         await this.killProcess();
         if (!(err instanceof ServerExitedEarly) || !autoPort || attempt >= MAX_START_ATTEMPTS) {
+          await this.stopDaemon();
           // stop() is not called after a failed start; don't leak the assets this server built for itself.
           if (this.ownedAssets) {
             await cleanupSharedAssets(this.ownedAssets);
@@ -195,6 +224,11 @@ export class TestServer {
         // A private tmux server, so this run's sessions never share the live service's
         // default server (where its leaked-control-mode sweeper could see them).
         STAPLER_SQUAD_TMUX_SOCKET: this.tmuxSocket(),
+        ...(this.daemonPort ? {
+          TYMUXD_ADDR: `http://127.0.0.1:${this.daemonPort}`,
+          TYMUXD_SOCKET_PATH: path.join(this.daemonDir!, 'd.sock'),
+          XDG_STATE_HOME: this.daemonDir!,
+        } : {}),
         // The idle seed sessions would otherwise be flagged stale 5 min into the run, raising
         // "No activity for Nm" toasts over whatever spec is running on this long-lived server.
         STAPLER_SQUAD_REVIEW_STALENESS_THRESHOLD: '24h',
@@ -249,12 +283,26 @@ export class TestServer {
     // --tmux-keep-server leaves the private tmux server behind; it holds only this run's sessions.
     await execPromise(`tmux -L ${this.tmuxSocket()} kill-server`).catch(() => undefined);
 
+    await this.stopDaemon();
     await this.cleanupTestDir();
     if (this.ownedAssets) {
       await cleanupSharedAssets(this.ownedAssets);
       this.ownedAssets = null;
       this.config.assets = undefined;
     }
+  }
+
+  private async stopDaemon(): Promise<void> {
+    const daemon = this.daemon;
+    this.daemon = null;
+    if (daemon && daemon.exitCode === null && daemon.signalCode === null) {
+      await new Promise<void>(resolve => {
+        daemon.once('exit', () => resolve());
+        daemon.kill('SIGKILL');
+      });
+    }
+    if (this.daemonDir) await fs.promises.rm(this.daemonDir, { recursive: true, force: true });
+    this.daemonDir = null;
   }
 
   /** The private tmux socket name of this server: unique per instance, so concurrent servers never share one. */

@@ -43,6 +43,8 @@ function webkitMobileProjects() {
 const DEV_SERVER_SPECS = '**/dev-mode-hmr.spec.ts';
 // Records marketing clips; run only via scripts/record-website-demos.sh (its own config).
 const WEBSITE_DEMO_SPECS = '**/website-demos.spec.ts';
+// Rendered-row assertions require xterm's DOM renderer; both backend legs run there.
+const TERMINAL_EDITING_SPEC = '**/terminal-editing.spec.ts';
 const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 // terminal-stress specs assert absolute in-browser throughput (frames/s, frame time, heap growth), which sibling
 // workers starve of CPU. CI runs them in their own one-worker pass: E2E_SKIP_STRESS=1 drops them from the
@@ -205,7 +207,7 @@ export default defineConfig({
     {
       name: 'chromium',
       ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, TERMINAL_EDITING_SPEC, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {

@@ -150,6 +150,7 @@ func startLiveTymuxd(t *testing.T, bin, xdgStateHome, addr string) *liveTymuxd {
 	require.NoError(t, cmd.Start(), "failed to start tymuxd at %s", bin)
 
 	lt := &liveTymuxd{cmd: cmd, addr: addr}
+	t.Cleanup(func() { lt.stop(t) })
 	wait.RequireEventually(t, func() bool {
 		conn, dialErr := net.DialTimeout("tcp", lt.addr, 200*time.Millisecond)
 		if dialErr != nil {

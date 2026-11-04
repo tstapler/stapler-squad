@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,55 @@ func startRawCatSession(t *testing.T, outFile string) TymuxManager {
 		return err == nil && strings.Contains(content, "READY")
 	}, 10*time.Second, 50*time.Millisecond, "pane never became ready")
 	return sess
+}
+
+func startNumberedHistorySession(t *testing.T) TymuxManager {
+	t.Helper()
+	// A private daemon and real PTY are required to verify the daemon's history coordinates.
+	daemon := startLiveTymuxd(t, findTymuxdBinary(t), t.TempDir(), reserveLoopbackAddr(t))
+	t.Cleanup(func() { daemon.stop(t) })
+	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon.addr))
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+		launchcmd.Word("sh"), launchcmd.Literal("-c"),
+		launchcmd.Literal("i=1; while [ $i -le 120 ]; do printf 'HISTORY-%03d\\n' \"$i\"; i=$((i+1)); done; printf 'READY\\nDONE'; exec cat"),
+	}})
+	require.NoError(t, sess.Start(t.TempDir()))
+	t.Cleanup(func() {
+		// Killing the private daemon unblocks Close if a teardown RPC stops responding.
+		timer := time.AfterFunc(10*time.Second, func() { _ = daemon.cmd.Process.Kill() })
+		defer timer.Stop()
+		if err := sess.Close(); err != nil {
+			t.Logf("session cleanup: %v", err)
+		}
+	})
+	wait.RequireEventually(t, func() bool {
+		content, err := sess.CapturePaneContentRaw()
+		return err == nil && strings.Contains(content, "DONE")
+	}, 10*time.Second, 50*time.Millisecond, "numbered history never finished printing")
+
+	return sess
+}
+
+func TestLiveTymuxd_ScrollbackRange_ReturnsHistoryInsteadOfLiveScreen(t *testing.T) {
+	sess := startNumberedHistorySession(t)
+	width, height, err := sess.GetPaneDimensions()
+	require.NoError(t, err)
+	require.Greater(t, width, len("HISTORY-001"))
+	require.Greater(t, height, 3)
+	require.Less(t, height, 120)
+
+	// Read the same oldest full page through the native offset and tmux range interfaces.
+	oldest, err := sess.(*tymuxGRPCSession).capturePane(t.Context(), 1000)
+	require.NoError(t, err)
+	want := rowsToPlainText(oldest.GetGrid())
+	require.Contains(t, want, "HISTORY-001")
+	historyLines := 122 - height // 120 numbered lines, READY, and the final DONE cursor row.
+	start := "-" + strconv.Itoa(historyLines)
+	end := "-" + strconv.Itoa(historyLines-height+1)
+	got, err := sess.CapturePaneContentWithOptions(start, end)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "tmux-style negative ranges must capture retained history, not offset zero")
+	assert.NotContains(t, got, "READY", "live-screen content must not leak into this historical range")
 }
 
 func fileSize(path string) int {
