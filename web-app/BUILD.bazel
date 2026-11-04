@@ -36,7 +36,7 @@ filegroup(
         ],
         exclude = [
             "build/__tests__/**",
-            "src/gen/**",  # supplied by //tools/bzl/proto:gen_ts
+            "src/gen/**",  # supplied by //proto/session/v1:session_ts
         ],
     ),
 )
@@ -45,7 +45,7 @@ bun_dist(
     name = "dist",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
-    gen = "//tools/bzl/proto:gen_ts",
+    gen = "//proto/session/v1:session_ts",
     bun = "@bun_host//:bun",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
@@ -56,7 +56,7 @@ bun_dist(
     name = "dist_trace",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
-    gen = "//tools/bzl/proto:gen_ts",
+    gen = "//proto/session/v1:session_ts",
     bun = "@bun_host//:bun",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
@@ -66,37 +66,32 @@ bun_dist(
 # Jest inputs: everything jest.config.js's web-app project reads.
 filegroup(
     name = "jest_srcs",
-    srcs = [":dist_srcs"] + glob(["jest.config.js", "jest.setup.js", "eslint-plugin-analytics/**"]),
+    srcs = [":dist_srcs"] + glob(["jest.config.js", "jest.setup.js", "eslint.config.mjs", "eslint-plugin-analytics/**", "eslint-plugin-rpc-lifecycle/**"]),
 )
 
-# Task 0.6c: 20 test suites (231 test cases) chosen from pure-logic suites under src/lib.
+# Full Jest suite (web-app project of jest.config.js), split by jest's --shard over the sorted test list.
 bun_jest_test(
-    name = "jest_subset",
-    gen = "//tools/bzl/proto:gen_ts",
+    name = "jest",
     srcs = [":jest_srcs"],
     bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
-    tests = [
-        "src/lib/backlog/bulkActions.test.ts",
-        "src/lib/backlog/composeQuestionAnswerFeedback.test.ts",
-        "src/lib/backlog/currentWorkSession.test.ts",
-        "src/lib/backlog/dependencies.test.ts",
-        "src/lib/backlog/formatReworkCapOverride.test.ts",
-        "src/lib/backlog/itemActions.test.ts",
-        "src/lib/backlog/julesDispatchGate.test.ts",
-        "src/lib/backlog/jumpToSession.test.ts",
-        "src/lib/backlog/pipelineModeDisplay.test.ts",
-        "src/lib/backlog/planReviewStatus.test.ts",
-        "src/lib/backlog/sessionKind.test.ts",
-        "src/lib/backlog/sortGroup.test.ts",
-        "src/lib/board/columns.test.ts",
-        "src/lib/board/compositeId.test.ts",
-        "src/lib/board/statusForColumnMove.test.ts",
-        "src/lib/board/transitions.test.ts",
-        "src/lib/cron/buildCronFromSimple.test.ts",
-        "src/lib/cron/explainCron.test.ts",
-        "src/lib/cron/validateCron.test.ts",
-        "src/lib/constants/modelFuzzyMatch.test.ts",
+    # Suites that read docs/, project_plans/ (.bazelignore'd), tests/e2e or tests/terminal-conformance
+    # through ../ paths; those directories are not Bazel packages. Epic 4 (sandbox remediation) owns them.
+    ignore_patterns = [
+        "src/lib/__tests__/e2e_isolation_guard\\.test",
+        "src/lib/__tests__/e2e_notification_conventions\\.test",
+        "src/lib/__tests__/notification_docs_exist\\.test",
+        "src/lib/__tests__/notification_plan_docs\\.test",
+        "src/lib/files/analytics/__tests__/events\\.test",
+        "src/lib/terminal/__tests__/conformance/conformance\\.(xterm|ghostty)\\.test",
     ],
+    repo_data = [
+        "//server/analytics:client_metrics.go",
+        "//server/analytics:client_pages.json",
+    ],
+    shard_count = 4,
+    size = "large",
+    tags = ["no-remote-cache"],
 )

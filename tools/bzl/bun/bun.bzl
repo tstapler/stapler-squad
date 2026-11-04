@@ -154,25 +154,37 @@ WS="$TEST_TMPDIR/ws"; W="$WS/web-app"; mkdir -p "$W/node_modules"
 # jest.config.js lists roots outside web-app/ for projects we do not run; jest validates them anyway.
 mkdir -p "$WS/scripts/dev-stack" "$WS/tests/e2e"
 tar -chf - -C "$RF/_main" -T "$(rp {manifest})" | tar -xf - -C "$W" --strip-components=1
+# Files outside web-app/ that suites read through ../ paths, staged at their repo-relative location.
+if [ -s "$(rp {repo_manifest})" ]; then tar -chf - -C "$RF/_main" -T "$(rp {repo_manifest})" | tar -xf - -C "$WS"; fi
 cp -al "$NM/." "$W/node_modules" 2>/dev/null || cp -a "$NM/." "$W/node_modules"
 {gencmd}cd "$W"
 mkdir -p "$TEST_UNDECLARED_OUTPUTS_DIR"
-bun x jest --selectProjects web-app --ci --no-coverage --json --outputFile="$TEST_UNDECLARED_OUTPUTS_DIR/jest.json" {tests}
+# Bazel's shard protocol: TEST_TOTAL_SHARDS/TEST_SHARD_INDEX (0-based); jest's --shard is 1-based.
+SHARD=""
+if [ "${{TEST_TOTAL_SHARDS:-0}}" -gt 1 ]; then
+  [ -z "${{TEST_SHARD_STATUS_FILE:-}}" ] || touch "$TEST_SHARD_STATUS_FILE"
+  SHARD="--shard=$((TEST_SHARD_INDEX + 1))/$TEST_TOTAL_SHARDS"
+fi
+bun x jest --selectProjects web-app --ci --no-coverage --maxWorkers=2 $SHARD {ignore} --json --outputFile="$TEST_UNDECLARED_OUTPUTS_DIR/jest.json" {tests}
 """
 
 def _bun_jest_test_impl(ctx):
     manifest = ctx.actions.declare_file(ctx.label.name + ".manifest")
     ctx.actions.write(manifest, "\n".join([f.short_path for f in ctx.files.srcs]) + "\n")
+    repo_manifest = ctx.actions.declare_file(ctx.label.name + ".repo_manifest")
+    ctx.actions.write(repo_manifest, "".join([f.short_path + "\n" for f in ctx.files.repo_data]))
     script = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(script, _JEST_SCRIPT.format(
         node = ctx.file.node.short_path,
         bun = ctx.file.bun.short_path,
         nm = ctx.file.node_modules.short_path,
         manifest = manifest.short_path,
+        repo_manifest = repo_manifest.short_path,
+        ignore = " ".join(["--testPathIgnorePatterns='%s'" % p for p in ctx.attr.ignore_patterns]),
         tests = " ".join(ctx.attr.tests),
         gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$(rp " + ctx.file.gen.short_path + ")/.\" \"$W/src/gen/\"; chmod -R u+w \"$W/src/gen\"\n") if ctx.file.gen else "",
     ), is_executable = True)
-    rf = ctx.runfiles(files = ctx.files.srcs + [manifest, ctx.file.node, ctx.file.bun, ctx.file.node_modules] + ([ctx.file.gen] if ctx.file.gen else []))
+    rf = ctx.runfiles(files = ctx.files.srcs + ctx.files.repo_data + [manifest, repo_manifest, ctx.file.node, ctx.file.bun, ctx.file.node_modules] + ([ctx.file.gen] if ctx.file.gen else []))
     return [DefaultInfo(executable = script, runfiles = rf)]
 
 bun_jest_test = rule(
@@ -181,7 +193,9 @@ bun_jest_test = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = True),
         "gen": attr.label(allow_single_file = True),
-        "tests": attr.string_list(mandatory = True),
+        "repo_data": attr.label_list(allow_files = True, doc = "Repo files outside web-app/ staged at their repo-relative path."),
+        "ignore_patterns": attr.string_list(doc = "jest --testPathIgnorePatterns regexes for suites that need files Bazel cannot supply."),
+        "tests": attr.string_list(doc = "Test files to run; empty runs the whole web-app project."),
         "node_modules": attr.label(allow_single_file = True, mandatory = True),
         "bun": attr.label(allow_single_file = True, mandatory = True),
         "node": attr.label(allow_single_file = True, mandatory = True),
