@@ -165,5 +165,39 @@ class EconomicGate(unittest.TestCase):
         self.assertEqual(run(MEASURED, {}, "--midpoint")[0], 4)
 
 
+COMPONENTS = {"e2e": 1974.5, "lint": 0, "setup_and_queue": 398, "go_or_other": 34, "span": 2601}
+
+
+class Ra2Projection(unittest.TestCase):
+    def m(self, **over):
+        return dict(MEASURED, **{"ra2_non_go_share": 0.987, "ra2_median_components_s": COMPONENTS, **over})
+
+    def test_undecided_s_is_one_and_trips_on_measured_baseline(self):
+        code, out = run(self.m(), dict(CLEAR))
+        self.assertEqual(code, 3)
+        self.assertIn("S14 undecided", out)
+        self.assertIn("RA2 projected 0.925 > 0.90", out)
+
+    def test_projection_formula_and_clear(self):
+        # (432 + 1974.5 * 0.25) / 2601 = 0.3557
+        code, out = run(self.m(), dict(CLEAR, e2e_selected_share_median=0.25))
+        self.assertEqual(code, 0, out)
+        self.assertIn("projected 0.356 at s=0.25", out)
+
+    def test_s_just_above_limit_trips(self):
+        # s = 0.90 -> (432 + 1777.05) / 2601 = 0.849 clear; s = 1.0 -> 0.987 trips
+        self.assertEqual(run(self.m(), dict(CLEAR, e2e_selected_share_median=0.90))[0], 0)
+        self.assertEqual(run(self.m(), dict(CLEAR, e2e_selected_share_median=1.0))[0], 3)
+
+    def test_residual_above_limit_trips_even_when_s_is_zero(self):
+        comp = dict(COMPONENTS, setup_and_queue=1700)
+        code, out = run(self.m(ra2_median_components_s=comp), dict(CLEAR, e2e_selected_share_median=0.0))
+        self.assertEqual(code, 3)
+        self.assertIn("RA2 residual", out)
+
+    def test_without_components_the_old_rule_applies(self):
+        self.assertEqual(run(dict(MEASURED, ra2_non_go_share=0.987), dict(CLEAR))[0], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
