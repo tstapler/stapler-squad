@@ -75,7 +75,9 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 | --repo_contents_cache | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache (a path; default: see description)` |
 | --repo_contents_cache_gc_max_age | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache_gc_max_age (An immutable length of time.; default: "14d")` |
 | --repository_cache | spike-verified | `bazel help build --long` 9.3.1: `--repository_cache (a path; default: see description)` |
-| --sandbox_default_allow_network | spike-verified | `bazel help build --long` 9.3.1: `--[no]sandbox_default_allow_network (a boolean; default: "true")` (spike S1 uses `=false`; not committed) |
+| --sandbox_default_allow_network | spike-verified | `bazel help build --long` 9.3.1: `--[no]sandbox_default_allow_network (a boolean; default: "true")` (committed as `test --sandbox_default_allow_network=false`, Task 4.1b; loopback still works, S8 census ran with it) |
+| --test_env | spike-verified | `bazel help build --long` 9.3.1: `--test_env (a 'name[=value]' assignment with an optional value part or the special syntax '=name' to unset a variable; may be used multiple times)` (committed only for `STAPLER_SQUAD_INSTANCE=bazel-test`, Task 4.1b) |
+| --run_under | spike-verified | `bazel help build --long` 9.3.1: `--run_under (a prefix in front of command; default: see description)`; applies to `bazel test` (Task 4.1b: `//tools/bzl:test_wrapper`; `env_test` passes with it and fails without it, with `--run_under=/usr/bin/env`) |
 | --shutdown_on_low_sys_mem | spike-verified | `bazel help startup_options --long` 9.3.1: `--[no]shutdown_on_low_sys_mem (a boolean; default: "false")` |
 | --experimental_run_in_user_cgroup | spike-verified | `bazel help build --long` 9.3.1: `--[no]experimental_run_in_user_cgroup (a boolean; default: "false")` (not committed; evaluated in E7, Task 0.10g) |
 | --local_ram_resources | absent | `grep -cE -- '--local_ram_resources' ` of `bazel help build --long` 9.3.1 prints 0 |

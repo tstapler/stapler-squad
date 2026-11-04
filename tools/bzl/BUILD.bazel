@@ -1,6 +1,7 @@
 # Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
 # gazelle:ignore
 # Starlark helpers for the Bazel conversion (macros and rules loaded as //tools/bzl:<name>.bzl).
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:ent_test.bzl", "ent_gen_action_test")
 
 exports_files([
@@ -12,4 +13,11 @@ exports_files([
 ent_gen_action_test(
     name = "ent_bzl_test",
     target_under_test = "//tools/bzl/ent:ent_gen",
+)
+
+# `test --run_under` target (.bazelrc): private HOME with a .gitconfig, private tmux dir, host tools on PATH.
+sh_binary(
+    name = "test_wrapper",
+    srcs = ["test_wrapper.sh"],
+    visibility = ["//visibility:public"],
 )

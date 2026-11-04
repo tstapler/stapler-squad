@@ -21,3 +21,9 @@ go_test(
     ],
     tags = ["manual"],  # keep
 )
+
+# Task 4.1b probe: prints and asserts the env that `test --run_under=//tools/bzl:test_wrapper` builds.
+go_test(
+    name = "env_test",
+    srcs = ["env_test.go"],
+)
