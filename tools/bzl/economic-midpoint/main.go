@@ -45,7 +45,7 @@ func main() {
 const defaultInputs = "project_plans/bazel-conversion/implementation/spike-measurements.json"
 
 func bazelOut(root, bazel string, args ...string) ([]byte, error) {
-	cmd := exec.Command(bazel, args...)
+	cmd := exec.Command(bazel, args...) //nolint:norawexec // dev-time measurement tool, waited on
 	cmd.Dir = root
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -109,7 +109,7 @@ func runT1(args []string) error {
 		}
 		_, _ = f.WriteString(ns)
 		_ = f.Close()
-		cmd := exec.Command(*affected, "-root", *root, "-name-status", f.Name(), "-bazel", *bazel)
+		cmd := exec.Command(*affected, "-root", *root, "-name-status", f.Name(), "-bazel", *bazel) //nolint:norawexec // dev-time measurement tool, waited on
 		var eb bytes.Buffer
 		cmd.Stderr = &eb
 		o, err := cmd.Output()

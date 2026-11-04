@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "s6measure_lib",
+    srcs = [
+        "main.go",
+        "proc.go",
+        "sampler.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/s6measure",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "s6measure",
+    embed = [":s6measure_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "s6measure_test",
+    srcs = ["s6measure_test.go"],
+    embed = [":s6measure_lib"],
+)
