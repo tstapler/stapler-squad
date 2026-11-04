@@ -740,6 +740,35 @@ func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	}
 }
 
+// setGitHubPRMirrorFields writes the legacy scalar PR columns on a full save.
+// A session whose snapshot carries links writes them unconditionally so a detach
+// or an open PR can clear the number, URL and terminal flag; a session whose legacy
+// number has no link keeps its stored number/URL untouched. A session without links
+// keeps the old set-only behavior, so a stale in-memory zero cannot erase data (its
+// stale terminal=true is cleared by the immediate title-keyed write, not here).
+func setGitHubPRMirrorFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
+	switch {
+	case data.LegacyPRUnrepresented:
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		}
+	case data.HasPRLinks:
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL).
+			SetGithubPrNumber(data.GitHubPRNumber).
+			SetGithubPrStatusTerminal(data.GitHubPRStatusTerminal)
+	default:
+		if data.GitHubPRURL != "" {
+			sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+		}
+		if data.GitHubPRNumber > 0 {
+			sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+		}
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		}
+	}
+}
+
 func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -766,15 +795,7 @@ func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data Instanc
 	if !data.CreationProgressUpdatedAt.IsZero() {
 		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
-	if data.GitHubPRURL != "" {
-		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
-	}
-	if data.GitHubPRNumber > 0 {
-		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
-	}
-	if data.GitHubPRStatusTerminal {
-		sessionUpdate.SetGithubPrStatusTerminal(true)
-	}
+	setGitHubPRMirrorFields(sessionUpdate, data)
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
 	}

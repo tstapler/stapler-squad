@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -822,4 +823,98 @@ func TestAttachPR_ShouldAllowLinkOnlyChange_WhenMirrorUnchanged(t *testing.T) {
 	require.Equal(t, 1, countLinks(t, storage.repo))
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 	assert.Equal(t, 2, countLinks(t, storage.repo))
+}
+
+// ---- full-save mirror semantics (T2.3.3) -----------------------------------------
+
+func TestFullSave_ShouldClearTerminalFlag_WhenOpenPRAttachedToTerminalSession(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	inst.SetPRPersister(nil) // force the full-save path, not the narrow AttachSessionPR write
+
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery,
+		PRInitial{State: PRStateMerged, Terminal: true}))
+	require.NoError(t, storage.UpdateInstance(inst))
+	got := sessionMirror(t, storage, "pr-session")
+	require.True(t, got.GitHubPRStatusTerminal, "all PRs terminal: the flag is persisted true")
+	require.Equal(t, 11, got.GitHubPRNumber)
+
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, storage.UpdateInstance(inst)) // update path
+
+	rows, err := storage.ListInstanceDataWithWorktree()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].GitHubPRStatusTerminal, "the update path must clear a stale true")
+	assert.Equal(t, 12, rows[0].GitHubPRNumber)
+	assert.Equal(t, 2, countLinks(t, storage.repo))
+
+	// Create path: a brand-new row built from the same set carries the cleared flag.
+	fresh, cleanup := createTestStorage(t)
+	t.Cleanup(cleanup)
+	clone := newTestInstance("pr-session-clone")
+	clone.UUID, clone.GitHubOwner, clone.GitHubRepo = "uuid-clone", "acme", "app"
+	finishInstanceConstruction(clone)
+	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBackfill, PRInitial{State: PRStateMerged, Terminal: true}))
+	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBackfill, PRInitial{State: PRStateOpen}))
+	require.NoError(t, fresh.AddInstance(clone))
+	assert.False(t, sessionMirror(t, fresh, "pr-session-clone").GitHubPRStatusTerminal)
+}
+
+func TestFullSave_ShouldLeaveLegacyColumns_WhenLegacyNumberUnrepresented(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	t.Cleanup(cleanup)
+	prLoadFixture(t, storage, "legacy-only", "uuid-legacy-only", "", "", 41)
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	inst := loaded[0]
+	want := sessionMirror(t, storage, "legacy-only")
+
+	inst.SetPRPersister(nil) // exercise the full save; the narrow attach write overwrites the mirror by design
+	inst.UUID = "uuid-legacy-only"
+	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
+	finishInstanceConstruction(inst)
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.True(t, inst.Snapshot().GitHub.LegacyPRUnrepresented, "an unrelated attach keeps the flag")
+	require.NoError(t, storage.UpdateInstance(inst))
+
+	got := sessionMirror(t, storage, "legacy-only")
+	assert.Equal(t, want.GitHubPRNumber, got.GitHubPRNumber)
+	assert.Equal(t, want.GitHubPRURL, got.GitHubPRURL)
+}
+
+func TestHookProcess_ShouldNotChangeLegacyColumns_WhenLinklessSessionSavedViaSsqHooksPath(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "hook-path.db")
+	// The ssq-hooks process opens the database exactly like this (cmd/ssq-hooks/main.go loadStorage).
+	open := func() *Storage {
+		repo, err := NewEntRepository(WithDatabasePath(dbPath))
+		require.NoError(t, err)
+		storage, err := NewStorageWithRepository(repo)
+		require.NoError(t, err)
+		return storage
+	}
+	owner := open()
+	prLoadFixture(t, owner, "hook-session", "uuid-hook", "acme", "app", 41)
+	want := sessionMirror(t, owner, "hook-session")
+	require.NoError(t, owner.repo.UpdateGitHubPRStatusTerminal(context.Background(), "hook-session", true))
+	want.GitHubPRStatusTerminal = true
+	owner.Close()
+
+	hook := open() // the hook process: open, read rules, write analytics, close
+	loaded, err := hook.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	// Even the worst case, a full save of the loaded session, leaves the columns alone.
+	require.NoError(t, hook.UpdateInstance(loaded[0]))
+	hook.Close()
+
+	check := open()
+	defer check.Close()
+	got := sessionMirror(t, check, "hook-session")
+	assert.Equal(t, want.GitHubPRNumber, got.GitHubPRNumber)
+	assert.Equal(t, want.GitHubPRURL, got.GitHubPRURL)
+	assert.Equal(t, want.GitHubPRStatusTerminal, got.GitHubPRStatusTerminal)
 }
