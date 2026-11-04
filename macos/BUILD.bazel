@@ -1,0 +1,27 @@
+# gazelle:ignore
+load("//tools/bzl:go_test.bzl", "go_test")
+
+# Task 5.1b: the Info.plist the woven darwin link embeds with -sectcreate (see //:stapler-squad's stage select
+# and tools/bzl/otel_weave_hermetic.sh). It lives here, not at the repo root, for the codesign reason in
+# docs/how-to/macos-codesigning.md.
+exports_files(
+    ["Info.plist"],
+    visibility = ["//:__pkg__"],
+)
+
+# Task 5.1d: the Intel target for --config=darwin_amd64.
+platform(
+    name = "darwin_amd64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# Task 5.1c: skipped (incompatible) off macOS. NOT RUN on a Mac yet; see docs/how-to/macos-codesigning.md.
+go_test(
+    name = "infoplist_test",
+    srcs = ["infoplist_test.go"],
+    data = ["//:stapler-squad"],
+    target_compatible_with = ["@platforms//os:macos"],
+)

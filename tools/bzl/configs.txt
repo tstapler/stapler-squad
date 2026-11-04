@@ -2,6 +2,7 @@ agent
 ci
 ci-cache-read
 ci-cache-write
+darwin_amd64
 dev
 e2e
 embed_tmux
@@ -9,6 +10,7 @@ embed_tymux
 gitoracle
 integration
 linux
+macos
 race
 release
 sinkguard

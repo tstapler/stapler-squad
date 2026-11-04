@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "codesigndiff_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/codesigndiff",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/bzl/codesign"],
+)
+
+go_binary(
+    name = "codesigndiff",
+    embed = [":codesigndiff_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "codesigndiff_test",
+    srcs = ["main_test.go"],
+    embed = [":codesigndiff_lib"],
+)

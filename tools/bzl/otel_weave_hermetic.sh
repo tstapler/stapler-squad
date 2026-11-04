@@ -104,7 +104,23 @@ export PATH=$work/bin:$PATH
 export GOFLAGS="-mod=readonly -trimpath '-toolexec=otelc toolexec'"
 goos=${target%/*} goarch=${target#*/}
 # Cross-compile (--platforms): the target OS/arch come from rules_go; cgo is off, as for the plain Windows build.
-if [ "$goos/$goarch" != "$("$go_bin" env GOHOSTOS)/$("$go_bin" env GOHOSTARCH)" ]; then export GOOS=$goos GOARCH=$goarch CGO_ENABLED=0; fi
+# Exception (UNVERIFIED, needs a Mac): a darwin target on a darwin host keeps cgo, with clang told the target arch,
+# because infoplist_darwin.go and the other darwin cgo files need it (Task 5.1d).
+if [ "$goos/$goarch" != "$("$go_bin" env GOHOSTOS)/$("$go_bin" env GOHOSTARCH)" ]; then
+  export GOOS=$goos GOARCH=$goarch
+  if [ "$goos" = darwin ] && [ "$("$go_bin" env GOHOSTOS)" = darwin ]; then
+    clang_arch=$goarch
+    [ "$goarch" = amd64 ] && clang_arch=x86_64
+    export CGO_ENABLED=1 CC="clang -arch $clang_arch"
+  else
+    export CGO_ENABLED=0
+  fi
+fi
+# macOS TCC identity (Task 5.1b, UNVERIFIED, needs a Mac): embed the staged Info.plist as __TEXT,__info_plist, as the
+# Makefile does. Skipped when cgo is off (the darwin cgo files, including the Info.plist one, are then not built).
+if [ "$goos" = darwin ] && [ "${CGO_ENABLED:-1}" != 0 ] && [ -f "$src/macos/Info.plist" ]; then
+  export CGO_LDFLAGS="-sectcreate __TEXT __info_plist $src/macos/Info.plist"
+fi
 taglist=$(IFS=,; echo "${tags[*]:-}")
 buildargs=(-buildvcs=false -tags "${taglist:+$taglist,}otelcauto")
 [ -n "$ldflags" ] && buildargs+=(-ldflags "$ldflags")

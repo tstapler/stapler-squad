@@ -99,6 +99,13 @@ build:linux --@rules_go//go/config:pure
 # Race needs cgo and a host C compiler, so it turns off the pure-Go default (ADR-006).
 build:race --@rules_go//go/config:pure=false
 build:race --@rules_go//go/config:race
+# macOS (Story 5.1). enable_platform_specific_config applies build:macos on a macOS host. Only the cc toolchain reads
+# this minimum; the woven binary links through `go build` (tools/bzl/otel_weave_hermetic.sh). UNVERIFIED, needs a Mac,
+# and the 13.0 value is a placeholder the owner must confirm against the oldest macOS to support.
+build:macos --macos_minimum_os=13.0
+# Intel macOS target from an arm64 runner (Task 5.1d). cgo for it relies on `clang -arch x86_64` in the weave script;
+# if Bazel's cc toolchain resolution rejects the cross, use an Intel runner instead. UNVERIFIED, needs a Mac.
+build:darwin_amd64 --platforms=//macos:darwin_amd64
 # release == embed_tymux, repeated rather than `--config=embed_tymux` (no spike-verified row for
 # --config yet, and the full tag set must stay in one line anyway).
 build:release --@rules_go//go/config:tags=embed_tmux,embed_tymux

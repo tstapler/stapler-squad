@@ -56,7 +56,9 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 | --incompatible_remote_local_fallback_for_remote_cache | spike-verified | `bazel help` 9.3.1: `--[no]incompatible_remote_local_fallback_for_remote_cache (a boolean; default: "false")` |
 | --local_resources | spike-verified | `bazel help` 9.3.1: `--local_resources (a named double, 'name=value', where value is an integer, or a keyword ("HOST_CPUS", "HOST_RAM"), optionally followed by an operation ([-\|*]<float>) eg. "HOST_CPUS", "HOST_CPUS*.5"; may be used multiple times)` |
 | --lockfile_mode | spike-verified | `bazel help` 9.3.1: `--lockfile_mode (off, update, refresh or error; default: "update")` |
+| --macos_minimum_os | spike-verified | `bazel help build` 9.3.1: `--macos_minimum_os (a dotted version (for example '2.3' or '3.3alpha2.4'); default: see description)` (flag exists; its effect on macOS is not verified, no Mac) |
 | --max_idle_secs | spike-verified | `bazel help` 9.3.1: `--max_idle_secs (an integer; default: "10800")` |
+| --platforms | spike-verified | `bazel help build` 9.3.1: `--platforms (a build target label; default: "")` |
 | --remote_download_minimal | spike-verified | `bazel help` 9.3.1: `--remote_download_minimal` (not committed) |
 | --remote_download_toplevel | spike-verified | `bazel help` 9.3.1: `--remote_download_toplevel` |
 | --remote_local_fallback | spike-verified | `bazel help` 9.3.1: `--[no]remote_local_fallback (a boolean; default: "false")` |

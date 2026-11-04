@@ -179,12 +179,16 @@ otel_weave_hermetic(
         "//instrumentation/otelc/safeexec",
     ],
     modcache = ":otel_modcache",
+    # On a macOS target the weave also stages macos/Info.plist and links it with -sectcreate (Task 5.1b).
     stage = select({
         ":embed_tmux_and_tymux": [
             "//session/tmux/embed:tmux_staged",
             "//session/tymux/embed:tymuxd_staged",
         ],
         "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
+    }) + select({
+        "@platforms//os:macos": ["//macos:Info.plist"],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
