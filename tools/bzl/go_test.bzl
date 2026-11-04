@@ -18,6 +18,8 @@ _HOST_COUPLED = {
     "tuitest/integration/claude_squad": ["exec-host-binary"],
 }
 
+_EXTERNAL = "external"  # tag-reason: host-coupled result must rerun, never cache (pre-mortem #3) (#1423)
+
 def go_test_defaults(package, kwargs):
     """Returns kwargs with the table's size, shard_count and cache-policy tags applied."""
     if kwargs.get("flaky"):
@@ -29,8 +31,8 @@ def go_test_defaults(package, kwargs):
     if shards and "shard_count" not in out:
         out["shard_count"] = shards
     tags = list(out.get("tags", []))
-    if _HOST_COUPLED.get(package) and "external" not in tags:
-        tags.append("external")  # tag-reason: host-coupled result must rerun, never cache (pre-mortem #3) (#1423)
+    if _HOST_COUPLED.get(package) and _EXTERNAL not in tags:
+        tags.append(_EXTERNAL)
     if tags:
         out["tags"] = tags
     return out
