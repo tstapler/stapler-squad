@@ -3,10 +3,12 @@
 # Starlark helpers for the Bazel conversion (macros and rules loaded as //tools/bzl:<name>.bzl).
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:ent_test.bzl", "ent_gen_action_test")
+load("//tools/bzl:go_test_test.bzl", "go_test_bzl_test_suite")
 
 exports_files([
     "ent.bzl",
     "go_test.bzl",
+    "go_test_test.bzl",
     "sync_gen.sh",
 ])
 
@@ -21,3 +23,5 @@ sh_binary(
     srcs = ["test_wrapper.sh"],
     visibility = ["//visibility:public"],
 )
+
+go_test_bzl_test_suite(name = "go_test_bzl_test")
