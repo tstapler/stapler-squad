@@ -293,7 +293,7 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 		// fan-out path and the after_seq replay path.
 		Seq: evt.Seq,
 		// Constant per process; lets clients distinguish a redeploy from a seq anomaly.
-		DeployId: deployID,
+		DeployId: DeployID(),
 	}
 
 	payload := evt.BacklogItemPayload

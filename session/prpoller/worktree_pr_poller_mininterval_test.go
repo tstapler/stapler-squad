@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 // Deterministic (fake clock, fake fetch) coverage for the per-PR minimum poll
 // interval: scanner completions arrive every few seconds but each PR must be

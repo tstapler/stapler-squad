@@ -1,0 +1,5 @@
+# Packages that must not depend, even transitively, on a forbidden package (`scoping boundaries`).
+# Direct session/ent imports are covered by depguard rule `scoped_packages_off_ent` in .golangci.yml.
+session/prpoller !server
+server/services/sessionbundle !server/web
+server/services/devtools !server/web

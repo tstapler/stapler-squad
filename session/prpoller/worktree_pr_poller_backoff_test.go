@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 // Failure backoff and targeted InvalidateCache coverage for WorktreePRPoller.
 // Fake clock and fake fetch throughout; the fetchAndStore mapping tests use an

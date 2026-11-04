@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 // worktree_pr_poller_discovery_test.go covers the same discovery-path
 // ordering bug as pr_status_poller_discovery_test.go: a real

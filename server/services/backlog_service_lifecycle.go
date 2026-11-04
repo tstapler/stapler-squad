@@ -847,45 +847,6 @@ func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
 		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
 }
 
-type transitionActorKey struct{}
-
-// WithTransitionActor marks ctx so TransitionBacklogItemStatus records the given
-// audit actor (default TriggeredByUser), e.g. TriggeredByAgent for MCP callers.
-func WithTransitionActor(ctx context.Context, actor string) context.Context {
-	return context.WithValue(ctx, transitionActorKey{}, actor)
-}
-
-type transitionCallerKey struct{}
-
-// WithTransitionCaller names the registered operator caller of an RPC that
-// another operator-facing component forwards to TransitionBacklogItemStatus.
-// resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
-// and only for the user actor.
-func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) context.Context {
-	return context.WithValue(ctx, transitionCallerKey{}, caller)
-}
-
-// resolveTransitionCaller maps the request's actor to its registered caller:
-// the user actor is an operator; the agent actor, and any unknown value, is the
-// MCP delegate (class agent), so an unknown actor never gains the operator
-// override. Both context keys are unexported, so only in-process code sets them.
-func resolveTransitionCaller(ctx context.Context) session.TransitionCaller {
-	if transitionActorFromContext(ctx) != session.TriggeredByUser {
-		return session.CallerMCPTransitionDelegate
-	}
-	if c, ok := ctx.Value(transitionCallerKey{}).(session.TransitionCaller); ok && c == session.CallerOperatorNotificationAction {
-		return c
-	}
-	return session.CallerOperatorTransitionRPC
-}
-
-func transitionActorFromContext(ctx context.Context) string {
-	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
-		return a
-	}
-	return session.TriggeredByUser
-}
-
 // isFailedPreconditionGuardError reports whether guardErr is one of
 // TransitionGuard's sentinel errors (session/domain/backlog.go) that
 // represent a business-rule precondition not yet met, as opposed to a

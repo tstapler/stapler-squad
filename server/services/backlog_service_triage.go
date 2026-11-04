@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -394,21 +393,6 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 		map[string]string{"item_id": itemID},
 	))
 }
-
-// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
-// headless triage path. The orphan guard uses this prefix to identify sessions that have no
-// live tmux process and can be safely tombstoned on re-trigger.
-// headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
-const (
-	headlessTriageUUIDPrefix   = "headless-triage-"
-	headlessReReviewUUIDPrefix = "headless-re-review-"
-
-	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
-	// forms for callers outside this package that must not treat a synthetic
-	// headless ItemSession UUID as a tmux session.
-	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
-	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
-)
 
 // triageCallBudget bounds a single headless triage LLM call — now a backstop
 // against a call that never stops producing output, since headless.idleTimeout
@@ -1467,40 +1451,6 @@ func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []sessio
 		}
 	}
 	return nil
-}
-
-// findSupersededSessions returns every tmux-backed (work or review role)
-// ItemSession in sessions that is NOT the current round for its role — i.e.
-// a strictly newer ItemSession of the same role exists for this item. This is
-// the single source of truth for "which round is current," reusing
-// findMostRecentSessions' exact per-role tie-break (latest CreatedAt wins) —
-// the same helper TriggerReReview itself already calls to find the prior
-// review round to archive — rather than defining a second, competing notion
-// of "current." findActiveWorkSession/findConfirmedLiveWorkSession answer a
-// different question ("is there a still-open/still-live work session at
-// all," by EndedAt/IsSessionLive, not CreatedAt) for spawnSessionAfterGates'
-// concurrency guard, not "which round is current," so this deliberately does
-// not reuse their tie-break. The two can disagree in theory (e.g. the
-// newest-by-CreatedAt round already ended while an older one is still open) —
-// archiveIfNotLive's IsSessionLive check is what actually protects a
-// genuinely-attached session from being archived on such a disagreement, not
-// this function agreeing with those two on "current."
-// Pure — no I/O, no locking — so it's table-testable without tmux/storage.
-func findSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
-	currentReview, currentWork := findMostRecentSessions(sessions)
-
-	var superseded []session.ItemSessionSummary
-	for i := range sessions {
-		is := &sessions[i]
-		if !session.IsTmuxBackedSessionRole(is.Role) {
-			continue
-		}
-		if is == currentReview || is == currentWork {
-			continue
-		}
-		superseded = append(superseded, *is)
-	}
-	return superseded
 }
 
 // findActiveJulesSession returns the open (not yet ended) jules_work-role
@@ -2908,30 +2858,6 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 // maxErrorDetailRunes bounds ItemSession.error_detail.
 const maxErrorDetailRunes = 500
 
-// errorDetailSecretPattern matches common credential shapes that could ride along in a
-// wrapped exec/network error: vendor token prefixes, JWTs, bearer/basic auth, and
-// key/value or --flag secrets with =, :, quoted-JSON or (for --flags) space separators.
-var errorDetailSecretPattern = regexp.MustCompile(`(?i)(` +
-	`\bsk-[a-z0-9_-]{8,}` +
-	`|\b(?:gh[pousr]|github_pat)_[a-z0-9_]{20,}` +
-	`|\bxox[abpr]-[a-z0-9-]{8,}` +
-	`|\b(?:akia|asia)[a-z0-9]{16}\b` +
-	`|\beyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]*` +
-	`|\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}` +
-	`|(?:api[_-]?key|token|secret|passw(?:or)?d|authorization)\b["']?\s*[:=]\s*["']?(?:(?:bearer|basic)\s+)?[^\s"',;&]+` +
-	`|--(?:api[_-]?key|token|secret|passw(?:or)?d)\s+[^\s"',;&]+` +
-	`)`)
-
-// errorDetailURLUserinfoPattern captures a URL's scheme so only its user:pass@ part is masked.
-var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@`)
-
-// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
-// log rotation and is shown in the UI, so it must not become a durable secret store.
-func redactErrorDetail(s string) string {
-	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
-	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
-}
-
 // truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
 // multi-byte rune), or "" for a nil error.
 func truncateErrorDetail(err error, maxRunes int) string {
@@ -3132,7 +3058,7 @@ func (s *BacklogService) TriggerReReview(
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
 				log.Warn("[TriggerReReview] branch drift blocked review", "item", item.ID, "branch", wt.BranchName, "summary", blockedSummary)
-				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
@@ -3227,7 +3153,7 @@ Do not modify the code. Only write the review verdict.
 		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
 		if workSessionDiff == "" && !codebaseWorkDirExists {
 			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
-			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, blockedSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
@@ -3330,7 +3256,7 @@ Do not modify the code. Only write the review verdict.
 		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
 			reviewPath = "codebase-read-degraded"
 			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
-			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, capSummary)
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, capSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
@@ -3376,7 +3302,7 @@ Do not modify the code. Only write the review verdict.
 			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
 				reviewPath = "codebase-read-degraded"
 				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
-				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, timeoutSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), HeadlessReReviewUUIDPrefix, timeoutSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
@@ -3392,12 +3318,12 @@ Do not modify the code. Only write the review verdict.
 			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
 			// changes the returned error: every step here is best-effort/log-and-continue.
 			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
-			capturePath := s.captureHeadlessFailure(headlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			capturePath := s.captureHeadlessFailure(HeadlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
 			log.Error("[TriggerReReview] headless re-review call failed", "item", item.ID, "errType", errType, "capture", capturePath, "error", callErr)
 			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, session.ItemSessionData{
 				ItemID:      item.ID,
-				SessionUUID: headlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionUUID: HeadlessReReviewUUIDPrefix + uuid.New().String(),
 				SessionRole: session.SessionRoleReview,
 				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
 			}); failCreateErr != nil {
@@ -3430,7 +3356,7 @@ Do not modify the code. Only write the review verdict.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 
-		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
+		reviewSessionUUID := HeadlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
 			ItemID:                 item.ID,
 			SessionUUID:            reviewSessionUUID,
@@ -3698,7 +3624,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
 		// regardless, to prevent a genuinely hung or leaked call from blocking
 		// re-trigger indefinitely.
-		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
+		isHeadless := strings.HasPrefix(is.SessionUUID, HeadlessTriageUUIDPrefix)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
 		var live bool
 		if isHeadless {
@@ -3756,25 +3682,6 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 //     signal about our own process lifecycle for it.
 func shouldAttributeTombstoneToShutdown(isHeadless, isStale, live bool, createdAt, bootTime time.Time) bool {
 	return isHeadless && !isStale && !live && createdAt.Before(bootTime)
-}
-
-// findMostRecentSessions returns the most recently created review and work ItemSessions
-// from the provided list. Either return value may be nil if no session of that role exists.
-func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
-	for i := range sessions {
-		is := &sessions[i]
-		switch is.Role {
-		case session.SessionRoleReview:
-			if reviewSession == nil || is.CreatedAt.After(reviewSession.CreatedAt) {
-				reviewSession = is
-			}
-		case session.SessionRoleWork:
-			if workSession == nil || is.CreatedAt.After(workSession.CreatedAt) {
-				workSession = is
-			}
-		}
-	}
-	return
 }
 
 // resolveCodebaseWorkDir returns the directory the headless codebase-read review call

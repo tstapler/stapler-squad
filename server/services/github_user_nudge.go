@@ -440,12 +440,7 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 
 // Canonical reason names shared with PR-fix auto-steer's duplicate key.
 const (
-	reasonNameFailingChecks     = "FAILING_CHECKS"
-	reasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
-	reasonNameMergeConflict     = "MERGE_CONFLICT"
-	// reasonNameChangesRequested has no manual-nudge counterpart, so a
-	// changes-requested-only steer never suppresses a thread nudge.
-	reasonNameChangesRequested = "CHANGES_REQUESTED"
+	reasonNameMergeConflict = "MERGE_CONFLICT"
 )
 
 // nudgeSignature keys the duplicate window by PR and canonical reason set, the

@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -470,7 +471,7 @@ func (p *WorktreePRPoller) pruneLastPolled(live map[string]struct{}) {
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
 func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) error {
-	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
+	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, session.EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
 		return nil // also covers transient git exec/lock errors: they wait a full PollInterval, which paces the warning
@@ -582,7 +583,7 @@ func (p *WorktreePRPoller) sessionBackedPaths() map[string]struct{} {
 		return nil
 	}
 	p.prPoller.mu.RLock()
-	insts := make([]*Instance, len(p.prPoller.instances))
+	insts := make([]*session.Instance, len(p.prPoller.instances))
 	copy(insts, p.prPoller.instances)
 	p.prPoller.mu.RUnlock()
 

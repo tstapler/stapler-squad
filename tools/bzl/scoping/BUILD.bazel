@@ -4,10 +4,14 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "scoping_lib",
     srcs = [
+        "boundaries.go",
+        "budget.go",
+        "deps.go",
         "golist.go",
         "main.go",
         "model.go",
         "move.go",
+        "relocate.go",
         "replay.go",
         "t9.go",
     ],
@@ -16,6 +20,7 @@ go_library(
     deps = [
         "@org_golang_x_tools//go/ast/astutil",
         "@org_golang_x_tools//go/packages",
+        "@org_golang_x_tools//imports",
     ],
 )
 
@@ -28,7 +33,11 @@ go_binary(
 go_test(
     name = "scoping_test",
     srcs = [
+        "boundaries_test.go",
+        "budget_test.go",
+        "deps_test.go",
         "move_test.go",
+        "relocate_test.go",
         "scoping_test.go",
     ],
     embed = [":scoping_lib"],

@@ -3,8 +3,12 @@
 //
 //	scoping replay    [--commits N] [--write]   T9 components as JSON; --write stores tools/bzl/scoping/baseline.json
 //	scoping move      --from D --to D --files a.go,..  git mv a cluster into a new package and re-point references
+//	scoping relocate  --dir D --to f.go --decls a,T.m  move declarations between files of one package (no package change)
+//	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
+//	scoping budget    [--file F] [--base REF]   per-package size/import caps (ratchet); --init a,b prints caps from the tree
+//	scoping boundaries [--file F]               packages that must not depend (transitively) on others
 package main
 
 import (
@@ -262,12 +266,36 @@ func runMove(args []string, stdout io.Writer) int {
 	fs.StringVar(&spec.ToDir, "to", "", "new package directory, relative to the root")
 	fs.StringVar(&spec.Root, "root", workspace(), "repository root")
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
+	fs.BoolVar(&spec.AllowCollisions, "allow-collisions", false, "measurement only: skip the capitalisation-collision refusal (the result does not compile)")
+	fs.BoolVar(&spec.Lower, "lower", false, "the staying files depend on the cluster (test-support package): re-point them instead of reporting")
 	if fs.Parse(args) != nil || spec.FromDir == "" || spec.ToDir == "" || *files == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping move --from DIR --to DIR --files a.go,b.go [--dry-run]")
 		return 2
 	}
 	spec.Files = strings.Split(*files, ",")
 	if err := RunMove(spec, stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func runRelocate(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("relocate", flag.ContinueOnError)
+	spec := RelocateSpec{}
+	decls := fs.String("decls", "", "comma-separated declarations: Name, or Type.Method")
+	fs.StringVar(&spec.Dir, "dir", "", "package directory, relative to the root")
+	fs.StringVar(&spec.ToFile, "to", "", "destination file name inside --dir (created when absent)")
+	fs.StringVar(&spec.Root, "root", workspace(), "repository root")
+	fs.BoolVar(&spec.AnyKind, "any-kind", false, "allow moving declarations between _test.go and non-test files")
+	fs.BoolVar(&spec.WithMethods, "with-methods", false, "also move every method of each listed type")
+	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
+	if fs.Parse(args) != nil || spec.Dir == "" || spec.ToFile == "" || *decls == "" {
+		fmt.Fprintln(os.Stderr, "usage: scoping relocate --dir DIR --to file.go --decls A,B,T.M [--with-methods] [--dry-run]")
+		return 2
+	}
+	spec.Decls = strings.Split(*decls, ",")
+	if err := RunRelocate(spec, stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -305,6 +333,14 @@ func main() {
 		os.Exit(runInversions(os.Args[2:], os.Stdout))
 	case "move":
 		os.Exit(runMove(os.Args[2:], os.Stdout))
+	case "relocate":
+		os.Exit(runRelocate(os.Args[2:], os.Stdout))
+	case "deps":
+		os.Exit(runDeps(os.Args[2:], os.Stdout))
+	case "budget":
+		os.Exit(runBudget(os.Args[2:], os.Stdout))
+	case "boundaries":
+		os.Exit(runBoundaries(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
 	default:

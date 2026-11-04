@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -653,8 +654,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
+			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
+			if deps.BacklogService != nil {
+				backlogTransitions = deps.BacklogService
+			}
 			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
-				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService, Cancels: wakeTriggerSvc,
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: backlogTransitions, Cancels: wakeTriggerSvc,
 			})
 		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -1118,7 +1123,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// alongside the existing prFixRouter dispatch. deps.WorktreePRPoller may
 			// be nil (not constructed when no GitHub token is available at startup);
 			// the adapter itself nil-guards it.
-			pollerInvalidator := session.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
+			pollerInvalidator := prpoller.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
 			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter, pollerInvalidator)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)

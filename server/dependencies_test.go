@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -545,7 +546,7 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 	cache := githubpkg.NewUserPRCache()
 	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
 
-	poller := session.NewPRStatusPoller(nil)
+	poller := prpoller.NewPRStatusPoller(nil)
 	titles := []string{"no-pr-one", "no-pr-two"}
 	instances := make([]*session.Instance, 0, len(titles))
 	for _, title := range titles {

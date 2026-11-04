@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 // InvalidateCache interaction tests: failure backoff, no-PR backoff, and the
 // production path that registers a worktree's repo for targeted invalidation.

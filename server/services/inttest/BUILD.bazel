@@ -17,6 +17,7 @@ go_test(
         "//server/services",
         "//session",
         "//session/domain",
+        "//session/prpoller",
         "//session/scrollback",
         "//testutil",
         "//testutil/wait",

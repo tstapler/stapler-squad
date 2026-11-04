@@ -134,7 +134,7 @@ func defaultPRPendingCheckerFactory(repoPath string) prPendingChecker {
 // unchanged when no PR exists — see reconcileOrphanedAgentPRs, which treats
 // that as "no match yet", not a failure.
 func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 // production default installed by newListenerBase for
 // verifyPRBelongsToItem's live-GitHub re-check.
 func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
@@ -801,7 +801,7 @@ func (l *BacklogLifecycleListener) autoMergePreflight(repoPath, itemID string) b
 	if seam.Cached == nil || seam.Fetch == nil {
 		return false
 	}
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
 	if err != nil || !ref.IsValid() {
 		return false
 	}
@@ -2012,7 +2012,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *EntRepository, repoFullN
 		if item.PrNumber != prNumber {
 			continue
 		}
-		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
+		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, EnterpriseHostsForRemoteParsing())
 		if refErr != nil || !ref.IsValid() {
 			continue
 		}

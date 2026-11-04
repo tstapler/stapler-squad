@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prpoller",
+    srcs = [
+        "poller_invalidation_adapter.go",
+        "pr_status_poller.go",
+        "worktree_pr_poller.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/prpoller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//github",
+        "//log",
+        "//session",
+        "//telemetry",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prpoller",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prpoller_test",
+    srcs = [
+        "poller_invalidation_adapter_test.go",
+        "pr_status_poller_discovery_test.go",
+        "pr_status_poller_test.go",
+        "worktree_pr_poller_backoff_test.go",
+        "worktree_pr_poller_discovery_test.go",
+        "worktree_pr_poller_invalidate_test.go",
+        "worktree_pr_poller_mininterval_test.go",
+        "worktree_pr_poller_noprlift_test.go",
+        "worktree_pr_poller_test.go",
+    ],
+    embed = [":prpoller"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//github",
+        "//session",
+        "//testutil/wait",
+    ],
+)
