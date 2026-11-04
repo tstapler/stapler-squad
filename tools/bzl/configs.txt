@@ -7,6 +7,7 @@ embed_tmux
 embed_tymux
 gitoracle
 integration
+linux
 race
 release
 sinkguard
