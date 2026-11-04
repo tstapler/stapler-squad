@@ -25,6 +25,7 @@ func TestIntegration_DetectDaemonVersions_FindsRealRunningDaemon(t *testing.T) {
 
 	assert.True(t, info.Running)
 	assert.Equal(t, readTymuxdPID(t), info.PID, "listener pid must match the daemon we spawned")
+	assert.NotZero(t, info.ProtocolVersion, "version must come from GetServerInfo, not the process probe")
 	assert.NotEmpty(t, info.RunningVersion)
 	assert.Equal(t, info.InstalledVersion, info.RunningVersion)
 	assert.Equal(t, VersionSame, info.Direction)

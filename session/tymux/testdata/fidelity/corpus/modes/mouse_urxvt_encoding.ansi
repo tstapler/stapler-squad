@@ -1,0 +1,2 @@
+modes/mouse_urxvt_encoding -- xterm ctlseqs ?1015 urxvt mouse encoding
+[?1002h[?1015hbutton tracking + urxvt encoding

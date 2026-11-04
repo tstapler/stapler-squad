@@ -140,7 +140,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	// wall-clock latency bound flaked under load, so only hang-detect.
 	transitionDone := make(chan error, 1)
 	go func() {
-		_, transitionErr := fx.repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
+		_, transitionErr := fx.repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
 			&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
 		transitionDone <- transitionErr
 	}()

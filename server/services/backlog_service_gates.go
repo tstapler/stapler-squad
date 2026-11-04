@@ -138,41 +138,54 @@ func (s *BacklogService) GetPendingGates(
 	return connect.NewResponse(&sessionv1.GetPendingGatesResponse{Gates: protoGates}), nil
 }
 
-// buildPendingGatesGuardInput assembles the BacklogItemTransitionInput
-// GetPendingGates hands to PendingGates, computing hasUnshippedCode/
-// hasUnresolvedBlockers under the same to-status-gated conditions
-// TransitionBacklogItemStatus uses so this preview matches what a real
-// transition attempt would see. Query failures are logged and degrade the
-// corresponding field to its zero value — this is a read-only preview, never
-// worth failing the whole request over.
+// buildPendingGatesGuardInput is the read-only preview form of buildGuardInput:
+// a failed blockers lookup is logged and the field degrades to its zero value,
+// never worth failing the whole request over.
 func (s *BacklogService) buildPendingGatesGuardInput(
 	ctx context.Context,
 	item *session.BacklogItemData,
 	to session.BacklogStatus,
 ) session.BacklogItemTransitionInput {
+	guardInput, err := s.buildGuardInput(ctx, item, to, "GetPendingGates")
+	if err != nil {
+		log.WarningLog().Printf("[GetPendingGates] failed to check unresolved blockers for item %s: %v", item.ID, err)
+	}
+	return guardInput
+}
+
+// buildGuardInput assembles the BacklogItemTransitionInput shared by
+// TransitionBacklogItemStatus and GetPendingGates, computing
+// hasUnshippedCode/hasUnresolvedBlockers only under the to-status-gated
+// conditions a real transition uses, so a preview matches an attempt. caller
+// tags the log lines. A failed blockers lookup is returned next to an input
+// whose HasUnresolvedBlockers is false; a failed verdict lookup is logged and
+// leaves OverallOutcome empty (TransitionGuard then blocks review->done).
+func (s *BacklogService) buildGuardInput(
+	ctx context.Context,
+	item *session.BacklogItemData,
+	to session.BacklogStatus,
+	caller string,
+) (session.BacklogItemTransitionInput, error) {
 	var hasUnshippedCode bool
 	if to == session.BacklogStatusDone {
-		hasUnshippedCode = !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, "GetPendingGates")
+		hasUnshippedCode = !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, caller)
 	}
 
 	var hasUnresolvedBlockers bool
+	var blockersErr error
 	if to == session.BacklogStatusInProgress {
-		var err error
-		hasUnresolvedBlockers, err = s.hasUnresolvedBlockers(ctx, item.ID)
-		if err != nil {
-			log.WarningLog().Printf("[GetPendingGates] failed to check unresolved blockers for item %s: %v", item.ID, err)
-		}
+		hasUnresolvedBlockers, blockersErr = s.hasUnresolvedBlockers(ctx, item.ID)
 	}
 
 	overallOutcome, err := s.storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	if err != nil {
-		log.WarningLog().Printf("[GetPendingGates] failed to load review verdict for item %s: %v", item.ID, err)
+		log.WarningLog().Printf("[%s] failed to load review verdict for item %s: %v", caller, item.ID, err)
 	}
 
 	guardInput := session.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
 	guardInput.OverallOutcome = overallOutcome
 	guardInput.HasUnshippedCode = hasUnshippedCode
-	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers && blockersErr == nil
 	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
-	return guardInput
+	return guardInput, blockersErr
 }

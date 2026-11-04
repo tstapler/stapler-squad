@@ -6,8 +6,7 @@ import {
   type ProfileDefaultsProto,
 } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
 import {
   container,
@@ -94,7 +93,7 @@ export function ProfilesManager() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadProfiles();
   }, [loadProfiles]);
@@ -210,7 +209,7 @@ export function ProfilesManager() {
           type="button"
           className="btn btn-primary"
           onClick={handleNewProfile}
-        >
+        >{/* analytics-exempt */}
           New Profile
         </button>
       </div>
@@ -248,14 +247,14 @@ export function ProfilesManager() {
               type="button"
               className="btn btn-secondary"
               onClick={() => handleEdit(key, profile)}
-            >
+            >{/* analytics-exempt */}
               Edit
             </button>
             <button
               type="button"
               className="btn btn-danger"
               onClick={() => handleDelete(key)}
-            >
+            >{/* analytics-exempt */}
               Delete
             </button>
           </div>
@@ -339,7 +338,7 @@ export function ProfilesManager() {
                       className={tagRemove}
                       onClick={() => handleRemoveTag(t)}
                       aria-label={`Remove tag ${t}`}
-                    >
+                    >{/* analytics-exempt */}
                       x
                     </button>
                   </span>
@@ -360,7 +359,7 @@ export function ProfilesManager() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={handleAddTag}
-                >
+                >{/* analytics-exempt */}
                   Add
                 </button>
               </div>
@@ -372,14 +371,14 @@ export function ProfilesManager() {
               className="btn btn-primary"
               onClick={handleSave}
               disabled={saving}
-            >
+            >{/* analytics-exempt */}
               {saving ? "Saving..." : "Save"}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={handleCancel}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           </div>

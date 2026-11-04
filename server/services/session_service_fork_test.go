@@ -60,6 +60,9 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
+	// Registered after Shutdown's cleanup so it runs first: any session the test
+	// created through CreateSession must not leave its SessionDriver polling.
+	t.Cleanup(func() { stopPollerSessionDrivers(poller) })
 
 	return &forkTestFixture{
 		svc:     svc,

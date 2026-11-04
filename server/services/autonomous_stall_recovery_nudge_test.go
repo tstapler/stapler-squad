@@ -477,7 +477,7 @@ func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
 	f.svc.autonomousSvc.SetNudgeFlagReaders(func() bool {
 		if !moved {
 			moved = true
-			_, err := f.storage.TransitionBacklogItemStatus(context.Background(), f.itemID, session.BacklogStatusReview, nil, "test")
+			_, err := f.storage.RawTransitionBacklogItemStatus(context.Background(), f.itemID, session.BacklogStatusReview, nil, "test")
 			require.NoError(t, err)
 		}
 		return true

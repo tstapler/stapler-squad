@@ -2,10 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { DetectionEventProto } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -53,7 +52,7 @@ export function DetectionEventsPanel({ sessionId, program = "claude" }: Detectio
   const [copiedField, setCopiedField] = useState<"content" | "snippet" | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 
@@ -142,7 +141,7 @@ export function DetectionEventsPanel({ sessionId, program = "claude" }: Detectio
             cursor: capturing ? "not-allowed" : "pointer",
             opacity: capturing ? 0.5 : 1,
           }}
-        >
+        >{/* analytics-exempt */}
           {capturing ? "Capturing…" : "📸 Capture test case"}
         </button>
       </div>
@@ -219,7 +218,7 @@ export function DetectionEventsPanel({ sessionId, program = "claude" }: Detectio
               <button
                 onClick={() => copyToClipboard(captureResult.content, "content")}
                 style={copyBtnStyle}
-              >
+              >{/* analytics-exempt */}
                 {copiedField === "content" ? "Copied!" : "Copy"}
               </button>
             </div>
@@ -253,7 +252,7 @@ export function DetectionEventsPanel({ sessionId, program = "claude" }: Detectio
               <button
                 onClick={() => copyToClipboard(goSnippet, "snippet")}
                 style={copyBtnStyle}
-              >
+              >{/* analytics-exempt */}
                 {copiedField === "snippet" ? "Copied!" : "Copy"}
               </button>
             </div>

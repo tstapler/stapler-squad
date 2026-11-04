@@ -42,6 +42,7 @@ func TestSessionService_Shutdown_KillsTestTmuxServer(t *testing.T) {
 	queue := session.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
+	t.Cleanup(func() { stopPollerSessionDrivers(poller) })
 
 	require.NotEmpty(t, svc.testTmuxServerSocket, "test binary must set testTmuxServerSocket")
 	socket := svc.testTmuxServerSocket

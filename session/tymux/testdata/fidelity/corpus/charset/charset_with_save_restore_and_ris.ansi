@@ -1,0 +1,4 @@
+charset/charset_with_save_restore_and_ris -- esctest2 save_restore_cursor.py (
+[1;1H(07(Blqk-ascii[2;1H8lqk-gfx-restored(B
+[4;1H(0lqkclqk-after-RIS[6;1H(0[!plqk-after-DECSTR-soft-reset?(B
+[8;1H(0lq[2J[9;1Hlqk-charset-survives-ED(B

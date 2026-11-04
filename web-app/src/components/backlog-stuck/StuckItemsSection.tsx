@@ -47,6 +47,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.SPAWN_FAILED,
   StuckReason.STEER_FAILED,
   StuckReason.VERDICT_UNDELIVERED,
+  StuckReason.TRANSITION_DENIED,
   StuckReason.PR_PENDING_NO_PR,
   StuckReason.REWORK_BLOCKED_STALE,
   StuckReason.PR_NEEDS_FIX,
@@ -95,6 +96,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     bulkResetParkedRemediation,
     triggerRemediationNow,
     overrideClaimBlock,
+    refreshAutoMerge,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
@@ -263,6 +265,17 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     [visibleItems]
   );
 
+  const constituentReasonsFor = useCallback(
+    (item: StuckBacklogItem): StuckReason[] =>
+      item.reason === StuckReason.MULTIPLE_REASONS
+        ? // Unfiltered `items`: an active reason filter hides the sibling rows.
+          items
+            .filter((i) => i.itemId === item.itemId && !isEscalationReason(i.reason))
+            .map((i) => i.reason)
+        : [],
+    [items]
+  );
+
   const grouped = useMemo(() => {
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
@@ -404,6 +417,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       onToggleExpand={() => toggleExpand(key)}
                       otherReasonsCount={otherCount}
                       otherReasonLabels={otherReasonLabelsFor(item)}
+                      constituentReasons={constituentReasonsFor(item)}
                       justResolved={ghost !== undefined}
                       resolvedMessage={ghost?.message}
                       resolvedTrailingMessage={ghost?.trailingMessage}
@@ -415,6 +429,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
                       onDiagnose={handleDiagnose}
+                      onRefreshAutoMerge={refreshAutoMerge}
                       focusItemId={focusItemId}
                     />
                   );

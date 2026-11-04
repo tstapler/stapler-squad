@@ -8,8 +8,9 @@ const _features = [
 // vars.color.background on cockpitRoot in layout.css.ts.
 
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 const DARK_THEMES = ['matrix', 'dark', 'cyberpunk77', 'wh40k', 'clean'] as const;
 

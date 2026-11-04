@@ -4,8 +4,9 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import { BacklogPage } from "./pages/BacklogPage";
 import { BacklogItemDetailPage, seedHeadlessTriageItem, seedReviewVerdictItem } from "./pages/BacklogItemDetailPage";
 import { enableBacklogFeatureFlag } from "./pages/StuckItemsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 test.use({ viewport: { width: 320, height: 568 }, isMobile: true, hasTouch: true });
 

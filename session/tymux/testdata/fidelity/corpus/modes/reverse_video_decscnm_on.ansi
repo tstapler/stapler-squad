@@ -1,0 +1,2 @@
+modes/reverse_video_decscnm_on -- xterm ctlseqs DECSCNM ?5h
+[?5hreverse video (DECSCNM) on [31mred[0m

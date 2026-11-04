@@ -8,8 +8,9 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { UpNextPage } from './pages/UpNextPage';
 import { deleteSeededStuckItems, enableBacklogFeatureFlag, seedStuckItem } from './pages/StuckItemsPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
 test.afterEach(async ({ request }) => {
@@ -195,7 +196,7 @@ test.describe('Up Next tabs', () => {
 
     await expect(upNext.tab('stuck')).toHaveAttribute('aria-selected', 'true');
     const card = page.locator(`[data-testid="stuck-item"][data-item-id="${itemId}"]`);
-    await expect(card).toHaveAttribute('aria-expanded', 'true');
+    await expect(card.getByTestId('stuck-item-toggle')).toHaveAttribute('aria-expanded', 'true');
     expect(await page.evaluate(() => (window as unknown as { __prsSkeletonSeen: boolean }).__prsSkeletonSeen)).toBe(false);
     expect(await page.evaluate(() => localStorage.getItem('up-next-tab'))).toBe('worktrees');
 

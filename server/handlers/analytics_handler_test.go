@@ -301,3 +301,31 @@ func TestAnalyticsHandler_ShouldLeaveNonFilesEventsUnchanged_When_GuardAdded(t *
 		t.Errorf("non-files labels were altered: %v", p.events[0].Labels)
 	}
 }
+
+type batchCountingProvider struct {
+	batches [][]analytics.Event
+	singles int
+}
+
+func (p *batchCountingProvider) Record(_ context.Context, _ analytics.Event) error {
+	p.singles++
+	return nil
+}
+
+func (p *batchCountingProvider) RecordBatch(_ context.Context, evs []analytics.Event) error {
+	p.batches = append(p.batches, evs)
+	return nil
+}
+
+// HandlePost must hand the whole request to the provider as one batch.
+func TestAnalyticsHandler_ShouldRecordRequestAsOneBatch_When_ProviderSupportsBatches(t *testing.T) {
+	p := &batchCountingProvider{}
+	w := postAnalytics(NewAnalyticsHandler(p), map[string]any{"events": []any{
+		map[string]any{"name": "a", "category": "user_action"},
+		map[string]any{"name": "b", "category": "user_action"},
+		map[string]any{"name": "c", "category": "navigation"},
+	}})
+	if w.Code != http.StatusNoContent || len(p.batches) != 1 || len(p.batches[0]) != 3 || p.singles != 0 {
+		t.Fatalf("code=%d batches=%d singles=%d; want 204, one batch of 3 events, no per-event calls", w.Code, len(p.batches), p.singles)
+	}
+}

@@ -126,6 +126,7 @@ jest.mock('../useTerminalMetrics', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { useTerminalStream } from '../useTerminalStream';
+import { defined } from "@/lib/utils/defined";
 
 // ---------------------------------------------------------------------------
 // Controllable stream factory
@@ -172,7 +173,7 @@ function makePushStream<T>(signal?: AbortSignal): PushStream<T> {
             await new Promise<void>((resolve, reject) => resolvers.push({ resolve, reject }));
           }
           if (queue.length > 0) {
-            return { value: queue.shift()!, done: false };
+            return { value: defined(queue.shift()), done: false };
           }
           return { value: undefined as any, done: true };
         },
@@ -515,6 +516,78 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     expect(callCount).toBe(callCountBeforeEnd);
   });
 
+  it('connect_should_surfaceError_When_serverEndsStreamCleanlyAndFlagAbsent', async () => {
+    // Without V2 the only reconnect trigger is the `error` TerminalOutput watches.
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { stream.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    expect(result.current.error?.message).toContain('closed by server');
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('connect_should_stopSurfacingErrors_When_streamsKeepEndingCleanlyRightAfterConnecting', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makePushStream<object>();
+      s.end();
+      return s.iterable;
+    });
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    for (let i = 0; i < 8; i++) {
+      await act(async () => { await result.current.connect(); });
+      await act(async () => { await Promise.resolve(); });
+    }
+
+    expect(onError.mock.calls.length).toBeGreaterThan(0);
+    expect(onError.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it('connect_should_notSurfaceError_When_shellStreamEndsCleanly', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, shellId: 'shell-1', onError }));
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { stream.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('disconnect_should_notSurfaceError_When_streamEndsAfterUserDisconnect', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { result.current.disconnect(); stream.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('connect_should_reconnectAfterJitteredDelay_When_streamClosesCleanlyAndShouldReconnectTrue', async () => {
     let callCount = 0;
     const streams: ReturnType<typeof makePushStream<object>>[] = [];
@@ -794,10 +867,13 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
       streams.push(s);
       return s.iterable;
     });
+    // Backoff delay is Math.random() * 1000ms. Pin it near the ceiling so the natural
+    // reconnect cannot fire inside the 300ms window and make the online connect() a no-op
+    // (a ~0ms draw made it fire early, leaving the count flat).
+    jest.spyOn(Math, 'random').mockReturnValue(0.999);
 
     const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
 
-    // Connect then disconnect stream
     await act(async () => { result.current.connect(); });
     await waitFor(() => expect(streams.length).toBe(1));
     await act(async () => { streams[0].push(makeOutputMsg()); });
@@ -805,18 +881,16 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await act(async () => { streams[0].end(); });
     await waitFor(() => expect(result.current.isConnected).toBe(false));
 
-    // Cancel any pending backoff timer from the natural reconnect
-    await act(async () => { jest.advanceTimersByTime(0); });
+    // The natural backoff reconnect is still pending: nothing has reconnected yet.
+    expect(callCount).toBe(1);
 
-    const callCountBefore = callCount;
-
-    // Fire an online event
     await act(async () => {
       window.dispatchEvent(new Event('online'));
-      jest.advanceTimersByTime(300);
+      jest.advanceTimersByTime(300); // 200ms debounce, well under the ~999ms backoff
     });
 
-    await waitFor(() => expect(callCount).toBeGreaterThan(callCountBefore));
+    // Exactly one connect, and it came from the online path.
+    expect(callCount).toBe(2);
   });
 
   it('useTerminalStream_should_registerExactlyOneVisibilityListener_When_strictModeRemounts', async () => {
@@ -1714,5 +1788,69 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     expect(streams.length).toBe(3);
     await act(async () => { jest.advanceTimersByTime(1); });
     await waitFor(() => expect(streams.length).toBe(4));
+  });
+});
+
+describe('useTerminalStream — handshake zero-size guard (Task 3.1.2d)', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+    mockMessageQueueInstances.length = 0;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const handshakeOf = (index: number) =>
+    (mockMessageQueueInstances[index].queue[0] as { data: { value: Record<string, unknown> } }).data.value;
+
+  it.each([
+    ['0x0 override', 0, 0],
+    ['0xN override', 0, 24],
+    ['1x1 override', 1, 1],
+  ])('connect_should_NotSendHandshakeDimensions_When_ContainerIsZeroSize (%s)', async (_label, cols, rows) => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }));
+
+    await act(async () => {
+      result.current.connect(cols, rows);
+    });
+
+    const req = handshakeOf(0);
+    expect(req.targetCols).toBeUndefined();
+    expect(req.targetRows).toBeUndefined();
+    stream.end();
+  });
+
+  it('connect_should_NotSendHandshakeDimensions_When_HiddenTerminalReportsZeroSize', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const getTerminal = () => ({ cols: 0, rows: 0 }) as never;
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false, getTerminal }));
+
+    await act(async () => {
+      result.current.connect();
+    });
+
+    expect(handshakeOf(0).targetCols).toBeUndefined();
+    stream.end();
+  });
+
+  it('connect_should_SendHandshakeDimensions_When_SizeIsReal', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }));
+
+    await act(async () => {
+      result.current.connect(120, 40);
+    });
+
+    expect(handshakeOf(0)).toMatchObject({ targetCols: 120, targetRows: 40 });
+    stream.end();
   });
 });

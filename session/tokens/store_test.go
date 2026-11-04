@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,34 +78,18 @@ func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
 func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
 	t.Parallel()
 	store := NewTokenStore("")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.Start(ctx)
 
-	// Parse and cache a file.
-	store.enqueue("testdata/valid_session.jsonl")
-
-	wait.RequireEventually(t, func() bool { return len(store.GetAll()) > 0 }, 5*time.Second, 10*time.Millisecond)
-
-	// Get the cached result pointer.
+	// parseAndCache is the queue handler; calling it directly keeps this synchronous.
+	store.parseAndCache("testdata/valid_session.jsonl")
 	results1 := store.GetAll()
-	require.NotEmpty(t, results1)
-	ptr1 := results1[0]
+	require.Len(t, results1, 1)
 
-	// Enqueue again — modtime hasn't changed, so cache should not be reparsed.
-	store.enqueue("testdata/valid_session.jsonl")
-	// enqueue marks the path in-flight synchronously; the worker clears it once it has processed (and skipped) the file.
-	wait.RequireEventually(t, func() bool {
-		_, inflight := store.inflight.Load("testdata/valid_session.jsonl")
-		return !inflight
-	}, 5*time.Second, time.Millisecond)
-
+	// Unchanged size and mtime: the cache entry must be kept as-is.
+	store.parseAndCache("testdata/valid_session.jsonl")
 	results2 := store.GetAll()
-	require.NotEmpty(t, results2)
-	ptr2 := results2[0]
+	require.Len(t, results2, 1)
 
-	// Same pointer (no reparse).
-	assert.Equal(t, ptr1, ptr2, "expected same ParseResult pointer on cache hit")
+	assert.Same(t, results1[0], results2[0], "expected same ParseResult pointer on cache hit")
 }
 
 func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
@@ -238,35 +221,20 @@ func TestTokenStoreSubscribe_WhenInitialWalkCompletes_ExpectSubscriberReceivesNi
 	}
 }
 
-// TestEnqueue_RateLimitsQueueFullWarnings guards the drop-log rate limiting
-// that motivated this package's log.DropCounter: without it, sustained
-// backpressure logs a Warn line for every single dropped file, which under
-// real load fired thousands of times per hour. Not t.Parallel(): it captures
-// the process-wide slog default.
-func TestEnqueue_RateLimitsQueueFullWarnings(t *testing.T) {
-	store := NewTokenStore("") // Start() deliberately not called — nothing drains parseQueue.
+// A burst far beyond the old 256-slot queue must neither drop nor duplicate work.
+func TestEnqueue_BurstCoalescesByPathAndNeverDrops(t *testing.T) {
+	t.Parallel()
+	store := NewTokenStore("") // Start() deliberately not called — nothing drains the queue.
 
-	// Saturate the queue so every subsequent enqueue takes the drop path.
-	for i := 0; i < parseQueueSize; i++ {
-		store.enqueue(fmt.Sprintf("testdata/fill-%d.jsonl", i))
+	const distinct = 1000 // well past the old parseQueueSize of 256
+	for round := 0; round < 3; round++ {
+		for i := 0; i < distinct; i++ {
+			store.enqueue(fmt.Sprintf("testdata/burst-%d.jsonl", i))
+		}
 	}
 
-	buf := captureLogs(t)
-
-	const drops = log.DropLogInterval + 5 // 105: crosses one rate-limit boundary
-	for i := 0; i < drops; i++ {
-		store.enqueue(fmt.Sprintf("testdata/drop-%d.jsonl", i))
-	}
-
-	lines := strings.Count(strings.TrimRight(buf.String(), "\n"), "\n") + 1
-	if buf.Len() == 0 {
-		lines = 0
-	}
-	// The counter logs on drop #1 and again on drop #101 (n%DropLogInterval==1),
-	// so 105 drops produce 2 log lines — far fewer than 105, which is the
-	// property under test.
-	const wantLines = 2
-	if lines != wantLines {
-		t.Fatalf("got %d log lines for %d drops, want %d (rate limiting not applied): %s", lines, drops, wantLines, buf.String())
-	}
+	assert.Equal(t, distinct, store.queue.Pending(), "every distinct path queued exactly once")
+	st := store.QueueStats()
+	assert.Equal(t, uint64(3*distinct), st.Enqueued)
+	assert.Equal(t, uint64(2*distinct), st.Coalesced, "repeat enqueues of a pending path coalesce")
 }

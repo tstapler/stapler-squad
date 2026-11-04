@@ -6,6 +6,8 @@ export interface CDPViewerProps {
   isVisible: boolean;
   onConnected?: () => void;
   onDisconnected?: () => void;
+  /** Called each time a frame is decoded and painted. */
+  onFrame?: () => void;
   /** When true, clicks are reported via onInspectClick instead of being sent to Chrome. */
   inspectMode?: boolean;
   /** Called with Chrome-pixel coordinates when the canvas is clicked in inspect mode. */
@@ -20,7 +22,7 @@ const HOVER_BOX_H = 60;
 // CDPViewer connects to a WebSocket that streams JPEG frames (binary messages)
 // and renders them to a canvas. Mouse and keyboard events are forwarded back
 // to the server as CDP Input.dispatch* JSON messages.
-export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnected, inspectMode = false, onInspectClick }: CDPViewerProps) {
+export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnected, onFrame, inspectMode = false, onInspectClick }: CDPViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -29,11 +31,13 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   // Keep latest callbacks in a ref so they can be used in stable event handlers
   const onConnectedRef = useRef(onConnected);
   const onDisconnectedRef = useRef(onDisconnected);
+  const onFrameRef = useRef(onFrame);
   const isVisibleRef = useRef(isVisible);
   const [connectionStatusText, setConnectionStatusText] = useState<string>('Browser disconnected');
 
   useEffect(() => { onConnectedRef.current = onConnected; }, [onConnected]);
   useEffect(() => { onDisconnectedRef.current = onDisconnected; }, [onDisconnected]);
+  useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
   useEffect(() => { isVisibleRef.current = isVisible; }, [isVisible]);
 
   // Leaving inspect mode clears any hover rectangle left on the overlay.
@@ -67,6 +71,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
           canvas.height = bitmap.height;
           ctx.drawImage(bitmap, 0, 0);
           bitmap.close();
+          onFrameRef.current?.();
         } catch {
           // Ignore decode errors on individual frames
         }
@@ -80,6 +85,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
           canvas.height = img.naturalHeight;
           ctx.drawImage(img, 0, 0);
           URL.revokeObjectURL(url);
+          onFrameRef.current?.();
         };
         img.onerror = () => URL.revokeObjectURL(url);
         img.src = url;

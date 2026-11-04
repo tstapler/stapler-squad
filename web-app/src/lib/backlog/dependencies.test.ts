@@ -1,23 +1,12 @@
-import { blockedByLabel, isBlockerUnresolved, unresolvedBlockers } from "./dependencies";
+import { dependencyLabel, isBlockerUnresolved, unresolvedBlockers } from "./dependencies";
 
 const dep = (title: string, status: string) => ({ itemId: title, publicId: "", title, status });
 
-describe("blockedByLabel", () => {
-  it("returns undefined when there are no blockers", () => {
-    expect(blockedByLabel(undefined)).toBeUndefined();
-    expect(blockedByLabel([])).toBeUndefined();
-  });
-
-  it("names the blocker's title", () => {
-    expect(blockedByLabel([dep("Fix auth", "in_progress")])).toBe("blocked by Fix auth");
-  });
-
-  it("clears when every blocker is done or archived", () => {
-    expect(blockedByLabel([dep("A", "done"), dep("B", "archived")])).toBeUndefined();
-  });
-
-  it("counts extra unresolved blockers and ignores resolved ones", () => {
-    expect(blockedByLabel([dep("A", "done"), dep("B", "queued"), dep("C", "idea")])).toBe("blocked by B +1");
+describe("dependencyLabel", () => {
+  it("falls back from title to publicId to itemId", () => {
+    expect(dependencyLabel({ itemId: "id", publicId: "BL-1", title: "T" })).toBe("T");
+    expect(dependencyLabel({ itemId: "id", publicId: "BL-1", title: "" })).toBe("BL-1");
+    expect(dependencyLabel({ itemId: "id", publicId: "", title: "" })).toBe("id");
   });
 });
 

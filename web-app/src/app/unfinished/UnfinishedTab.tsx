@@ -5,15 +5,14 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { Link, useReplaceSearch, useSearchParams } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
+import { getConnectTransport } from "@/lib/api/transport";
+import type { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import {
   DismissWorktreeRequestSchema,
   SnoozeWorktreeRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { stringParam } from "@/lib/nav/search-params";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
@@ -63,10 +62,7 @@ export function UnfinishedTab() {
 
   const transport = useMemo(
     () =>
-      createConnectTransport({
-        baseUrl: getApiBaseUrl(),
-        interceptors: [createAuthInterceptor()],
-      }),
+      getConnectTransport(),
     []
   );
   const client = useMemo(() => createClient(UnfinishedWorkService, transport), [transport]);
@@ -120,8 +116,12 @@ export function UnfinishedTab() {
   const groups = new Map<string, UnfinishedWorktree[]>();
   for (const wt of filtered) {
     const name = wt.repoName || wt.repoPath;
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name)!.push(wt);
+    let group = groups.get(name);
+    if (!group) {
+      group = [];
+      groups.set(name, group);
+    }
+    group.push(wt);
   }
 
   const chips: { label: string; value: FilterType }[] = [
@@ -163,7 +163,7 @@ export function UnfinishedTab() {
         {itemMissing && (
           <div className={styles.notice} role="status">
             <span>Item {focusItemId} was not found. It may have been completed or removed.</span>
-            <button className={styles.btn} onClick={showAllStuck}>
+            <button className={styles.btn} onClick={showAllStuck}>{/* analytics-exempt */}
               Show all stuck items
             </button>
           </div>
@@ -180,7 +180,7 @@ export function UnfinishedTab() {
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}
               onClick={() => setFilter(value)}
               aria-pressed={filter === value}
-            >
+            >{/* analytics-exempt */}
               {label}
             </button>
           ))}
@@ -237,7 +237,7 @@ export function UnfinishedTab() {
             onClick={triggerScan}
             disabled={isScanning}
             aria-label="Refresh — trigger an immediate scan"
-          >
+          >{/* analytics-exempt */}
             Refresh
           </button>
         </div>

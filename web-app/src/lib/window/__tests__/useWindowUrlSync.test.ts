@@ -1,4 +1,5 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
+import { announce } from "@/lib/nav/announce";
 import { useWindowUrlSync } from "../useWindowUrlSync";
 import type { NamedWindow } from "../windowTypes";
 import type { LeafPane } from "@/lib/pane/paneTypes";
@@ -7,6 +8,11 @@ const LAST_FOCUSED_KEY = "cockpit.lastFocusedWindowId";
 
 const mockReplace = jest.fn();
 let mockSearchParams = new URLSearchParams();
+
+jest.mock("@/lib/nav/announce", () => ({
+  announce: jest.fn(),
+  formatWindowAnnouncement: jest.requireActual("@/lib/nav/announce").formatWindowAnnouncement,
+}));
 
 jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockSearchParams,
@@ -23,6 +29,7 @@ function makeWindow(id: string, name: string): NamedWindow {
 }
 
 beforeEach(() => {
+  jest.mocked(announce).mockClear();
   localStorage.clear();
   mockReplace.mockClear();
   mockSearchParams = new URLSearchParams();
@@ -70,7 +77,7 @@ describe("useWindowUrlSync", () => {
     const { result } = renderHook(() => useWindowUrlSync(windows, true));
     mockReplace.mockClear();
 
-    result.current.switchToWindow("win-2");
+    act(() => result.current.switchToWindow("win-2"));
 
     expect(mockReplace).toHaveBeenCalledTimes(1);
     const [url, opts] = mockReplace.mock.calls[0];
@@ -110,5 +117,113 @@ describe("useWindowUrlSync", () => {
 
     expect(result.current.currentWindowId).toBe("win-real");
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+});
+
+describe("useWindowUrlSync pending switch", () => {
+  const three = [makeWindow("w1", "one"), makeWindow("w2", "api"), makeWindow("w3", "")];
+  type Props = { windows: NamedWindow[] };
+  const setup = (windows = three, onCommit?: jest.Mock) => {
+    mockSearchParams = new URLSearchParams("window=w1");
+    return renderHook(({ windows: w }: Props) => useWindowUrlSync(w, true, onCommit), {
+      initialProps: { windows },
+    });
+  };
+  const commitUrl = (rerender: (p: Props) => void, id: string, windows = three) => {
+    mockSearchParams = new URLSearchParams(`window=${id}`);
+    rerender({ windows });
+  };
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it("switchToWindow_should_HighlightTargetInSameRender_When_UrlHasNotCommitted", () => {
+    const { result } = setup();
+    act(() => result.current.switchToWindow("w3"));
+    expect(result.current.highlightedWindowId).toBe("w3");
+    expect(result.current.currentWindowId).toBe("w1");
+  });
+
+  it("pendingWindow_should_ClearAndAnnounceOnce_When_UrlCommitsToTarget", () => {
+    const { result, rerender } = setup();
+    act(() => result.current.switchToWindow("w2"));
+    expect(announce).not.toHaveBeenCalled();
+    act(() => commitUrl(rerender, "w2"));
+    expect(result.current.highlightedWindowId).toBe("w2");
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Window 2 of 3: api");
+    act(() => void jest.advanceTimersByTime(5000));
+    expect(announce).toHaveBeenCalledTimes(1);
+  });
+
+  it("switchToWindow_should_AnnounceWithoutName_When_WindowUnnamed", () => {
+    const { result, rerender } = setup();
+    act(() => result.current.switchToWindow("w3"));
+    act(() => commitUrl(rerender, "w3"));
+    expect(announce).toHaveBeenCalledWith("Window 3 of 3");
+  });
+
+  it("switchToWindow_should_BeNoop_When_TargetAlreadyActive", () => {
+    const { result } = setup();
+    mockReplace.mockClear();
+    act(() => result.current.switchToWindow("w1"));
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
+    expect(result.current.highlightedWindowId).toBe("w1");
+  });
+
+  it("switchToWindow_should_LetLastSwitchWin_When_TwoSwitchesBeforeCommit", () => {
+    const { result, rerender } = setup();
+    act(() => result.current.switchToWindow("w2"));
+    act(() => result.current.switchToWindow("w3"));
+    expect(result.current.highlightedWindowId).toBe("w3");
+    act(() => commitUrl(rerender, "w3"));
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Window 3 of 3");
+  });
+
+  it("pendingWindow_should_RevertAndAnnounceNothing_When_TargetClosedConcurrently", () => {
+    const { result, rerender } = setup();
+    act(() => result.current.switchToWindow("w3"));
+    const withoutW3 = three.filter((w) => w.id !== "w3");
+    act(() => rerender({ windows: withoutW3 }));
+    expect(result.current.highlightedWindowId).toBe("w1");
+    act(() => void jest.advanceTimersByTime(5000));
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("pendingWindow_should_ClearAfter2sSafetyTimer_When_UrlNeverCommits", () => {
+    const { result } = setup();
+    act(() => result.current.switchToWindow("w2"));
+    act(() => void jest.advanceTimersByTime(1999));
+    expect(result.current.highlightedWindowId).toBe("w2");
+    act(() => void jest.advanceTimersByTime(2));
+    expect(result.current.highlightedWindowId).toBe("w1");
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("onCommit_should_ReceiveTargetAndTrigger_When_UrlCommits", () => {
+    const onCommit = jest.fn();
+    const { result, rerender } = setup(three, onCommit);
+    act(() => result.current.switchToWindow("w2", "touch"));
+    expect(onCommit).not.toHaveBeenCalled();
+    act(() => commitUrl(rerender, "w2"));
+    expect(onCommit).toHaveBeenCalledWith("w2", "touch");
+  });
+
+  it("onCommit_should_DefaultToProgrammaticTrigger_When_NoTriggerGiven", () => {
+    const onCommit = jest.fn();
+    const { result, rerender } = setup(three, onCommit);
+    act(() => result.current.switchToWindow("w2"));
+    act(() => commitUrl(rerender, "w2"));
+    expect(onCommit).toHaveBeenCalledWith("w2", "programmatic");
+  });
+
+  it("onCommit_should_NotFire_When_UrlChangesWithoutUserSwitch", () => {
+    const onCommit = jest.fn();
+    const { rerender } = setup(three, onCommit);
+    act(() => commitUrl(rerender, "w2"));
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
   });
 });

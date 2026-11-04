@@ -39,6 +39,7 @@ test.describe('Backlog live updates (detail panel)', () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
       localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
     });
   });

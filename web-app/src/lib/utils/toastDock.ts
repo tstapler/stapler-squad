@@ -36,15 +36,19 @@ export function subscribeStackTopOffset(listener: () => void): () => void {
  * measuring 0 must not blank the visible one's anchor.
  */
 let deckOwner: symbol | null = null;
+let deckPx: number | null = null;
 
 export function setDeckTopOffset(px: number | null, owner?: symbol): void {
   if (typeof document === "undefined") return;
   if (px === null) {
     if (owner !== undefined && owner !== deckOwner) return;
     deckOwner = null;
+    deckPx = null;
     document.documentElement.style.removeProperty("--mobile-deck-top-offset");
     return;
   }
   if (owner !== undefined) deckOwner = owner;
+  if (px === deckPx) return;
+  deckPx = px;
   document.documentElement.style.setProperty("--mobile-deck-top-offset", `${px}px`);
 }

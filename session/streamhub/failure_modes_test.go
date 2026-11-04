@@ -130,7 +130,9 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_MemoryTransportConfigu
 func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_IncrementDropsCounterExactlyOnce(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
 	hub := streamhub.NewStreamHub("backpressure-test", nil,
+		streamhub.WithClock(clock),
 		streamhub.WithSubscriberBufferSize(4),
 		streamhub.WithSlowSubscriberGrace(20*time.Millisecond),
 		streamhub.WithTeardownGrace(time.Hour),
@@ -144,20 +146,36 @@ func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_Incr
 	hub.AttachSubscriber(blocked, streamhub.SubscriberCapability{})
 
 	const frameCount = 100
-	start := time.Now()
-	for i := 1; i <= frameCount; i++ {
-		hub.Broadcast([]byte("frame"))
-		if !waitFor(t, 500*time.Millisecond, func() bool { return len(normal.ReceivedFrames()) == i }) {
-			t.Fatalf("expected the normal subscriber to have received %d frames by broadcast %d, got %d",
-				i, i, len(normal.ReceivedFrames()))
+	// Time stands still during the loop, so only a Broadcast that blocks on the stalled subscriber
+	// (rather than a wall-clock bound) can keep it from finishing.
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		for i := 1; i <= frameCount; i++ {
+			hub.Broadcast([]byte("frame"))
+			if !waitFor(t, 30*time.Second, func() bool { return len(normal.ReceivedFrames()) == i }) {
+				t.Errorf("expected the normal subscriber to have received %d frames by broadcast %d, got %d",
+					i, i, len(normal.ReceivedFrames()))
+				return
+			}
 		}
+	}()
+	select {
+	case <-loopDone:
+	case <-time.After(time.Minute): // hang guard only; never elapses in a passing run
+		t.Fatal("the broadcast loop stalled behind the blocked subscriber")
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("expected the sustained-backpressure broadcast loop to complete quickly despite a stalled subscriber, took %s", elapsed)
+	if t.Failed() {
+		return
+	}
+	if got := hub.SubscriberCount(); got != 2 {
+		t.Fatalf("no fake time has passed, so the blocked subscriber must not be evicted yet, SubscriberCount() == %d", got)
 	}
 
-	if !waitFor(t, time.Second, func() bool { return hub.SubscriberCount() == 1 }) {
-		t.Fatalf("expected the blocked subscriber to be evicted before the loop finished, SubscriberCount() == %d", hub.SubscriberCount())
+	clock.Advance(20 * time.Millisecond) // the slow-grace timer armed when the queue first filled
+
+	if !waitFor(t, 30*time.Second, func() bool { return hub.SubscriberCount() == 1 }) {
+		t.Fatalf("expected the blocked subscriber to be evicted once the grace elapsed, SubscriberCount() == %d", hub.SubscriberCount())
 	}
 	if got := hub.SlowSubscriberDropsTotal(); got != 1 {
 		t.Fatalf("expected streamhub_slow_subscriber_drops_total to be incremented exactly once for the eviction (not once per dropped frame), got %d", got)

@@ -8,10 +8,13 @@ import (
 	"os"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
 	"golang.org/x/net/http2"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // rpcTransport is the narrow seam between tymuxGRPCSession and the generated
@@ -29,6 +32,8 @@ type rpcTransport interface {
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	ReviveSession(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	CapturePane(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
+	GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error)
+	GetPaneStatus(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
 	// Attach opens the standing bidi stream. The returned attachStream exposes
 	// only Send/Receive/CloseRequest/CloseResponse — the subset of
 	// *connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEvent] that
@@ -94,6 +99,14 @@ func (t *grpcTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 	return t.client.CapturePane(ctx, req)
 }
 
+func (t *grpcTransport) GetPaneStatus(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+	return t.client.GetPaneStatus(ctx, req)
+}
+
+func (t *grpcTransport) GetServerInfo(ctx context.Context, req *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	return t.client.GetServerInfo(ctx, req)
+}
+
 func (t *grpcTransport) Attach(ctx context.Context) attachStream {
 	return t.client.Attach(ctx)
 }
@@ -149,6 +162,24 @@ func NewRealTransport(addr string) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
-	client := tymuxv1connect.NewTymuxServiceClient(newH2CClient(), addr, connect.WithGRPC())
-	return &grpcTransport{client: client}
+	if sharedDaemonBlockedInTest(addr) {
+		addr = deadLoopbackAddr
+	}
+	return &grpcTransport{client: newTymuxClient(newH2CClient(), addr)}
+}
+
+// newTymuxClient builds the generated client with gRPC framing (tymuxd is a
+// strict tonic server) and, so a stapler-squad trace continues into tymuxd
+// as a W3C traceparent header, an otelconnect client interceptor. Traces
+// only: otelconnect's own metrics and per-message span events are off, since
+// the Attach stream would emit one event per output chunk.
+func newTymuxClient(httpClient *http.Client, addr string) tymuxv1connect.TymuxServiceClient {
+	opts := []connect.ClientOption{connect.WithGRPC()}
+	interceptor, err := otelconnect.NewInterceptor(otelconnect.WithoutMetrics(), otelconnect.WithoutTraceEvents())
+	if err != nil {
+		log.Warn("tymux: otelconnect client interceptor unavailable, RPCs will not propagate trace context", "err", err)
+	} else {
+		opts = append(opts, connect.WithInterceptors(interceptor))
+	}
+	return tymuxv1connect.NewTymuxServiceClient(httpClient, addr, opts...)
 }

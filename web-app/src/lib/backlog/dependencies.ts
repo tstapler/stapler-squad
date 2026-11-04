@@ -12,10 +12,7 @@ export function unresolvedBlockers(deps: ItemDependency[] | undefined): ItemDepe
   return (deps ?? []).filter(isBlockerUnresolved);
 }
 
-/** "blocked by <title>" / "blocked by <title> +N", or undefined when nothing blocks the item. */
-export function blockedByLabel(deps: ItemDependency[] | undefined): string | undefined {
-  const open = unresolvedBlockers(deps);
-  if (open.length === 0) return undefined;
-  const first = open[0].title || open[0].publicId || open[0].itemId;
-  return open.length === 1 ? `blocked by ${first}` : `blocked by ${first} +${open.length - 1}`;
+/** Display name for a dependency: title, else public id, else item id. */
+export function dependencyLabel(dep: Pick<ItemDependency, "title" | "publicId" | "itemId">): string {
+  return dep.title || dep.publicId || dep.itemId;
 }

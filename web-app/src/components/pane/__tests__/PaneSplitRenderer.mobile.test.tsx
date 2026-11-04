@@ -156,13 +156,23 @@ describe("PaneSplitRenderer — mobile layout", () => {
   });
 
   describe("horizontal split on mobile", () => {
-    it("shows both panes for horizontal split (stacked rows) on mobile", () => {
+    it("collapses a horizontal split to the focused pane so each session is full screen", () => {
       render(
         <PaneSplitRenderer state={horizontalSplitState} dispatch={jest.fn()} sessions={sessions} />
       );
-      // Horizontal splits are not collapsed on mobile — both panes are visible
       const sessionDetails = screen.getAllByTestId("session-detail");
-      expect(sessionDetails).toHaveLength(2);
+      expect(sessionDetails).toHaveLength(1);
+      expect(sessionDetails[0]).toHaveTextContent("Session One");
+    });
+
+    it("shows the second pane of a horizontal split when it is focused", () => {
+      const secondFocused: PaneState = { ...horizontalSplitState, focusedPaneId: "p2" };
+      render(
+        <PaneSplitRenderer state={secondFocused} dispatch={jest.fn()} sessions={sessions} />
+      );
+      const sessionDetails = screen.getAllByTestId("session-detail");
+      expect(sessionDetails).toHaveLength(1);
+      expect(sessionDetails[0]).toHaveTextContent("Session Two");
     });
 
     it("shows mobile tab strip for horizontal split", () => {
@@ -266,5 +276,44 @@ describe("PaneSplitRenderer — desktop layout", () => {
     for (const header of screen.getAllByTestId("pane-header")) {
       expect(header).toHaveAttribute("data-split-visible", "true");
     }
+  });
+});
+
+describe("PaneSplitRenderer — --mobile-pane-tab-strip-height ownership (Task 4.1.3b)", () => {
+  const readVar = () => document.documentElement.style.getPropertyValue("--mobile-pane-tab-strip-height");
+  let stripHeight = 0;
+  let offsetSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockIsMobile = true;
+    mockIsFoldable = false;
+    document.documentElement.style.removeProperty("--mobile-pane-tab-strip-height");
+    offsetSpy = jest.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => stripHeight);
+  });
+  afterEach(() => offsetSpy.mockRestore());
+
+  const renderWindow = (height: number, windowActive: boolean) => {
+    stripHeight = height;
+    return render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} windowActive={windowActive} />
+    );
+  };
+
+  it("cssVar_should_EqualActiveWindowHeight_When_ActiveMountedBeforeHidden", () => {
+    renderWindow(40, true);
+    renderWindow(56, false);
+    expect(readVar()).toBe("40px");
+  });
+
+  it("cssVar_should_EqualActiveWindowHeight_When_HiddenMountedBeforeActive", () => {
+    renderWindow(56, false);
+    renderWindow(40, true);
+    expect(readVar()).toBe("40px");
+  });
+
+  it("cssVar_should_NotBeResetByHiddenWindow_When_HiddenHasNoTabStrip", () => {
+    renderWindow(40, true);
+    render(<PaneSplitRenderer state={singlePaneState} dispatch={jest.fn()} sessions={[]} windowActive={false} />);
+    expect(readVar()).toBe("40px");
   });
 });

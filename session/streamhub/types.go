@@ -26,6 +26,13 @@ type SubscriberCapability struct {
 
 	// CanWrite allows the subscriber to send input to the session.
 	CanWrite bool
+
+	// ManualFirstPaint makes the hub skip the attach-time CatchUpSnapshot and hold the
+	// subscriber's output until the caller runs its own first paint through
+	// StreamHub.FirstPaint. For a transport whose first paint needs framing the hub can't
+	// apply (the browser WebSocket path); it also spares the capture the hub would make
+	// only for the caller to discard.
+	ManualFirstPaint bool
 }
 
 // ReadOnlyCapability is the capability of a viewer that must never change the

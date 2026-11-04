@@ -47,8 +47,8 @@ func loadChangelogFlags() changelogFlags {
 	}
 	cfg := config.LoadConfig()
 	c.vals = changelogFlags{
-		changelog:   cfg.GetFeatureFlagWithDefault(services.ChangelogFlagName, true),
-		updateCheck: cfg.GetFeatureFlagWithDefault(services.UpdateCheckFlagName, false),
+		changelog:   services.ChangelogEnabled(cfg),
+		updateCheck: services.UpdateCheckFlagEnabled(cfg),
 	}
 	c.at = time.Now()
 	return c.vals

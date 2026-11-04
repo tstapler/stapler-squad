@@ -307,6 +307,16 @@ func mergeBaseFallback(d gitoracle.Diff, left, right string) bool {
 	return d.Fixture == "random-dag" && strings.Contains(d.Candidate, "merge bases: git picks one")
 }
 
+// gitfileInvalidAsNotARepo: git 2.56 reports a gitfile whose admin directory is unusable as an untyped
+// "gitfile does not point to a valid repository" fatal, where 2.55 said "not a git repository".
+// Both mean not-a-repo, so the candidate's typed ErrNotARepo is the same verdict.
+func gitfileInvalidAsNotARepo(d gitoracle.Diff) bool {
+	return d.Kind == gitoracle.DiffError &&
+		strings.HasPrefix(d.Oracle, "CommandError") &&
+		strings.Contains(d.Oracle, "gitfile does not point to a valid repository") &&
+		strings.HasPrefix(d.Candidate, "ErrNotARepo")
+}
+
 func oneLine(d gitoracle.Diff) string {
 	flat := func(s string) string { return strings.ReplaceAll(s, "\n", " | ") }
 	return fmt.Sprintf("%s/%s %s [%s] oracle=%s candidate=%s", d.Fixture, d.Place, d.Op, d.Kind, flat(d.Oracle), flat(d.Candidate))

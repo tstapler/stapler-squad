@@ -180,3 +180,39 @@ func TestWebSocketTransport_should_ReturnSendError_When_ConnectionIsClosed(t *te
 	err := transport.Send([]byte("should fail"))
 	require.Error(t, err)
 }
+
+// A transport-initiated Close forces a read deadline to unblock the input loop;
+// that must end the loop as a clean close (nil on errChan), not an i/o-timeout
+// failure that HandleWebSocket would send to the client as INTERNAL (code 13).
+func TestReadOneInputFrame_should_ReportCleanClose_When_TransportClosedServerSide(t *testing.T) {
+	serverStream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	errChan := make(chan error, 1)
+	params := inputReadLoopParams{stream: serverStream, errChan: errChan, sessionID: "clean-close"}
+	stopped := make(chan bool, 1)
+	go func() { stopped <- readOneInputFrame(params) }()
+
+	transport := NewWebSocketTransport(serverStream, "clean-close")
+	require.NoError(t, transport.Close())
+
+	select {
+	case stop := <-stopped:
+		require.True(t, stop)
+	case <-time.After(5 * time.Second):
+		t.Fatal("read loop was not interrupted by transport Close")
+	}
+	require.NoError(t, <-errChan)
+}
+
+// A read deadline that was NOT set by the transport is still a real failure.
+func TestReadOneInputFrame_should_ReportError_When_ReadTimesOutWithoutServerClose(t *testing.T) {
+	serverStream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	require.NoError(t, serverStream.conn.SetReadDeadline(time.Now()))
+
+	errChan := make(chan error, 1)
+	stop := readOneInputFrame(inputReadLoopParams{stream: serverStream, errChan: errChan, sessionID: "timeout"})
+	require.True(t, stop)
+	require.Error(t, <-errChan)
+}

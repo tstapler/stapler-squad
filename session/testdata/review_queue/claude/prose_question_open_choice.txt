@@ -1,0 +1,12 @@
+
+  I haven't marked it ready or merged it. The plan file
+  (project_plans/feature-x/) is still untracked and not in the
+  PR. Want me to wait for CI and merge when green, or measure on
+  the emulator first?
+
+✻ Sautéed for 27s · done 8:44 AM
+  new task? /clear to save… · ✔ Update installed · Restart to up…
+──────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────
+  ⏵⏵ auto mode on · PR #34 · ← 2 agents

@@ -246,7 +246,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// against a real precondition check on that row, so this test must apply
 	// the real transition itself first, mirroring what *BacklogService's real
 	// transitionWithGuard would have done in production.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
 		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByUser)
 	require.NoError(t, err)
 

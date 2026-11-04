@@ -195,6 +195,7 @@ describe("GitHubPRsSection PRs panel", () => {
     const group = screen.getByRole("group", { name: "Filter PRs" });
     expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "All",
+      "Ready to merge",
       "CI failing",
       "Changes req",
       "Has session",
@@ -210,6 +211,19 @@ describe("GitHubPRsSection PRs panel", () => {
       "Attention first",
     ]);
     expect(select.value).toBe("attention-first");
+  });
+
+  it("gitHubPRsSection_should_ShowOnlyMergeReadyPRs_When_ReadyToMergeChipClicked", () => {
+    const prs = [
+      makePR(1),
+      makePR(2, { hasMergeConflict: true }),
+      makePR(3, { hasMergeConflict: undefined, detailsLoaded: false }),
+      makePR(4, { checkConclusion: "failure" }),
+    ];
+    render(<Panel prs={prs} />);
+    fireEvent.click(screen.getByTestId("filter-chip-ready-to-merge"));
+    expect(screen.getAllByTestId("github-pr-card")).toHaveLength(1);
+    expect(screen.getByTestId("github-prs-stats")).toHaveTextContent("1 ready to merge");
   });
 
   it("gitHubPRsSection_should_RenderFilterAsAriaPressedToggleGroupAndSortAsLabelledSelect_When_Rendered", () => {

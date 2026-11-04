@@ -1,11 +1,14 @@
 package tymux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -32,6 +36,17 @@ type fakeTransport struct {
 	listSessionsFn  func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	reviveSessionFn func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	capturePaneFn   func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
+	// capabilities are what GetServerInfo advertises; nil makes it fail like a pre-1.5 daemon.
+	capabilities []string
+	// serverInfoCalls counts GetServerInfo calls.
+	serverInfoCalls int32
+	// serverInfoErr, when set, makes GetServerInfo fail with it (a transient fault).
+	serverInfoErr atomic.Pointer[error]
+	// lastServerInfoHadDeadline records whether the latest GetServerInfo ctx was bounded.
+	lastServerInfoHadDeadline atomic.Bool
+
+	// paneStatusFn answers GetPaneStatus; nil means the daemon lacks the RPC.
+	paneStatusFn func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
 
 	// attachFn lets a test substitute a custom attachStream (e.g. one that
 	// plays back a scripted sequence of AttachEvents); defaults to a
@@ -78,6 +93,26 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 		return nil, errors.New("fakeTransport: CapturePane not configured")
 	}
 	return f.capturePaneFn(ctx, req)
+}
+
+func (f *fakeTransport) GetServerInfo(ctx context.Context, _ *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	atomic.AddInt32(&f.serverInfoCalls, 1)
+	_, hasDeadline := ctx.Deadline()
+	f.lastServerInfoHadDeadline.Store(hasDeadline)
+	if err := f.serverInfoErr.Load(); err != nil {
+		return nil, *err
+	}
+	if f.capabilities == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetServerInfo"))
+	}
+	return connect.NewResponse(&v1.ServerInfo{Capabilities: f.capabilities}), nil
+}
+
+func (f *fakeTransport) GetPaneStatus(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+	if f.paneStatusFn == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetPaneStatus"))
+	}
+	return f.paneStatusFn(ctx, req)
 }
 
 func (f *fakeTransport) Attach(ctx context.Context) attachStream {
@@ -130,6 +165,7 @@ func fakeSession(sessionID, paneID, cwd string, liveness v1.Liveness) *v1.Sessio
 }
 
 func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var gotReq *v1.CreateSessionRequest
 	transport := &fakeTransport{
@@ -150,36 +186,169 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	resetClaims(t)
+	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
+	require.NoError(t, os.WriteFile(promptFile, []byte("fix the bug\n"), 0o600))
+	hostile := "a b'c\"d$e`f\\g"
+	script, err := launchcmd.NewShellText("claude && true")
+	require.NoError(t, err)
+	envVar, err := launchcmd.NewEnvVar("FOO", "1 2")
+	require.NoError(t, err)
+
 	tests := []struct {
-		name        string
-		command     string
-		wantCommand string
-		wantArgs    []string
+		name         string
+		command      launchcmd.LaunchCommand
+		capabilities []string
+		wantCommand  string
+		wantArgs     []string
+		wantStderr   string
+		wantStdin    string
+		wantInfoRPCs int32
+		wantEnv      map[string]string
 	}{
-		{"bare program", "claude", "claude", nil},
-		{"absolute path", "/home/u/.local/bin/claude", "/home/u/.local/bin/claude", nil},
-		{"program with args", "claude --resume abc", shellPath, []string{shellFlagC, "claude --resume abc"}},
-		{"quoted path arg", "claude --mcp-config '/tmp/a b.json'", shellPath, []string{shellFlagC, "claude --mcp-config '/tmp/a b.json'"}},
-		{"env prefix and chaining", "FOO=1 claude && true", shellPath, []string{shellFlagC, "FOO=1 claude && true"}},
-		{"unset", "", "", nil},
+		{name: "unset", command: nil},
+		{name: "bare program", command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}}, wantCommand: "claude"},
+		{
+			name: "args reach the daemon unquoted",
+			command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+				launchcmd.Word("claude"), launchcmd.MustFlag("--resume"), launchcmd.Literal(hostile),
+			}},
+			wantCommand: "claude", wantArgs: []string{"--resume", hostile},
+		},
+		{
+			name:        "file contents are resolved and trimmed",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.FileContents(promptFile)}},
+			wantCommand: "claude", wantArgs: []string{"fix the bug"},
+		},
+		{
+			name:        "env goes in the request",
+			command:     launchcmd.ExecCommand{Env: []launchcmd.EnvVar{envVar}, Argv: []launchcmd.Arg{launchcmd.Word("claude")}},
+			wantCommand: "claude", wantEnv: map[string]string{"FOO": "1 2"},
+		},
+		{
+			name:         "stderr uses the daemon redirect when advertised",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
+			capabilities: []string{capStderrRedirect},
+			wantCommand:  "pi", wantStderr: "/tmp/pi err.log", wantInfoRPCs: 1,
+		},
+		{
+			name:        "stderr falls back to a shell on an old daemon",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "pi 2>>'/tmp/pi err.log'"}, wantInfoRPCs: 1,
+		},
+		{
+			name:         "stdin uses the daemon redirect when advertised",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: "/tmp/in.txt"},
+			capabilities: []string{capStdinFile},
+			wantCommand:  "claude", wantArgs: []string{"-p"}, wantStdin: "/tmp/in.txt", wantInfoRPCs: 1,
+		},
+		{
+			name:        "stdin falls back to a shell on an old daemon",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: "/tmp/in.txt"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude -p <'/tmp/in.txt'"}, wantInfoRPCs: 1,
+		},
+		{
+			name:         "relative stdin path never reaches the daemon",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}, StdinFile: "in.txt"},
+			capabilities: []string{capStdinFile},
+			wantCommand:  shellPath, wantArgs: []string{shellFlagC, "claude <'in.txt'"},
+		},
+		{
+			name:         "stdin and stderr share one capability lookup",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}, StdinFile: "/tmp/in.txt", StderrAppend: "/tmp/err.log"},
+			capabilities: []string{capStdinFile, capStderrRedirect},
+			wantCommand:  "claude", wantStdin: "/tmp/in.txt", wantStderr: "/tmp/err.log", wantInfoRPCs: 1,
+		},
+		{
+			name:        "raw shell word needs a shell",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.RawShell("$HOME/bin/claude")}},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "$HOME/bin/claude"},
+		},
+		{name: "shell script", command: launchcmd.ShellScript{Text: script}, wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude && true"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			var gotReq *v1.CreateSessionRequest
-			transport := &fakeTransport{
-				createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-					gotReq = req.Msg
-					return connect.NewResponse(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)), nil
-				},
-			}
+			transport := captureCreateSessionRequest(dir, &gotReq)
+			transport.capabilities = tc.capabilities
 			sess := NewTymuxGRPCSession(transport)
 			sess.SetCommand(tc.command)
 
 			require.NoError(t, sess.Start(dir))
 			require.NotNil(t, gotReq)
 			assert.Equal(t, tc.wantCommand, gotReq.GetCommand())
+			assert.ElementsMatch(t, tc.wantArgs, gotReq.GetArgs()) // nil and empty are the same on the wire
+			assert.Equal(t, tc.wantStderr, gotReq.GetStderrPath())
+			assert.Equal(t, tc.wantStdin, gotReq.GetStdinPath())
+			assert.Equal(t, tc.wantInfoRPCs, atomic.LoadInt32(&transport.serverInfoCalls))
+			for k, v := range tc.wantEnv {
+				assert.Equal(t, v, gotReq.GetEnv()[k])
+			}
+		})
+	}
+}
+
+func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
+	resetClaims(t)
+	big := filepath.Join(t.TempDir(), "big.txt")
+	require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte("x"), launchcmd.MaxArgBytes), 0o600))
+	dir := t.TempDir()
+	var gotReq *v1.CreateSessionRequest
+	sess := NewTymuxGRPCSession(captureCreateSessionRequest(dir, &gotReq))
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.FileContents(big)}})
+
+	err := sess.Start(dir)
+
+	require.ErrorIs(t, err, launchcmd.ErrArgTooLarge)
+	assert.Nil(t, gotReq, "no session may be created with a truncated prompt")
+}
+
+// A prompt at or above MaxArgBytes reaches tymuxd without ever being an argv
+// entry: one-shot via stdin_path, interactive via a short reference instruction.
+func TestTymuxGRPCSession_Start_LargePromptRoutes(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	stdinFile := filepath.Join(dir, "prompt-stdin.txt")
+	require.NoError(t, os.WriteFile(stdinFile, bytes.Repeat([]byte("p"), 2*1024*1024), 0o600))
+	instruction := "Your complete task instructions are in the file /cache/prompt-ref.md. Read it."
+
+	tests := []struct {
+		name      string
+		command   launchcmd.ExecCommand
+		wantArgs  []string
+		wantStdin string
+	}{
+		{
+			name:      "one-shot prompt goes through stdin_path",
+			command:   launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: stdinFile},
+			wantArgs:  []string{"-p"},
+			wantStdin: stdinFile,
+		},
+		{
+			name: "interactive prompt is a short reference instruction",
+			command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+				launchcmd.Word("claude"), launchcmd.MustFlag("--add-dir"), launchcmd.Literal("/cache"), launchcmd.MustFlag("--"), launchcmd.Literal(instruction),
+			}},
+			wantArgs: []string{"--add-dir", "/cache", "--", instruction},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotReq *v1.CreateSessionRequest
+			transport := captureCreateSessionRequest(dir, &gotReq)
+			transport.capabilities = []string{capStdinFile}
+			sess := NewTymuxGRPCSession(transport)
+			sess.SetCommand(tc.command)
+
+			require.NoError(t, sess.Start(dir))
+			require.NotNil(t, gotReq)
+			assert.Equal(t, "claude", gotReq.GetCommand())
 			assert.Equal(t, tc.wantArgs, gotReq.GetArgs())
+			assert.Equal(t, tc.wantStdin, gotReq.GetStdinPath())
+			for _, a := range gotReq.GetArgs() {
+				assert.Less(t, len(a), launchcmd.MaxArgBytes)
+			}
 		})
 	}
 }
@@ -197,6 +366,7 @@ func captureCreateSessionRequest(dir string, got **v1.CreateSessionRequest) *fak
 }
 
 func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
+	resetClaims(t)
 	const wantColorterm = "truecolor"
 	tests := []struct {
 		name          string
@@ -206,8 +376,8 @@ func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
 		wantColorterm string
 	}{
 		{"both unset: injects defaults", "", "", "xterm-256color", wantColorterm},
-		{"TERM already set: left alone", "screen-256color", "", "", wantColorterm},
-		{"COLORTERM already set: left alone", "", wantColorterm, "xterm-256color", ""},
+		{"TERM already set: overridden", "screen-256color", "", "xterm-256color", wantColorterm},
+		{"COLORTERM already set: overridden", "", "24bit", "xterm-256color", wantColorterm},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,6 +397,7 @@ func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
 	err := sess.Start("")
@@ -237,6 +408,7 @@ func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
 	err := sess.Start(filepath.Join(t.TempDir(), "does-not-exist"))
@@ -246,6 +418,7 @@ func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_StartThenIsAlive_ReturnsTrueImmediately(t *testing.T) {
+	resetClaims(t)
 	sess := startedSession(t, &v1.PaneSnapshot{PaneId: testPaneID, Liveness: v1.Liveness_LIVENESS_LIVE})
 
 	assert.True(t, sess.IsAlive())
@@ -279,6 +452,7 @@ func TestTymuxGRPCSession_Close_IssuesKillSessionAndIsAliveThenFalse(t *testing.
 }
 
 func TestTymuxGRPCSession_RestoreWithWorkDir_RevivesDeadSession(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var revivedID string
 	// tymuxGRPCSession.Start's Name convention: RestoreWithWorkDir matches
@@ -307,6 +481,7 @@ func TestTymuxGRPCSession_RestoreWithWorkDir_RevivesDeadSession(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_RestoreWithWorkDir_NoMatchFallsBackToStart(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var created bool
 	transport := &fakeTransport{
@@ -328,6 +503,7 @@ func TestTymuxGRPCSession_RestoreWithWorkDir_NoMatchFallsBackToStart(t *testing.
 }
 
 func TestTymuxGRPCSession_GetCurrentWorkingDirectory_ReturnsCachedCwdWithNoExtraRPC(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	calls := 0
 	transport := &fakeTransport{
@@ -350,6 +526,7 @@ func TestTymuxGRPCSession_GetCurrentWorkingDirectory_ReturnsCachedCwdWithNoExtra
 }
 
 func TestTymuxGRPCSession_GetCurrentWorkingDirectory_EmptyBeforeStart(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 	cwd, err := sess.GetCurrentWorkingDirectory()
 	require.NoError(t, err)
@@ -358,6 +535,7 @@ func TestTymuxGRPCSession_GetCurrentWorkingDirectory_EmptyBeforeStart(t *testing
 
 func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	t.Helper()
+	resetClaims(t)
 	dir := t.TempDir()
 	transport := &fakeTransport{
 		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -373,7 +551,179 @@ func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	return sess
 }
 
+// activitySession exercises the real manager's capture path without opening an Attach stream.
+func activitySession(t *testing.T, capture func() (*v1.PaneSnapshot, error)) TymuxManager {
+	t.Helper()
+	transport := &fakeTransport{
+		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			assert.Equal(t, testPaneID, req.Msg.GetPaneId())
+			snap, err := capture()
+			if err != nil {
+				return nil, err
+			}
+			return connect.NewResponse(snap), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	return sess
+}
+
+func activitySnapshot(text string) *v1.PaneSnapshot {
+	lines := strings.Split(text, "\n")
+	rows := make([]*v1.Row, 0, len(lines))
+	for _, line := range lines {
+		rows = append(rows, &v1.Row{Cells: []*v1.Cell{{Text: line}}})
+	}
+	return &v1.PaneSnapshot{Grid: rows}
+}
+
+func TestTymuxGRPCSession_ActivitySnapshots(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	var captureErr error
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, captureErr })
+
+	check := func(wantUpdated bool, wantContent string) {
+		t.Helper()
+		updated, prompt, content := sess.HasUpdated()
+		assert.Equal(t, wantUpdated, updated)
+		assert.False(t, prompt)
+		assert.Equal(t, wantContent, content)
+		assert.Equal(t, wantContent != "", sess.HasMeaningfulContent(content))
+	}
+	check(true, "working")
+	check(false, "working")
+	snap = activitySnapshot("finished")
+	check(true, "finished")
+	captureErr = errors.New("capture unavailable")
+	check(false, "")
+	captureErr = nil
+	check(false, "finished")
+	snap = activitySnapshot("more output")
+	check(true, "more output")
+}
+
+func TestTymuxGRPCSession_ActivityFiltersBanners(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	for _, text := range []string{"", "  \n", "14:23 5-Jan-24"} {
+		snap = activitySnapshot(text)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, prompt)
+		if text == "" {
+			assert.False(t, updated, "an initial empty snapshot is not output")
+		}
+		assert.False(t, sess.HasMeaningfulContent(content), "text: %q", text)
+		filtered, removed := sess.FilterBanners(content)
+		assert.Empty(t, strings.TrimSpace(filtered))
+		if text == "14:23 5-Jan-24" {
+			assert.Equal(t, 1, removed)
+		}
+		updated, prompt, content = sess.HasUpdated()
+		assert.False(t, updated, "identical empty/banner snapshots are stable")
+		assert.False(t, prompt)
+		assert.False(t, sess.HasMeaningfulContent(content))
+	}
+	filtered, removed := sess.FilterBanners("working\n14:23 5-Jan-24")
+	assert.Equal(t, "working", filtered)
+	assert.Equal(t, 1, removed)
+	snap = activitySnapshot("working\n14:23 5-Jan-24")
+	updated, _, _ := sess.HasUpdated()
+	assert.True(t, updated)
+	snap = activitySnapshot("working\n14:24 5-Jan-24")
+	updated, _, content := sess.HasUpdated()
+	assert.False(t, updated, "banner-only changes must not publish activity")
+	assert.True(t, sess.HasMeaningfulContent(content))
+}
+
+func TestTymuxGRPCSession_ActivityPrompts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		program string
+		content string
+		prompt  bool
+	}{
+		{"claude", "❯ 1. Yes\n  2. No", true},
+		{"aider", "(Y)es/(N)o/(D)on't ask again", true},
+		{"gemini", "Yes, allow once", true},
+		{"/usr/local/bin/claude", "❯ 1. Yes\n  2. No", true},
+		{"sh", "Yes, allow once", false},
+	} {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return activitySnapshot(tc.content), nil })
+			sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Literal(tc.program)}})
+			updated, prompt, _ := sess.HasUpdated()
+			assert.True(t, updated)
+			assert.Equal(t, tc.prompt, prompt)
+			updated, prompt, _ = sess.HasUpdated()
+			assert.False(t, updated)
+			assert.Equal(t, tc.prompt, prompt, "stable prompts must remain detectable")
+		})
+	}
+}
+
+func TestTymuxGRPCSession_ActivityOutOfOrderCaptures(t *testing.T) {
+	t.Parallel()
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	var calls atomic.Int32
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) {
+		if calls.Add(1) == 1 {
+			close(oldStarted)
+			<-releaseOld
+			return activitySnapshot("old output"), nil
+		}
+		return activitySnapshot("new output"), nil
+	})
+	oldDone := make(chan struct{})
+	go func() {
+		defer close(oldDone)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, updated, "a stale capture must not overwrite a newer snapshot")
+		assert.False(t, prompt)
+		assert.Empty(t, content)
+	}()
+	<-oldStarted
+	updated, prompt, content := sess.HasUpdated()
+	assert.True(t, updated)
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+	close(releaseOld)
+	<-oldDone
+	updated, prompt, content = sess.HasUpdated()
+	assert.False(t, updated, "the newer snapshot remains the baseline")
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+}
+
+func TestTymuxGRPCSession_ActivityConcurrentPolls(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	command, err := launchcmd.NewShellText("claude")
+	require.NoError(t, err)
+	var updates atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			updated, _, content := sess.HasUpdated()
+			if updated {
+				updates.Add(1)
+			}
+			assert.True(t, sess.HasMeaningfulContent(content))
+			sess.FilterBanners(content)
+			sess.SetCommand(launchcmd.ShellScript{Text: command})
+		})
+	}
+	wg.Wait()
+	assert.EqualValues(t, 1, updates.Load(), "one snapshot is published exactly once")
+}
+
 func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "r", Fg: 1}, {Text: "e", Fg: 1}, {Text: "d"}}}},
 	}
@@ -387,6 +737,7 @@ func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{
 			{Cells: []*v1.Cell{{Text: "h"}, {Text: "e"}, {Text: "l"}, {Text: "l"}, {Text: "o"}}},
@@ -403,6 +754,7 @@ func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_CaptureViewport_TailsToRequestedLines(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{
 			{Cells: []*v1.Cell{{Text: "one"}}},
@@ -420,6 +772,7 @@ func TestTymuxGRPCSession_CaptureViewport_TailsToRequestedLines(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_GetCursorPosition_ReturnsColRowFromSnapshot(t *testing.T) {
+	resetClaims(t)
 	// kibitzer:ignore replace-magic-literal -- fixture cursor row/col; the other "5"/"2"s the check groups these with (viewport line count, SGR selector codes) are unrelated values that just happen to share a digit
 	snap := &v1.PaneSnapshot{CursorRow: 5, CursorCol: 2}
 	sess := startedSession(t, snap)
@@ -432,6 +785,7 @@ func TestTymuxGRPCSession_GetCursorPosition_ReturnsColRowFromSnapshot(t *testing
 }
 
 func TestTymuxGRPCSession_GetPaneDimensions_ReturnsColsRowsFromSnapshot(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{Rows: 24, Cols: 80}
 	sess := startedSession(t, snap)
 
@@ -587,6 +941,7 @@ func TestTymuxGRPCSession_StartStopControlMode_AreNoOps(t *testing.T) {
 // --- Story 2.2.6: ErrTymuxdUnreachable classification ---
 
 func TestTymuxGRPCSession_Start_TransportUnavailable_ClassifiesAsErrTymuxdUnreachable(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	underlying := connect.NewError(connect.CodeUnavailable, errors.New("dial tcp: connection refused"))
 	transport := &fakeTransport{
@@ -605,6 +960,7 @@ func TestTymuxGRPCSession_Start_TransportUnavailable_ClassifiesAsErrTymuxdUnreac
 }
 
 func TestTymuxGRPCSession_Start_OrdinaryRPCError_NotClassifiedAsUnreachable(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	underlying := connect.NewError(connect.CodeInvalidArgument, errors.New("bad request"))
 	transport := &fakeTransport{
@@ -710,6 +1066,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_CancelledContext_ReturnsEarlyW
 }
 
 func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendInputViaControlMode(context.Background(), []byte(testHelloInput))
@@ -731,6 +1088,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *
 // byte, mirroring TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream's
 // pattern of asserting on stream.sentRequests().
 func TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSends(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendPromptWithEnter("some long driver-generated prompt text")
@@ -757,6 +1115,7 @@ func TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSend
 // pane is still live must fire exactly once when the standing stream later
 // delivers Exited.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
@@ -790,6 +1149,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t
 // exactly once — not zero times, which is what a naive
 // store-only-for-future-events implementation would do.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 	concrete := sess.(*tymuxGRPCSession)
 
@@ -827,6 +1187,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 // once, the assertion ResetExitOnce is checked against is that calling it
 // with no subsequent exit never spuriously invokes the callback again.
 func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
@@ -941,6 +1302,7 @@ func assertCleanExitFires(t *testing.T, sess TymuxManager, stream *fakeAttachStr
 // marker and can't assert on rendered ANSI/SGR content the way this test
 // does via a real ANSI-aware parser (parseSGRSequences, render_test.go).
 func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences(t *testing.T) {
+	resetClaims(t)
 	sess, stream, transport := startedSessionWithStream(t)
 
 	assertAgentPromptSentOverStream(t, sess, stream, "explain the reconnect backoff schedule\n")
@@ -979,4 +1341,59 @@ func TestParseScrollbackOffset(t *testing.T) {
 			assert.Equal(t, tt.want, parseScrollbackOffset(tt.in))
 		})
 	}
+}
+
+func TestTymuxGRPCSession_CapturePaneRedraw_CarriesTerminalStateAndAltScreen(t *testing.T) {
+	resetClaims(t)
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		Modes:     &v1.TerminalModes{},
+		AltScreen: true,
+		Title:     "vim",
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.True(t, altScreen)
+	assert.Contains(t, data, "\x1b[?1049h", "alt-screen entry must be restored, not just the text")
+	assert.Contains(t, data, "\x1b]2;vim", "title must be restored")
+	assert.Contains(t, data, "hi")
+}
+
+func TestTymuxGRPCSession_CapturePaneRedraw_PropagatesCaptureError(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	sess := NewTymuxGRPCSession(&fakeTransport{
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, errors.New("daemon gone")
+		},
+	})
+	require.NoError(t, sess.Start(dir))
+
+	_, _, _, err := sess.CapturePaneRedraw(context.Background())
+
+	require.Error(t, err)
+}
+
+// A daemon older than v1.9.0 sends no Modes; the redraw must decline so callers keep the text path.
+func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalState(t *testing.T) {
+	resetClaims(t)
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		AltScreen: true, // would be reported if the snapshot were used
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, data)
+	assert.False(t, altScreen)
 }

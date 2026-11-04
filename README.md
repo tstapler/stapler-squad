@@ -28,7 +28,7 @@
 - **Bulk actions** — select and act on multiple sessions simultaneously
 
 **Review & Approval**
-- **Auto-approval rules engine** — 42 built-in rules block dangerous operations automatically; add custom rules to approve safe, repetitive actions without manual review
+- **Auto-approval rules engine** — 100+ built-in rules block dangerous operations automatically; add custom rules to approve safe, repetitive actions without manual review
 - **Review Queue** — structured triage before any agent change reaches your codebase
 - **Approval analytics** — visualise decision trends and classifier performance over time
 
@@ -119,7 +119,7 @@ brew install go node buf
 git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
-# 3. Build (compiles proto code, Next.js web UI, and Go binary)
+# 3. Build (compiles proto code, the web UI, and Go binary)
 make build
 
 # 4. Install to ~/.local/bin

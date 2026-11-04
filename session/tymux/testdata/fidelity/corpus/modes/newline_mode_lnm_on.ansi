@@ -1,0 +1,4 @@
+modes/newline_mode_lnm_on -- xterm ctlseqs LNM 20h
+[20hLNM on: LF also does CR
+line two
+   three

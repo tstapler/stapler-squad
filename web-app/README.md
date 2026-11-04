@@ -1,13 +1,13 @@
 # Stapler Squad Session Management UI
 
-This is the web-based session management interface for Stapler Squad. It's a separate Next.js application from the main marketing website.
+This is the web-based session management interface for Stapler Squad. It's a separate Bun-built React application from the main marketing website.
 
 ## Architecture
 
-- **Framework**: Next.js 15 with TypeScript
+- **Framework**: React 19 with TypeScript, React Router, built with Bun (`build/`)
 - **API Client**: ConnectRPC (TypeScript client for Go backend)
 - **Styling**: CSS Modules
-- **Build Output**: Static export (embedded in Go binary)
+- **Build Output**: Static files in `out/` (embedded in the Go binary)
 
 ## Development
 
@@ -61,5 +61,5 @@ The UI connects to the ConnectRPC API at `http://localhost:8543`:
 
 ## Related Projects
 
-- **`../web/`** - Marketing website (separate Next.js app)
+- **`../web/`** - Marketing website (separate site)
 - **`../server/`** - Go backend with ConnectRPC API

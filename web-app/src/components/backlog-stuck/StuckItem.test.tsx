@@ -24,19 +24,27 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
 
 describe("StuckItem", () => {
   describe("StuckItem_should_exposeButtonRoleAndAriaExpanded_When_Toggled", () => {
-    it("renders role=button with aria-expanded=false when collapsed", () => {
+    it("exposes one real expand button with aria-expanded=false and no role=button card", () => {
       render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
       const card = screen.getByTestId("stuck-item");
-      expect(card).toHaveAttribute("role", "button");
-      expect(card).toHaveAttribute("aria-expanded", "false");
+      expect(card).not.toHaveAttribute("role");
+      expect(card).not.toHaveAttribute("tabindex");
+      const toggle = screen.getByTestId("stuck-item-toggle");
+      expect(toggle.tagName).toBe("BUTTON");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
     });
 
-    it("calls onToggleExpand on Enter and Space", () => {
+    it("does not nest a control inside the expand button", () => {
+      render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} onSnooze={jest.fn()} />);
+      expect(screen.getByTestId("stuck-item-toggle").querySelector("button, a, input, [tabindex]")).toBeNull();
+    });
+
+    it("calls onToggleExpand once per click on the card or its toggle", () => {
       const onToggleExpand = jest.fn();
       render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={onToggleExpand} />);
-      const card = screen.getByTestId("stuck-item");
-      fireEvent.keyDown(card, { key: "Enter" });
-      fireEvent.keyDown(card, { key: " " });
+      fireEvent.click(screen.getByTestId("stuck-item-toggle"));
+      expect(onToggleExpand).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId("stuck-item"));
       expect(onToggleExpand).toHaveBeenCalledTimes(2);
     });
 
@@ -140,9 +148,9 @@ describe("StuckItem", () => {
       const { rerender } = render(
         <StuckItem item={makeItem()} isExpanded={true} onToggleExpand={onToggleExpand} />
       );
-      const card = screen.getByTestId("stuck-item");
+      const toggle = screen.getByTestId("stuck-item-toggle");
       rerender(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={onToggleExpand} />);
-      expect(document.activeElement).toBe(card);
+      expect(document.activeElement).toBe(toggle);
     });
   });
 

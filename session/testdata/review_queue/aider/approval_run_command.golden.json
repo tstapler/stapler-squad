@@ -1,0 +1,22 @@
+{
+  "label": "approval",
+  "source": "captured",
+  "detected_status": "Needs Approval",
+  "label_matched": true,
+  "no_controller": {
+    "action": "add",
+    "reason": "approval_pending",
+    "priority": "High",
+    "context": "Aider permission prompt",
+    "claude_status": "Needs Approval",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "add",
+    "reason": "approval_pending",
+    "priority": "High",
+    "context": "Aider permission prompt",
+    "claude_status": "Needs Approval",
+    "clean_worktree": false
+  }
+}

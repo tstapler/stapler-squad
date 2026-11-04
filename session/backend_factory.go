@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -27,7 +28,12 @@ var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBac
 // through as-is (so "native" still works), and "" falls through to
 // NewProcessManager's defaultBackend/BackendTmux.
 func getSelectedBackend() ProcessManagerBackend {
-	cfg := config.LoadConfig()
+	return selectedBackendFromConfig(config.LoadConfig())
+}
+
+// selectedBackendFromConfig is getSelectedBackend's pure core over an
+// already-loaded config.
+func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
 	backend := ProcessManagerBackend(cfg.ProcessManagerBackend)
 	if backend == BackendTymux || config.EffectiveTymuxEnabled(cfg) {
 		return BackendTymux
@@ -99,10 +105,20 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 // opts.Program, if set, is applied via SetCommand here (mirrors newTmuxBackendFromOpts below).
 func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 	b := NewTymuxBackend(newTymuxSessionFn())
-	if opts.Program != "" {
-		b.TymuxManager().SetCommand(opts.Program)
+	if cmd := opts.launchCommand(); cmd != nil {
+		b.TymuxManager().SetCommand(cmd)
 	}
+	b.TymuxManager().SetSessionLabel(opts.SessionName)
+	b.TymuxManager().SetStoredSessionID(opts.TymuxSessionID)
 	return b
+}
+
+// launchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
+func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
+	if o.Command != nil {
+		return o.Command
+	}
+	return shellLaunch(o.Program)
 }
 
 // newTymuxSessionFn is the injection seam for constructing a real tymux

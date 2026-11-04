@@ -220,6 +220,7 @@ func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) 
 	if len(edited) != len(body) || edited == string(body) {
 		t.Fatal("fixture edit must keep the length and change the content")
 	}
+	newCtimeTicker(t).next() // coarse ctime: the rewrite must not share the stored entry's tick
 	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
 		t.Fatal(err)
 	}

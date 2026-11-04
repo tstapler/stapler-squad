@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -33,11 +34,12 @@ type diagnoseHandlers struct {
 // diagnostic_service.go): a genuine defect, an inconclusive/informational
 // note, a successful nudge, or (added for completeness) no action needed at
 // all.
-var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "NO_ACTION"}
+var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "REMEDIATION_RESET", "NO_ACTION"}
 
 func registerDiagnoseTools(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
 	registerSubmitDiagnosisResultTool(s, dh)
 	registerDiagnoseNudgeSessionTool(s, dh)
+	registerDiagnoseResetRemediationTool(s, dh)
 }
 
 func registerSubmitDiagnosisResultTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
@@ -85,6 +87,76 @@ func registerDiagnoseNudgeSessionTool(s *mcpserver.MCPServer, dh *diagnoseHandle
 		),
 		dh.nudgeSession,
 	)
+}
+
+// remediationResettableReasons are the stuck reasons whose automated retry is parked behind a
+// RemediationDue backoff gate; re-arming any other row (rework_cap, bounce_cap_exhausted, ...)
+// would override a deliberate hand-off to a human.
+var remediationResettableReasons = map[domain.StuckReason]bool{
+	domain.StuckReasonAutonomousStuck: true,
+	domain.StuckReasonPRNeedsFix:      true,
+	domain.StuckReasonPushFailed:      true,
+	domain.StuckReasonBouncing:        true,
+	domain.StuckReasonAbandonedReview: true,
+	domain.StuckReasonStaleWork:       true,
+	domain.StuckReasonOrphanedTriage:  true,
+}
+
+func registerDiagnoseResetRemediationTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
+	s.AddTool(
+		mcpgo.NewTool("diagnose_reset_remediation",
+			mcpgo.WithDescription("Re-arm automated remediation for a parked stuck row so the next reconcile tick spawns a fresh fix session. Use when the item has NO live session to nudge (e.g. a pr_pending item whose PR just needs a rebase) and the stuck row's automated retries are exhausted. Role: diagnose only. Shares the per-item nudge cap/cooldown (claimed atomically), which bounds it within one stuck episode. Declines (does not error loudly) if no open row matches or the cap is spent."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("stuck_reason",
+				mcpgo.Description("The domain.StuckReason value of the open row to re-arm, e.g. pr_needs_fix"),
+				mcpgo.Required(),
+			),
+		),
+		dh.resetRemediation,
+	)
+}
+
+func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	args := req.GetArguments()
+	itemID, _ := args["item_id"].(string)
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+	reasonStr, _ := args["stuck_reason"].(string)
+	reason := domain.StuckReason(reasonStr)
+	if !reason.IsValid() {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid stuck_reason %q", reasonStr), ""), nil
+	}
+	if !remediationResettableReasons[reason] {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("stuck_reason %q has no automated retry to re-arm; it needs a human decision", reasonStr), declineToDiagnoseRemediation), nil
+	}
+	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
+		return errRes, nil
+	}
+
+	// Claim the cap/cooldown slot atomically before the effect (no refund), so
+	// concurrent calls cannot overshoot the cap. The slot lives on the open row, so when
+	// the reset then finds no row (a concurrent resolve), nothing is left to refund.
+	claim, claimErr := dh.storage.ClaimDiagnoseNudgeSlot(ctx, itemID, reason, 0)
+	if claimErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("claim re-arm slot: %v", claimErr), ""), nil
+	}
+	if !claim.Claimed {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("no open %s row for item %s, or its nudge cap/cooldown is spent", reason, itemID), declineToDiagnoseRemediation), nil
+	}
+	if applied, resetErr := dh.storage.ResetStuckRemediation(ctx, itemID, reason); resetErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("reset remediation: %v", resetErr), ""), nil
+	} else if !applied {
+		return errResult(ErrItemNotFound, fmt.Sprintf("no open %s row for item %s", reason, itemID), declineToDiagnoseRemediation), nil
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf("Re-armed %s remediation for item %s; the next reconcile tick will retry", reason, itemID)), nil
 }
 
 // resolveDiagnoseItemLink is resolveItemLink's diagnose-role counterpart:
@@ -150,10 +222,11 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 // operator-facing title, keyed the same as the note AppendActivityNote
 // records, so the notification and the activity log agree on what happened.
 var diagnosisOutcomeTitles = map[string]string{
-	"BUG_FILED": "Diagnosis: bug filed",
-	"NOTE_ONLY": "Diagnosis: note added",
-	"NUDGED":    "Diagnosis: session nudged",
-	"NO_ACTION": "Diagnosis: no action needed",
+	"BUG_FILED":         "Diagnosis: bug filed",
+	"NOTE_ONLY":         "Diagnosis: note added",
+	"NUDGED":            "Diagnosis: session nudged",
+	"REMEDIATION_RESET": "Diagnosis: automated retry re-armed",
+	"NO_ACTION":         "Diagnosis: no action needed",
 }
 
 // notifyDiagnosisResult publishes an operator-facing notification for a
@@ -251,12 +324,13 @@ const declineToDiagnoseRemediation = "File a bug via create_backlog_item or post
 // just trusted from the dispatch prompt — a long-running diagnostic session
 // could otherwise call this tool after its own cap-eligibility snapshot went
 // stale (e.g. another dispatch nudged the same item in the meantime).
-func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, stuckReason string) *mcpgo.CallToolResult {
+func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, stuckReason, targetSessionID string) *mcpgo.CallToolResult {
 	allowed, disallowReason, gateErr := dh.storage.DiagnoseNudgeAllowed(ctx, itemID, domain.StuckReason(stuckReason))
 	if gateErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("check nudge eligibility: %v", gateErr), "")
 	}
 	if !allowed {
+		session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeSkippedCap, targetSessionID)
 		return errResult(ErrPermissionDenied, disallowReason, declineToDiagnoseRemediation)
 	}
 	return nil
@@ -331,6 +405,7 @@ func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, t
 		return errRes
 	}
 	if submitErr := session.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
+		recordDiagnoseWriteFailure(target, submitErr)
 		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), "")
 	}
 	return nil
@@ -344,7 +419,7 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 		return errResult(ErrPermissionDenied, diagnoseNudgeDisabledMessage, declineToDiagnoseRemediation), nil
 	}
 
-	if errRes := dh.checkNudgeCapForWrite(ctx, a.itemID, a.stuckReason); errRes != nil {
+	if errRes := dh.checkNudgeCapForWrite(ctx, a.itemID, a.stuckReason, a.targetSessionID); errRes != nil {
 		return errRes, nil
 	}
 
@@ -356,10 +431,21 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 	if errRes := dh.writeNudge(ctx, callerUUID, target, a.message); errRes != nil {
 		return errRes, nil
 	}
+	session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeDelivered, a.targetSessionID)
 
 	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, a.itemID, domain.StuckReason(a.stuckReason)); recErr != nil {
 		log.Warn("[diagnose_nudge_session] failed to record nudge attempt", "item", a.itemID, "session", a.targetSessionID, "err", recErr)
 	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf("Nudged session %s for item %s", a.targetSessionID, a.itemID)), nil
+}
+
+// recordDiagnoseWriteFailure counts a failed diagnose write; an uncertain
+// submit may still have reached the pane, so it is kept apart from "failed".
+func recordDiagnoseWriteFailure(target *session.Instance, err error) {
+	outcome := session.NudgeOutcomeFailed
+	if errors.Is(err, session.ErrNudgeSubmitUncertain) {
+		outcome = session.NudgeOutcomeUncertain
+	}
+	session.RecordNudgeOutcome(session.NudgeKindDiagnose, outcome, target.Snapshot().Title)
 }

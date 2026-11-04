@@ -37,6 +37,7 @@ const writeFileProcedurePath = "/api" + sessionv1connect.SessionServiceWriteFile
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
+	"/api" + sessionv1connect.SessionServiceContinueTCCEnrichmentProcedure: middleware.ProfileRebinding,
 	probeProcedurePath: middleware.ProfileProbe,
 	nudgeProcedurePath: middleware.ProfileProbe,
 	pruneProcedurePath: middleware.ProfileRebinding,
@@ -45,6 +46,23 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 	replyProcedurePath:      middleware.ProfileRebinding,
 
 	writeFileProcedurePath: middleware.ProfileRebinding,
+
+	// Config writes that change engine or gate behavior on the unauthenticated
+	// local listener (Task 2.1.1e). Reads (Get*/List*) stay unguarded.
+	"/api" + sessionv1connect.QuotaServiceUpdateQuotaConfigProcedure:       middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeletePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceRecordGateApprovalProcedure:    middleware.ProfileRebinding,
 }
 
 // writeFileBodyLimit caps a WriteFile body: 1 MiB of content grows to about 1.34 MiB as
@@ -84,6 +102,13 @@ func (s *Server) localChain() http.Handler {
 // localChainWith builds localChain over an explicit guard set so tests can
 // exercise a profile before a real procedure registers in it.
 func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
+	return wrapOuterMiddleware(s.localDispatcherWith(procedures), s.origins)
+}
+
+// localDispatcherWith is the stamp -> HostGuard -> [auth | LocalWriteGuard] -> mux
+// composition without Logging/CORS/Compress: what the unary WebSocket bridge
+// re-enters for each call so every guard behaves as it does for HTTP.
+func (s *Server) localDispatcherWith(procedures map[string]middleware.GuardProfile) http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
@@ -94,6 +119,11 @@ func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) h
 		})(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(inner)
+}
+
+// wrapOuterMiddleware adds the HTTP-only outer layers (Logging, CORS, gzip)
+// around a dispatcher.
+func wrapOuterMiddleware(dispatcher http.Handler, origins []string) http.Handler {
+	return middleware.Logging(middleware.CORSWithOrigins(origins)(middleware.Compress(dispatcher)))
 }

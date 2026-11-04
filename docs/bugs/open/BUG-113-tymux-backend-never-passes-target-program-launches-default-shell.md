@@ -1,6 +1,6 @@
 # BUG-113: tymux backend never passes the target program — every session launches `$SHELL` instead [SEVERITY: High]
 
-**Status**: ✅ Fixed — the command is delivered on every start/restore/resume path (`ProcessManager.WireLaunch`), and a launch with arguments or shell syntax is sent as `/bin/sh -c <command>` via `CreateSessionRequest.Args` (client bumped to the tymux#54 commit; `splitLaunchCommand` in `session/tymux/session.go`). Sessions created before the fix keep a stored shell command in tymuxd and must be recreated, not revived. `AppendLaunchEnv` is still a no-op.
+**Status**: ✅ Fixed — the command is delivered on every start/restore/resume path (`ProcessManager.WireLaunch`), and a launch with arguments or shell syntax is sent as `/bin/sh -c <command>` via `CreateSessionRequest.Args` (client bumped to the tymux#54 commit); since the typed-launch work a plain program is exec'd with argv directly and only `RawShell`, a relative stdin path, or a stdin/stderr redirect the daemon does not advertise (`create_session.stdin_file` / `stderr_redirect`) use `/bin/sh -c` (`session/tymux/launch.go`). Sessions created before the fix keep a stored shell command in tymuxd and must be recreated, not revived. `AppendLaunchEnv` is still a no-op.
 **Discovered**: 2026-09-16, user report: "our implementation of the stapler-squad tymux integration doesn't start the right target program", plus a related report that streaming logs don't work.
 
 ## Problem Description

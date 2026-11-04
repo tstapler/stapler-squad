@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -23,13 +26,25 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
+	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+)
+
+// Delays before the startup transcript backfill begins (live file changes are
+// never delayed). Tokens go first because QuotaGate reads token usage at boot;
+// a warm restart restores persisted checkpoints immediately regardless.
+const (
+	tokenBackfillDelay    = 15 * time.Second
+	artifactBackfillDelay = 30 * time.Second
 )
 
 // ServerDependencies holds all wired service components for the HTTP server.
@@ -99,6 +114,10 @@ type ServerDependencies struct {
 	QuotaGate *services.QuotaGate
 	SyncLoop  *session.SyncLoop
 
+	// WorkflowEngine is the selector/recorder stack behind BacklogService's
+	// engine; the server starts its recorder and wires the soak actuator.
+	WorkflowEngine *WorkflowEngineWiring
+
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag. See RuntimeDeps.BacklogEnabledCheck.
 	BacklogEnabledCheck func() bool
@@ -106,6 +125,16 @@ type ServerDependencies struct {
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
+	// AnalyticsDriver is the instrumented driver behind AnalyticsEntClient, used
+	// by background SQLite maintenance. Nil whenever AnalyticsEntClient is nil.
+	AnalyticsDriver dialect.ExecQuerier
+
+	// Escape-event storage: db/escape_events.db, its own SQLite file and single
+	// writer so escape inserts and retention deletes never queue analytics_events.
+	// All three are nil when the database failed to open (escape capture is then off).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	// Available=false means the Browser tab will be hidden on all sessions.
@@ -207,8 +236,13 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		BacklogService:                 rt.BacklogService,
 		QuotaGate:                      rt.QuotaGate,
 		SyncLoop:                       rt.SyncLoop,
+		WorkflowEngine:                 rt.WorkflowEngine,
 		BacklogEnabledCheck:            rt.BacklogEnabledCheck,
 		AnalyticsEntClient:             rt.AnalyticsEntClient,
+		AnalyticsDriver:                rt.AnalyticsDriver,
+		EscapeEventsClient:             rt.EscapeEventsClient,
+		EscapeEventsDriver:             rt.EscapeEventsDriver,
+		EscapeEventsDB:                 rt.EscapeEventsDB,
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
@@ -441,6 +475,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
+	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
 	prStatusPoller := session.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
@@ -515,7 +550,15 @@ type RuntimeDeps struct {
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
 	SyncLoop  *session.SyncLoop
-	Config    *config.Config // Used for encryption of sensitive data
+
+	// WorkflowEngine (see the identically-named field on ServerDependencies).
+	WorkflowEngine *WorkflowEngineWiring
+
+	// BacklogController starts and stops the periodic SyncLoop; exposed so the
+	// production-wiring test can check which engine that loop holds.
+	BacklogController *session.BacklogController
+
+	Config *config.Config // Used for encryption of sensitive data
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
@@ -524,6 +567,12 @@ type RuntimeDeps struct {
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
+	AnalyticsDriver    dialect.ExecQuerier
+
+	// Escape-event storage (see ServerDependencies).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	VNCDeps vnc.DepsResult
@@ -662,6 +711,30 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	eventBus := svc.EventBus
 	sessionService := svc.SessionService
 
+	// DetectWorktree's open() can block on an unreadable (TCC-protected) session
+	// path, so instance loading consults this enricher's cache instead of probing
+	// inline. Registered before LoadInstances; stopped by a server shutdown hook. ADR-038.
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		home = "/__unresolved_home__"
+	}
+	gate := tcc.NewConsentGate(tcc.LexicalPolicy(home), cfg.TCCEnrichmentConsent, func(id string) error {
+		return config.UpdateConfig(func(c *config.Config) error {
+			if c.TCCEnrichmentConsent == nil {
+				c.TCCEnrichmentConsent = map[string]bool{}
+			}
+			c.TCCEnrichmentConsent[id] = true
+			return nil
+		})
+	})
+	enricherConfig := session.WorktreeEnricherConfig{}
+	if cfg.TCCEnrichmentConsentEnabled() {
+		enricherConfig.Ready = gate.Ready
+		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
+	}
+	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
+	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
+
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
 	if err != nil {
@@ -679,7 +752,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// WorkflowEngine governs backlog state transitions; constructed once and shared
 	// by the service layer.
-	workflowEngine := session.NewDefaultWorkflowEngine()
+	defaultWorkflowEngine := session.NewDefaultWorkflowEngine()
 
 	// PipelineEngine resolves a backlog item's slash-command set / prompts (Epic 1.5).
 	// Constructed here — before NewBacklogLifecycleListenerWithPool and
@@ -762,7 +835,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// TransitionGate CRUD RPCs (Epic 2.7 of backlog-custom-workflow-stages).
 	// stageConfigEngine here is used only for its InvalidateCache method —
 	// those write handlers' downstream cache-invalidation target — not as
-	// the active session.WorkflowEngine (workflowEngine above still is);
+	// the active session.WorkflowEngine (the workflowEngine selector below is);
 	// switching runtime transition/gate evaluation over to
 	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
 	// posture as pipelineEngine/livenessEngine above.
@@ -782,6 +855,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	} else {
 		log.Warn("stageCRUDRepo unavailable: storage is not ent-backed; Stage/StageTransition/TransitionGate CRUD RPCs will return CodeUnavailable")
 	}
+
+	// The selector must exist, with its shadow recorder, before NewBacklogService
+	// and the BacklogController's SyncLoop take their engine.
+	workflowEngine := newWorkflowEngineWiring(defaultWorkflowEngine, stageConfigEngine, storage.GetEntClient(), config.LoadConfig)
+	session.InitNudgeOutcomes()
 
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
 	// via constructor (eliminating the post-construction wiring race). Non-fatal if
@@ -960,7 +1038,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if !inst.Started() {
+			if !inst.Started() && !deferToReconcile(inst) {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
 				}
@@ -994,7 +1072,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if inst.IsHotRestoreRecoverable() && inst.TmuxSessionExists() {
+			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
 				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
@@ -1100,6 +1178,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		time.Sleep(500 * time.Millisecond)
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
+		scanner.SetOptionsSource(attentionOptionsSource)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
@@ -1322,12 +1401,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
+	var analyticsDriver dialect.ExecQuerier
+	var escapeEventsClient *ent.Client
+	var escapeEventsDriver dialect.ExecQuerier
+	var escapeEventsDB *dbpool.Database
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
 		ctx := context.Background()
-		if ac, acErr := analytics.OpenAnalyticsDB(ctx, configDir); acErr != nil {
+		if ec, edb, ecErr := escapedb.Open(ctx, configDir); ecErr != nil {
+			log.Warn("could not open escape events DB (escape capture disabled)", "err", ecErr)
+		} else {
+			escapeEventsClient, escapeEventsDriver, escapeEventsDB = ec, edb.Driver(), edb
+			log.Info("escape events DB opened", "path", escapedb.Path(configDir))
+		}
+		if ac, drv, acErr := analytics.OpenAnalyticsDBWithDriver(ctx, configDir); acErr != nil {
 			log.Warn("could not open analytics DB (will use log-only fallback)", "err", acErr)
 		} else {
 			analyticsClient = ac
+			analyticsDriver = drv
 			log.Info("analytics DB opened", "path", configDir+"/analytics.db")
 		}
 	} else {
@@ -1393,7 +1483,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		historyDir, homeDirErr = config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
 	}
 	if homeDirErr == nil {
-		tokenStore = tokens.NewTokenStore(historyDir)
+		tokenOpts := []tokens.Option{tokens.WithQueueConfig(scanqueue.BackfillConfig(tokenBackfillDelay))}
+		if entClient := storage.GetEntClient(); entClient != nil {
+			tokenOpts = append(tokenOpts, tokens.WithStateStore(scanstate.NewStore(entClient).Consumer("tokens")))
+		}
+		tokenStore = tokens.NewTokenStore(historyDir, tokenOpts...)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		go publishContextHealth(context.Background(), tokenStore,
 			historyLinker.Instances,
@@ -1425,6 +1519,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		keyFunc = cfg.GetOrCreateEncryptionKey
 	}
 	backlogCtrl := session.NewBacklogController(backlogLifecycleListener, storage, syncRegistry, keyFunc)
+	backlogCtrl.SetWorkflowEngine(workflowEngine.Engine)
 	if cfg.GetFeatureFlag("backlog") {
 		if err := backlogCtrl.Enable(context.Background()); err != nil {
 			log.Error("failed to enable backlog feature on startup — disk config says enabled but the runtime controller is not; TriggerSync will reject calls until this is retried", "err", err)
@@ -1459,6 +1554,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		eventBus,
 	)
 	sessionService.SetQuotaGate(quotaGate)
+	services.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
 	quotaGate.Reconcile(context.Background())
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
@@ -1494,8 +1590,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}
 
-	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
+	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
+		return nil, gateErr
+	}
 	backlogSvc.SetLivenessRepository(livenessRepo)
+	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogSvc.SetRepoSettingsNonBlockingLookup(githubpkg.RepoSettingsNonBlocking)
+	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
+	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
 	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
@@ -1559,7 +1662,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// literal only. Guarded the same way backlogSvc.SetStageConfigEngine is
 	// above: stageConfigEngine is a concrete *session.ConfiguredWorkflowEngine,
 	// and passing a nil one through SetWorkflowEngine's interface parameter
-	// would box it as a non-nil-interface-wrapping-nil-pointer.
+	// would box it as a non-nil-interface-wrapping-nil-pointer. Never pass the
+	// workflowEngine.Engine selector here: the listener type-asserts the concrete
+	// engine, and the selector would silently disable gate-context resolution.
 	if stageConfigEngine != nil {
 		backlogLifecycleListener.SetWorkflowEngine(stageConfigEngine)
 	}
@@ -1661,6 +1766,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
+	workflowEngine.RegisterStatusDetail(sessionService)
 	// Read-only visibility for the restart-with-handoff-summary feature (see
 	// services.HandoffSummaryFeatureController's doc comment): lets the frontend
 	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
@@ -1742,6 +1848,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Wire ArtifactExtractor to extract PR links, commits, and URLs from JSONL history.
 		// Uses historyLinker.Instances() for live instance snapshots so sessions created
 		// after startup are included in lookupTitle and OnScanComplete.
+		artifactOpts := []artifacts.Option{artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay))}
+		if entClient := storage.GetEntClient(); entClient != nil {
+			artifactOpts = append(artifactOpts, artifacts.WithStateStore(scanstate.NewStore(entClient).Consumer("artifacts")))
+		}
 		artifactExtractor := artifacts.NewArtifactExtractor(
 			func(title, blob string) error {
 				return storage.UpdateInstanceArtifacts(title, blob)
@@ -1752,6 +1862,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			func(filePath string) (string, bool) {
 				return session.FindInstanceByHistoryPath(historyLinker.Instances(), filePath)
 			},
+			artifactOpts...,
 		)
 		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
 			// Take a snapshot to avoid a data race with concurrent AddInstance calls (M-5 fix).
@@ -1939,6 +2050,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}()
 
+	// Unwired, GatedTransition answers in Off mode, so every transition would pass unchecked.
+	if !storage.TransitionGateWired() {
+		return nil, errors.New("workflow engine transition gate is not wired; refusing to start with unchecked transitions")
+	}
+
 	return &RuntimeDeps{
 		HeadlessPool:                   headlessPool,
 		LLMSelector:                    llmSelector,
@@ -1968,9 +2084,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		BacklogService:                 backlogSvc,
 		QuotaGate:                      quotaGate,
 		SyncLoop:                       nil, // managed by BacklogController
+		WorkflowEngine:                 workflowEngine,
+		BacklogController:              backlogCtrl,
 		BacklogEnabledCheck:            backlogCtrl.IsEnabled,
 		Config:                         cfg,
 		AnalyticsEntClient:             analyticsClient,
+		AnalyticsDriver:                analyticsDriver,
+		EscapeEventsClient:             escapeEventsClient,
+		EscapeEventsDriver:             escapeEventsDriver,
+		EscapeEventsDB:                 escapeEventsDB,
 		VNCDeps:                        vncDeps,
 		CDPDeps:                        cdpDeps,
 		WorkflowRepo:                   workflowRepo,
@@ -2053,7 +2175,36 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 			RepoPath:     r.RepoPath,
 			Branch:       r.Branch,
 			WorktreePath: r.WorktreePath,
+			Fingerprint:  worktreeFingerprint(r),
 		})
 	}
 	return items
+}
+
+// installWorktreeEnricher starts and registers the process-wide worktree enricher
+// that instance loading consults (stopped by session.StopWorktreeEnricher). Any
+// previously registered enricher is stopped first.
+func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherConfig) *session.WorktreeEnricher {
+	session.StopWorktreeEnricher()
+	e := session.NewWorktreeEnricher(cfg)
+	e.Start(ctx)
+	session.SetWorktreeEnricher(e)
+	return e
+}
+
+// hotRestoreEligible probes persisted backend identity before a pane is attached.
+func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
+	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
+}
+
+// deferToReconcile reports whether Step 6 must leave inst for Step 6b.
+// Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
+// cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+func deferToReconcile(inst *session.Instance) bool {
+	switch inst.GetLifecycleStatus() {
+	case session.PermanentlyFailed, session.Failed:
+		return true
+	default:
+		return false
+	}
 }

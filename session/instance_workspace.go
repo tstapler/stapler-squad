@@ -80,13 +80,9 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 		i.tryExtractConversationUUID()
 	}
 
-	var result *WorkspaceSwitchResult
-	err := i.sendSyncErr(func(s *instanceState) error {
-		r, e := switchWorkspaceLocked(s, req)
-		result = r
-		return e
+	return sendSyncValue(i, func(s *instanceState) (*WorkspaceSwitchResult, error) {
+		return switchWorkspaceLocked(s, req)
 	})
-	return result, err
 }
 
 // killSessionLocked kills the tmux session from within an actor command.

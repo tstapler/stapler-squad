@@ -71,4 +71,15 @@ describe("webglBudget", () => {
     claim(c, 2);
     expect(b.release).not.toHaveBeenCalled();
   });
+
+  it("webglBudget_should_EvictHiddenFirst_And_KeepContextsAtMost8_When_12TerminalsMounted", () => {
+    // 3 windows x 4 panes; window 0 is active, windows 1 and 2 are hidden (not visible).
+    const windows = [0, 1, 2].map((w) => Array.from({ length: 4 }, () => makeSlot(w === 0)));
+    // Mount order: hidden windows were visited first, the active window mounts last.
+    [windows[1], windows[2], windows[0]].flat().forEach((s) => claim(s, 8));
+    const evicted = windows.flat().filter((s) => s.release.mock.calls.length > 0);
+    expect(evicted).toHaveLength(4); // 12 claimed, budget 8
+    expect(evicted.every((s) => !windows[0].includes(s))).toBe(true); // the active window keeps WebGL
+    expect(windows[0].every((s) => s.release.mock.calls.length === 0)).toBe(true);
+  });
 });

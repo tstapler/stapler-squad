@@ -187,12 +187,16 @@ export function useTerminalResizeHandler({
     } else {
       resize(cols, rows);
     }
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, onTerminalResized, xtermRef]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, onTerminalResized, xtermRef,
+      hasCachedDimensionsRef, hasInitiatedConnectionRef, isMountedRef, lastResizeRef, metricsRef,
+      setIsWaitingForStableSize, settleBypassPendingRef, sizeStabilityTimeoutRef]);
 }
 
 interface ConnectionBootstrapParams {
   sessionId: string;
   containerWidth: number;
+  /** Observer-reported height; when set, pre-sizing skips the forced getBoundingClientRect read. */
+  containerHeight?: number;
   terminalContainerRef: RefObject<HTMLDivElement | null>;
   xtermRef: RefObject<XtermTerminalHandle | null>;
   isConnected: boolean;
@@ -214,6 +218,7 @@ interface ConnectionBootstrapParams {
 export function useSessionConnectionBootstrap({
   sessionId,
   containerWidth,
+  containerHeight,
   terminalContainerRef,
   xtermRef,
   isConnected,
@@ -265,7 +270,9 @@ export function useSessionConnectionBootstrap({
         // the container has a real constrained width (not the full pre-layout browser width).
         // containerWidth > 0 means layout is complete and the pane has its actual dimensions.
         if (containerWidth > 0) {
-          const rect = terminalContainerRef.current.getBoundingClientRect();
+          const rect = containerHeight && containerHeight > 0
+            ? { width: containerWidth, height: containerHeight }
+            : terminalContainerRef.current.getBoundingClientRect();
           const preSize = computePreSize(rect, { cellWidth: cached.cellWidth, cellHeight: cached.cellHeight });
           if (preSize.ok) {
             const { cols: preCols, rows: preRows } = preSize;
@@ -387,5 +394,6 @@ export function useSessionConnectionBootstrap({
       }
       // If no dims, the resize handler will fire and connect normally
     }
-  }, [isConnected, connect]);
+  }, [isConnected, connect, hasInitiatedConnectionRef, isMountedRef, lastResizeRef,
+      pendingConnectAfterDisconnectRef, setIsWaitingForStableSize]);
 }

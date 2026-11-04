@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
 export interface WebhookTriggerFields {
   slug: string;
@@ -19,7 +20,7 @@ export class TriggersPage {
   constructor(private page: Page) {}
 
   async goto() {
-    await this.page.goto((process.env.TEST_SERVER_URL ?? "http://localhost:8544") + "/triggers", {
+    await this.page.goto(baseUrl() + "/triggers", {
       waitUntil: "domcontentloaded",
       timeout: 15000,
     });
@@ -113,6 +114,7 @@ export class TriggersPage {
   }
 
   callbackErrorBanner(): Locator {
-    return this.page.getByRole("alert");
+    // Excludes the permanent assertive live region (Announcer.tsx), which is also role="alert".
+    return this.page.locator('[role="alert"]:not([data-testid="announcer-assertive"])');
   }
 }

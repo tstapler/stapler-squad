@@ -47,12 +47,13 @@ test("the path reader can fail: a workflow with only web-app/src misses the buil
   assert.deepEqual(pullRequestPaths(old), ["web-app/src/**"]);
 });
 
-test("every .next/cache step is skipped under WEB_BUILD=bun", () => {
-  for (const file of [".github/workflows/benchmark.yml", ".github/actions/prepare/action.yml"]) {
-    const blocks = read(file).split(/\n(?= *- name: )/).filter((b) => b.includes("path: web-app/.next/cache"));
-    assert.ok(blocks.length > 0, `${file} has no .next/cache step`);
-    for (const b of blocks) assert.match(b, /if: env\.WEB_BUILD != 'bun'/, `${file}: ${b.split("\n")[0]}`);
-  }
+test("no workflow or composite action still builds, caches or selects Next", () => {
+  const files = [".github/workflows", ".github/actions"].flatMap((dir) =>
+    readdirSync(path.join(root, dir), { recursive: true })
+      .filter((n) => /\.ya?ml$/.test(n))
+      .map((n) => `${dir}/${n}`),
+  );
+  for (const file of files) assert.doesNotMatch(read(file), /web-app\/\.next|WEB_BUILD|NEXT_BUILD_MODE|e2e-next/, file);
 });
 
 test("Lighthouse has one config, served by the Go server, covering a nested deep link", () => {
@@ -72,14 +73,48 @@ test("no workflow uses pull_request_target, and every setup-bun is pinned by SHA
   }
 });
 
-test("storybook-build and web-supply-chain exist in build.yml and stay out of the gate's needs", () => {
+test("web-checks in build.yml still runs the storybook build and the dependency screen", () => {
   const build = read(".github/workflows/build.yml");
-  for (const job of ["storybook-build", "web-supply-chain"]) assert.match(build, new RegExp(`^  ${job}:`, "m"));
-  const gate = build.match(/^ {2}web-build-gate:[\s\S]*?needs: \[([^\]]*)\]/m)[1];
-  assert.doesNotMatch(gate, /storybook-build|web-supply-chain/);
+  assert.match(build, /^ {2}web-checks:/m);
+  for (const step of ["bun run build-storybook", "bun run check:dependency-screen", "TestBuiltAssets"]) assert.ok(build.includes(step), step);
 });
 
-test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {
+test("main-only jobs live in main-ci.yml, not build.yml, so PR runs list no skipped checks for them", () => {
+  const build = read(".github/workflows/build.yml");
+  const main = read(".github/workflows/main-ci.yml");
+  for (const job of ["test-tmux", "test-rest"]) {
+    assert.doesNotMatch(build, new RegExp(`^ {2}${job}:`, "m"), `${job} should not be in build.yml`);
+    assert.match(main, new RegExp(`^ {2}${job}:`, "m"), `${job} missing from main-ci.yml`);
+  }
+  assert.doesNotMatch(build, /^ {2}benchmark-gate:/m, "benchmark-gate was retired; benchmark.yml covers benchmarks");
+  assert.doesNotMatch(main, /^ {2}benchmark-gate:/m, "benchmark-gate was retired; benchmark.yml covers benchmarks");
+  assert.doesNotMatch(main, /^\s*pull_request\s*:/m);
+  for (const m of main.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
+    if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
+  }
+});
+
+test("build.yml: every matrix sets fail-fast: false", () => {
+  const yml = read(".github/workflows/build.yml");
+  for (const m of yml.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
+    if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
+  }
+});
+
+test("build.yml detect-changes regex and push paths treat e2e-only edits as relevant", () => {
+  const yml = read(".github/workflows/build.yml");
+  const regex = yml.match(/grep -qE '([^']+)'; then/)?.[1];
+  assert.ok(regex, "detect-changes grep regex not found");
+  for (const p of ["^tests/e2e/", "^web-app/tests/e2e/"]) assert.ok(regex.includes(p), `detect-changes regex is missing ${p}`);
+  const re = new RegExp(regex);
+  assert.ok(re.test("tests/e2e/playwright.config.ts"));
+  assert.ok(re.test("web-app/tests/e2e/terminal-stress/helpers.ts"));
+  assert.ok(!re.test("tests/e2e-sharding-helper/foo.ts"));
+  const pushPaths = yml.split("\n  workflow_dispatch:")[0];
+  for (const p of ["tests/e2e/**", "web-app/tests/e2e/**"]) assert.ok(pushPaths.includes(`- '${p}'`), `push paths is missing ${p}`);
+});
+
+test("the merged lint job pins checkout to the PR head, not the stale default merge ref", () => {
   // actions/checkout defaults to GitHub's synthetic refs/pull/N/merge for pull_request
   // events, which tracks main's CURRENT tip independently of base.sha (captured once, at
   // the PR's last push). Once main advances past base.sha, each job's `git diff
@@ -87,7 +122,7 @@ test("web-lint and go-lint pin checkout to the PR head, not the stale default me
   // in between — surfaced 2026-10-22 as unrelated pre-existing warnings failing an
   // unrelated PR (#1144). Each job's checkout step must pin `ref:` to the actual head SHA.
   const lines = read(".github/workflows/lint.yml").split("\n");
-  for (const job of ["web-lint", "go-lint"]) {
+  for (const job of ["lint"]) {
     const start = lines.findIndex((l) => l === `  ${job}:`);
     assert.ok(start !== -1, job);
     const rest = lines.slice(start + 1);

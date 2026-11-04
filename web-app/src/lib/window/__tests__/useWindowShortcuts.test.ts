@@ -80,7 +80,7 @@ describe("useWindowShortcuts", () => {
     pressKey("2");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win2.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win2.id, "leader");
 
     // Sequence is consumed: a later bare "2" does nothing shortcut-related.
     pressKey("2");
@@ -143,7 +143,7 @@ describe("useWindowShortcuts", () => {
     pressKey("n");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win1.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win1.id, "leader");
 
     unmount();
   });
@@ -159,7 +159,7 @@ describe("useWindowShortcuts", () => {
     pressKey("p");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win3.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win3.id, "leader");
 
     unmount();
   });
@@ -181,6 +181,23 @@ describe("useWindowShortcuts", () => {
     // Sequence consumed: a later bare "," does nothing.
     pressKey(",");
     expect(onRenameRequest).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("o opens the window overview and disarms", () => {
+    const onOverviewRequest = jest.fn();
+    const { unmount } = renderHook(() =>
+      useWindowShortcuts(windows, win1.id, jest.fn(), jest.fn(), onOverviewRequest)
+    );
+
+    pressAltW();
+    pressKey("o");
+    expect(onOverviewRequest).toHaveBeenCalledTimes(1);
+
+    // Sequence consumed: a later bare "o" does nothing.
+    pressKey("o");
+    expect(onOverviewRequest).toHaveBeenCalledTimes(1);
 
     unmount();
   });

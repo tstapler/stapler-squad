@@ -152,20 +152,26 @@ func flagScopeReadback(cfg *config.Config, name string, scopes []string) []*sess
 // previous effective value (the inherited global when the key was absent) goes
 // to the audit line; a failed controller apply restores or deletes the key.
 func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit *flagAudit) error {
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagScopedOverride(op.name, op.scope)
-	if !hadKey {
-		previous = cfg.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
-	}
+	var previous, hadKey bool
+	var cfg *config.Config
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
+	err := config.UpdateConfig(func(c *config.Config) error {
+		cfg = c
+		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
+		if !hadKey {
+			previous = c.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
+		}
+		if op.isSet() {
+			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
+		}
+		return nil
+	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlagScope(op.name, op.scope, op.enabled)
-	} else {
-		err = cfg.DeleteFeatureFlagScope(op.name, op.scope)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag scope: %w", err))
@@ -189,12 +195,14 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	}
 	log.Error("feature controller scope apply failed, rolling back persisted scope",
 		"feature", op.name, "scope", op.scope, "err", ctrlErr)
-	var rollbackErr error
-	if hadKey {
-		rollbackErr = cfg.SetFeatureFlagScope(op.name, op.scope, previous)
-	} else {
-		rollbackErr = cfg.DeleteFeatureFlagScope(op.name, op.scope)
-	}
+	rollbackErr := config.UpdateConfig(func(c *config.Config) error {
+		if hadKey {
+			c.ApplyFeatureFlagScope(op.name, op.scope, previous)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
+		}
+		return nil
+	})
 	if rollbackErr != nil {
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
@@ -225,8 +233,8 @@ func explicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
 // kindOffStatusDetail is the per-kind half of the explicit-false status line
 // (Task 2.11g): one phrase per kind whose override is false. It is a source on
 // the composite provider, so registration order cannot hide it.
-func kindOffStatusDetail() string {
-	kinds := explicitOffKinds(config.LoadConfig())
+func kindOffStatusDetail(cfg *config.Config) string {
+	kinds := explicitOffKinds(cfg)
 	parts := make([]string, 0, len(kinds))
 	for _, k := range kinds {
 		parts = append(parts, fmt.Sprintf("Gate is OFF for kind %s: hidden %s sessions deliver everything", k, k))
@@ -243,8 +251,7 @@ const (
 // effective global value is off and either never set (shadow mode) or
 // explicitly false. It reads the effective value, so it goes silent once the
 // default flips on.
-func globalOffStatusDetail() string {
-	cfg := config.LoadConfig()
+func globalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
 	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
 		return ""

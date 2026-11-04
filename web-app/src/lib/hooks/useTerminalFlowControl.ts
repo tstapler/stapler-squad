@@ -1,12 +1,14 @@
 "use client";
 
 import { useRef, useCallback, useEffect } from "react";
-import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
+import type { TerminalData} from "@/gen/session/v1/events_pb";
+import { TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { generateSecureId } from "@/lib/pane/paneUtils";
 import { useResizeSettling, type ResizeOptions } from "@/lib/hooks/useResizeSettling";
 import type { Terminal } from '@xterm/xterm';
+import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
 
 // Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
 // resulting TerminalOutput.resync_id. Flag off preserves pre-project wire
@@ -202,8 +204,10 @@ export function useTerminalFlowControl({
       const currentPaneReq = create(CurrentPaneRequestSchema, {
         lines: 50,
         includeEscapes: true,
-        targetCols: currentTerminal.cols,
-        targetRows: currentTerminal.rows,
+        ...(isUsableTerminalSize(currentTerminal.cols, currentTerminal.rows) && {
+          targetCols: currentTerminal.cols,
+          targetRows: currentTerminal.rows,
+        }),
         resyncId,
         staleDimensions,
       });
@@ -358,8 +362,7 @@ export function useTerminalFlowControl({
               value: create(CurrentPaneRequestSchema, {
                 lines: 50,
                 includeEscapes: true,
-                targetCols: cols,
-                targetRows: rows,
+                ...(isUsableTerminalSize(cols, rows) && { targetCols: cols, targetRows: rows }),
                 resyncId,
                 staleDimensions: false,
               }),

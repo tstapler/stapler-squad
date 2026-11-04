@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Buffer } from "@/lib/files/bufferReducer";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { useFileTransport } from "./useFileTransport";
+import { pollIntervalMs, type PollMode } from "./pollMode";
 
 const POLL_MS = 10_000;
+const SLOW_POLL_MS = 100_000;
 const BACKOFF_MS = 30_000;
 const CONFIRM_MS = 1_000;
 const BACKOFF_AFTER_FAILURES = 3;
@@ -35,6 +37,8 @@ interface Options {
   active: Buffer | null;
   /** files:viewer-v2 on and the Files tab mounted. */
   enabled: boolean;
+  /** "off" (hidden window) stops all checks; "slow" (unfocused pane) polls at SLOW_POLL_MS. Defaults to "fast". */
+  pollMode?: PollMode;
   sessionRunning: boolean;
   /** Adopts a token whose content is unchanged (mtime-only). */
   onAdoptToken: (path: string, token: string) => void;
@@ -46,7 +50,7 @@ const canCheck = () => document.visibilityState === "visible" && navigator.onLin
  * Detects on-disk changes to the active buffer: on focus, on becoming visible and every 10 s.
  * A change must be seen on two checks (one second apart) before the banner shows; it never touches the buffer.
  */
-export function useBufferFreshness({ active, enabled, sessionRunning, onAdoptToken }: Options) {
+export function useBufferFreshness({ active, enabled, pollMode = "fast", sessionRunning, onAdoptToken }: Options) {
   const transport = useFileTransport();
   const analytics = useFilesAnalytics({ component: "BannerStack" });
   const [stale, setStale] = useState<StaleInfo | null>(null);
@@ -69,7 +73,8 @@ export function useBufferFreshness({ active, enabled, sessionRunning, onAdoptTok
 
   const lastPath = useRef<string | null>(null);
   useEffect(() => {
-    if (!enabled || !path || !sessionId) return;
+    const pollMs = pollIntervalMs(pollMode, POLL_MS, SLOW_POLL_MS);
+    if (!enabled || pollMs === null || !path || !sessionId) return;
     const abort = new AbortController();
     let inflight = false;
     let failures = 0;
@@ -122,7 +127,7 @@ export function useBufferFreshness({ active, enabled, sessionRunning, onAdoptTok
       pollTimer = setTimeout(async () => {
         await check();
         if (!abort.signal.aborted) schedule();
-      }, failures >= BACKOFF_AFTER_FAILURES ? BACKOFF_MS : POLL_MS);
+      }, failures >= BACKOFF_AFTER_FAILURES ? BACKOFF_MS : pollMs);
     };
     const onWake = () => void check();
     const onVisibility = () => { if (document.visibilityState === "visible") onWake(); };
@@ -139,7 +144,7 @@ export function useBufferFreshness({ active, enabled, sessionRunning, onAdoptTok
       window.removeEventListener("focus", onWake);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [enabled, path, sessionId, transport]);
+  }, [enabled, pollMode, path, sessionId, transport]);
 
   const resolve = useCallback((action: StaleAction) => {
     const cur = live.current.stale;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { writeFileSync, rmSync } from "node:fs";
 import { test } from "node:test";
-import { buildBaseline, classify } from "./classify-e2e.mjs";
+import { buildBaseline, classify, mergeRoutesVisited, loadBuildCoupledSpecs } from "./classify-e2e.mjs";
 
 const att = (...statuses) => statuses.map((status, retry) => ({ retry, status }));
 const report = (results) => ({ suites: [{ title: "a.spec.ts", file: "a.spec.ts", specs: [{ title: "t", file: "a.spec.ts", tests: [{ projectName: "chromium", results }] }] }] });
@@ -26,4 +27,30 @@ test("buildBaseline keeps every attempt of every run", () => {
   assert.equal(b.specs[0].class, "flaky");
   assert.deepEqual(b.specs[0].runs[0].attempts, [{ retry: 0, status: "failed" }, { retry: 1, status: "passed" }]);
   assert.equal(b.meta.counts.flaky, 1);
+});
+
+test("mergeRoutesVisited merges JSONL route records by spec file, sorted and deduped", () => {
+  const jsonl = "/tmp/classify-e2e-test-routes.jsonl";
+  writeFileSync(jsonl, [
+    JSON.stringify({ specFile: "a.spec.ts", routes: ["/b", "/a"] }),
+    JSON.stringify({ specFile: "a.spec.ts", routes: ["/a", "/c"] }),
+  ].join("\n") + "\n");
+  const specs = [{ spec: "a.spec.ts", title: "t1", routesVisited: null }, { spec: "other.spec.ts", title: "t2", routesVisited: null }];
+  mergeRoutesVisited(specs, jsonl);
+  assert.deepEqual(specs[0].routesVisited, ["/a", "/b", "/c"]);
+  assert.equal(specs[1].routesVisited, null);
+  rmSync(jsonl);
+});
+
+test("mergeRoutesVisited is a no-op when the JSONL path is missing or absent", () => {
+  const specs = [{ spec: "a.spec.ts", title: "t1", routesVisited: null }];
+  mergeRoutesVisited(specs, undefined);
+  mergeRoutesVisited(specs, "/tmp/does-not-exist-classify-e2e.jsonl");
+  assert.equal(specs[0].routesVisited, null);
+});
+
+test("loadBuildCoupledSpecs reads the committed build-coupled-specs.json inventory", () => {
+  const list = loadBuildCoupledSpecs(new URL("../../../../tests/e2e/baseline/build-coupled-specs.json", import.meta.url).pathname);
+  assert.ok(list.length >= 8, `expected at least 8 build-coupled specs, got ${list.length}`);
+  assert.ok(list.some((s) => s.spec === "jules-status-badge.spec.ts"));
 });

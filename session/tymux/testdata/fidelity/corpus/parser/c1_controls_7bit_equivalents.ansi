@@ -1,0 +1,4 @@
+parser/c1_controls_7bit_equivalents -- libvterm 02parser.test (C1); ECMA-48 C1
+[1;1Hind-Dx[3;1Hnel-Ex[6;1Hri-Mx[8;1Hhts-H[8;20HH[9;1H	a	b
+[11;1Hcsi-via-esc[: [1;31mred[0m[12;1Hosc-via-esc]: ]0;t\ok[13;1Hdcs-via-escP: Pxx\ok
+[14;1Hsos/pm/apc: Xs\^p\_a\ok[15;1Hss2/ss3: NxOy[16;1Hst alone: \ok

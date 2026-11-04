@@ -21,6 +21,7 @@ export const overlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   animation: `${fadeIn} 0.2s ease`,
 });
@@ -79,7 +80,7 @@ export const input = style({
   background: vars.color.inputBackground,
   color: vars.color.textPrimary,
   fontSize: "14px",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:focus": {
       outline: "none",
@@ -101,7 +102,7 @@ export const addButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,
@@ -155,7 +156,7 @@ export const tagItem = style({
   background: vars.color.surfaceMuted,
   border: `1px solid ${vars.color.borderMuted}`,
   borderRadius: "6px",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -231,7 +232,7 @@ export const removeButton = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.error,
@@ -260,7 +261,7 @@ export const cancelButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -278,7 +279,7 @@ export const saveButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,

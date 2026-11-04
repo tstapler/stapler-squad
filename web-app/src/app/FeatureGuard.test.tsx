@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { FeatureGuard } from "./FeatureGuard";
 
 const mockReplace = jest.fn();
@@ -8,6 +9,7 @@ const mockGetFeatureFlags = jest.fn();
 
 jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+  usePathname: () => "/changelog/",
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect", () => ({
@@ -26,6 +28,7 @@ function renderGuard(flag: "backlog" | "changelog") {
 
 describe("FeatureGuard", () => {
   beforeEach(() => {
+    resetFlagStoreForTest();
     mockReplace.mockClear();
     mockGetFeatureFlags.mockReset();
   });
@@ -48,5 +51,13 @@ describe("FeatureGuard", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/"));
     expect(mockReplace).toHaveBeenCalledTimes(1);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("keeps the route's <title> while flags load, without rendering any guarded content", async () => {
+    mockGetFeatureFlags.mockReturnValue(new Promise(() => {}));
+    const { container } = renderGuard("changelog");
+    await waitFor(() => expect(document.title).toBe("Stapler Squad Sessions"));
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("guarded")).not.toBeInTheDocument();
   });
 });

@@ -112,7 +112,7 @@ func (h *BacklogDebugMutateHandler) handleCreate(w http.ResponseWriter, r *http.
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:              req.Title,
 		Description:        req.Description,
 		Status:             status,
@@ -169,7 +169,7 @@ func (h *BacklogDebugMutateHandler) handleTransition(w http.ResponseWriter, r *h
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.TransitionBacklogItemStatus(ctx, req.ItemID, session.BacklogStatus(req.TargetStatus), nil, session.TriggeredBySystem); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, session.BacklogStatus(req.TargetStatus), session.TriggeredBySystem); err != nil {
 		log.Error("backlog debug mutate: transition failed", "err", err)
 		http.Error(w, "failed to transition backlog item: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -250,7 +250,7 @@ func (h *BacklogDebugMutateHandler) handleArchive(w http.ResponseWriter, r *http
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.ArchiveBacklogItem(ctx, req.ItemID, nil, session.TriggeredByUser, ""); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, session.BacklogStatusArchived, session.TriggeredByUser); err != nil {
 		log.Error("backlog debug mutate: archive failed", "err", err)
 		http.Error(w, "failed to archive backlog item: "+err.Error(), http.StatusInternalServerError)
 		return

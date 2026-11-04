@@ -26,6 +26,53 @@ const defined = <T,>(x: T | undefined): x is T => x !== undefined;
 
 const isCoarsePointer = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
 
+type SessionClient = ReturnType<typeof createClient<typeof SessionService>>;
+
+// Capabilities are server-wide, so one entry serves every mounted Files tab (8 tabs -> 1 call).
+// A response epoch that differs from the cached one means the server changed; refetch then.
+let capsCache: { caps: FileCapabilities; inflight?: undefined } | { caps?: undefined; inflight: Promise<FileCapabilities> } | null = null;
+
+/** Test-only: forget the shared capabilities. */
+export function resetCapabilitiesCacheForTests(): void {
+  capsCache = null;
+}
+
+function sharedCapabilities(client: SessionClient, sessionId: string, observedEpoch?: number): Promise<FileCapabilities> {
+  if (capsCache?.caps && (observedEpoch === undefined || capsCache.caps.capsEpoch === observedEpoch)) return Promise.resolve(capsCache.caps);
+  if (capsCache?.inflight) return capsCache.inflight;
+  const inflight = fetchCapabilities(client, sessionId).then(
+    (caps) => {
+      if (capsCache?.inflight === inflight) capsCache = { caps };
+      return caps;
+    },
+    (err: unknown) => {
+      if (capsCache?.inflight === inflight) capsCache = null;
+      throw err;
+    },
+  );
+  capsCache = { inflight };
+  return inflight;
+}
+
+async function fetchCapabilities(client: SessionClient, sessionId: string): Promise<FileCapabilities> {
+  // Shared page-lifetime fetch with no owning component to cancel it.
+  // abort-signal-exempt
+  const { capabilities: c } = await client.getFileTransportCapabilities({ sessionId });
+  const l = c?.limits;
+  return {
+    protocolVersion: c?.protocolVersion ?? 0,
+    features: c?.features ?? [],
+    ops: (c?.ops ?? []).map((o) => OPS[o]).filter(defined),
+    wires: (c?.wires ?? []).map((w) => WIRES[w]).filter(defined),
+    capsEpoch: Number(c?.capsEpoch ?? 0),
+    limits: {
+      maxRangeBytes: Number(l?.maxRangeBytes ?? 0), maxRangeLines: l?.maxRangeLines ?? 0, preferredChunkBytes: l?.preferredChunkBytes ?? 0,
+      maxPatchOps: l?.maxPatchOps ?? 0, maxPatchBodyBytes: Number(l?.maxPatchBodyBytes ?? 0), maxInsertBytes: Number(l?.maxInsertBytes ?? 0),
+      maxWriteFullBytes: Number(l?.maxWriteFullBytes ?? 0), hashCapBytes: Number(l?.hashCapBytes ?? 0), maxConcurrentRanges: l?.maxConcurrentRanges ?? 0,
+    },
+  };
+}
+
 /** Production router: the `full` floor, the `connect_unary` range adapter and the capability RPC; stream rungs register as they land. */
 export function createDefaultFileTransport(analytics?: Pick<ReturnType<typeof useFilesAnalytics>, "emit" | "time">): FileTransportPort {
   const client = createClient(SessionService, getConnectTransport());
@@ -41,24 +88,7 @@ export function createDefaultFileTransport(analytics?: Pick<ReturnType<typeof us
     full,
     adapters: [unary],
     analytics,
-    async fetchCapabilities(sessionId): Promise<FileCapabilities> {
-      // One cached page-lifetime fetch with no owning component to cancel it.
-      // abort-signal-exempt
-      const { capabilities: c } = await client.getFileTransportCapabilities({ sessionId });
-      const l = c?.limits;
-      return {
-        protocolVersion: c?.protocolVersion ?? 0,
-        features: c?.features ?? [],
-        ops: (c?.ops ?? []).map((o) => OPS[o]).filter(defined),
-        wires: (c?.wires ?? []).map((w) => WIRES[w]).filter(defined),
-        capsEpoch: Number(c?.capsEpoch ?? 0),
-        limits: {
-          maxRangeBytes: Number(l?.maxRangeBytes ?? 0), maxRangeLines: l?.maxRangeLines ?? 0, preferredChunkBytes: l?.preferredChunkBytes ?? 0,
-          maxPatchOps: l?.maxPatchOps ?? 0, maxPatchBodyBytes: Number(l?.maxPatchBodyBytes ?? 0), maxInsertBytes: Number(l?.maxInsertBytes ?? 0),
-          maxWriteFullBytes: Number(l?.maxWriteFullBytes ?? 0), hashCapBytes: Number(l?.hashCapBytes ?? 0), maxConcurrentRanges: l?.maxConcurrentRanges ?? 0,
-        },
-      };
-    },
+    fetchCapabilities: (sessionId, observedEpoch) => sharedCapabilities(client, sessionId, observedEpoch),
   });
   return router;
 }

@@ -1,15 +1,20 @@
 "use client";
 
-import { forwardRef, memo, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
+import { WindowPreviewCard, type SessionTitleLookup } from "./WindowLayoutPreview";
+import * as overviewStyles from "@/styles/window/windowOverview.css";
 import { GESTURE_MOVEMENT_THRESHOLD_PX } from "@/lib/window/windowGestureConstants";
 import { useWindowSwipe } from "@/lib/window/useWindowSwipe";
+import type { WindowSwitchTrigger } from "@/lib/window/useWindowFocusMemory";
+import { windowPanelDomId, windowTabDomId } from "@/lib/window/windowDomIds";
 import {
   windowTabStrip,
   windowTabList,
   windowTabWrapper,
   windowTabButton,
   windowTabCloseButton,
+  windowTabEditorWrapper,
   windowTabInput,
   windowAddButton,
   windowOnboardingHint,
@@ -40,11 +45,22 @@ export interface WindowTabStripHandle {
 interface WindowTabStripProps {
   windows: NamedWindow[];
   currentWindowId: WindowId;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onCreate: () => void;
   onClose: (id: WindowId) => void;
   onRename: (id: WindowId, name: string) => void;
+  /**
+   * Hover-preview inputs. Callbacks (not data) because arePropsEqual below
+   * deliberately ignores pane-tree changes; reading through them at hover time
+   * always sees the latest layout. Omit either to disable the preview.
+   */
+  getWindows?: () => NamedWindow[];
+  getSessionTitle?: SessionTitleLookup;
+  onOpenOverview?: () => void;
 }
+
+const HOVER_PREVIEW_DELAY_MS = 300;
+const HOVER_PREVIEW_CLOSE_MS = 150;
 
 const LONG_PRESS_MS = 500;
 
@@ -103,7 +119,7 @@ interface WindowTabProps {
   isEditing: boolean;
   draftName: string;
   showClose: boolean;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   onDraftChange: (value: string) => void;
@@ -128,15 +144,18 @@ function WindowTabEditor({
   onCommit,
   onCancel,
 }: WindowTabEditorProps) {
+  // Select once on mount; an inline ref callback re-runs every render and would
+  // re-select the text on each keystroke, so each character overwrites the last.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
   return (
-    <div className={windowTabWrapper}>
+    <div className={windowTabEditorWrapper}>
       <input
-        ref={(el) => {
-          if (el) {
-            el.focus();
-            el.select();
-          }
-        }}
+        ref={inputRef}
         className={windowTabInput}
         value={draftName}
         onChange={(e) => onDraftChange(e.target.value)}
@@ -184,16 +203,24 @@ function WindowTabCloseButton({
         onClose(id);
       }}
     >
+      {/* analytics-exempt */}
       &times;
     </button>
   );
+}
+
+/** `detail === 0` is a synthesized activation (assistive tech "activate"), treated like Enter/Space. */
+function clickTrigger(e: React.MouseEvent): WindowSwitchTrigger {
+  const pointerType = (e.nativeEvent as Partial<PointerEvent>).pointerType;
+  if (pointerType === "touch" || pointerType === "pen") return "touch";
+  return e.detail === 0 ? "tab-key" : "mouse";
 }
 
 interface WindowTabButtonProps {
   window: NamedWindow;
   isActive: boolean;
   showClose: boolean;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   longPress: ReturnType<typeof useLongPress>;
@@ -234,21 +261,28 @@ function WindowTabButton({
       // A native <button> auto-activates on Enter/Space; this element is a
       // <div> (see doc comment above), so that activation is wired up here.
       e.preventDefault();
-      onSwitch(w.id);
+      onSwitch(w.id, "tab-key");
     }
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    onSwitch(w.id, clickTrigger(e));
   };
 
   return (
     <div
       ref={(el) => tabRef(w.id, el)}
       role="tab"
+      id={windowTabDomId(w.id)}
       aria-selected={isActive}
+      // Only the selected tab's panel is guaranteed to be in the DOM (the keep-alive host adds the rest).
+      aria-controls={isActive ? windowPanelDomId(w.id) : undefined}
       aria-label={w.name}
       tabIndex={isActive ? 0 : -1}
       data-testid={`window-tab-${w.id}`}
       className={windowTabButton({ active: isActive })}
       title={w.name}
-      onClick={() => onSwitch(w.id)}
+      onClick={handleClick}
       onDoubleClick={() => onBeginEdit(w.id, w.name)}
       onKeyDown={handleKeyDown}
       onTouchStart={(e) => longPress.onTouchStart(e, w.id, w.name)}
@@ -315,18 +349,44 @@ const WindowTabStripInner = forwardRef<
   WindowTabStripHandle,
   WindowTabStripProps
 >(function WindowTabStrip(
-  { windows, currentWindowId, onSwitch, onCreate, onClose, onRename },
+  {
+    windows,
+    currentWindowId,
+    onSwitch,
+    onCreate,
+    onClose,
+    onRename,
+    getWindows,
+    getSessionTitle,
+    onOpenOverview,
+  },
   ref,
 ) {
   const [editingId, setEditingId] = useState<WindowId | null>(null);
   const [draftName, setDraftName] = useState("");
+  const [previewWindows, setPreviewWindows] = useState<NamedWindow[] | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const beginEdit = (id: WindowId, name: string) => {
+  const clearHoverTimer = () => {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  };
+  const scheduleHover = (open: boolean) => {
+    clearHoverTimer();
+    hoverTimer.current = setTimeout(
+      () => setPreviewWindows(open && getWindows ? getWindows() : null),
+      open ? HOVER_PREVIEW_DELAY_MS : HOVER_PREVIEW_CLOSE_MS,
+    );
+  };
+  useEffect(() => clearHoverTimer, []);
+
+  const beginEdit = useCallback((id: WindowId, name: string) => {
     setEditingId(id);
     setDraftName(name);
-  };
+  }, []);
 
   const commitRename = (id: WindowId) => {
+    clearHoverTimer();
     const trimmed = draftName.trim();
     if (trimmed.length > 0) {
       onRename(id, trimmed);
@@ -364,7 +424,7 @@ const WindowTabStripInner = forwardRef<
         dir === "next"
           ? (idx + 1) % windows.length
           : (idx - 1 + windows.length) % windows.length;
-      onSwitch(windows[nextIdx].id);
+      onSwitch(windows[nextIdx].id, "swipe");
     },
   });
 
@@ -397,13 +457,23 @@ const WindowTabStripInner = forwardRef<
     if (targetIdx === null) return;
     e.preventDefault();
     const target = windows[targetIdx];
-    onSwitch(target.id);
+    onSwitch(target.id, "tab-key");
     tabNodesRef.current.get(target.id)?.focus();
   };
 
   return (
     <>
-      <div ref={containerRef} className={windowTabStrip}>
+      <div
+        ref={containerRef}
+        className={windowTabStrip}
+        // Mouse only: a touch tap synthesizes mouseenter, which would pop the preview
+        // open on every tap. Touch users get the overview button instead.
+        onPointerEnter={(e) => e.pointerType === "mouse" && scheduleHover(true)}
+        onPointerLeave={(e) => e.pointerType === "mouse" && scheduleHover(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setPreviewWindows(null);
+        }}
+      >
         {/* role="tablist" wraps ONLY the tabs — the "+" button is a sibling
             outside this element's DOM subtree, not a tablist child, since
             aria-required-children mandates role="tab" for every direct
@@ -440,8 +510,46 @@ const WindowTabStripInner = forwardRef<
           title="New window"
           aria-label="New window"
         >
+          {/* analytics-exempt */}
           +
         </button>
+        {onOpenOverview && (
+          <button
+            className={windowAddButton}
+            data-testid="window-overview-button"
+            onClick={() => {
+              setPreviewWindows(null);
+              onOpenOverview();
+            }}
+            title="Window overview"
+            aria-label="Window overview"
+          >
+            {/* analytics-exempt */}
+            ⊞
+          </button>
+        )}
+        {previewWindows && editingId === null && getSessionTitle && (
+          <div
+            className={overviewStyles.popover}
+            data-testid="window-hover-preview"
+            onMouseEnter={clearHoverTimer}
+          >
+            {previewWindows.map((w, i) => (
+              <WindowPreviewCard
+                key={w.id}
+                window={w}
+                position={i + 1}
+                isActive={w.id === currentWindowId}
+                getSessionTitle={getSessionTitle}
+                className={overviewStyles.popoverCard}
+                onSelect={(id) => {
+                  setPreviewWindows(null);
+                  onSwitch(id, "mouse");
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
       {showHint && (
         <div
@@ -455,6 +563,7 @@ const WindowTabStripInner = forwardRef<
             tmux sessions.
           </span>
           <button className={windowOnboardingHintDismiss} onClick={dismissHint}>
+            {/* analytics-exempt */}
             Got it ✕
           </button>
         </div>

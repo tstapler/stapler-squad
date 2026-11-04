@@ -372,7 +372,12 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		}
 	}
 
-	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
+	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
+	}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard}); setErr != nil {
+		if isTransitionDenied(setErr) {
+			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
+		}
 		if errors.Is(setErr, session.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
 			// our read above and the atomic write (another action resolved it,

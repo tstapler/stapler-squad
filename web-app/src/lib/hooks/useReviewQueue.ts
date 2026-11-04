@@ -5,11 +5,12 @@ import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
 import { getWatchTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import {
+import type {
   ReviewQueue,
   ReviewItem,
   Priority,
-  AttentionReason,
+  AttentionReason} from "@/gen/session/v1/types_pb";
+import {
   SessionStatus,
 } from "@/gen/session/v1/types_pb";
 import {
@@ -21,7 +22,8 @@ import {
   AcknowledgeSessionRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { SessionEvent, ReviewQueueEvent } from "@/gen/session/v1/events_pb";
+import type { ReviewQueueEvent } from "@/gen/session/v1/events_pb";
+import { SessionEvent } from "@/gen/session/v1/events_pb";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import {
   setReviewQueue as setReviewQueueAction,
@@ -37,7 +39,7 @@ import {
   selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
-import { useWatchStream } from "@/lib/hooks/useWatchStream";
+import { useWatchStream, type WatchConnectionState } from "@/lib/hooks/useWatchStream";
 
 // How long a reconciled row stays visible-but-disabled (ux.md Surface 9) before the
 // deferred removeItem dispatch actually removes it from the store.
@@ -124,6 +126,9 @@ interface UseReviewQueueReturn extends AsyncResult {
  * });
  * ```
  */
+const LIVE_RECONCILE_MS = 120_000;
+const RECONCILE_MIN_GAP_MS = 10_000;
+
 export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
@@ -188,15 +193,26 @@ export function useReviewQueue(
     clientRef.current = createClient(SessionService, getWatchTransport());
   }, []);
 
-  // Fetch review queue with optional filters
+  // Stream events applied so far; a background REST reconcile that started before one is stale and is dropped.
+  const eventCountRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshEndRef = useRef(0);
+
+  // Fetch review queue with optional filters. A background fetch (reconcile while the stream is live) does not
+  // flash the loading state and yields to any stream event that landed while it was in flight.
   const fetchReviewQueue = useCallback(
-    async (filters?: {
-      priorityFilter?: Priority;
-      reasonFilter?: AttentionReason;
-    }) => {
+    async (
+      filters?: {
+        priorityFilter?: Priority;
+        reasonFilter?: AttentionReason;
+      },
+      background = false
+    ) => {
       if (!clientRef.current) return;
 
-      dispatch(setLoading(true));
+      refreshInFlightRef.current = true;
+      const eventsAtStart = eventCountRef.current;
+      if (!background) dispatch(setLoading(true));
       dispatch(setError(null));
 
       try {
@@ -211,6 +227,7 @@ export function useReviewQueue(
         }
 
         const response = await clientRef.current.getReviewQueue(request);
+        if (background && eventCountRef.current !== eventsAtStart) return; // stream state is newer; next reconcile heals
 
         // A REST fetch (including the fallback poll) fully replaces the queue, but
         // an item in its ~5s post-reconciliation display window (autoResolvedRules)
@@ -247,7 +264,9 @@ export function useReviewQueue(
         dispatch(setError(error.message));
         console.error("Failed to fetch review queue:", error);
       } finally {
-        dispatch(setLoading(false));
+        refreshInFlightRef.current = false;
+        lastRefreshEndRef.current = Date.now();
+        if (!background) dispatch(setLoading(false));
       }
     },
     [dispatch]
@@ -256,6 +275,13 @@ export function useReviewQueue(
   // Refresh with current filters
   const refresh = useCallback(async () => {
     await fetchReviewQueue({ priorityFilter, reasonFilter });
+  }, [fetchReviewQueue, priorityFilter, reasonFilter]);
+
+  // Reconcile over REST while the stream is live: never concurrent with another refresh and at most one per
+  // RECONCILE_MIN_GAP_MS, so a flapping stream (or the mount fetch right before the first connect) costs nothing.
+  const reconcile = useCallback(async () => {
+    if (refreshInFlightRef.current || Date.now() - lastRefreshEndRef.current < RECONCILE_MIN_GAP_MS) return;
+    await fetchReviewQueue({ priorityFilter, reasonFilter }, true);
   }, [fetchReviewQueue, priorityFilter, reasonFilter]);
 
   // Get review queue filtered by priority
@@ -383,17 +409,31 @@ export function useReviewQueue(
         initialSnapshot: true,
         includeStatistics: true,
       });
-      return clientRef.current!.watchReviewQueue(request, { signal });
+      const client = clientRef.current;
+      if (!client) throw new Error("review queue client not initialised");
+      return client.watchReviewQueue(request, { signal });
     },
     [priorityFilter, reasonFilter]
   );
 
   const onReviewQueueEvent = useCallback((event: ReviewQueueEvent) => {
+    eventCountRef.current++;
     handleReviewQueueEventRef.current?.(event);
   }, []);
 
+  // The REST poll below only runs while the stream is not delivering.
+  const [streamLive, setStreamLive] = useState(false);
+  const onStreamState = useCallback((state: WatchConnectionState) => setStreamLive(state === "live"), []);
+
+  // A filter change or push toggle restarts the stream loop without emitting a state, so liveness is reset here.
+  const streamKey = `${useWebSocketPush}:${priorityFilter ?? ""}:${reasonFilter ?? ""}`;
+  useEffect(() => {
+    setStreamLive(false);
+  }, [streamKey]);
+
   useWatchStream<ReviewQueueEvent>({
     subscribe: subscribeReviewQueue,
+    onConnectionStateChange: onStreamState,
     onEvent: onReviewQueueEvent,
     isHeartbeat: (event) => event.heartbeat,
     enabled: useWebSocketPush,
@@ -403,9 +443,17 @@ export function useReviewQueue(
   // Keep a ref to the latest refresh so interval callbacks are always current
   // without needing refresh in the interval-setup effect's dep array.
   const refreshRef = useRef(refresh);
+  const reconcileRef = useRef(reconcile);
   useEffect(() => {
     refreshRef.current = refresh;
-  }, [refresh]);
+    reconcileRef.current = reconcile;
+  }, [refresh, reconcile]);
+
+  // A reconnect snapshot only re-adds items, so items removed during a gap would linger: reconcile over REST
+  // on every transition to live.
+  useEffect(() => {
+    if (streamLive) void reconcileRef.current();
+  }, [streamLive]);
 
   // Always do an initial REST fetch on mount for immediate fresh data.
   // Even in WebSocket push mode the stream may take a moment to connect and
@@ -428,9 +476,12 @@ export function useReviewQueue(
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      interval = setInterval(() => {
-        void refreshRef.current();
-      }, fallbackPollInterval);
+      // A live stream can still drop an event (the server's client channel is bounded and heartbeats keep the
+      // connection looking healthy), so a slow reconcile poll runs while live; the full-rate poll runs when it is not.
+      interval = setInterval(
+        () => void (streamLive ? reconcileRef.current() : refreshRef.current()),
+        streamLive ? Math.max(fallbackPollInterval, LIVE_RECONCILE_MS) : fallbackPollInterval
+      );
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
       interval = setInterval(() => {
@@ -443,7 +494,7 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
-  }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
+  }, [useWebSocketPush, streamLive, autoRefresh, refreshInterval, fallbackPollInterval]);
 
   // Acknowledge session with optimistic update
   const acknowledgeSession = useCallback(
@@ -480,14 +531,15 @@ export function useReviewQueue(
   // instead.
   const acknowledgeSessions = useCallback(
     async (sessionIds: string[]): Promise<{ failed: string[] }> => {
-      if (!clientRef.current) return { failed: sessionIds };
+      const client = clientRef.current;
+      if (!client) return { failed: sessionIds };
 
       sessionIds.forEach((id) => dispatch(removeItem(id)));
 
       const results = await Promise.allSettled(
         sessionIds.map((id) => {
           const request = create(AcknowledgeSessionRequestSchema, { id });
-          return clientRef.current!.acknowledgeSession(request);
+          return client.acknowledgeSession(request);
         })
       );
 

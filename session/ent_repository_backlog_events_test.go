@@ -33,6 +33,15 @@ func newTestEntRepositoryForEvents(t *testing.T) (*session.EntRepository, func()
 	return repo, func() {}
 }
 
+// storageOn wraps repo in a Storage so these tests reach the status writers,
+// which are unexported on *session.EntRepository.
+func storageOn(t *testing.T, repo *session.EntRepository) *session.Storage {
+	t.Helper()
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	return storage
+}
+
 // panickingItemChangePublisher is a test double for Task 2.1.1d: its
 // PublishItemChanged always panics, simulating a broken publisher wired
 // directly (i.e. not wrapped by the real adapter's own recover()), so the
@@ -68,7 +77,7 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 	})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusInProgress),
 	}, session.TriggeredBySystem)
 	require.NoError(t, err)
@@ -109,7 +118,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 
 	// Stale precondition: the item is actually "in_progress", not "review", so
 	// the CAS WHERE clause matches zero rows.
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusReview),
 	}, session.TriggeredBySystem)
 	require.Error(t, err)
@@ -147,7 +156,7 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		updated, transErr := repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
 			ExpectedStatus: string(session.BacklogStatusInProgress),
 		}, session.TriggeredBySystem)
 		require.NoError(t, transErr)
@@ -297,7 +306,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	})
 	require.NoError(t, err)
 
-	_, err = repo.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	select {
@@ -326,7 +335,7 @@ func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *t
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	_, err := repo.UnarchiveBacklogItem(ctx, uuid.NewString())
+	_, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, uuid.NewString())
 	require.Error(t, err)
 	require.ErrorIs(t, err, session.ErrNotFound)
 
@@ -358,13 +367,13 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	})
 	require.NoError(t, err)
 
-	_, err = repo.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	unarchived, err := repo.UnarchiveBacklogItem(ctx, item.ID)
+	unarchived, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
 	assert.Nil(t, unarchived.ArchivedAt)
@@ -404,7 +413,7 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	unarchived, err := repo.UnarchiveBacklogItem(ctx, item.ID)
+	unarchived, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
 	assert.Nil(t, unarchived.ArchivedAt)
@@ -548,7 +557,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		t.Fatal("timed out waiting for SaveReviewVerdict's own BacklogItemChanged event")
 	}
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -601,7 +610,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 	})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReady, nil, session.TriggeredByUser)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReady, nil, session.TriggeredByUser)
 	require.NoError(t, err)
 
 	// Drain the "idea -> ready" transition's own event — a different publish
@@ -612,7 +621,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 		t.Fatal("timed out waiting for the idea->ready BacklogItemChanged event")
 	}
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -725,7 +734,7 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 
 	require.NoError(t, repo.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-5*time.Minute)))
 
-	count, err := repo.ReconcileStuckItems(ctx)
+	count, err := storageOn(t, repo).GatedReconcileStuck(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 

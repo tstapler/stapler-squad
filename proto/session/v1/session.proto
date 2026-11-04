@@ -691,6 +691,14 @@ service SessionService {
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
 
+  // GetTCCEnrichmentStatus lists heuristic protected roots discovered by background enrichment.
+  // +api: tcc:enrichment-status
+  rpc GetTCCEnrichmentStatus(GetTCCEnrichmentStatusRequest) returns (GetTCCEnrichmentStatusResponse) {}
+
+  // ContinueTCCEnrichment persists app consent, not an OS permission grant.
+  // +api: tcc:continue-enrichment
+  rpc ContinueTCCEnrichment(ContinueTCCEnrichmentRequest) returns (ContinueTCCEnrichmentResponse) {}
+
   // GetTmuxVersionStatus reports any detected tmux client/server version
   // mismatch (see session/tmux/version_check.go) -- a mismatch disables
   // control mode for the affected socket, degrading terminal input/output to
@@ -1014,7 +1022,8 @@ message DeleteSessionRequest {
   // Session identifier.
   string id = 1;
 
-  // Force deletion even if session is running.
+  // Discard uncommitted changes in the session's worktree. Without it, deleting a session
+  // whose worktree is dirty (or whose state can't be checked) fails with FAILED_PRECONDITION.
   bool force = 2;
 }
 
@@ -1074,6 +1083,11 @@ message WatchSessionsRequest {
 message GetSessionDiffRequest {
   // Session identifier.
   string id = 1;
+  // Unchanged lines of context around each hunk.
+  // 0 = server default (3). -1 = whole file (expand all). Positive = literal count (above 10000 = whole file).
+  // Values below -1 are rejected with INVALID_ARGUMENT. Applies to worktree sessions; directory
+  // sessions always return the default context.
+  int32 context_lines = 2;
 }
 
 message GetSessionDiffResponse {
@@ -1084,6 +1098,13 @@ message GetSessionDiffResponse {
 message GetVCSStatusRequest {
   // Session identifier.
   string id = 1;
+
+  // When true the server never answers from a cache entry past its TTL while
+  // refreshing in the background (stale-while-revalidate), and will not join a
+  // computation that began before this request. The short fresh-TTL cache still
+  // applies. Set by callers reacting to a known change (session-updated event,
+  // user-clicked refresh); interval polls leave it false.
+  bool wait_for_fresh = 2;
 }
 
 message GetVCSStatusResponse {
@@ -3724,10 +3745,21 @@ message FeatureFlagScopeOverride {
   bool enabled = 2;
 }
 
-message GetFeatureFlagsRequest {}
+message GetFeatureFlagsRequest {
+  // Validator (ETag) of the body the caller already holds. When it matches the
+  // current flags the server answers not_modified instead of re-sending them.
+  // Empty means "send everything" (and is what clients predating this field send).
+  string if_none_match = 1;
+}
 
 message GetFeatureFlagsResponse {
+  // Empty when not_modified is true; keep the previously held flags.
   repeated FeatureFlag flags = 1;
+  // Validator for this body. Echo it as if_none_match on the next poll.
+  // Absent from servers predating this field: treat the body as authoritative.
+  string etag = 2;
+  // True when if_none_match matched and flags was elided.
+  bool not_modified = 3;
 }
 
 message GetHookStatusRequest {}
@@ -3764,6 +3796,30 @@ message InstallHooksResponse {
   // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
   repeated string messages = 2;
 }
+
+message GetTCCEnrichmentStatusRequest {}
+
+message TCCEnrichmentRoot {
+  string id = 1;
+  string root = 2;
+  repeated string paths = 3;
+  repeated string session_titles = 4;
+  bool app_consented = 5;
+  // Enrichment outcome only: pending, unresolved/slow, error, or completed.
+  string outcome = 6;
+}
+
+message GetTCCEnrichmentStatusResponse {
+  bool enabled = 1;
+  repeated TCCEnrichmentRoot roots = 2;
+}
+
+message ContinueTCCEnrichmentRequest {
+  // Must be a known opaque ID returned by GetTCCEnrichmentStatus.
+  string root_id = 1;
+}
+
+message ContinueTCCEnrichmentResponse {}
 
 message GetTmuxVersionStatusRequest {}
 

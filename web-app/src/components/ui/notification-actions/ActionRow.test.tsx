@@ -9,6 +9,8 @@ import {
   makeQuestionDescriptors,
 } from "../__fixtures__/notificationFixtures";
 import { invokeMock, renderRow, respondWith } from "../__fixtures__/actionRowHarness";
+import { ANNOUNCE_HOLD_MS } from "@/lib/hooks/useAnnounce";
+import { defined } from "@/lib/utils/defined";
 import { APPROVE_EXTRA_GAP_PX, TOUCH_TARGET_PX } from "./ActionRow";
 
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
@@ -294,7 +296,7 @@ describe("ActionRow availability and connectivity", () => {
     expect(option).toHaveAttribute("aria-disabled", "true");
     expect(option).not.toBeDisabled();
     const described = option.getAttribute("aria-describedby");
-    expect(document.getElementById(described!)).toHaveTextContent("Answer from desktop");
+    expect(document.getElementById(defined(described, "aria-describedby"))).toHaveTextContent("Answer from desktop");
     await userEvent.click(option);
     expect(invokeMock).not.toHaveBeenCalled();
     expect(screen.getByTestId("action-open")).not.toHaveAttribute("aria-disabled");
@@ -309,7 +311,7 @@ describe("ActionRow availability and connectivity", () => {
     renderRow({ descriptors: approvals(), disabledReason: "Offline" });
     const approve = screen.getByTestId("action-approve");
     expect(approve).toHaveAttribute("aria-disabled", "true");
-    expect(document.getElementById(approve.getAttribute("aria-describedby")!)).toHaveTextContent("Offline");
+    expect(document.getElementById(defined(approve.getAttribute("aria-describedby"), "aria-describedby"))).toHaveTextContent("Offline");
     approve.focus();
     expect(approve).toHaveFocus();
     await userEvent.click(approve);
@@ -322,7 +324,11 @@ describe("ActionRow polite region", () => {
     respondWith(ActionOutcome.APPLIED);
     renderRow({ descriptors: approvals() });
     await userEvent.click(screen.getByTestId("action-approve"));
-    await waitFor(() => expect(screen.getByTestId("announcer-polite")).toHaveTextContent("Approved"));
+    // The announcer holds each polite message for ANNOUNCE_HOLD_MS, so the result queued behind
+    // "Approval pending" appears no sooner than that; waitFor's 1s default raced it on loaded runners.
+    await waitFor(() => expect(screen.getByTestId("announcer-polite")).toHaveTextContent("Approved"), {
+      timeout: ANNOUNCE_HOLD_MS * 3,
+    });
     expect(document.querySelectorAll("[role=status]")).toHaveLength(1);
   });
 });

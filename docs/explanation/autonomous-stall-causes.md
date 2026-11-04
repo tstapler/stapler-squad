@@ -163,7 +163,8 @@ Resolved by this change: S1, S2, X1-X5 (see "After this change"). The gaps below
   reopen nor Reset clears it.
 - `diagnose_nudge_enabled` is already `true` in the owner's workspace config, which is why the
   in-process nudge gets its own `autonomous_stall_nudge_enabled` flag (default off) rather than
-  reusing it.
+  reusing it. The code defaults, live state and rollback for these flags are recorded in
+  [ADR-030](../adr/ADR-030-autonomy-flag-defaults.md).
 
 ## After this change
 

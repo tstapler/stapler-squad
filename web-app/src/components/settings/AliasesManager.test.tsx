@@ -26,6 +26,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
 jest.mock("@connectrpc/connect");
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web");
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost" }));
 jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => ({ hosts: [] }) }));

@@ -519,6 +519,12 @@ type WorktreeInfo struct {
 	GitHubHost string
 }
 
+// isEmptyDetection reports the zero result DetectWorktree returns for a path
+// with no .git (or no readable remote and not a worktree).
+func (w *WorktreeInfo) isEmptyDetection() bool {
+	return w == nil || (!w.IsWorktree && w.MainRepoRoot == "" && w.RemoteURL == "" && w.GitHubOwner == "")
+}
+
 // DetectWorktree checks if the given path is a git worktree and extracts relevant info.
 // Results are cached per-path for 5 minutes to avoid repeated git subprocess calls on
 // every LoadInstances invocation for sessions whose GitHubOwner was never resolved.

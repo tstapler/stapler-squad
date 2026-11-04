@@ -331,7 +331,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			// calling Determine(), which reads the atomic-only accessors on the live Instance.
 			inst.SyncAtomicTimestamps()
 
-			result := determiner.Determine(inst, tt.content, tt.statusInfo, detector)
+			result := determiner.Determine(inst, tt.content, tt.statusInfo, detector, DeterminerOptions{})
 
 			// checkAction is true when this test explicitly asserts Action.
 			if tt.checkAction && result.Action != tt.wantAction {
@@ -366,7 +366,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateActive},
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add (approval takes priority over idle-active), got %v", result.Action)
@@ -395,7 +395,7 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 		StatusContext:      customContext,
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Context != customContext {
 		t.Errorf("expected context %q, got %q", customContext, result.Context)
@@ -420,7 +420,7 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 		StatusContext:      "",
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Context == "" {
 		t.Error("expected non-empty default context for StatusNeedsApproval")
@@ -443,7 +443,7 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 		ClaudeStatus:       detection.StatusInputRequired,
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
@@ -472,7 +472,7 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 		ClaudeStatus:       detection.StatusError,
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
@@ -504,7 +504,7 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateWaiting},
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionSkip {
 		t.Errorf("expected Skip for fresh session with no actionable status, got %v", result.Action)
@@ -543,7 +543,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 			ClaudeStatus:       detection.StatusSuccess,
 		}
 
-		result := determiner.Determine(inst, "", statusInfo, detector)
+		result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 		if result.Action != DetectionActionSkip {
 			t.Errorf("expected Skip for Hidden instance with ReasonTaskComplete, got %v (reason=%v)", result.Action, result.Reason)
@@ -562,7 +562,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 			IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
 		}
 
-		result := determiner.Determine(inst, "", statusInfo, detector)
+		result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 		if result.Action != DetectionActionSkip {
 			t.Errorf("expected Skip for Hidden instance with ReasonIdle, got %v (reason=%v)", result.Action, result.Reason)
@@ -581,7 +581,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 			IsControllerActive: false,
 		}
 
-		result := determiner.Determine(inst, "", statusInfo, detector)
+		result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 		if result.Action != DetectionActionSkip {
 			t.Errorf("expected Skip for Hidden instance with ReasonStale, got %v (reason=%v)", result.Action, result.Reason)
@@ -601,7 +601,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 			ClaudeStatus:       detection.StatusError,
 		}
 
-		result := determiner.Determine(inst, "", statusInfo, detector)
+		result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonErrorState (safety net), got %v", result.Action)
@@ -622,7 +622,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 			ClaudeStatus:       detection.StatusTestsFailing,
 		}
 
-		result := determiner.Determine(inst, "", statusInfo, detector)
+		result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonTestsFailing (safety net), got %v", result.Action)
@@ -651,7 +651,7 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 		IsControllerActive: false,
 	}
 
-	result := determiner.Determine(inst, approvalContent, statusInfo, detector)
+	result := determiner.Determine(inst, approvalContent, statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add for approval content without controller, got %v", result.Action)
@@ -686,7 +686,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_Sti
 	inst.SyncAtomicTimestamps()
 
 	statusInfo := InstanceStatusInfo{IsControllerActive: false}
-	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector, DeterminerOptions{})
 
 	if result.ClaudeStatus != detection.StatusWaitingForAgent {
 		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
@@ -714,7 +714,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughT
 	inst.SyncAtomicTimestamps()
 
 	statusInfo := InstanceStatusInfo{IsControllerActive: false}
-	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector, DeterminerOptions{})
 
 	if result.ClaudeStatus != detection.StatusWaitingForAgent {
 		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
@@ -750,7 +750,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_RecentlyUpdated_Remov
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusWaitingForAgent,
 	}
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionRemove {
 		t.Errorf("expected Remove for recently-updated controller-active WaitingForAgent session, got %v", result.Action)
@@ -778,7 +778,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_Stale_FallsThroughToI
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusWaitingForAgent,
 	}
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add (idle/stale fallback) for stale controller-active WaitingForAgent session, got %v", result.Action)
@@ -809,7 +809,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	inst.SyncAtomicTimestamps()
 
 	statusInfo := InstanceStatusInfo{IsControllerActive: false}
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionSkip {
 		t.Errorf("expected Skip for an acknowledged idle session with no new output, got %v (reason %v)", result.Action, result.Reason)
@@ -822,7 +822,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	inst.UpdatedAt = newOutput
 	inst.SyncAtomicTimestamps()
 
-	result = determiner.Determine(inst, "", statusInfo, detector)
+	result = determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
@@ -854,7 +854,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 		ClaudeStatus:       detection.StatusUnknown,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
 	}
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionSkip {
 		t.Errorf("expected Skip for an acknowledged idle session (controller-active) with no new output, got %v (reason %v)", result.Action, result.Reason)
@@ -867,7 +867,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	inst.UpdatedAt = newOutput
 	inst.SyncAtomicTimestamps()
 
-	result = determiner.Determine(inst, "", statusInfo, detector)
+	result = determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
@@ -904,7 +904,7 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
 	}
 
-	result := determiner.Determine(inst, "", statusInfo, detector)
+	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Reason != ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending (idle-suppression branch must be unreachable), got %v", result.Reason)
@@ -915,4 +915,11 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
 	}
+}
+
+func TestStatusDeterminerInterface_Should_BuildWithOptionsSignature_When_PollerCallSiteChanged(t *testing.T) {
+	t.Parallel()
+	var _ StatusDeterminer = (*DefaultStatusDeterminer)(nil)
+	var _ StatusDeterminer = stubDeterminer{}
+	var _ StatusDeterminer = (*optsRecordingDeterminer)(nil)
 }

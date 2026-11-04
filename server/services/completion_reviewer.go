@@ -92,9 +92,14 @@ func StartCompletionReviewerSubscriber(ctx context.Context, bus *events.EventBus
 	}
 	r := &completionReviewer{
 		storage: storage, call: call, memory: memory, notifier: notifier,
-		enabled: func() bool { return config.LoadConfig().GetFeatureFlag(completionReviewerFlagName) },
+		enabled: completionReviewerEnabled,
 	}
 	return r.start(ctx, bus)
+}
+
+// completionReviewerEnabled reads the flag live on every completion event.
+func completionReviewerEnabled() bool {
+	return config.LoadConfig().GetFeatureFlag(completionReviewerFlagName)
 }
 
 func (r *completionReviewer) start(ctx context.Context, bus *events.EventBus) <-chan struct{} {

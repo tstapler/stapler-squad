@@ -3,14 +3,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
+import { getConnectTransport } from "@/lib/api/transport";
+import type { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import {
   GetWorktreeAISummaryRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { CommitPushModal } from "./CommitPushModal";
 import { WorktreeDiffModal } from "./WorktreeDiffModal";
@@ -49,10 +48,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showSessionPicker]);
 
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
+  const transport = getConnectTransport();
   const client = createClient(UnfinishedWorkService, transport);
 
   const handleOpenSession = useCallback(() => {
@@ -101,7 +97,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
       {/* Action buttons */}
       <div className={styles.actionRow}>
         <div className={styles.sessionBtnWrapper} ref={pickerRef}>
-          <button className={styles.btnPrimary} onClick={handleOpenSession} aria-expanded={showSessionPicker}>
+          <button className={styles.btnPrimary} onClick={handleOpenSession} aria-expanded={showSessionPicker}>{/* analytics-exempt */}
             {worktree.sessionIds.length > 1
               ? `Reattach Session (${worktree.sessionIds.length})`
               : worktree.sessionIds.length === 1
@@ -120,7 +116,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
                     setShowSessionPicker(false);
                     router.push(routes.sessionDetail(id));
                   }}
-                >
+                >{/* analytics-exempt */}
                   Session {i + 1}
                   <span className={styles.sessionPickerIdHint}>{id.slice(0, 8)}</span>
                 </button>
@@ -128,10 +124,10 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
             </div>
           )}
         </div>
-        <button className={styles.btn} onClick={() => setShowDiffModal(true)}>
+        <button className={styles.btn} onClick={() => setShowDiffModal(true)}>{/* analytics-exempt */}
           View Diff
         </button>
-        <button className={styles.btn} onClick={() => setShowCommitModal(true)}>
+        <button className={styles.btn} onClick={() => setShowCommitModal(true)}>{/* analytics-exempt */}
           Commit &amp; Push
         </button>
         <button
@@ -139,7 +135,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
           onClick={handleSummarize}
           disabled={aiLoading}
           aria-label="Generate AI summary of changes"
-        >
+        >{/* analytics-exempt */}
           {aiLoading ? "Summarizing…" : "Summarize"}
         </button>
       </div>

@@ -19,18 +19,9 @@ jest.mock("@connectrpc/connect", () => ({
   createClient: jest.fn(),
 }));
 
-// Mock the watch transport so no WebSocket is opened
-jest.mock("@/lib/transport/watch-ws-transport", () => ({
-  createSessionWatchTransport: jest.fn(() => ({})),
-}));
-
-jest.mock("@/lib/config", () => ({
-  getApiBaseUrl: () => "http://localhost:8543",
-  createAuthInterceptor: () => () => ({}),
-}));
-
-jest.mock("@/lib/telemetry/rpcTiming", () => ({
-  createRpcTimingInterceptor: () => () => ({}),
+// Mock the shared transport so no real transport (or WebSocket) is built
+jest.mock("@/lib/api/transport", () => ({
+  getConnectTransport: jest.fn(() => ({})),
 }));
 
 // Minimal proto stubs — just enough for the hook to import without error
@@ -47,12 +38,8 @@ jest.mock("@/gen/session/v1/types_pb", () => ({
   },
 }));
 
-// AnalyticsContext — return null so the hook uses the auth-only interceptor path
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  AnalyticsContext: { _currentValue: null },
-}));
-
 import { createClient } from "@connectrpc/connect";
+import { getConnectTransport } from "@/lib/api/transport";
 import { useShells } from "../useShells";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +75,11 @@ describe("useShells", () => {
     jest.clearAllMocks();
     mockClient = makeMockClient();
     (createClient as jest.Mock).mockReturnValue(mockClient);
+  });
+
+  it("useShells_should_UseSharedTransport_When_Mounted", () => {
+    renderHook(() => useShells("session-abc"));
+    expect(getConnectTransport).toHaveBeenCalled();
   });
 
   describe("spawnShell_should_callRpc_With_correctParams", () => {

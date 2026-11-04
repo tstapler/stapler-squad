@@ -7,6 +7,7 @@ const updateSettings = jest.fn();
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({ getLLMBackendSettings: getSettings, updateLLMBackendSettings: updateSettings }),
 }));
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web", () => ({ createConnectTransport: () => ({}) }));
 jest.mock("./LLMBackendSettings.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://test" }));

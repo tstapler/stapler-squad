@@ -263,6 +263,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		if item.PrNumber != 0 || item.RepoPath == "" {
 			continue
 		}
+		// The write is itself denied-and-retried; skipping saves the per-tick GitHub lookup.
+		if l.heldByTransitionDenial(ctx, &item, "orphaned_agent_pr") {
+			continue
+		}
 
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
@@ -305,12 +309,33 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
-		if setErr := l.storage.SetBacklogItemPRAndTransition(ctx, &item, info.HTMLURL, info.Number, summary, nil); setErr != nil {
+		if setErr := l.recordOrphanedAgentPR(ctx, item.ID, info, summary); setErr != nil {
+			if isGateDenial(setErr) || errors.Is(setErr, ErrPreconditionFailed) {
+				log.Debug("[BacklogLifecycle] reconcileOrphanedAgentPRs: PR association skipped, retried next tick", "item", item.ID, "pr", info.Number, "error", setErr)
+				continue
+			}
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs SetBacklogItemPRAndTransition item=%s pr=%d: %v", item.ID, info.Number, setErr)
 			continue
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs item=%s → pr_pending (recovered PR #%d %s, never reported)", item.ID, info.Number, info.HTMLURL)
 	}
+}
+
+// recordOrphanedAgentPR records the recovered PR and moves the item
+// review->pr_pending through the gate. It re-reads the item so the gate decides
+// on its full status history; the list read the caller holds carries none. It
+// passes no reassignment guard because the caller lists review items only.
+func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, itemID string, info *github.PRInfo, summary string) error {
+	observed, err := l.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if observed.Status != string(BacklogStatusReview) {
+		return fmt.Errorf("%w: item %s is %q, not review", ErrPreconditionFailed, itemID, observed.Status)
+	}
+	return l.storage.GatedSetPRAndTransition(ctx,
+		TransitionRequest{Caller: CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: TriggeredBySystem},
+		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary})
 }
 
 // mostRecentWorkCommitShippedToMain finds itemID's most recent work session
@@ -436,8 +461,12 @@ func prFooter(origin PRFooterOrigin, item *BacklogItemData) string {
 
 // appendBacklogFooter returns the LLM-drafted body with exactly one trailing
 // newline, followed by the item footer.
-func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogItemData) string {
-	return strings.TrimRight(drafted, "\n") + "\n\n" + prFooter(origin, item)
+func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogItemData, prRemoteURL string) string {
+	body := strings.TrimRight(drafted, "\n") + "\n\n"
+	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+		body += line + "\n\n"
+	}
+	return body + prFooter(origin, item)
 }
 
 // buildFallbackPRBody composes a PR body from the backlog item's own data —
@@ -449,9 +478,12 @@ func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogIte
 // item's own problem statement (the "why"); the item's acceptance criteria
 // double as a test plan checklist since they are the only verification steps
 // this code path has available without an LLM call.
-func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin) string {
+func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin, prRemoteURL string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Summary\n%s\n", sanitizeField(item.Description, 1000))
+	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+		fmt.Fprintf(&sb, "\n%s\n", line)
+	}
 	sb.WriteString("\n" + prFooter(origin, item))
 
 	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
@@ -598,8 +630,13 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s falling back to done: %s", item.ID, reason)
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
+		if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerPushCreatePRFallback, ItemID: item.ID, To: BacklogStatusDone, TriggeredBy: TriggeredBySystem,
+		}); transErr != nil {
+			logSystemTransitionFailure("pushAndCreatePR fallback done", item.ID, BacklogStatusDone, transErr)
+			if errors.Is(transErr, ErrPreconditionFailed) {
+				return // a concurrent mover changed the status; the next tick re-evaluates
+			}
 			// A PASS verdict already confirmed the work; there was nothing to
 			// ship, so done was the correct terminal state — a failure here
 			// leaves the item stuck with no further signal.
@@ -657,7 +694,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 		origin := l.getPRFooterOrigin()
 		prTitle := item.Title
-		prBody := buildFallbackPRBody(item, origin)
+		// Best-effort: without a remote URL no closing keyword is emitted.
+		prRemoteURL, _ := git.RemoteURL(wt.RepoPath, "origin")
+		prBody := buildFallbackPRBody(item, origin, prRemoteURL)
 		if pool := l.getHeadlessCaller(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
@@ -674,7 +713,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 				if draftErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 				} else if drafted != "" {
-					prBody = appendBacklogFooter(drafted, origin, item)
+					prBody = appendBacklogFooter(drafted, origin, item, prRemoteURL)
 				}
 			}
 		}
@@ -715,14 +754,18 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// operator must merge it manually, so this needs a notification, not just a log line
 	// (same silent-failure pattern found and fixed elsewhere in this codebase — see
 	// docs/tasks/backlog-feature-improvement.md).
+	preflightSent := l.autoMergePreflight(wt.RepoPath, item.ID)
 	if autoErr := g.EnablePRAutoMerge(ctx, prNumber); autoErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR auto-merge item=%s pr=%d: %v", item.ID, prNumber, autoErr)
-		l.notify(item.ID,
-			"Auto-merge not enabled",
-			fmt.Sprintf("%s — PR #%d could not be set to auto-merge (%v). It will need to be merged manually once checks pass.", item.Title, prNumber, autoErr),
-			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			false, true, // urgent, important — needs eventual manual merge, but only once checks pass
-		)
+		// A preflight sent for this PR already covers it: one message per PR.
+		if !preflightSent {
+			l.notify(item.ID,
+				"Auto-merge not enabled",
+				fmt.Sprintf("%s — PR #%d could not be set to auto-merge (%v). It will need to be merged manually once checks pass.", item.Title, prNumber, autoErr),
+				8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+				false, true, // urgent, important — needs eventual manual merge, but only once checks pass
+			)
+		}
 	} else {
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d auto-merge enabled", item.ID, prNumber)
 	}
@@ -749,6 +792,94 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+const (
+	autoMergePreflightWindow = 24 * time.Hour
+	autoMergePreflightType   = 10 // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+)
+
+// autoMergePreflight warns once per repo per 24h that the repo disallows
+// auto-merge. It reads the repo-settings cache only: a cold cache starts a
+// background warm-up and sends nothing, so PR creation never waits on GitHub.
+// Reports whether a notification was sent.
+func (l *BacklogLifecycleListener) autoMergePreflight(repoPath, itemID string) bool {
+	l.repoSettingsMu.Lock()
+	seam := l.repoSettings
+	l.repoSettingsMu.Unlock()
+	if seam.Cached == nil || seam.Fetch == nil {
+		return false
+	}
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	if err != nil || !ref.IsValid() {
+		return false
+	}
+	res, ok := seam.Cached(ref)
+	if !ok {
+		l.warmRepoSettings(seam, ref)
+		return false
+	}
+	if allowed, known := res.AutoMerge(); !known || allowed {
+		return false
+	}
+	key := fmt.Sprintf("automerge-off:%s/%s", github.NormalizeHost(ref.Host()), ref)
+	if !l.claimPreflight(key) {
+		return false
+	}
+	l.notify(itemID,
+		"Auto-merge unavailable",
+		fmt.Sprintf("Repo %s does not allow auto-merge. PR will still be created.", ref),
+		autoMergePreflightType,
+		false, false,
+	)
+	return true
+}
+
+// claimPreflight records key as sent unless it was sent within the window.
+func (l *BacklogLifecycleListener) claimPreflight(key string) bool {
+	l.repoSettingsMu.Lock()
+	defer l.repoSettingsMu.Unlock()
+	now := time.Now
+	if l.preflightNowFn != nil {
+		now = l.preflightNowFn
+	}
+	t := now()
+	if last, seen := l.preflightSentAt[key]; seen && t.Sub(last) < autoMergePreflightWindow {
+		return false
+	}
+	if l.preflightSentAt == nil {
+		l.preflightSentAt = map[string]time.Time{}
+	}
+	l.preflightSentAt[key] = t
+	return true
+}
+
+// warmRepoSettings fetches settings in the background (singleflight and the
+// 2s timeout live in the github cache) so a later PR can warn. A failed fetch
+// sends nothing.
+func (l *BacklogLifecycleListener) warmRepoSettings(seam RepoSettingsSeam, ref github.RepoRef) {
+	key := ref.String() + "@" + ref.Host()
+	l.repoSettingsMu.Lock()
+	if l.preflightInflight[key] {
+		l.repoSettingsMu.Unlock()
+		return
+	}
+	if l.preflightInflight == nil {
+		l.preflightInflight = map[string]bool{}
+	}
+	l.preflightInflight[key] = true
+	l.preflightWarmWG.Add(1)
+	l.repoSettingsMu.Unlock()
+	go func() {
+		defer l.preflightWarmWG.Done()
+		defer func() {
+			l.repoSettingsMu.Lock()
+			delete(l.preflightInflight, key)
+			l.repoSettingsMu.Unlock()
+		}()
+		ctx := github.WithGitHubCallOrigin(l.shutdownCtx, github.OriginBacklogSync)
+		seam.Fetch(ctx, ref)
+	}()
 }
 
 // stayInReviewAndNotify handles push/PR-creation failures for both
@@ -816,7 +947,9 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 // if any, so callers can apply their own logging/fallback behavior.
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: note}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerResolveToPRPending, ItemID: itemID, To: BacklogStatusPRPending, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
 		return transErr
 	}
 	l.resolveStuckLogged(ctx, l.storage.repo, itemID, domain.StuckReasonPushFailed, caller)
@@ -845,7 +978,13 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 		Note: fmt.Sprintf("self-heal (%s): recovered from drift — item has PR #%d (%s) cached but status was %q, not pr_pending",
 			caller, item.PrNumber, item.PrURL, item.Status),
 	}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerRecoverDriftedPR, ItemID: item.ID, To: BacklogStatusPRPending, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
+		if isGateDenial(transErr) {
+			log.Debug("[BacklogLifecycle] recoverDriftedPRItem: transition denied, will retry next tick", "caller", caller, "item", item.ID, "error", transErr)
+			return false
+		}
 		log.WarningLog().Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovery transition failed (likely a concurrent legitimate transition, will retry next tick): %v", caller, item.ID, transErr)
 		return false
 	}
@@ -944,6 +1083,11 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 		}
 		if row.ItemStatus != BacklogStatusReview {
 			continue // no longer applicable to this item's current state
+		}
+		// A retried push ends in the same denied review->pr_pending/done write, and
+		// would spend a backoff attempt and a git push per tick doing it.
+		if l.heldByTransitionDenial(ctx, &BacklogItemData{ID: row.ItemID, Status: string(row.ItemStatus)}, "push_failed") {
+			continue
 		}
 		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle, row.Context)
 	}
@@ -1330,6 +1474,28 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 	return nil
 }
 
+// conflictRowState reports whether itemID has an open rework_cap row and the attempt
+// counter of its open pr_needs_fix row (0 when there is none or the read fails).
+func (l *BacklogLifecycleListener) conflictRowState(ctx context.Context, er *EntRepository, itemID string) (reworkCapOpen bool, prAttempts int32) {
+	rows, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false, 0
+	}
+	_, reworkCapOpen = findOpenStuckStateFor(rows, itemID, domain.StuckReasonReworkCap)
+	if row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix); ok {
+		prAttempts = row.RemediationAttempts
+	}
+	return reworkCapOpen, prAttempts
+}
+
+// conflictRetryClock is overridable so tests can step the hourly throttle.
+func (l *BacklogLifecycleListener) conflictRetryNow() time.Time {
+	if l.conflictRetryClock != nil {
+		return l.conflictRetryClock()
+	}
+	return time.Now()
+}
+
 // remediatePRFixWithBackoffGate wraps fixSpawner.AutoReopenForPRFix with the
 // shared remediation backoff gate (Storage.RemediationDue,
 // session/backlog_remediation.go) — the fix for the MAJOR bug flagged in
@@ -1362,7 +1528,10 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // an active session skips the backoff gate entirely for that tick (it always
 // steers, never spawns). Only the no-active-session (spawn) path is gated by
 // RemediationDue.
-func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
+//
+// conflictOnly (a merge conflict with nothing else wrong) is a cheap mechanical fix, so it
+// also gets an hourly retry that outlives the parked state; see conflictRetryMaxAttempts.
+func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string, conflictOnly bool) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuck item=%s: %v", itemID, markErr)
@@ -1407,7 +1576,33 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
 	}
-	if justParked {
+	// A conflict-only PR is a cheap, mechanical fix that must not park behind the
+	// 5-attempt/7-day budget meant for failing CI: it gets an hourly retry instead, for
+	// at most conflictRetryMaxAttempts consecutive grants. The override stands down once
+	// a rework_cap row is open or the attempts are spent; the normal parked behaviour and
+	// its "needs manual attention" notice then apply.
+	overrideActive, grantedHere := false, false
+	if capOpen, prAttempts := l.conflictRowState(ctx, er, itemID); conflictOnly && !capOpen {
+		switch l.conflictRetries.take(itemID, l.conflictRetryNow(), conflictRetryInterval, prAttempts) {
+		case conflictRetryGranted:
+			overrideActive, grantedHere, due = true, true, true
+		case conflictRetryThrottled:
+			overrideActive = true
+		case conflictRetryExhausted:
+			if l.conflictRetries.markExhaustedNotified(itemID) {
+				l.notify(itemID,
+					"Auto-rework paused",
+					fmt.Sprintf("%s — the merge conflict survived %d automated fix sessions. It now needs manual attention; use Reset to try again automatically.", itemTitle, conflictRetryMaxAttempts),
+					8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+					true, true, // urgent, important — automated retry gave up; a genuine dead end
+				)
+			}
+		}
+	} else if !conflictOnly {
+		l.conflictRetries.clear(itemID)
+	}
+	// While the override is retrying, the row being parked is not a dead end.
+	if justParked && !overrideActive {
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated PR-fix retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
@@ -1427,7 +1622,11 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// webhook side (the poller never writes to that table, by design — AC3).
 	log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: attempting fix (trigger_source=%s)", itemID, prFixTriggerSourceFrom(ctx))
 
-	return true, fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	fixErr := fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	if fixErr != nil && grantedHere {
+		l.conflictRetries.refund(itemID) // no session started: don't spend the attempt budget
+	}
+	return true, fixErr
 }
 
 // reconcilePRPendingItem runs ReconcilePRPending's per-item reconciliation logic for
@@ -1466,6 +1665,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		return
 	}
 	if merged {
+		l.conflictRetries.clear(item.ID.String())
 		// Capture the durable ship snapshot (GitHub PR/CI/review state +
 		// per-file diff stats) synchronously, before the done transition —
 		// never as a background goroutine — so the data is written before
@@ -1542,8 +1742,11 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
+		if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+		}); transErr != nil {
+			// A gate denial is reported once by the gate; the item stays pr_pending and is retried next tick.
+			logSystemTransitionFailure("ReconcilePRPending done", item.ID.String(), BacklogStatusDone, transErr)
 			// PR #%d is already confirmed merged — the item is left at
 			// pr_pending with nothing else surfacing this until the next
 			// tick retries it.
@@ -1613,6 +1816,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		closedPrURL, closedPrNum := item.PrURL, item.PrNumber
+		l.conflictRetries.clear(item.ID.String())
 		// A closed-without-merging PR can never be pr_ready_unmerged again
 		// under this pr_number; resolve immediately regardless of whether
 		// the reopen below succeeds (self-heal would also catch this
@@ -1628,7 +1832,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
 			// call that never happened: nothing was attempted, so nothing
@@ -1720,6 +1924,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// PRReadyUnmerged handling immediately above).
 		l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending/healthy")
 		l.ciReruns.clear(item.ID.String())
+		// Only a known-clean PR resets the conflict throttle: GitHub reports UNKNOWN while
+		// it recomputes mergeability, and a conflicting PR flapping DIRTY/UNKNOWN must not
+		// earn a fresh attempt on every flip.
+		if prStatus.Mergeable == "MERGEABLE" {
+			l.conflictRetries.clear(item.ID.String())
+		}
 		return
 	}
 
@@ -1768,7 +1978,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		logFeedbackBatchCoverage(item.ID.String(), prStatus)
 	}
 
-	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+	conflictOnly := prStatus.HasConflicts && !prStatus.CIFailing && !prStatus.HasBlockingReviews && !hasNewFeedback
+	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, conflictOnly)
 	if fixErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
 	} else if attempted && hasNewFeedback {
@@ -2194,8 +2405,10 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
 			closedPrNum, lastCommitSha, bounceMainBranch),
 	}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerCloseSupersededPR, ItemID: item.ID, To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
+		logSystemTransitionFailure("closeIfSupersededByMain done", item.ID, BacklogStatusDone, transErr)
 		return false
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)

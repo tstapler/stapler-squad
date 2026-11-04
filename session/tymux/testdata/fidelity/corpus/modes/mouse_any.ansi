@@ -1,0 +1,2 @@
+modes/mouse_any -- xterm ctlseqs mouse tracking any-event tracking (?1003)
+[?1003hmouse protocol any-event tracking (?1003) on

@@ -2,7 +2,8 @@
 
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import type { TerminalData, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import { TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
@@ -13,6 +14,11 @@ import { useTerminalFlowControl, type ResizeOptions } from "./useTerminalFlowCon
 import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
+import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
+
+/** A stream that lived this long counts as healthy and resets the clean-end streak. */
+const STABLE_STREAM_MS = 10_000;
+const MAX_CLEAN_SERVER_ENDS = 5;
 
 interface ScrollbackMetadata {
   hasMore: boolean;
@@ -194,6 +200,7 @@ export function useTerminalStream({
   // is a deliberate, internal fast-retry optimization, not a real failure the caller
   // should count toward its own attempt/error UI.
   const connectTimeoutAbortedRef = useRef(false);
+  const cleanServerEndsRef = useRef(0);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number, options?: { isAutoRetry?: boolean }) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
@@ -383,12 +390,12 @@ export function useTerminalStream({
         includeEscapes: true,
       });
 
-      if (targetCols !== undefined && targetRows !== undefined) {
+      if (targetCols !== undefined && targetRows !== undefined && isUsableTerminalSize(targetCols, targetRows)) {
         currentPaneReq.targetCols = targetCols;
         currentPaneReq.targetRows = targetRows;
         console.log(`[useTerminalStream] Sending handshake with dimensions: ${targetCols}x${targetRows}`);
       } else {
-        console.warn(`[useTerminalStream] No terminal dimensions available for handshake`);
+        console.warn(`[useTerminalStream] No usable terminal dimensions for handshake (${targetCols}x${targetRows})`);
       }
 
       messageQueueRef.current.push(
@@ -408,6 +415,7 @@ export function useTerminalStream({
 
       // Message processing loop
       (async () => {
+        let serverReportedError = false;
         try {
           for await (const msg of stream) {
             // Task 2.2.3 — a superseded generation's loop must not mutate
@@ -536,6 +544,7 @@ export function useTerminalStream({
               onAppScrollback?.(text, resp.outcome, resp.program, resp.forwardId, resp.blockedReason);
               setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
+              serverReportedError = true;
               const err = new Error(msg.data.value.message);
               setError(err);
               onError?.(err);
@@ -553,6 +562,23 @@ export function useTerminalStream({
                 setIsHardFailed(true);
                 console.warn(`[reconnect] stream=terminal trigger=hub-start-failed, giving up`);
               }
+            }
+          }
+          // The server ended the stream without an error (e.g. a hub eviction or teardown,
+          // sent as a clean EndStream). Surface it as a lost connection: with
+          // NEXT_PUBLIC_RECONNECT_V2 off, TerminalOutput's auto-reconnect is driven by `error`.
+          // Shell tabs end normally when the shell exits, and an error frame was already surfaced.
+          if (myGeneration === connectionGenerationRef.current
+              && !shellId
+              && !serverReportedError
+              && shouldReconnectRef.current
+              && !isDisconnectingRef.current
+              && !connectTimeoutAbortedRef.current) {
+            // TerminalOutput resets its attempt counter on every connect, so a stream that
+            // connects and then ends cleanly each time would reconnect forever; cap the streak.
+            cleanServerEndsRef.current = Date.now() - connectStartedAt >= STABLE_STREAM_MS ? 1 : cleanServerEndsRef.current + 1;
+            if (cleanServerEndsRef.current <= MAX_CLEAN_SERVER_ENDS) {
+              handleError(new Error("terminal stream closed by server"));
             }
           }
         } catch (err) {
@@ -656,6 +682,7 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- flowControl is a fresh object each render; kept so connect's identity churn is unchanged
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput, onAppScrollback,
       onAltScreenActiveHint, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 

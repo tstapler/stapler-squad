@@ -65,7 +65,7 @@ export class SessionsPage {
     await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
 
     const sessionTitle = `${namePrefix}-${Date.now()}`;
-    await this.page.getByLabel('Session Name').fill(sessionTitle);
+    await this.page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
 
     await this.page.getByText('Advanced Options').click();
     await this.page.getByLabel('Program', { exact: true }).selectOption('bash');
@@ -100,7 +100,7 @@ export class SessionsPage {
     await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
 
     const sessionTitle = `${namePrefix}-${Date.now()}`;
-    await this.page.getByLabel('Session Name').fill(sessionTitle);
+    await this.page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
 
     await this.page.getByText('Advanced Options').click();
     await this.page.getByLabel('Program', { exact: true }).selectOption('pi');

@@ -110,14 +110,7 @@ func TestScanProto_NoUnmappedMethods(t *testing.T) {
 
 	var unmapped []string
 	for _, f := range features {
-		hasColon := false
-		for _, c := range f.ID {
-			if c == ':' {
-				hasColon = true
-				break
-			}
-		}
-		if !hasColon {
+		if _, ok := methodToID[f.Method]; !ok {
 			unmapped = append(unmapped, f.Method)
 		}
 	}

@@ -1,0 +1,3 @@
+realworld/claude_code_idle_modes -- Claude Code idle prompt: bracketed paste + focus + title
+[?2004h[?1004h]0;✳ Claude Code[2m────────────────────────────────────[0m
+❯ prompt text[?25l

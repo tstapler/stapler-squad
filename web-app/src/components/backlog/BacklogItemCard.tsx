@@ -13,7 +13,7 @@ import { getStatusLabel } from "@/lib/backlog/status";
 import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
-import { blockedByLabel } from "@/lib/backlog/dependencies";
+import { DependencyChip } from "./DependencyChip";
 import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
 import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
@@ -83,6 +83,7 @@ function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: s
       data-action-button="true"
       onClick={(e) => e.stopPropagation()}
     >
+      {/* analytics-exempt */}
       <CircleDot aria-hidden="true" size={12} />
       {shortRef}
     </a>
@@ -145,7 +146,6 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   claim,
 }: BacklogItemCardProps) {
   const actionSpec = getPrimaryCardAction(item);
-  const blockedByText = blockedByLabel(item.blockedBy);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
   // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
@@ -262,6 +262,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             }
           }}
         >
+          {/* analytics-exempt */}
           {isActionPending ? (
             <>
               <span className={styles.buttonSpinner} aria-hidden="true" />
@@ -272,10 +273,8 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           )}
         </button>
         {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
-        {blockedByText && (
-          <span className={styles.blockedByLabel} data-testid="backlog-card-blocked-by">
-            {blockedByText}
-          </span>
+        {item.blockedBy && item.blockedBy.length > 0 && (
+          <DependencyChip deps={item.blockedBy} onItemClick={onClick} />
         )}
       </div>
       {disabledReason && (

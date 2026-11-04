@@ -3,9 +3,9 @@
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
-import { SessionDetailTab } from "@/components/sessions/SessionDetail";
+import type { SessionDetailTab } from "@/components/sessions/SessionDetail";
 
 const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
 function isValidTab(tab: string | null): tab is SessionDetailTab {
@@ -17,12 +17,25 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
-import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
-import type { WindowId } from "@/lib/window/windowTypes";
+import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
+import { WindowKeepAliveHost, type WindowRenderContext } from "@/components/pane/WindowKeepAliveHost";
+import { ConnectingPlaceholder } from "@/components/window/ConnectingPlaceholder";
+import { getAllLeaves } from "@/lib/pane/paneUtils";
+import { useWindowsController } from "@/lib/window/useWindowsController";
+import { WindowHostSlot, useWindowsContext, type WindowHostInputs } from "@/lib/window/WindowsProvider";
+import {
+  focusKindForTrigger,
+  focusWindowContent,
+  useWindowFocusMemory,
+  type WindowSwitchTrigger,
+} from "@/lib/window/useWindowFocusMemory";
+import { containsPaneId } from "@/lib/pane/paneUtils";
+import { WindowOverview } from "@/components/window/WindowOverview";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -71,9 +84,12 @@ function HomeContent() {
   // Using a counter-based key so that clicking the same session again still triggers.
   const [externalAssignCounter, setExternalAssignCounter] = useState(0);
   const [externalAssignSession, setExternalAssignSession] = useState<{ sessionId: string; tab: SessionDetailTab; forceNewPane?: boolean } | null>(null);
+  const externalSessionAssign = useMemo(
+    () => (externalAssignSession ? { ...externalAssignSession, version: externalAssignCounter } : null),
+    [externalAssignSession, externalAssignCounter],
+  );
 
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
-  const sessionDetailRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
@@ -98,16 +114,6 @@ function HomeContent() {
     notificationId: string | null;
     status: Exclude<SessionLookupOutcome, "found">;
   } | null>(null);
-
-  // Focus detail panel when session opens; return focus on close
-  useEffect(() => {
-    if (selectedSession) {
-      sessionDetailRef.current?.focus();
-    } else if (sessionTriggerRef.current) {
-      sessionTriggerRef.current.focus();
-      sessionTriggerRef.current = null;
-    }
-  }, [selectedSession]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
   useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
@@ -157,12 +163,53 @@ function HomeContent() {
   // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
   const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
     useWindowManager(paneSessions);
-  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
+  const windowPanelRef = useRef<HTMLDivElement>(null);
+  const windowFocusMemory = useWindowFocusMemory();
+  // Focus after a committed switch depends on the trigger (design/ux.md S3): tab-key keeps it on the tab,
+  // touch/swipe never focus a terminal, everything else lands in the target's last-focused pane.
+  const handleWindowSwitchCommitted = (id: WindowId, trigger: WindowSwitchTrigger) => {
+    if (focusKindForTrigger(trigger) !== "pane") return;
+    // Double-clicking an inactive tab switches to it first; stealing focus now would blur and commit the inline rename.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && active.closest('[role="tablist"]')) return;
+    const target = windows.find((w) => w.id === id);
+    if (!target) return;
+    const remembered = windowFocusMemory.recall(id)?.paneId;
+    const paneId =
+      remembered && containsPaneId(target.paneState.root, remembered) ? remembered : target.paneState.focusedPaneId;
+    focusWindowContent(windowPanelRef.current, paneId);
+  };
+  const {
+    currentWindowId,
+    highlightedWindowId,
+    switchToWindow: switchWindowUnrecorded,
+  } = useWindowUrlSync(windows, isWindowsRestored, handleWindowSwitchCommitted);
   const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
-  const paneDispatch = useCallback(
-    (action: PaneAction) => dispatchPane(currentWindow.id, action),
-    [dispatchPane, currentWindow.id]
-  );
+  const switchToWindow = (id: WindowId, trigger?: WindowSwitchTrigger) => {
+    windowFocusMemory.record(currentWindow.id, {
+      paneId: currentWindow.paneState.focusedPaneId,
+      scrollTop: windowPanelRef.current?.scrollTop ?? 0,
+    });
+    switchWindowUnrecorded(id, trigger);
+  };
+  // The layout-level provider owns the controller (and, with keep-alive on, the host) so retained windows
+  // survive navigating away; the local controller only serves trees rendered without a provider.
+  const windowsContext = useWindowsContext();
+  const localController = useWindowsController({ currentWindowId: currentWindow.id, dispatchPane });
+  // The provider's controller dispatches through inputs the page only publishes with keep-alive on; with it
+  // off that dispatch is a no-op, so the page must drive its own controller.
+  const { keepAlive, paneDispatchFor, detailRefFor, focusActiveDetail } =
+    windowsContext?.controller.keepAlive ? windowsContext.controller : localController;
+
+  // Focus detail panel when session opens; return focus on close
+  useEffect(() => {
+    if (selectedSession) {
+      focusActiveDetail();
+    } else if (sessionTriggerRef.current) {
+      sessionTriggerRef.current.focus();
+      sessionTriggerRef.current = null;
+    }
+  }, [selectedSession, focusActiveDetail]);
   // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
   // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
   // inline editor double-click/F2 already open, not a separate native prompt.
@@ -173,7 +220,38 @@ function HomeContent() {
     },
     [windows]
   );
-  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
+  const [windowOverviewOpen, setWindowOverviewOpen] = useState(false);
+  const toggleWindowOverview = useCallback(() => setWindowOverviewOpen((open) => !open), []);
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest, toggleWindowOverview);
+
+  // Hover preview + overview read the latest windows/sessions through refs so the
+  // memoized WindowTabStrip needn't re-render on every pane change.
+  const windowsRef = useRef(windows);
+  windowsRef.current = windows;
+  const getWindows = useCallback(() => windowsRef.current, []);
+  const paneSessionsRef = useRef(paneSessions);
+  paneSessionsRef.current = paneSessions;
+  const getSessionTitle = useCallback(
+    (sessionId: string) => paneSessionsRef.current.find((s) => s.id === sessionId)?.title,
+    []
+  );
+  const connectingSessionsFor = useCallback(
+    (root: Parameters<typeof getAllLeaves>[0]) =>
+      getAllLeaves(root).flatMap((leaf) =>
+        leaf.viewKind === "session-detail" && leaf.sessionId
+          ? [{ id: leaf.sessionId, title: getSessionTitle(leaf.sessionId) ?? leaf.sessionId.slice(0, 8) }]
+          : [],
+      ),
+    [getSessionTitle]
+  );
+  useShortcut("window.overview", {
+    key: "o",
+    code: "KeyO",
+    modifiers: { alt: true },
+    label: "Window overview",
+    context: "global",
+    action: toggleWindowOverview,
+  });
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback(
     (sessionId: string): Session | undefined => findSessionByIdIn(sessions, sessionId),
@@ -330,47 +408,48 @@ function HomeContent() {
   useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
 
   // Close session and clear URL query parameter
-  const closeSession = () => {
+  const closeSession = useCallback(() => {
     setSelectedSession(null);
     setActiveTab("info");
     lastUrlRoutedRef.current = { sessionId: null, tab: null };
     updateUrl(null, null);
-  };
+  }, [updateUrl]);
 
   // Handle session deletion
-  const handleDeleteSession = async (sessionId: string) => {
-    if (selectedSession?.id === sessionId) {
+  const selectedSessionId = selectedSession?.id;
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (selectedSessionId === sessionId) {
       closeSession();
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     track({ name: "session_deleted", category: "user_action" });
     await deleteSession(sessionId);
-  };
+  }, [selectedSessionId, closeSession, track, deleteSession]);
 
   // Handle new workspace on same project
-  const handleNewWorkspaceSession = (sessionId: string) => {
+  const handleNewWorkspaceSession = useCallback((sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
       openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });
-  };
+  }, [track, getSession, openOmnibar]);
 
   const handleCloneSession = useCallback((_sessionId: string) => {
     openInCreationMode();
   }, [openInCreationMode]);
 
-  const handleNewSession = () => {
+  const handleNewSession = useCallback(() => {
     openInCreationMode();
-  };
+  }, [openInCreationMode]);
 
-  const handleUpdateTags = async (sessionId: string, tags: string[]) => {
+  const handleUpdateTags = useCallback(async (sessionId: string, tags: string[]) => {
     if (tags.length > 0) {
       track({ name: "session_tags_updated", category: "user_action" });
       await updateSession(sessionId, { tags });
     }
-  };
+  }, [track, updateSession]);
 
   const handleSetRateLimitEnabled = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_rate_limit_updated", category: "user_action" });
@@ -415,7 +494,7 @@ function HomeContent() {
     return true;
   }, [updateSession, track, addNotification]);
 
-  const handleSessionClick = (session: Session) => {
+  const handleSessionClick = useCallback((session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
     if (typeof performance !== "undefined") {
       performance.mark("session:click");
@@ -430,7 +509,7 @@ function HomeContent() {
     // Also route the session to the currently-focused tiling pane
     setExternalAssignCounter((c) => c + 1);
     setExternalAssignSession({ sessionId: session.id, tab: "info" });
-  };
+  }, [updateUrl]);
 
   const handleTabChange = (tab: SessionDetailTab) => {
     setActiveTab(tab);
@@ -551,6 +630,78 @@ function HomeContent() {
     handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
+  const renderConnecting = (w: NamedWindow, { active }: { active: boolean }) => (
+    <ConnectingPlaceholder sessions={connectingSessionsFor(w.paneState.root)} active={active} />
+  );
+  const renderWindow = (w: NamedWindow, { active, externalAssign }: WindowRenderContext<typeof externalSessionAssign>) =>
+    lookup && active ? (
+      <SessionUnavailableCard
+        variant={lookup.status === "failed" ? "failed" : "unavailable"}
+        sessionLabel={lookup.sessionId.slice(0, 8)}
+        notification={lookup.status === "not_found" ? lookupNotification : null}
+        onOpenNotifications={() => router.push("/notifications")}
+        onGoToSessions={() => {
+          setLookup(null);
+          updateUrl(null, null);
+        }}
+        onRetry={() => {
+          const link = parseSessionDeepLink(searchParams);
+          setLookup(null);
+          fetchHiddenSessionFallback(link, true);
+        }}
+      />
+    ) : (
+      <div
+        ref={detailRefFor(w.id)}
+        className={styles.cockpitContainer}
+        tabIndex={-1}
+        role="region"
+        aria-label="Session cockpit"
+        data-context="cockpit"
+      >
+        <PaneTilingContainer
+          sessions={paneSessions}
+          paneState={w.paneState}
+          dispatch={paneDispatchFor(w.id)}
+          externalSessionAssign={externalAssign}
+          windowActive={active}
+        />
+      </div>
+    );
+  // With keep-alive on and a provider, the windows render above the route (so they outlive this page) and
+  // this page only supplies their inputs; otherwise the host renders inline exactly as before.
+  const hostSlot =
+    keepAlive && windowsContext ? (
+      <WindowHostSlot
+        inputs={{
+          windows,
+          currentWindowId: currentWindow.id,
+          focusMemory: windowFocusMemory,
+          panelRef: windowPanelRef,
+          externalAssign: externalSessionAssign,
+          dispatchPane,
+          renderWindow: renderWindow as WindowHostInputs["renderWindow"],
+          renderConnecting,
+          wrap: (host) => (
+            <CockpitActionsProvider value={cockpitActions}>
+              <SessionViewModeProvider value={{ viewMode, setViewMode }}>{host}</SessionViewModeProvider>
+            </CockpitActionsProvider>
+          ),
+        }}
+      />
+    ) : (
+      <WindowKeepAliveHost
+        windows={windows}
+        currentWindowId={currentWindow.id}
+        keepAlive={keepAlive}
+        focusMemory={windowFocusMemory}
+        panelRef={windowPanelRef}
+        externalAssign={externalSessionAssign}
+        renderConnecting={renderConnecting}
+        renderWindow={renderWindow}
+      />
+    );
+
   return (
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
@@ -559,7 +710,7 @@ function HomeContent() {
           <WindowTabStrip
             ref={windowTabStripRef}
             windows={windows}
-            currentWindowId={currentWindow.id}
+            currentWindowId={highlightedWindowId}
             onSwitch={switchToWindow}
             onCreate={() => switchToWindow(createWindow())}
             onClose={(id) => {
@@ -567,43 +718,20 @@ function HomeContent() {
               if (id === currentWindow.id && next) switchToWindow(next);
             }}
             onRename={renameWindow}
+            getWindows={getWindows}
+            getSessionTitle={getSessionTitle}
+            onOpenOverview={() => setWindowOverviewOpen(true)}
           />
-          {lookup ? (
-            <SessionUnavailableCard
-              variant={lookup.status === "failed" ? "failed" : "unavailable"}
-              sessionLabel={lookup.sessionId.slice(0, 8)}
-              notification={lookup.status === "not_found" ? lookupNotification : null}
-              onOpenNotifications={() => router.push("/notifications")}
-              onGoToSessions={() => {
-                setLookup(null);
-                updateUrl(null, null);
-              }}
-              onRetry={() => {
-                const link = parseSessionDeepLink(searchParams);
-                setLookup(null);
-                fetchHiddenSessionFallback(link, true);
-              }}
+          {windowOverviewOpen && (
+            <WindowOverview
+              windows={windows}
+              currentWindowId={currentWindow.id}
+              getSessionTitle={getSessionTitle}
+              onSwitch={(id) => switchToWindow(id, "overview")}
+              onClose={() => setWindowOverviewOpen(false)}
             />
-          ) : (
-            <div
-              ref={sessionDetailRef}
-              className={styles.cockpitContainer}
-              tabIndex={-1}
-              role="region"
-              aria-label="Session cockpit"
-              data-context="cockpit"
-            >
-              <PaneTilingContainer
-                sessions={paneSessions}
-                paneState={currentWindow.paneState}
-                dispatch={paneDispatch}
-                externalSessionAssign={externalAssignSession ? {
-                  ...externalAssignSession,
-                  version: externalAssignCounter,
-                } : null}
-              />
-            </div>
           )}
+          {hostSlot}
         </SessionViewModeProvider>
       </CockpitActionsProvider>
 

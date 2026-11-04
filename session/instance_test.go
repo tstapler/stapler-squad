@@ -399,8 +399,8 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(LifecycleEvent, string) {}})
 	inst.SetGitWorktree(wt) // also sets started=true
 
-	if err := inst.Destroy(); err != nil {
-		t.Fatalf("Destroy(): %v", err)
+	if err := inst.ForceDestroy(); err != nil {
+		t.Fatalf("ForceDestroy(): %v", err)
 	}
 
 	// CleanupWorktree() (called after UpdateDiffStats() inside Destroy()) must
@@ -446,8 +446,8 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 	inst := &Instance{Title: "diff-skip-test", UUID: "sess-diff-skip"}
 	inst.SetGitWorktree(wt) // also sets started=true — no RegisterLifecycleListener call
 
-	if err := inst.Destroy(); err != nil {
-		t.Fatalf("Destroy(): %v", err)
+	if err := inst.ForceDestroy(); err != nil {
+		t.Fatalf("ForceDestroy(): %v", err)
 	}
 
 	stats := inst.GetDiffStats()

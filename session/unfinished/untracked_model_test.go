@@ -216,7 +216,9 @@ func runModelSequence(t testing.TB, seed int64, omitAncestorChain bool) (mismatc
 	if msg := m.compare(false); msg != "" {
 		return "warm: " + msg, false
 	}
+	tick := newCtimeTicker(t)
 	for i := range modelSteps {
+		tick.next() // the cached state was stored at the previous step's ctime tick
 		op, _ := m.step()
 		// The model's matcher is always current (any op may delete or rename a
 		// .gitignore); production instead gives a rebuilt matcher a new

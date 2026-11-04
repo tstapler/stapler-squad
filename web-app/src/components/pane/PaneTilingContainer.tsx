@@ -2,12 +2,13 @@
 
 import { useRef, useEffect, useState, useCallback, type Dispatch } from "react";
 import { createPortal } from "react-dom";
-import { Columns2, Rows2, LayoutList, X, Maximize2 } from "lucide-react";
+import { Columns2, Rows2, LayoutList, X, Maximize2, ArrowRight } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
 import type { PaneState, PaneAction, SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
+import { usePanePickerKeys } from "./usePanePickerKeys";
 import { PaneContext } from "./PaneContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
@@ -39,6 +40,8 @@ interface PaneTilingContainerProps {
     forceNewPane?: boolean;
     version: number;
   } | null;
+  /** False when this container's window is retained but hidden (keep-alive); gates keys, focus and external assign. */
+  windowActive?: boolean;
 }
 
 /**
@@ -52,6 +55,7 @@ export function PaneTilingContainer({
   paneState,
   dispatch,
   externalSessionAssign,
+  windowActive = true,
 }: PaneTilingContainerProps) {
   const state = paneState;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -105,6 +109,9 @@ export function PaneTilingContainer({
       if (eligiblePanes.length === 0) {
         // Auto-split: reducer creates a new detail pane beside the session-list pane.
         dispatch({ type: "ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: session.id });
+      } else if (eligiblePanes.length === 1 && eligiblePanes[0].sessionId === session.id) {
+        // Already showing this session: just focus, so ASSIGN_SESSION doesn't reset the active tab.
+        dispatch({ type: "FOCUS_PANE", paneId: eligiblePanes[0].id });
       } else if (eligiblePanes.length === 1) {
         // Single detail pane: assign directly. If focused pane is the detail pane,
         // eligiblePanes[0] === focusedLeaf, so the intent shortcut still fires — just
@@ -140,75 +147,40 @@ export function PaneTilingContainer({
   );
 
   // Register keyboard shortcuts
-  usePaneShortcuts(state, dispatch, containerRef);
+  usePaneShortcuts(state, dispatch, containerRef, windowActive);
 
-  // Keyboard handler for the pane picker: Escape cancels, A–Z selects the nth eligible pane.
-  useEffect(() => {
-    if (!pickerPendingSession) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        cancelPicker();
-        return;
-      }
-      const upper = e.key.toUpperCase();
-      if (upper === "M") {
-        e.stopPropagation();
-        setPeekSession(pickerPendingSession);
-        cancelPicker();
-        return;
-      }
-      if (upper === "V") {
-        e.stopPropagation();
-        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "vertical" });
-        cancelPicker();
-        return;
-      }
-      if (upper === "H") {
-        e.stopPropagation();
-        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "horizontal" });
-        cancelPicker();
-        return;
-      }
-      if (upper.length === 1 && upper >= "A" && upper <= "Z") {
-        const allLeaves = getAllLeaves(state.root);
-        const eligiblePanes = allLeaves.filter((l) => l.viewKind !== "session-list");
-        const idx = upper.charCodeAt(0) - 65;
-        const target = eligiblePanes[idx];
-        if (target) {
-          e.stopPropagation();
-          dispatch({ type: "ASSIGN_SESSION", paneId: target.id, sessionId: pickerPendingSession.id });
-          dispatch({ type: "ASSIGN_TAB", paneId: target.id, tab: "terminal" });
-          cancelPicker();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [pickerPendingSession, state.root, dispatch, cancelPicker]);
+  const openPeek = useCallback((session: Session) => setPeekSession(session), []);
+  const findOpenPane = (sessionId: string | undefined) =>
+    sessionId
+      ? getAllLeaves(state.root).find((l) => l.viewKind !== "session-list" && l.sessionId === sessionId) ?? null
+      : null;
+  const alreadyOpenLeaf = findOpenPane(pickerPendingSession?.id);
+  const alreadyOpenLeafMobile = findOpenPane(mobilePickerSession?.id);
+  usePanePickerKeys(windowActive, {
+    pickerPendingSession, state, dispatch, cancelPicker, openPeek,
+    alreadyOpenPaneId: alreadyOpenLeaf?.id ?? null,
+  });
 
   // Focus the mobile sheet when it opens so keyboard and screen reader users can interact.
   useEffect(() => {
-    if (mobilePickerSession) {
+    if (windowActive && mobilePickerSession) {
       mobilePickerSheetRef.current?.focus();
     }
-  }, [mobilePickerSession]);
+  }, [windowActive, mobilePickerSession]);
 
   // Focus the first button in the picker action bar when it appears, so keyboard
   // and screen reader users can immediately interact without hunting for focus.
   useEffect(() => {
-    if (pickerPendingSession && pickerBarRef.current) {
+    if (windowActive && pickerPendingSession && pickerBarRef.current) {
       const firstBtn = pickerBarRef.current.querySelector<HTMLButtonElement>("button");
       firstBtn?.focus();
     }
-  }, [pickerPendingSession]);
+  }, [windowActive, pickerPendingSession]);
 
   // When externalSessionAssign fires (omnibar, URL nav, keyboard), route through
   // triggerPicker so the user gets the same pane-picker UX as session-list clicks.
   useEffect(() => {
-    if (!externalSessionAssign) return;
+    if (!windowActive || !externalSessionAssign) return;
     if (externalSessionAssign.version === prevVersionRef.current) return;
     prevVersionRef.current = externalSessionAssign.version;
 
@@ -219,7 +191,7 @@ export function PaneTilingContainer({
     } else {
       triggerPicker(session, externalSessionAssign.tab);
     }
-  }, [externalSessionAssign, sessions, triggerPicker, triggerPickerForceNew]);
+  }, [windowActive, externalSessionAssign, sessions, triggerPicker, triggerPickerForceNew]);
 
   const allLeaves = pickerPendingSession ? getAllLeaves(state.root) : [];
   const listPane = allLeaves.find((l) => l.viewKind === "session-list") ?? null;
@@ -235,6 +207,7 @@ export function PaneTilingContainer({
           state={state}
           dispatch={dispatch}
           sessions={sessions}
+          windowActive={windowActive}
         />
         {/* Aria-live region: always in DOM, announces picker appearance to screen readers */}
         <div
@@ -244,7 +217,7 @@ export function PaneTilingContainer({
           style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
         >
           {pickerPendingSession
-            ? `Choose where to open "${pickerPendingSession.title}": Side by side (V), Top/Bottom (H), Replace list (M), or Cancel (Esc)`
+            ? `Choose where to open "${pickerPendingSession.title}": ${alreadyOpenLeaf ? "Open existing pane (O), " : ""}Side by side (V), Top/Bottom (H), Replace list (M), or Cancel (Esc)`
             : ""}
         </div>
         {pickerPendingSession && (
@@ -254,6 +227,22 @@ export function PaneTilingContainer({
             role="toolbar"
             aria-label={`Open ${pickerPendingSession.title}`}
           >
+            {alreadyOpenLeaf && (
+              <button
+                className={pickerActionButton}
+                data-testid="picker-open-existing"
+                onClick={() => {
+                  dispatch({ type: "FOCUS_PANE", paneId: alreadyOpenLeaf.id });
+                  cancelPicker();
+                }}
+                title="Switch to the pane already showing this session"
+              >
+                {/* analytics-exempt */}
+                <ArrowRight size={14} />
+                Open existing pane
+                <span className={pickerActionKbd}>O</span>
+              </button>
+            )}
             <button
               className={pickerActionButton}
               onClick={() => {
@@ -262,6 +251,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a new pane side by side"
             >
+              {/* analytics-exempt */}
               <Columns2 size={14} />
               Side by side
               <span className={pickerActionKbd}>V</span>
@@ -274,6 +264,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a new pane stacked top/bottom"
             >
+              {/* analytics-exempt */}
               <Rows2 size={14} />
               Top / Bottom
               <span className={pickerActionKbd}>H</span>
@@ -288,6 +279,7 @@ export function PaneTilingContainer({
                 }}
                 title="Replace the session list pane with this session"
               >
+                {/* analytics-exempt */}
                 <LayoutList size={14} />
                 Replace list
               </button>
@@ -300,6 +292,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a floating modal without changing pane layout"
             >
+              {/* analytics-exempt */}
               <Maximize2 size={14} />
               Open in Modal
               <span className={pickerActionKbd}>M</span>
@@ -309,6 +302,7 @@ export function PaneTilingContainer({
               onClick={cancelPicker}
               title="Cancel (Esc)"
             >
+              {/* analytics-exempt */}
               <X size={14} />
               Cancel
               <span className={pickerActionKbd}>Esc</span>
@@ -342,6 +336,54 @@ export function PaneTilingContainer({
             onKeyDown={(e) => { if (e.key === "Escape") cancelPicker(); }}
           >
             <div id="mobile-pane-picker-title" className={mobilePickerSheetTitle}>Open session in…</div>
+            {alreadyOpenLeafMobile && (
+              <button
+                className={mobilePickerPaneItem}
+                data-testid="mobile-picker-open-existing"
+                onClick={() => {
+                  dispatch({ type: "FOCUS_PANE", paneId: alreadyOpenLeafMobile.id });
+                  cancelPicker();
+                }}
+              >
+                {/* analytics-exempt */}
+                <span className={mobilePickerPaneLabel}>→</span>
+                Open existing pane
+              </button>
+            )}
+            {/* A split is just another full-screen page on narrow screens, so offer a
+                fresh pane instead of forcing the session into an existing one. */}
+            <button
+              className={mobilePickerPaneItem}
+              data-testid="mobile-picker-new-pane"
+              onClick={() => {
+                dispatch({
+                  type: "SPLIT_AND_ASSIGN_SESSION",
+                  paneId: state.focusedPaneId,
+                  sessionId: mobilePickerSession.id,
+                  tab: "terminal",
+                  direction: "horizontal",
+                });
+                cancelPicker();
+              }}
+            >
+              {/* analytics-exempt */}
+              <span className={mobilePickerPaneLabel}>+</span>
+              New full-screen pane
+            </button>
+            <button
+              className={mobilePickerPaneItem}
+              data-testid="mobile-picker-peek-modal"
+              onClick={() => {
+                setPeekSession(mobilePickerSession);
+                cancelPicker();
+              }}
+            >
+              {/* analytics-exempt */}
+              <span className={mobilePickerPaneLabel}>
+                <Maximize2 size={14} />
+              </span>
+              Temporary modal
+            </button>
             {mobilePickerPanes.map((p) => (
               <button
                 key={p.id}
@@ -353,11 +395,13 @@ export function PaneTilingContainer({
                   cancelPicker();
                 }}
               >
+                {/* analytics-exempt */}
                 <span className={mobilePickerPaneLabel}>{p.letter}</span>
                 {p.label}
               </button>
             ))}
             <button className={mobilePickerCancelButton} onClick={cancelPicker}>
+              {/* analytics-exempt */}
               Cancel
             </button>
           </div>

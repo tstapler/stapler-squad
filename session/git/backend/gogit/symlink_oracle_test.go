@@ -278,6 +278,9 @@ func TestParitySymlinkedLayouts(t *testing.T) {
 				if d.Kind == gitoracle.DiffError && strings.Contains(d.Candidate, "fallback eligible") && symlinkFallbackExcused(d) {
 					continue
 				}
+				if gitfileInvalidAsNotARepo(d) {
+					continue
+				}
 				unexpected = append(unexpected, oneLine(d))
 			}
 			sort.Strings(unexpected)

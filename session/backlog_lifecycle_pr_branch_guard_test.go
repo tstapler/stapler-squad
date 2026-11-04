@@ -329,9 +329,9 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 

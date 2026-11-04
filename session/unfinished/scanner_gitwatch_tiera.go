@@ -50,6 +50,9 @@ func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
 		admin := filepath.Join(gitDir, "worktrees", e.Name())
 		wt, ok := linkedWorktreePath(admin)
 		if !ok {
+			wt, ok = s.watchPendingAdmin(w, admin)
+		}
+		if !ok {
 			continue
 		}
 		s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: wt})
@@ -102,4 +105,15 @@ func (s *Scanner) worktreeTargetFor(admin string) (worktreeTarget, bool) {
 	defer s.fsMu.Unlock()
 	t, ok := s.gitwatch.targets[admin]
 	return t, ok
+}
+
+// watchPendingAdmin covers `git worktree add`, which mkdirs the admin dir before
+// writing <admin>/gitdir: it watches admin so that write re-runs registration,
+// then re-reads gitdir in case the write landed before the watch did.
+func (s *Scanner) watchPendingAdmin(w gitWatcher, admin string) (string, bool) {
+	if err := w.Add(admin); err != nil {
+		log.Debug("could not watch pending linked worktree gitdir", "dir", admin, "err", err)
+		return "", false
+	}
+	return linkedWorktreePath(admin)
 }

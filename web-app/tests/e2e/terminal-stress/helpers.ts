@@ -16,6 +16,17 @@ export interface StressTestMetrics {
   elapsed: number;
 }
 
+type RendererType = 'webgl' | 'canvas' | 'unknown';
+
+const TEST_STATUS_TESTID = 'test-status';
+const WEBGL_RENDERER: RendererType = 'webgl';
+const MS_UNIT = 'ms';
+const STATUS_CHANGE_TIMEOUT_MS = 5000;
+const SCREENSHOT_TIMEOUT_MS = 5000;
+const BYTES_PER_KB = 1024;
+const BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB;
+const BYTES_PER_GB = BYTES_PER_KB * BYTES_PER_KB * BYTES_PER_KB;
+
 /**
  * Navigate to stress test page (alias for setupStressTestPage)
  */
@@ -58,20 +69,20 @@ export async function setupStressTestPage(page: Page): Promise<void> {
   await page.waitForSelector('[data-testid="start-test"]', { timeout: 15000 });
 
   // Verify page is ready - use waitFor for better reliability
-  await expect(page.getByTestId('test-status')).toHaveText('idle', { timeout: 10000 });
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('idle', { timeout: 10000 });
 }
 
 /**
  * Get the current renderer type (webgl or canvas)
  */
-export async function getRendererType(page: Page): Promise<'webgl' | 'canvas' | 'unknown'> {
+export async function getRendererType(page: Page): Promise<RendererType> {
   // Try from exposed window variable first (most reliable)
   const fromWindow = await page.evaluate(() => (window as any).stressTestRendererType);
   if (fromWindow) return fromWindow;
 
   // Fall back to reading from DOM
   const text = await page.getByTestId('renderer-type').textContent();
-  return (text?.toLowerCase() as 'webgl' | 'canvas') || 'unknown';
+  return (text?.toLowerCase() as RendererType) || 'unknown';
 }
 
 /**
@@ -79,7 +90,7 @@ export async function getRendererType(page: Page): Promise<'webgl' | 'canvas' | 
  */
 export async function assertWebGLActive(page: Page): Promise<void> {
   const renderer = await getRendererType(page);
-  expect(renderer).toBe('webgl');
+  expect(renderer).toBe(WEBGL_RENDERER);
 }
 
 /**
@@ -96,7 +107,7 @@ export async function selectPreset(page: Page, preset: string): Promise<void> {
 export async function startTest(page: Page): Promise<void> {
   await page.getByTestId('start-test').click();
   // Wait for test to start or complete (may complete very quickly for some tests)
-  await expect(page.getByTestId('test-status')).not.toHaveText('idle', { timeout: 5000 });
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).not.toHaveText('idle', { timeout: STATUS_CHANGE_TIMEOUT_MS });
 }
 
 /**
@@ -105,13 +116,13 @@ export async function startTest(page: Page): Promise<void> {
  */
 export async function stopTest(page: Page): Promise<void> {
   const stopButton = page.getByTestId('stop-test');
-  const status = await page.getByTestId('test-status').textContent();
+  const status = await page.getByTestId(TEST_STATUS_TESTID).textContent();
 
   // Only try to stop if still running
   if (status === 'running') {
     // Use force: true to click even during canvas animation
     await stopButton.click({ force: true });
-    await expect(page.getByTestId('test-status')).toHaveText('completed', { timeout: 5000 });
+    await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('completed', { timeout: STATUS_CHANGE_TIMEOUT_MS });
   }
 }
 
@@ -119,7 +130,7 @@ export async function stopTest(page: Page): Promise<void> {
  * Wait for test to complete naturally
  */
 export async function waitForTestCompletion(page: Page, timeoutMs: number = 60000): Promise<void> {
-  await expect(page.getByTestId('test-status')).toHaveText('completed', { timeout: timeoutMs });
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('completed', { timeout: timeoutMs });
 }
 
 /**
@@ -138,10 +149,10 @@ export async function getMetrics(page: Page): Promise<StressTestMetrics> {
 
   return {
     framesRendered: parseInt(framesRendered?.replace(/,/g, '') || '0'),
-    avgFrameTime: parseFloat(avgFrameTime?.replace('ms', '') || '0'),
-    p95FrameTime: parseFloat(p95FrameTime?.replace('ms', '') || '0'),
-    p99FrameTime: parseFloat(p99FrameTime?.replace('ms', '') || '0'),
-    maxFrameTime: parseFloat(maxFrameTime?.replace('ms', '') || '0'),
+    avgFrameTime: parseFloat(avgFrameTime?.replace(MS_UNIT, '') || '0'),
+    p95FrameTime: parseFloat(p95FrameTime?.replace(MS_UNIT, '') || '0'),
+    p99FrameTime: parseFloat(p99FrameTime?.replace(MS_UNIT, '') || '0'),
+    maxFrameTime: parseFloat(maxFrameTime?.replace(MS_UNIT, '') || '0'),
     peakMemory: parseBytes(peakMemory || '0'),
     memoryGrowthRate: parseBytes(memoryGrowth?.replace('/s', '') || '0'),
     bytesGenerated: parseBytes(bytesGenerated || '0'),
@@ -160,9 +171,9 @@ function parseBytes(str: string): number {
   const unit = (match[2] || 'B').toUpperCase();
 
   switch (unit) {
-    case 'GB': return value * 1024 * 1024 * 1024;
-    case 'MB': return value * 1024 * 1024;
-    case 'KB': return value * 1024;
+    case 'GB': return value * BYTES_PER_GB;
+    case 'MB': return value * BYTES_PER_MB;
+    case 'KB': return value * BYTES_PER_KB;
     default: return value;
   }
 }
@@ -175,7 +186,7 @@ function parseTime(str: string): number {
   if (!match) return 0;
 
   const value = parseFloat(match[1]);
-  const unit = (match[2] || 'ms').toLowerCase();
+  const unit = (match[2] || MS_UNIT).toLowerCase();
 
   return unit === 's' ? value * 1000 : value;
 }
@@ -199,7 +210,7 @@ export async function captureTestScreenshots(
     // Set timeout to avoid hanging on font loading
     const screenshot = await page.screenshot({
       animations: 'disabled',
-      timeout: 5000,
+      timeout: SCREENSHOT_TIMEOUT_MS,
     });
     screenshots.push(screenshot);
     await page.waitForTimeout(intervalMs);
@@ -222,7 +233,7 @@ export function assertFrameRate(metrics: StressTestMetrics, targetFps: number, t
 /**
  * Assert no memory leaks (growth rate under threshold)
  */
-export function assertNoMemoryLeak(metrics: StressTestMetrics, maxGrowthBytesPerSec: number = 1024 * 1024): void {
+export function assertNoMemoryLeak(metrics: StressTestMetrics, maxGrowthBytesPerSec: number = BYTES_PER_MB): void {
   expect(metrics.memoryGrowthRate).toBeLessThan(maxGrowthBytesPerSec);
 }
 
@@ -276,7 +287,7 @@ export function analyzeMemoryTrend(snapshots: number[]): {
   const growthRate = totalGrowth / durationSec;
 
   // Consider it a leak if memory consistently grows more than 1MB/sec
-  const isLeak = growthRate > 1024 * 1024;
+  const isLeak = growthRate > BYTES_PER_MB;
 
   return {
     startMemory,

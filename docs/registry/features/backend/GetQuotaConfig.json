@@ -1,0 +1,15 @@
+{
+  "id": "GetQuotaConfig",
+  "type": "backend",
+  "service": "QuotaService",
+  "method": "GetQuotaConfig",
+  "protoFile": "proto/session/v1/quota.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/quota_settings_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetQuotaConfig_ReturnsReactiveOnlyWithWarning_WhenEnabledAndBudgetZero",
+    "TestGetQuotaConfig_ReportsConfigured_WhenStoredValuesDifferFromDefaultsWithoutAPageSave"
+  ],
+  "lastModified": "2026-10-18T01:09:52.736043562-07:00"
+}

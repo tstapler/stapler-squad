@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BacklogStage, StageTransition } from "@/lib/hooks/useBacklogStages";
 import { GATE_KIND_LABELS } from "@/lib/hooks/useBacklogStages";
 import { visuallyHidden } from "@/styles/a11y.css";
@@ -116,6 +116,20 @@ export interface StageGraphDiagramProps {
  */
 export function StageGraphDiagram({ stages, transitions }: StageGraphDiagramProps) {
   const { nodes, edges } = useMemo(() => computeLayout(stages, transitions), [stages, transitions]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+
+  // A scrollable region must be keyboard-reachable (axe scrollable-region-focusable); a fitting one needs no tab stop.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setScrolls(el.scrollWidth > el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [stages, transitions]);
 
   if (stages.length === 0) {
     return <p className={styles.empty}>No stages configured yet.</p>;
@@ -131,7 +145,11 @@ export function StageGraphDiagram({ stages, transitions }: StageGraphDiagramProp
 
   return (
     <figure className={styles.figure} aria-label="Workflow stage graph">
-      <div className={styles.scrollArea}>
+      <div
+        ref={scrollRef}
+        className={styles.scrollArea}
+        {...(scrolls ? { tabIndex: 0, role: "region", "aria-label": "Workflow stage graph, scrollable" } : {})}
+      >
         <svg
           aria-hidden="true"
           width={maxX}

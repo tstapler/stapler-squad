@@ -38,6 +38,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
   [StuckReason.MERGED_PR_UNVERIFIED]: "Merged PR not tied to item",
   [StuckReason.VERDICT_UNDELIVERED]: "Review verdict not delivered to session",
+  [StuckReason.TRANSITION_DENIED]: "Automatic transition denied",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -67,6 +68,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
   [StuckReason.MERGED_PR_UNVERIFIED]: "⛔",
   [StuckReason.VERDICT_UNDELIVERED]: "🟡",
+  [StuckReason.TRANSITION_DENIED]: "⛔",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -96,6 +98,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
   [StuckReason.MERGED_PR_UNVERIFIED]: styles.chipPrPendingNoPR,
   [StuckReason.VERDICT_UNDELIVERED]: styles.chipAbandonedReview,
+  [StuckReason.TRANSITION_DENIED]: styles.chipPrPendingNoPR,
 };
 
 /**
@@ -141,6 +144,8 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   // this is strictly less urgent than PR_NEEDS_FIX (nothing auto-retries
   // that one) but still worth surfacing before ABANDONED_REVIEW.
   [StuckReason.VERDICT_UNDELIVERED]: 8.5,
+  // A gate or graph denied an automatic claim; the dequeue sweep retries, but an operator must open the gate or edge.
+  [StuckReason.TRANSITION_DENIED]: 8.7,
   [StuckReason.ABANDONED_REVIEW]: 9,
   [StuckReason.REWORK_CAP]: 10,
   [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 11,
@@ -313,4 +318,22 @@ export function formatAgo(ts: Timestamp | undefined, now: number = Date.now()): 
   if (diffMin < 60) return `${diffMin}m ago`;
   if (diffHour < 24) return `${diffHour}h ago`;
   return `${diffDay}d ago`;
+}
+
+/**
+ * Reasons TriggerRemediationNow has a wired action for — mirrors
+ * remediationActionByReason in server/services/backlog_service_stuck.go.
+ */
+const REMEDIABLE_STUCK_REASONS: ReadonlySet<StuckReason> = new Set([
+  StuckReason.BOUNCING,
+  StuckReason.ABANDONED_REVIEW,
+  StuckReason.AUTONOMOUS_STUCK,
+  StuckReason.STALE_WORK,
+  StuckReason.ORPHANED_TRIAGE,
+  StuckReason.PR_PENDING_NO_PR,
+  StuckReason.PR_NEEDS_FIX,
+]);
+
+export function hasRemediationAction(reason: StuckReason): boolean {
+  return REMEDIABLE_STUCK_REASONS.has(reason);
 }

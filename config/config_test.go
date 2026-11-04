@@ -1939,3 +1939,78 @@ func TestLogRotationDefaultsMatchLogPackage(t *testing.T) {
 			d.LogMaxSize, d.LogMaxFiles, d.LogMaxAge, DefaultLogMaxSizeMB, DefaultLogMaxFiles, DefaultLogMaxAgeDays)
 	}
 }
+
+func TestUpdateConfig_NoLostUpdate_WhenTwoWritersFiftyIterationsEach(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	const iterations = 50
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2*iterations)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			errCh <- UpdateConfig(func(c *Config) error {
+				c.Quota.AssumedWindowTokenBudget = int64(i)
+				return nil
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			errCh <- UpdateConfig(func(c *Config) error {
+				c.ConfigVersion = i
+				return nil
+			})
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	got := LoadConfig()
+	assert.Equal(t, int64(iterations), got.Quota.AssumedWindowTokenBudget, "field A lost an update")
+	assert.Equal(t, iterations, got.ConfigVersion, "field B lost an update")
+}
+
+func TestUpdateConfig_DoesNotSelfDeadlock_WhenSaveConfigRunsConcurrently(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	inFn := make(chan struct{})
+	release := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- UpdateConfig(func(c *Config) error {
+			c.ConfigVersion = 7
+			// Nested save takes the inner lock while the outer one is held.
+			if err := SaveConfig(c); err != nil {
+				return err
+			}
+			close(inFn)
+			<-release
+			return nil
+		})
+	}()
+
+	<-inFn
+	saveDone := make(chan error, 1)
+	go func() { saveDone <- SaveConfig(LoadConfig()) }()
+	select {
+	case err := <-saveDone:
+		require.NoError(t, err, "SaveConfig must not wait on UpdateConfig's outer lock")
+	case <-time.After(10 * time.Second):
+		t.Fatal("SaveConfig blocked while UpdateConfig was mid-update: the two locks are not independent")
+	}
+
+	close(release)
+	select {
+	case err := <-updateDone:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("UpdateConfig did not finish")
+	}
+	assert.Equal(t, 7, LoadConfig().ConfigVersion)
+}

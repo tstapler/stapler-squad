@@ -26,7 +26,7 @@ export const radioBtn = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.1s ease",
+  transition: "background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease, opacity 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -60,6 +60,7 @@ export const slashDropdownWrapper = style({
   bottom: "calc(100% + 2px)",
   left: 0,
   right: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 50,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,
@@ -87,7 +88,7 @@ export const attachButton = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.1s ease",
+  transition: "background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease, opacity 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,

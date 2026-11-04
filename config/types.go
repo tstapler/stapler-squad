@@ -771,6 +771,31 @@ type QuotaConfig struct {
 	// throttle stays active after the most recently observed foreground activity.
 	// Default: 300.
 	ForegroundThrottleDelaySeconds int `json:"foreground_throttle_delay_seconds,omitempty"`
+	// DefaultCostBudgetThresholdUSD is the global soft-budget default applied where
+	// a backlog item has no per-item threshold. nil = off; 0.0 is a valid threshold.
+	DefaultCostBudgetThresholdUSD *float64 `json:"default_cost_budget_threshold_usd,omitempty"`
+}
+
+// QuotaMode is derived from Enabled and AssumedWindowTokenBudget, never stored.
+type QuotaMode string
+
+const (
+	QuotaModeDisabled     QuotaMode = "disabled"
+	QuotaModeReactiveOnly QuotaMode = "reactive_only"
+	QuotaModeProactive    QuotaMode = "proactive"
+)
+
+// Mode reports which quota signals are live: a zero budget leaves only the
+// hard/reactive rate-limit override.
+func (c QuotaConfig) Mode() QuotaMode {
+	switch {
+	case !c.Enabled:
+		return QuotaModeDisabled
+	case c.AssumedWindowTokenBudget <= 0:
+		return QuotaModeReactiveOnly
+	default:
+		return QuotaModeProactive
+	}
 }
 
 // QuotaConfigOrDefault returns a QuotaConfig with standard defaults applied to zero fields.

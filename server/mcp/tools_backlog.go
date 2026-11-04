@@ -1504,16 +1504,39 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
 	if recoverFromReview {
 		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
-		if _, reopenErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
+		_, reopenErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerMCPRequestReview, ItemID: itemID, Observed: item,
+			To: session.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: session.TriggeredByAgent,
+		})
+		if reopenErr != nil {
 			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
+			if isTransitionDenied(reopenErr) {
+				return transitionDeniedResult(reopenErr, session.BacklogStatusReview, session.BacklogStatusInProgress), nil
+			}
 			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
 		}
 	}
 
 	// Transition item from its validated source status to the target status.
+	// Past a recovery reopen the item changed, so the gate re-reads it.
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
+	transitionReq := session.TransitionRequest{
+		Caller: session.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	}
+	if !recoverFromReview {
+		transitionReq.Observed = item
+	}
+	if targetStatus == session.BacklogStatusDone {
+		// The operator configured SkipReviewGate, so no verdict will exist: the
+		// Default guard's own override exemption keeps this flow working under
+		// enforcement. It frees only that guard, never a Configured gate.
+		transitionReq.OverrideReason = "SkipReviewGate: the item skips the independent review"
+	}
+	if _, transErr := h.storage.GatedTransition(ctx, transitionReq); transErr != nil {
 		log.InfoLog().Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
+		if isTransitionDenied(transErr) {
+			return transitionDeniedResult(transErr, validStatus, targetStatus), nil
+		}
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1678,13 +1701,23 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		targetStatus = session.BacklogStatusReview
 	}
 
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
-		log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
-			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+	// An escalation from review has nowhere further to go: the item already
+	// waits in review for a human, and review->review is not an edge.
+	if targetStatus != currentStatus {
+		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
+		if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
+			TriggeredBy: session.TriggeredByAgent,
+		}); transErr != nil {
+			log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
+			if isTransitionDenied(transErr) {
+				return transitionDeniedResult(transErr, currentStatus, targetStatus), nil
+			}
+			if errors.Is(transErr, session.ErrPreconditionFailed) {
+				return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+			}
+			return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
 		}
-		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
 	}
 
 	// Persist the blocking rationale on the item itself (not the
@@ -1818,8 +1851,14 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	}
 
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredByAgent); transErr != nil {
+	if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
+		TriggeredBy: session.TriggeredByAgent,
+	}); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
+		if isTransitionDenied(transErr) {
+			return transitionDeniedResult(transErr, session.BacklogStatusReady, session.BacklogStatusInProgress), nil
+		}
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1889,6 +1928,70 @@ func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) 
 		return h.getBacklogItemFn(ctx, itemID)
 	}
 	return h.storage.GetBacklogItem(ctx, itemID)
+}
+
+// ErrTransitionDenied is the code of an agent transition the workflow engine
+// refused. The agent must not retry: only a configuration change or an
+// operator approval can make the same call succeed.
+const ErrTransitionDenied = "TRANSITION_DENIED"
+
+// Layers a denial can come from, reported in blocked_by.
+const (
+	blockedByConfigGraph   = "config_graph"
+	blockedByOperatorGate  = "operator_gate"
+	blockedByDefaultGuard  = "default_guard"
+	hintAskOperatorApprove = "ask the operator to approve this transition"
+	hintAskOperatorEnable  = "ask the operator to enable this transition in the workflow configuration"
+)
+
+// transitionDeniedError is MCPError plus the layer that refused and what to do.
+type transitionDeniedError struct {
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	Remediation string `json:"remediation,omitempty"`
+	BlockedBy   string `json:"blocked_by"`
+	Hint        string `json:"hint"`
+}
+
+// isTransitionDenied reports whether err is the engine refusing a transition
+// (graph, Configured operator gate or Default guard), as opposed to a write
+// failure such as a lost compare-and-swap.
+func isTransitionDenied(err error) bool {
+	for _, sentinel := range []error{
+		session.ErrTransitionNotAllowed, session.ErrGateNotSatisfied,
+		session.ErrACRequired, session.ErrPlanRequired, session.ErrPlanArtifactsRequired, session.ErrPlanArtifactsMissing,
+		session.ErrVerdictRequired, session.ErrCodeNotOnMain, session.ErrVerdictClearRequiredForReady, session.ErrUnresolvedBlockers,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
+// transitionDeniedResult is the structured result of a denied agent transition:
+// the denying layer in blocked_by and a hint that tells the agent to stop and
+// ask rather than retry.
+func transitionDeniedResult(err error, from, to session.BacklogStatus) *mcpgo.CallToolResult {
+	blockedBy, hint := blockedByDefaultGuard, "satisfy the guard named in the message, then call again"
+	switch {
+	case errors.Is(err, session.ErrGateNotSatisfied):
+		blockedBy, hint = blockedByOperatorGate, hintAskOperatorApprove
+	case errors.Is(err, session.ErrTransitionNotAllowed):
+		blockedBy, hint = blockedByConfigGraph, hintAskOperatorEnable
+	}
+	// Marshaling plain strings cannot fail, as in errResult.
+	b, _ := json.Marshal(struct { // kibitzer:ignore go-ignored-error -- same as errResult: a struct of strings and a bool
+		Success bool                  `json:"success"`
+		Error   transitionDeniedError `json:"error"`
+	}{Error: transitionDeniedError{
+		Code:        ErrTransitionDenied,
+		Message:     fmt.Sprintf("the transition %s -> %s was denied: %v", from, to, err),
+		Remediation: hint,
+		BlockedBy:   blockedBy,
+		Hint:        hint,
+	}})
+	return mcpgo.NewToolResultText(string(b))
 }
 
 // --- submit_review_verdict ---
@@ -2522,8 +2625,13 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
-	if _, archErr := h.storage.ArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
+	if _, archErr := h.storage.GatedArchive(ctx, session.TransitionRequest{
+		Caller: session.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	}); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
+		if isTransitionDenied(archErr) {
+			return transitionDeniedResult(archErr, status, session.BacklogStatusArchived), nil
+		}
 		if errors.Is(archErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil
 		}

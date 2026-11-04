@@ -15,8 +15,9 @@
 // So a Link navigation yields a trailing slash and a direct load does not; exact comparisons
 // such as CockpitShell's `pathname !== "/review-queue"` misfire after client navigation.
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const SHORTCUTS_BUTTON = 'Keyboard shortcuts (?)';
 
 test.describe('pathname probe', () => {

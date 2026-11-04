@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"go.uber.org/goleak"
 
@@ -523,57 +522,28 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	}
 }
 
-// ─── U-GO-01: TestSanitizeInitialPromptForTmux_stripsNullBytes ───────────────
+// ─── U-GO-01: TestCleanDriverPromptText_stripsNullBytes ───────────────
 
-func TestSanitizeInitialPromptForTmux_stripsNullBytes(t *testing.T) {
+func TestCleanDriverPromptText_stripsNullBytes(t *testing.T) {
 	t.Parallel()
 	input := "hello\x00world\x00"
-	got := sanitizeInitialPromptForTmux(input)
+	got := cleanDriverPromptText(input)
 	if strings.Contains(got, "\x00") {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains null bytes", input, got)
+		t.Errorf("cleanDriverPromptText(%q) = %q, still contains null bytes", input, got)
 	}
 	if got != "helloworld" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "helloworld")
+		t.Errorf("cleanDriverPromptText(%q) = %q, want %q", input, got, "helloworld")
 	}
 }
 
-// ─── U-GO-02: TestSanitizeInitialPromptForTmux_collapsesNewlines ─────────────
+// ─── U-GO-04: TestCleanDriverPromptText_whitespaceOnlyFallsThrough ────
 
-func TestSanitizeInitialPromptForTmux_collapsesNewlines(t *testing.T) {
-	t.Parallel()
-	input := "line1\nline2\rline3"
-	got := sanitizeInitialPromptForTmux(input)
-	if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains newlines", input, got)
-	}
-	// Newlines should be replaced with spaces
-	if got != "line1 line2 line3" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "line1 line2 line3")
-	}
-}
-
-// ─── U-GO-03: TestSanitizeInitialPromptForTmux_truncatesAt4096 ───────────────
-
-func TestSanitizeInitialPromptForTmux_truncatesAt4096(t *testing.T) {
-	t.Parallel()
-	input := strings.Repeat("a", 5000)
-	got := sanitizeInitialPromptForTmux(input)
-	if len(got) > 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
-	}
-	if len(got) != 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want exactly 4096", len(got))
-	}
-}
-
-// ─── U-GO-04: TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough ────
-
-func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
+func TestCleanDriverPromptText_whitespaceOnlyFallsThrough(t *testing.T) {
 	t.Parallel()
 	input := "   \t  "
-	got := sanitizeInitialPromptForTmux(input)
+	got := cleanDriverPromptText(input)
 	if got != "" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
+		t.Errorf("cleanDriverPromptText(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
 	}
 }
 
@@ -584,7 +554,7 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 // NOTE (M-14): These tests re-implement the prompt-selection logic from runSessionDriver.
 // If that logic changes, update these tests to match. The selection logic is a simple
 // 4-line block in runSessionDriver that checks inst.InitialPrompt and calls
-// sanitizeInitialPromptForTmux — extracting it to a standalone helper was judged
+// cleanDriverPromptText — extracting it to a standalone helper was judged
 // too invasive given the minimal complexity.
 
 // resolveInitialPromptForTest re-implements the prompt-selection logic from
@@ -593,7 +563,7 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 func resolveInitialPromptForTest(inst *Instance) string {
 	initialPrompt := driverInitialPrompt
 	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		sanitized := cleanDriverPromptText(inst.InitialPrompt)
 		if sanitized != "" {
 			initialPrompt = sanitized
 		}
@@ -738,28 +708,6 @@ func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T)
 	}
 	if !initialPromptSentAt.Equal(sentAt) {
 		t.Errorf("initialPromptSentAt = %v, want the persisted %v", initialPromptSentAt, sentAt)
-	}
-}
-
-// ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
-
-func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
-	t.Parallel()
-	// Build a 4098-byte input: 4090 ASCII bytes + 2 emoji (😀 = 4 bytes each = 8 bytes total).
-	// After truncation at 4096 bytes, the second emoji straddles the boundary (bytes 4093-4096).
-	// The sanitizer must step back to a valid UTF-8 boundary.
-	input := strings.Repeat("a", 4090) + "😀😀"
-	if len(input) != 4098 {
-		t.Fatalf("test setup: expected input length 4098, got %d", len(input))
-	}
-
-	got := sanitizeInitialPromptForTmux(input)
-
-	if len(got) > 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
-	}
-	if !utf8.ValidString(got) {
-		t.Errorf("sanitizeInitialPromptForTmux: result is not valid UTF-8: %q", got[:min(len(got), 60)])
 	}
 }
 

@@ -23,6 +23,7 @@ import React from "react";
 
 jest.mock("@xterm/xterm", () => {
   class MockTerminal {
+    unicode = { activeVersion: "6" };
     static instances: MockTerminal[] = [];
     cols = 80;
     rows = 24;
@@ -115,6 +116,11 @@ jest.mock("@xterm/addon-web-links", () => {
   return { WebLinksAddon: MockWebLinksAddon };
 });
 
+jest.mock("@xterm/addon-unicode11", () => {
+  class MockUnicode11Addon {}
+  return { Unicode11Addon: MockUnicode11Addon };
+});
+
 jest.mock("@xterm/addon-search", () => {
   class MockSearchAddon {
     findNext = jest.fn(() => true);
@@ -127,6 +133,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { CanvasAddon } from "@xterm/addon-canvas";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import {
   XtermTerminal,
   shouldScheduleFit,
@@ -635,6 +642,83 @@ describe("XtermTerminal WebGL->Canvas fallback (mocked renderer, not real WebGL)
   });
 });
 
+describe("XtermTerminal windowActive gating (Story 4.1.3e)", () => {
+  const FRAMES = 60;
+  const FRAME_MS = 16;
+
+  async function mountWindow(windowActive: boolean) {
+    const ref = React.createRef<XtermTerminalHandle>();
+    const utils = render(<XtermTerminal ref={ref} windowActive={windowActive} />);
+    const fitAddon = MockFitAddon.instances[MockFitAddon.instances.length - 1];
+    return { ref, utils, fitAddon };
+  }
+
+  async function settle(frames = FRAMES) {
+    await act(async () => {
+      for (let i = 0; i < frames; i++) {
+        jest.advanceTimersByTime(FRAME_MS);
+        await Promise.resolve();
+      }
+    });
+  }
+
+  it("hiddenWindow_should_MakeZeroFitCalls_When_60FramesElapse", async () => {
+    const { ref, fitAddon } = await mountWindow(false);
+    const ro = capturedResizeObservers[capturedResizeObservers.length - 1];
+    fitAddon.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
+    await settle(5);
+    act(() => ro.callback([{ contentRect: { width: 800, height: 480 } }]));
+    act(() => ref.current?.fit());
+    await settle();
+    expect(fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it("hiddenWindow_should_RefitOnce_When_WindowBecomesActive", async () => {
+    const ref = React.createRef<XtermTerminalHandle>();
+    const { rerender } = render(<XtermTerminal ref={ref} windowActive={false} />);
+    const fitAddon = MockFitAddon.instances[MockFitAddon.instances.length - 1];
+    fitAddon.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
+    await settle();
+    expect(fitAddon.fit).not.toHaveBeenCalled();
+
+    jest.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    jest.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(480);
+    rerender(<XtermTerminal ref={ref} windowActive={true} />);
+    await settle();
+    expect(fitAddon.fit).toHaveBeenCalled();
+  });
+
+  it("hiddenWindow_should_YieldWebglSlotFirst_When_BudgetExceeded", async () => {
+    const BUDGET = 8;
+    // jsdom has no layout; give every container a width so only windowActive decides visibility.
+    jest.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    const utils = render(
+      <div>
+        {Array.from({ length: BUDGET }, (_, i) => (
+          <XtermTerminal key={i} windowActive={i !== 3} />
+        ))}
+      </div>
+    );
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+      for (let i = 0; i < BUDGET * 2; i++) await Promise.resolve();
+    });
+    utils.rerender(
+      <div>
+        {Array.from({ length: BUDGET + 1 }, (_, i) => (
+          <XtermTerminal key={i} windowActive={i !== 3} />
+        ))}
+      </div>
+    );
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+      for (let i = 0; i < BUDGET * 2; i++) await Promise.resolve();
+    });
+    expect(MockWebglAddon.instances[3].dispose).toHaveBeenCalledTimes(1);
+    expect(MockWebglAddon.instances[0].dispose).not.toHaveBeenCalled();
+  });
+});
+
 describe("XtermTerminal cross-instance perturbation (multi-mount, bounded settling)", () => {
   // Task 4.1.6 (AC1 cross-instance-perturbation gap): 3 instances share one
   // parent; instance 0's fit() perturbs siblings' proposed dimensions,
@@ -721,5 +805,14 @@ describe('XtermTerminal', () => {
   test('renders with default props', () => {
     const { container } = render(<XtermTerminal />);
     expect(container.firstChild).toBeInTheDocument();
+  });
+});
+
+describe("XtermTerminal unicode widths", () => {
+  it("loads the Unicode 11 addon and activates it so wide emoji match the daemon's cell layout", async () => {
+    const { terminal } = await mountAndSettle();
+
+    expect(terminal.loadedAddons.some((a: any) => a instanceof Unicode11Addon)).toBe(true);
+    expect((terminal as any).unicode.activeVersion).toBe("11");
   });
 });

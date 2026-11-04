@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { subscribeAnnouncements } from "./announce";
 import { ANNOUNCE_CLEAR_MS, ANNOUNCE_DELAY_MS } from "./policy";
 import { usePathnameChange } from "./usePathnameChange";
 
@@ -18,16 +19,38 @@ const VISUALLY_HIDDEN = {
 export function RouteAnnouncer() {
   const [message, setMessage] = useState("");
   const [generation, setGeneration] = useState(0);
+  // null means "speak document.title" (a pathname change); a string is an imperative announce().
+  const pending = useRef<string | null>(null);
+  const pathnameChangedThisTick = useRef(false);
 
-  usePathnameChange(() => {
-    // Clear now and set later in a separate task, so an identical title still counts as a change.
+  const queue = (text: string | null) => {
+    // Clear now and set later in a separate task, so an identical message still counts as a change.
+    pending.current = text;
     setMessage("");
     setGeneration((value) => value + 1);
+  };
+
+  usePathnameChange(() => {
+    pathnameChangedThisTick.current = true;
+    setTimeout(() => {
+      pathnameChangedThisTick.current = false;
+    }, 0);
+    queue(null);
   });
+
+  useEffect(
+    () =>
+      subscribeAnnouncements((text) => {
+        // The pathname announcement wins a same-tick conflict, in either order.
+        if (pathnameChangedThisTick.current) return;
+        queue(text);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (generation === 0) return;
-    const announce = setTimeout(() => setMessage(document.title), ANNOUNCE_DELAY_MS);
+    const announce = setTimeout(() => setMessage(pending.current ?? document.title), ANNOUNCE_DELAY_MS);
     const clear = setTimeout(() => setMessage(""), ANNOUNCE_DELAY_MS + ANNOUNCE_CLEAR_MS);
     return () => {
       clearTimeout(announce);

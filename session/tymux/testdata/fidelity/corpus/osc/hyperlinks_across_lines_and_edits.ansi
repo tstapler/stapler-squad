@@ -1,0 +1,8 @@
+osc/hyperlinks_across_lines_and_edits -- OSC 8 across wrap/erase/insert; escte
+]8;;https://e.com/wrap\wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww]8;;\
+[4;1H]8;;https://e.com/multi\row4
+row5-continues-link
+]8;;\row6-plain
+[8;1H]8;;https://e.com/ech\0123456789]8;;\[8;4H[3X[9;1H]8;;https://e.com/dch\0123456789]8;;\[9;4H[3P
+[10;1H]8;;https://e.com/ich\0123456789]8;;\[10;4H[3@[11;1H]8;;https://e.com/el\0123456789]8;;\[11;5H[K
+[12;1H]8;;https://e.com/over\abcdefghij]8;;\[12;4HXYZ[13;1H]8;;https://e.com/open-at-end-of-output\unterminated-link

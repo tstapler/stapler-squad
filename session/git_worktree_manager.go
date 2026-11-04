@@ -189,6 +189,12 @@ func (gm *GitWorktreeManager) GetBaseCommitSHA() string {
 	return wt.GetBaseCommitSHA()
 }
 
+// WorktreeChangeDetectionEnabled reports the live state of the
+// vcs:worktree-change-detection flag, read on every Setup.
+func WorktreeChangeDetectionEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(worktreeChangeDetectionFlagName, false)
+}
+
 // Setup prepares the worktree (creates directories, checks out branch, etc.),
 // then -- when worktreeChangeDetectionFlagName is on -- starts a
 // WorktreeChangeDetector for it (see startChangeDetector).
@@ -200,7 +206,7 @@ func (gm *GitWorktreeManager) Setup() error {
 	if err := wt.Setup(); err != nil {
 		return err
 	}
-	if config.LoadConfig().GetFeatureFlagWithDefault(worktreeChangeDetectionFlagName, false) {
+	if WorktreeChangeDetectionEnabled() {
 		gm.startChangeDetector(wt)
 	}
 	return nil

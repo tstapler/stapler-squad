@@ -329,10 +329,16 @@ func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
 	return GetPRInfoCtx(context.Background(), ref, prNumber)
 }
 
+// GraphQLPRInfoEnabled reports the live state of the github:graphql-pr-info
+// flag, read on every GetPRInfoCtx call.
+func GraphQLPRInfoEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(githubGraphQLMigrationFlagName, false)
+}
+
 // GetPRInfoCtx fetches metadata for a pull request with context support.
 // Includes review decisions and CI/check status. ref.Host() "" means github.com.
 func GetPRInfoCtx(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, error) {
-	if config.LoadConfig().GetFeatureFlagWithDefault(githubGraphQLMigrationFlagName, false) {
+	if GraphQLPRInfoEnabled() {
 		return GetPRInfoGraphQL(ctx, ref, prNumber)
 	}
 

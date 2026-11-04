@@ -1,0 +1,2 @@
+modes/alt_screen_stays -- xterm ctlseqs ?1049h (final state = alt)
+[1;1HL01-primary[2;1HL02-primary[3;1HL03-primary[4;1HL04-primary[5;1HL05-primary[6;1HL06-primary[?1049h[2J[1;1H[7m vim-like statusline [0m[3;1H~[4;1H~[24;1H[7m-- INSERT --[0m

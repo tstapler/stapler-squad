@@ -1,5 +1,4 @@
 import { defineConfig, devices } from '@playwright/test';
-import { parseWebBuildMode } from '../scripts/dev-stack/web-build-mode';
 
 /**
  * Playwright configuration for terminal stress tests.
@@ -18,9 +17,7 @@ import { parseWebBuildMode } from '../scripts/dev-stack/web-build-mode';
 // Can be overridden with TEST_PORT environment variable
 const TEST_PORT = process.env.TEST_PORT || '3333';
 
-// WEB_BUILD=bun must not shell out to `next dev` (Story 5.8); the single parseWebBuildMode owner (Story 5.7).
-const webServerCommand =
-  parseWebBuildMode(process.env) === 'bun' ? `env PORT=${TEST_PORT} bun build/dev.ts` : `npx next dev --port ${TEST_PORT}`;
+const webServerCommand = `env PORT=${TEST_PORT} bun build/dev.ts`;
 
 export default defineConfig({
   testDir: './tests/e2e',

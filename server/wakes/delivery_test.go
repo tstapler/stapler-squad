@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 type deliveryRig struct {
@@ -273,4 +274,27 @@ func TestEscapeWakePayload_should_DropC0AndC1Controls_When_PayloadCarriesThem(t 
 	t.Parallel()
 	in := "a\u001bb\u007fc\u0080d\u009be\u009ff g\th\ni"
 	assert.Equal(t, "abcdef g\th\ni", escapeWakePayload(in), "keeps NBSP, tab and newline; drops ESC, DEL and U+0080-U+009F")
+}
+
+func TestWriteIfIdle_should_WriteNothingWithoutError_When_PaneIsRestarting(t *testing.T) {
+	t.Parallel()
+	pane := &paneDouble{captureErr: &tymux.PaneExitedError{RestartPending: true}}
+
+	outcome, err := WriteIfIdle(context.Background(), pane, WakeMarkerPrefix+" id=1>")
+
+	require.NoError(t, err)
+	assert.Equal(t, WriteNotAttempted, outcome)
+	assert.Empty(t, pane.written())
+}
+
+func TestWriteIfIdle_should_ReportExit_When_PaneExitedForGood(t *testing.T) {
+	t.Parallel()
+	pane := &paneDouble{captureErr: &tymux.PaneExitedError{}}
+
+	outcome, err := WriteIfIdle(context.Background(), pane, WakeMarkerPrefix+" id=1>")
+
+	require.ErrorIs(t, err, tymux.ErrPaneExited)
+	assert.True(t, tymux.IsFinalExit(err))
+	assert.Equal(t, WriteNotAttempted, outcome)
+	assert.Empty(t, pane.written())
 }

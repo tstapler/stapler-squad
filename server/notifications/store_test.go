@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -1598,4 +1601,58 @@ func TestClearByIDs_ShouldBeNoOp_WhenIdsEmpty(t *testing.T) {
 	if _, ok := store.GetByID("a"); !ok {
 		t.Error("an empty id list must delete nothing")
 	}
+}
+
+// The polled readers must not wait behind a writer that holds the store lock
+// across the fsync in saveToDisk (GetNotificationHistory p95 1.0 s in production).
+func TestReaders_should_NotBlock_When_WriterIsInsideDiskWrite(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	require.NoError(t, store.Append(makeRecord("seed", "s1", notifTypeTaskCompleteTest)))
+
+	inWrite := make(chan struct{})
+	release := make(chan struct{})
+	store.beforeDiskWrite = func() {
+		close(inWrite)
+		<-release
+	}
+	appendDone := make(chan error, 1)
+	go func() { appendDone <- store.Append(makeRecord("blocked", "s2", notifTypeTaskCompleteTest)) }()
+	<-inWrite // the writer now holds mu and is parked where the fsync would be
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		recs, total, err := store.List(ListOptions{})
+		assert.NoError(t, err)
+		assert.GreaterOrEqual(t, total, 1)
+		assert.NotEmpty(t, recs)
+		assert.GreaterOrEqual(t, store.GetUnreadCount(), 1)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(10 * time.Second): // failure path only: a blocked reader would hang forever
+		t.Error("List/GetUnreadCount blocked behind a writer holding the store lock during disk I/O")
+	}
+
+	close(release)
+	require.NoError(t, <-appendDone)
+	_, total, err := store.List(ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total, "the published snapshot includes the finished write")
+	assert.Equal(t, 2, store.GetUnreadCount())
+}
+
+func TestList_should_ReturnCopies_When_RecordMutatedAfterwards(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	require.NoError(t, store.Append(makeRecord("a", "s1", notifTypeTaskCompleteTest)))
+	recs, _, err := store.List(ListOptions{})
+	require.NoError(t, err)
+	require.False(t, recs[0].IsRead)
+
+	_, err = store.MarkRead([]string{"a"})
+	require.NoError(t, err)
+	assert.False(t, recs[0].IsRead, "an earlier List result must not change under the caller")
+	assert.Equal(t, 0, store.GetUnreadCount())
 }

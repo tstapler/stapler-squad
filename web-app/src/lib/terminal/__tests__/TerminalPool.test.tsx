@@ -209,6 +209,7 @@ describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => 
   // rects, so every anchor needs a stubbed size for these tests to reach the
   // fit()/focus() calls at all.
   let getRectSpy: jest.SpyInstance;
+  let afterEachRestoreRO: () => void = () => {};
   beforeEach(() => {
     getRectSpy = jest.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
@@ -216,6 +217,8 @@ describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => 
   });
   afterEach(() => {
     getRectSpy.mockRestore();
+    afterEachRestoreRO();
+    afterEachRestoreRO = () => {};
   });
 
   it("docks the pooled terminal's host node under the consumer's anchor when visible", async () => {
@@ -250,6 +253,15 @@ describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => 
     getRectSpy.mockReturnValue({
       width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}),
     } as DOMRect);
+    const roCallbacks: Array<(entries: unknown[]) => void> = [];
+    const originalRO = global.ResizeObserver;
+    (global as any).ResizeObserver = class {
+      constructor(cb: (entries: unknown[]) => void) { roCallbacks.push(cb); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    afterEachRestoreRO = () => { (global as any).ResizeObserver = originalRO; };
 
     render(
       <TerminalPoolProvider>
@@ -263,13 +275,15 @@ describe("usePooledTerminal -- docking + fit-on-show + focus (Task 3.5)", () => 
     });
     expect(fitSpy).not.toHaveBeenCalled();
 
-    // Anchor's layout settles to a real size -- the stubbed ResizeObserver
-    // (jest.setup.js) only re-fires on the next observe()/getBoundingClientRect
-    // change it's told about, so flip the mock and let the in-flight
-    // requestAnimationFrame poll pick it up on its next tick.
+    // Anchor's layout settles to a real size. fitOnShow stops polling on a
+    // 0x0 observer delivery (Task 3.1.2a), so, like a real ResizeObserver,
+    // deliver the new size to re-arm it.
     getRectSpy.mockReturnValue({
       width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
     } as DOMRect);
+    act(() => {
+      roCallbacks.forEach((cb) => cb([{ contentRect: { width: 800, height: 600 } }]));
+    });
 
     await waitFor(() => expect(fitSpy).toHaveBeenCalled());
     expect(focusSpy).toHaveBeenCalled();

@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport, getWatchTransport } from "@/lib/api/transport";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { useBacklogService, mapBacklogItem } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
@@ -18,8 +18,8 @@ import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
+import { getApiBaseUrl } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -78,6 +78,8 @@ import * as styles from "./BacklogItemDetail.css";
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
+  /** Opens another item (e.g. a dependency) in the detail pane. */
+  onItemClick?: (itemId: string) => void;
 }
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
@@ -124,7 +126,7 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
-export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
   const {
     getBacklogItem,
@@ -146,7 +148,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession, updateSession } = useSessionService();
+  const { deleteSession, updateSession, getSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -344,7 +346,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // entry changes, unlike the hook's fully-remapped `items` array).
   // Task 6.2.1c: connectionState is captured here to mount the
   // ConnectionIndicator in this panel's header (ux.md §3 wireframe, UX AC #20).
-  const { connectionState } = useWatchBacklogItems();
+  const { connectionState } = useBacklogStream();
   const liveRawItem = useAppSelector((state) => selectBacklogItemById(state, itemId));
 
   // Buffered-update state (Story 5.3.2): while editMode is true, an incoming
@@ -423,10 +425,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
     const watchTerminal = async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        // Server stream: the unary transport's default 30s deadline would kill it.
+        const transport = getWatchTransport();
         const client = createClient(BacklogService, transport);
         const stream = client.watchBacklogItems(
           { statusFilter: [], categoryFilter: [], afterSeq: 0n },
@@ -712,10 +712,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     let cancelled = false;
     (async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        const transport = getConnectTransport();
         const client = createClient(SessionService, transport);
         const resp = await client.getJulesConfig({});
         if (cancelled || !resp.config) return;
@@ -798,6 +795,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             break;
           }
           case "restart_session":
+            if (
+              item.status === "pr_pending" &&
+              item.linkedSessions.some((s) => !s.endedAt) &&
+              !confirm("A session is still running for this item. Stop it and start a new work session?")
+            ) {
+              break;
+            }
             await spawnSessionFromItem(item.id, { force: true });
             break;
           case "approve_plan":
@@ -1629,7 +1633,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             scroll-area content. */}
         <GateBlockingSection item={item} />
 
-        <DependenciesSection item={item} />
+        <DependenciesSection item={item} onItemClick={onItemClick} />
 
         {/* Durable guidance requests scoped to this item (AC3) — same shared
             component also embedded in TriageReviewPanel and SessionDetailView.
@@ -1838,6 +1842,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               externalUrl={item.externalUrl}
               externalId={item.externalId}
               pluginId={item.pluginId}
+              claimingHostId={item.claimingHostId}
               labels={item.labels ?? []}
               defaultExpanded={sourceExpanded}
             />
@@ -1898,6 +1903,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onSteerSession={handleSteerSession}
             steeringSessionId={steeringSessionId}
             authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
+            getSession={getSession}
+            onRestartWork={item.status === "pr_pending" ? () => handleAction("restart_session") : undefined}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

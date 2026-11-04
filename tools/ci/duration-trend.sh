@@ -37,7 +37,6 @@ WORKFLOWS=(
   "demo-publish.yml|workflow_dispatch"
   "deploy-pages.yml|push,pull_request"
   "e2e-video.yml|pull_request"
-  "generated-proto-guard.yml|pull_request"
   "goreleaser-check.yml|push,pull_request,workflow_dispatch"
   "lint.yml|push,pull_request,workflow_dispatch"
   "mcp-integration.yml|push,pull_request"

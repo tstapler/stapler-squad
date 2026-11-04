@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // ReplyStep is one key write and the frame the pane must show right before it.
@@ -199,6 +201,9 @@ func (r *sequenceRun) awaitFrame(ctx context.Context, i int, step ReplyStep) err
 	var elapsed time.Duration
 	for {
 		capture, err := r.pane.CapturePaneContent()
+		if tymux.IsFinalExit(err) {
+			return fmt.Errorf("step %d: %w", i+1, err)
+		}
 		if err == nil && step.Expect(capture) {
 			return nil
 		}
@@ -256,7 +261,11 @@ func (r *sequenceRun) write(keys string) (ReplyStage, error) {
 func (r *sequenceRun) finish(ctx context.Context, res func(ReplyStage, bool, error) SequenceResult) SequenceResult {
 	var elapsed time.Duration
 	for {
-		if capture, err := r.pane.CapturePaneContent(); err == nil && (r.opts.StillOpen == nil || !r.opts.StillOpen(capture)) {
+		capture, err := r.pane.CapturePaneContent()
+		if tymux.IsFinalExit(err) {
+			return res(StageWriteEntered, false, fmt.Errorf("pane exited after the last key: %w", err))
+		}
+		if err == nil && (r.opts.StillOpen == nil || !r.opts.StillOpen(capture)) {
 			return res(StageDialogClosed, false, nil)
 		}
 		if elapsed >= r.opts.ClosedWindow {

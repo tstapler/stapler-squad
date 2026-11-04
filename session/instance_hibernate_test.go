@@ -3,10 +3,32 @@ package session
 import (
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestResumeFromHibernation_WaitsForTeardown(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		inst := &Instance{}
+		inst.hibernateTeardownWG.Add(1)
+		started := false
+		done := make(chan error, 1)
+		go func() {
+			done <- inst.resumeAfterTeardown(func() error {
+				started = true
+				return nil
+			})
+		}()
+		synctest.Wait()
+		require.False(t, started)
+		inst.hibernateTeardownWG.Done()
+		require.NoError(t, <-done)
+		require.True(t, started)
+	})
+}
 
 // TestRollbackFailedResume_DoesNotClobberLaterTransition verifies AC1: a
 // failed async hibernation-resume must not overwrite a status that already

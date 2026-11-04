@@ -117,7 +117,7 @@ export const presetButton = style({
   color: vars.color.terminalForeground,
   fontSize: "0.8rem",
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover": {
       background: vars.color.terminalHoverBg,
@@ -140,7 +140,7 @@ export const codeItem = style({
   border: `1px solid ${vars.color.terminalBorder}`,
   borderRadius: "4px",
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover": {
       background: vars.color.terminalHoverBg,
@@ -323,7 +323,7 @@ export const startButton = style({
   fontSize: "0.9rem",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   background: vars.color.success,
   color: vars.color.terminalBackground,
   selectors: {
@@ -342,7 +342,7 @@ export const stopButton = style({
   fontSize: "0.9rem",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   background: vars.color.error,
   color: vars.color.terminalBackground,
   selectors: {

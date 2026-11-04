@@ -476,15 +476,15 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 	}
 
 	scanner := bufio.NewScanner(stdout)
+	spanEnded := false // set once the in-loop %exit route ends this generation's span
 
 	for scanner.Scan() {
 		select {
 		case <-doneCh:
-			// doneCh is only closed by StopControlMode() while this generation's
-			// scan loop is still running (see classifyControlModeExit's callers
-			// and the tail of this function for why no other path can close
-			// *this* generation's doneCh) -- so reaching here is definitionally
-			// the deliberate-stop case. Ending the generation here (previously
+			// doneCh is closed either by StopControlMode() or by this reader's own
+			// EOF cleanup (teardownControlModeGeneration), which runs only after
+			// this loop exits -- so while the loop is running, a closed doneCh is
+			// definitionally the deliberate-stop case. Ending the generation here (previously
 			// missing entirely) closes a false-positive "stuck generation"
 			// signal: this is an ordinary shutdown race (a line arrived and was
 			// scanned in the narrow window between StopControlMode closing
@@ -518,6 +518,7 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 				// future edit that decouples the two invariants can't reintroduce a
 				// nil-span panic.
 				t.endControlModeGenerationV2(span, t.classifyControlModeExit(), exit.message)
+				spanEnded = true
 			}
 		}
 	}
@@ -533,75 +534,15 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 		}
 	}
 
-	// Drain any in-flight command response (reader-goroutine-only fields; no lock needed).
-	if t.curCmdCh != nil {
-		select {
-		case t.curCmdCh <- cmdResult{err: ErrControlModeStopped}:
-		default:
+	owner := t.teardownControlModeGeneration(doneCh)
+	if !owner {
+		// A newer generation owns the shared state and the exit callback; this
+		// stale reader must not fire onExit or consume the shared onExitOnce.
+		if v2Enabled && !spanEnded {
+			lifecycle.EndGeneration(span, "tmux_control_mode", lifecycle.ReasonDeliberateClose)
 		}
-		t.curCmdCh = nil
+		return
 	}
-	t.inCmdResp = false
-	t.cmdBodyBuf.Reset()
-
-	// Control mode process has exited. Close all subscriber channels and drain pending
-	// commands so that waiting goroutines detect end-of-stream and unblock.
-	// Also reset refcount and cmd so that a subsequent StartControlMode() can fork a
-	// fresh process instead of fast-returning against a dead (but non-nil) cmd (ARCH-1).
-	t.controlModeSubMu.Lock()
-	t.controlModeExited = true
-	for _, ch := range t.pendingCmds {
-		select {
-		case ch <- cmdResult{err: ErrControlModeStopped}:
-		default:
-		}
-	}
-	t.pendingCmds = nil
-	t.closeAllSubscribersLocked()
-	// Unilateral exit (process killed/crashed without StopControlMode being
-	// called) leaves runCMSender blocked forever on doneCh, since only
-	// StopControlMode used to close it -- close it here too so the sender
-	// goroutine doesn't leak.
-	//
-	// Close the doneCh captured locally above (this goroutine's own
-	// generation), not necessarily whatever t.controlModeDone currently
-	// holds: a fresh StartControlMode() racing this unilateral exit (see
-	// ARCH-1 above) can already have reassigned the field to a NEW
-	// generation's channel by the time we get here. Closing the live field
-	// unconditionally would close the wrong (newer) generation's doneCh
-	// instead of unblocking this (older) generation's runCMSender.
-	//
-	//   - doneCh == nil: this generation's own controlModeDone was already
-	//     nil at capture time (StopControlMode raced StartControlMode's
-	//     goroutine spawn and closed-and-nilled it before this goroutine's
-	//     RLock capture ran) -- there is nothing to close; falling through
-	//     to the equality check below would compare nil == nil and
-	//     wrongly close(nil), panicking.
-	//   - t.controlModeDone == doneCh: nothing has replaced or closed it
-	//     yet. Close-and-nil under the lock, same as StopControlMode's own
-	//     guard -- whichever of the two gets here first wins; the other
-	//     sees nil and skips, so this shared-field case can't double-close.
-	//   - t.controlModeDone == nil (and doneCh != nil): StopControlMode
-	//     already closed and nilled it (same generation) -- already
-	//     handled, skip.
-	//   - t.controlModeDone is some other non-nil channel: a newer
-	//     generation already replaced the field. Our doneCh is now
-	//     orphaned from it entirely -- this is the only goroutine that
-	//     ever holds this specific reference (monitorControlModeErrors
-	//     never closes doneCh), so it's safe to close directly.
-	if doneCh != nil {
-		if t.controlModeDone == doneCh {
-			close(doneCh)
-			t.controlModeDone = nil
-		} else if t.controlModeDone != nil {
-			close(doneCh)
-		}
-	}
-	// Reset so that the next StartControlMode() call sees a clean slate.
-	t.controlModeRefCount = 0
-	t.controlModeCmd = nil
-	t.controlModeRemoteProc = nil
-	t.controlModeSubMu.Unlock()
 
 	// Scanner-EOF fallback: if the pipe closed without a %exit notification (e.g. the
 	// tmux server crashed or the process was killed), fire the onExit callback here.
@@ -1394,4 +1335,75 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	}
 	_, err := t.enqueueCMCommand(ctx, ch, args...)
 	return err
+}
+
+// closeDoneChLocked closes doneCh unless it is already closed. Callers must hold
+// controlModeSubMu, the lock every doneCh closer takes, so no other goroutine can
+// close it between the check and the close.
+func closeDoneChLocked(doneCh chan struct{}) {
+	select {
+	case <-doneCh:
+	default:
+		close(doneCh)
+	}
+}
+
+// teardownControlModeGeneration runs a reader's EOF cleanup for the generation
+// identified by doneCh and reports whether that generation still owned the shared
+// control-mode state. A stale reader (StopControlMode then StartControlMode ran
+// before it reached EOF) closes only its own doneCh: zeroing the refcount/cmd,
+// closing subscribers, failing pendingCmds or touching the reader-only
+// curCmdCh/inCmdResp/cmdBodyBuf would clobber the newer generation, leaking its
+// tmux client (StopControlMode would see cmd == nil and return early).
+//
+// Ownership: the field still holds doneCh, or is nil (StopControlMode already
+// closed and cleared it and nothing replaced it). A nil doneCh with a non-nil
+// field is stale. Runs under controlModeSubMu, which also orders this drain
+// before a later generation's reader starts using the reader-only fields, for
+// readers that reach this EOF path only; a reader that returns early on a closed
+// doneCh, or one still looping after a %exit, has no such barrier.
+func (t *TmuxSession) teardownControlModeGeneration(doneCh chan struct{}) (owner bool) {
+	t.controlModeSubMu.Lock()
+	defer t.controlModeSubMu.Unlock()
+
+	owner = t.controlModeDone == nil || t.controlModeDone == doneCh
+	if doneCh != nil {
+		// Unilateral exit leaves runCMSender blocked on doneCh, so close it here
+		// too. StopControlMode may have closed it already; both closers hold
+		// controlModeSubMu, making check-then-close atomic.
+		closeDoneChLocked(doneCh)
+		if t.controlModeDone == doneCh {
+			t.controlModeDone = nil
+		}
+	}
+	if !owner {
+		return false
+	}
+
+	if t.curCmdCh != nil {
+		select {
+		case t.curCmdCh <- cmdResult{err: ErrControlModeStopped}:
+		default:
+		}
+		t.curCmdCh = nil
+	}
+	t.inCmdResp = false
+	t.cmdBodyBuf.Reset()
+
+	// Close subscribers and fail pending commands so waiters see end-of-stream, and
+	// reset refcount/cmd so a later StartControlMode() forks a fresh process instead
+	// of fast-returning against a dead but non-nil cmd (ARCH-1).
+	t.controlModeExited = true
+	for _, ch := range t.pendingCmds {
+		select {
+		case ch <- cmdResult{err: ErrControlModeStopped}:
+		default:
+		}
+	}
+	t.pendingCmds = nil
+	t.closeAllSubscribersLocked()
+	t.controlModeRefCount = 0
+	t.controlModeCmd = nil
+	t.controlModeRemoteProc = nil
+	return true
 }

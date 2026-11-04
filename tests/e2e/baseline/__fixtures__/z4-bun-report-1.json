@@ -1,0 +1,25 @@
+{
+ "suites": [
+  {
+   "title": "z4.spec.ts",
+   "file": "z4.spec.ts",
+   "specs": [
+    {
+     "file": "z4.spec.ts",
+     "title": "z4 test",
+     "tests": [
+      {
+       "projectName": "chromium",
+       "results": [
+        {
+         "retry": 0,
+         "status": "passed"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { ConnectError, Code } from "@connectrpc/connect";
 import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { useFilesFlags } from "../useFilesFlags";
 
 type Flags = Record<string, boolean>;
@@ -20,6 +21,7 @@ function setup(initial: Flags, fail = false) {
 }
 
 describe("useFilesFlags", () => {
+  beforeEach(() => resetFlagStoreForTest());
   afterEach(() => jest.useRealTimers());
 
   it("useFilesFlags_should_ReturnReadyWithServerValues_When_GetFeatureFlagsSucceeds", async () => {

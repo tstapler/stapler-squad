@@ -47,15 +47,16 @@ var reviewedConsumers = map[finding]string{
 
 	// server/services references EventNotification (event_converter, producers),
 	// so every Subscribe there is listed; only WatchSessions forwards it.
-	"consumer: " + svcPkgPath + ".WatchSessions":                           "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
-	"consumer: " + svcPkgPath + ".StartBacklogGitHubForwardSyncSubscriber": "subscribes for backlog item changes only; ignores notifications",
-	"consumer: " + svcPkgPath + ".StartVerdictSteering":                    "subscribes for backlog item changes only; ignores notifications",
-	"consumer: " + svcPkgPath + ".WatchUnfinishedWork":                     "converts only the unfinished-work event types (convertUnfinishedEvent); other types, notifications included, are dropped",
-	"consumer: " + svcPkgPath + ".waitForEvent":                            "generic wait for a caller-supplied match predicate on a session transition; forwards nothing to a client",
-	"consumer: " + svcPkgPath + ".watchBacklogItems":                       "backlog item stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".watchWorkflows":                          "workflow stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".start":                                   "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
-	"consumer: " + svcPkgPath + ".Run":                                     "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
+	"consumer: " + svcPkgPath + ".WatchSessions":                            "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
+	"consumer: " + svcPkgPath + ".StartBacklogGitHubForwardSyncSubscriber":  "subscribes for backlog item changes only; ignores notifications",
+	"consumer: " + svcPkgPath + ".StartBacklogGitHubProgressSyncSubscriber": "subscribes for backlog item changes only; ignores notifications",
+	"consumer: " + svcPkgPath + ".StartVerdictSteering":                     "subscribes for backlog item changes only; ignores notifications",
+	"consumer: " + svcPkgPath + ".WatchUnfinishedWork":                      "converts only the unfinished-work event types (convertUnfinishedEvent); other types, notifications included, are dropped",
+	"consumer: " + svcPkgPath + ".waitForEvent":                             "generic wait for a caller-supplied match predicate on a session transition; forwards nothing to a client",
+	"consumer: " + svcPkgPath + ".watchBacklogItems":                        "backlog item stream; ignores notifications",
+	"consumer: " + svcPkgPath + ".watchWorkflows":                           "workflow stream; ignores notifications",
+	"consumer: " + svcPkgPath + ".start":                                    "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
+	"consumer: " + svcPkgPath + ".Run":                                      "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call

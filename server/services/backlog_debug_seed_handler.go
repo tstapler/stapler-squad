@@ -98,7 +98,7 @@ func writeInternalError(w http.ResponseWriter, logMsg, userMsg string, err error
 // QueuedAt/PrNumber and handleSeedWorkSessionWithWorktree sets RepoPath, so
 // those call storage.CreateBacklogItem directly instead).
 func (h *BacklogDebugSeedHandler) createSimpleBacklogItem(w http.ResponseWriter, ctx context.Context, title, status string) (*session.BacklogItemData, bool) {
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:  title,
 		Status: status,
 	})
@@ -148,7 +148,7 @@ func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *htt
 
 	ctx := r.Context()
 	now := time.Now()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:    req.Title,
 		Status:   string(session.BacklogStatusQueued),
 		QueuedAt: &now,
@@ -226,7 +226,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 
 	ctx := r.Context()
 	status := statusForSeedReason(reason)
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:  req.Title,
 		Status: string(status),
 	})
@@ -618,7 +618,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:    req.Title,
 		Status:   status,
 		RepoPath: req.RepoPath,

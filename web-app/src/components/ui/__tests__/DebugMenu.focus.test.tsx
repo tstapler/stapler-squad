@@ -18,6 +18,7 @@ jest.mock("../DebugMenu.css", () =>
 jest.mock("@connectrpc/connect", () => ({
   createClient: jest.fn(() => ({})),
 }));
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({})),
 }));
@@ -45,7 +46,7 @@ function Harness() {
           debugButtonTriggerRef.current = event.currentTarget;
           setIsOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         Debug
       </button>
       <DebugMenu

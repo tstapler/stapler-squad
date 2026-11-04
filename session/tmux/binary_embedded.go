@@ -59,13 +59,5 @@ func extractEmbeddedTmux() (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("creating tmux cache dir: %w", err)
 	}
-	dst := filepath.Join(dir, "tmux")
-
-	// Only rewrite if the content has changed (avoids churn on repeated starts).
-	if existing, err := os.ReadFile(dst); err != nil || len(existing) != len(tmuxEmbedded) {
-		if err := os.WriteFile(dst, tmuxEmbedded, 0755); err != nil {
-			return "", fmt.Errorf("extracting embedded tmux: %w", err)
-		}
-	}
-	return dst, nil
+	return extractBinary(dir, tmuxEmbedded)
 }

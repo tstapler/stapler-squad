@@ -259,7 +259,9 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	})
 	require.NoError(t, err)
 
-	_, err = repoA.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	storageA, err := session.NewStorageWithRepository(repoA)
+	require.NoError(t, err)
+	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusInProgress),
 	}, session.TriggeredBySystem)
 	require.NoError(t, err)

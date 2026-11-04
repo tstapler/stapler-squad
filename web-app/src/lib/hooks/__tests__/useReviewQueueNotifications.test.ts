@@ -70,6 +70,7 @@ const mockCleanupExpired = jest.fn();
 
 jest.mock("@/lib/utils/notificationStorage", () => ({
   shouldNotify: (id: string) => mockShouldNotify(id),
+  getNotifiedSessions: () => new Map(),
   markNotified: (...args: unknown[]) => mockMarkNotified(...args),
   markAcknowledged: (...args: unknown[]) => mockMarkAcknowledged(...args),
   markNotifiedBatch: (...args: unknown[]) => mockMarkNotifiedBatch(...args),

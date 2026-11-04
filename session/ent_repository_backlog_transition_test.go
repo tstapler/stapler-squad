@@ -45,11 +45,11 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// Meanwhile, the item's real review session's PASS verdict ships it all
 	// the way to "done" — a different call path than the stale reopen in
 	// flight, with no knowledge of it.
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &BacklogItemPrecondition{
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusReview),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusPRPending),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
@@ -57,7 +57,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// The stale reopen attempt finally executes, using the precondition it
 	// captured before any of the above happened. It must be rejected — not
 	// silently applied on top of the now-shipped item.
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
 		ExpectedStatus:    string(BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
@@ -97,7 +97,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	race := func(toStatus BacklogStatus) {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, txErr := repo.TransitionBacklogItemStatus(ctx, item.ID, toStatus, &BacklogItemPrecondition{
+		_, txErr := repo.rawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &BacklogItemPrecondition{
 			ExpectedStatus: string(BacklogStatusReview),
 		}, TriggeredBySystem)
 		results <- txErr
@@ -162,7 +162,7 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	// The exact scenario that broke: a caller builds a CAS precondition from
 	// a protobuf-Timestamp round trip (always UTC, e.g. timestamppb.New(t).AsTime()).
 	utcPrecondition := item.UpdatedAt.UTC()
-	updated, err := repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
+	updated, err := repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
 		ExpectedStatus:    string(BacklogStatusReview),
 		ExpectedUpdatedAt: &utcPrecondition,
 	}, TriggeredByUser)

@@ -4,12 +4,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -103,6 +105,12 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 // validly-formed request is left untouched.
 func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 	setSlackInteractiveTestConfig(t, false)
+
+	origDistFS := getWebDistFS
+	getWebDistFS = func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>spa</title>")}}, nil
+	}
+	t.Cleanup(func() { getWebDistFS = origDistFS })
 
 	deps, err := BuildDependencies()
 	require.NoError(t, err)

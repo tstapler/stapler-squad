@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 )
 
 const (
@@ -59,11 +60,22 @@ func requirePerm(t *testing.T, path string, want os.FileMode) {
 	assert.Equal(t, want, info.Mode().Perm(), path)
 }
 
+// mcpArgs and settingsArgs flatten the typed flag/value pairs back to the
+// strings the assertions below were written against.
+func mcpArgs(f launchcmd.Flag, v launchcmd.Literal) (string, string) { return f.Name(), string(v) }
+
+func settingsArgs(f launchcmd.Flag, v launchcmd.Literal, ok bool) (string, string) {
+	if !ok {
+		return "", ""
+	}
+	return f.Name(), string(v)
+}
+
 func TestClaudeMCPConfigArgs_should_UseFileRoute_When_ProofPresentWithoutToken(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
 	inst := &Instance{Program: "claude", UUID: "uuid-proof"}
 
-	flag, val := inst.claudeMCPConfigArgsWithCredentials(testMCPURL, dir, mcpCredentials{Proof: testMCPProof})
+	flag, val := mcpArgs(inst.claudeMCPConfigArgsWithCredentials(testMCPURL, dir, mcpCredentials{Proof: testMCPProof}))
 
 	require.Equal(t, "--mcp-config", flag)
 	assert.NotContains(t, val, testMCPProof, "proof must not reach argv")
@@ -83,7 +95,7 @@ func TestClaudeMCPConfigArgs_should_FailClosed_When_ConfigFileCannotBeWritten(t 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mcp"), []byte("not a dir"), 0o600))
 	inst := &Instance{Program: "claude", UUID: "uuid-fail"}
 
-	_, val := inst.claudeMCPConfigArgsWithCredentials(testMCPURL, dir, mcpCredentials{Token: testToken, Proof: testMCPProof})
+	_, val := mcpArgs(inst.claudeMCPConfigArgsWithCredentials(testMCPURL, dir, mcpCredentials{Token: testToken, Proof: testMCPProof}))
 
 	assert.NotContains(t, val, testMCPProof)
 	assert.NotContains(t, val, testToken)
@@ -96,10 +108,10 @@ func TestClaudeMCPConfigArgs_should_OmitProofHeader_When_NoProviderWired(t *test
 	dir := envtest.NewIsolatedStateDir(t)
 	inst := &Instance{Program: "claude", UUID: "uuid-noprov"}
 
-	_, val := inst.claudeMCPConfigArgsWithToken(testMCPURL, dir, "")
+	_, val := mcpArgs(inst.claudeMCPConfigArgsWithToken(testMCPURL, dir, ""))
 	assert.NotContains(t, val, MCPProofHeader)
 
-	_, val = inst.claudeMCPConfigArgsWithToken(testMCPURL, dir, testToken)
+	_, val = mcpArgs(inst.claudeMCPConfigArgsWithToken(testMCPURL, dir, testToken))
 	assert.NotContains(t, readMCPConfigHeaders(t, strings.Trim(val, "'")), MCPProofHeader)
 }
 
@@ -118,7 +130,7 @@ func TestBuildLaunchCommand_should_KeepProofOutOfArgvAndEnv_When_ClaudeSessionLa
 		assert.Contains(t, cmd, filepath.Join(dir, "mcp", "uuid-nonleak.json"))
 	}
 	assert.NotContains(t, strings.Join(inst.buildExtraEnv(), "\n"), testMCPProof)
-	flag, val := inst.claudeSettingsEnvOverrideArgs()
+	flag, val := settingsArgs(inst.claudeSettingsEnvOverrideArgs())
 	assert.NotContains(t, flag+val, testMCPProof)
 }
 

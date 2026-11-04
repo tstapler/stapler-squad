@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -371,6 +372,9 @@ type Config struct {
 	// agent wake triggers; zero values keep the defaults and every value is
 	// clamped to the ceilings compiled into server/wakes.
 	WakeLimits WakeLimitsConfig `json:"wake_limits,omitempty"`
+	// InboxPRWatch configures the PR-watch inbox consumer (flag "inbox_pr_watch");
+	// resolve with InboxPRWatchSettings.
+	InboxPRWatch InboxPRWatchConfig `json:"inbox_pr_watch,omitempty"`
 	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
 	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
 	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
@@ -402,6 +406,8 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// TCCEnrichmentConsent records app consent by opaque protected-root ID, not OS grants.
+	TCCEnrichmentConsent map[string]bool `json:"tcc_enrichment_consent,omitempty"`
 	// FeatureFlagScopes holds per-scope overrides of a scopable flag, keyed by
 	// flag name then scope ("kind:review"). A scope key is explicit when present;
 	// deleting it returns the scope to the flag's global value. Today only
@@ -422,6 +428,10 @@ type Config struct {
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
+	// QuotaConfiguredAt is stamped when the quota settings page (UpdateQuotaConfig)
+	// saves. LoadConfig persists defaults into Quota, so the stored object alone
+	// cannot tell "never configured" from "configured with default values".
+	QuotaConfiguredAt *time.Time `json:"quota_configured_at,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
@@ -468,6 +478,7 @@ type Config struct {
 	// Default: 1.0.
 	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
 	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// A session may briefly hold up to 10% more between trims; each trim returns it to this cap.
 	// Default: 10000.
 	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
 	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
@@ -543,6 +554,19 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
+// EscapeEventsDBMigrateFeatureFlag gates the background copy of escape_events rows
+// from analytics.db into db/escape_events.db. Off leaves the new database empty
+// and the old table untouched (nothing reads it).
+const EscapeEventsDBMigrateFeatureFlag = "escape_events_db_migrate"
+
+// EscapeEventsDBMigrateDefault is the registry default for the flag above.
+const EscapeEventsDBMigrateDefault = true
+
+// EscapeEventsDBMigrateEnabled reports whether the escape_events copy should run.
+func (c *Config) EscapeEventsDBMigrateEnabled() bool {
+	return c.GetFeatureFlagWithDefault(EscapeEventsDBMigrateFeatureFlag, EscapeEventsDBMigrateDefault)
+}
+
 // HiddenSessionGateFeatureFlag is the config.FeatureFlags key backing the
 // hidden-session delivery gate (server/deliverygate). On by default; setting it
 // false (globally or per hidden-session kind) is the live rollback: hidden
@@ -553,6 +577,11 @@ const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 // and the gate's FlagCache so flipping it cannot leave them disagreeing.
 const HiddenSessionGateDefault = true
 
+// DriverPaneActivityGateDefault is the registry default of the session driver's
+// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// flag service and the driver's reader so they cannot disagree.
+const DriverPaneActivityGateDefault = true
+
 // TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
 // EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
 // and asks via a durable GuidanceRequest instead of guessing on a genuinely
@@ -561,6 +590,10 @@ const HiddenSessionGateDefault = true
 // TymuxFeatureFlag.
 const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 
+// TriageGuidanceHaltDefault is the registry default, shared by the flag service
+// and EffectiveTriageGuidanceHaltEnabled.
+const TriageGuidanceHaltDefault = false
+
 // EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
 // halt and create a GuidanceRequest on ambiguity rather than guess. Callers
 // must read this fresh at the exact halt-decision instant, not cache it at
@@ -568,7 +601,7 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // request/response RPC, so staleness at the decision point is the risk that
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, TriageGuidanceHaltDefault)
 }
 
 // DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
@@ -580,6 +613,10 @@ func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 // autonomous nudging as the default yet.
 const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 
+// DiagnoseNudgeDefault is the registry default, shared by the flag service and
+// EffectiveDiagnoseNudgeEnabled.
+const DiagnoseNudgeDefault = false
+
 // EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
 // agent may actually perform a nudge write. Callers must read this fresh at
 // the exact write instant (diagnose_nudge_session's MCP handler), not cache
@@ -587,7 +624,7 @@ const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 // decided to nudge before the flag flips off must still be blocked at the
 // write call site.
 func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, DiagnoseNudgeDefault)
 }
 
 // AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
@@ -603,6 +640,52 @@ const AutonomousStallNudgeDefault = false
 // Read it at the decision instant, never cached.
 func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
+}
+
+// WorkflowEngineShadowFeatureFlag and the per-class enforce flags select the
+// backlog workflow engine mode (session.ModeFromFlags): shadow compares the
+// configured engine against today's answer without changing anything; an
+// enforce flag makes the configured graph and gates decide for its caller
+// class (operator, agent, system). All are live-settable.
+const (
+	WorkflowEngineShadowFeatureFlag        = "backlog:workflow-engine-shadow"
+	WorkflowEngineEnforceFeatureFlag       = "backlog:workflow-engine-enforce"
+	WorkflowEngineEnforceAgentFeatureFlag  = "backlog:workflow-engine-enforce-agent"
+	WorkflowEngineEnforceSystemFeatureFlag = "backlog:workflow-engine-enforce-system"
+
+	// WorkflowEngineShadowDefault is on so the soak accrues evidence from the first boot.
+	WorkflowEngineShadowDefault = true
+	// WorkflowEngineEnforceDefault is off until the soak verdict is READY.
+	WorkflowEngineEnforceDefault = false
+	// WorkflowEngineEnforceAgentDefault is off until the agent class's soak is acknowledged.
+	WorkflowEngineEnforceAgentDefault = false
+	// WorkflowEngineEnforceSystemDefault is off until the system class's soak is
+	// acknowledged and the Story 1.5.8 recovery guards are on the deployed binary.
+	WorkflowEngineEnforceSystemDefault = false
+)
+
+// EffectiveWorkflowEngineShadow reports whether shadow comparison is on. Read
+// with the registered default: a plain GetFeatureFlag returns false when unset
+// and would silently switch shadow off.
+func EffectiveWorkflowEngineShadow(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineShadowFeatureFlag, WorkflowEngineShadowDefault)
+}
+
+// EffectiveWorkflowEngineEnforce reports whether the configured engine decides.
+func EffectiveWorkflowEngineEnforce(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceFeatureFlag, WorkflowEngineEnforceDefault)
+}
+
+// EffectiveWorkflowEngineEnforceAgent reports whether the configured engine
+// decides for agent (MCP tool) callers.
+func EffectiveWorkflowEngineEnforceAgent(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceAgentFeatureFlag, WorkflowEngineEnforceAgentDefault)
+}
+
+// EffectiveWorkflowEngineEnforceSystem reports whether the configured engine
+// decides for system (lifecycle, triage and dispatch) callers.
+func EffectiveWorkflowEngineEnforceSystem(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceSystemFeatureFlag, WorkflowEngineEnforceSystemDefault)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
@@ -1562,7 +1645,15 @@ func saveConfig(config *Config, paths ...string) error {
 // Callers must hold saveConfigLockFor(configPath) — factored out so
 // loadConfigWithDefaultFallback can share the same critical section as
 // saveConfig without re-entering (and deadlocking on) the same mutex.
-func saveConfigLocked(config *Config, configPath string) error {
+func saveConfigLocked(config *Config, configPath string) (saveErr error) {
+	start := time.Now()
+	var fsyncTook time.Duration
+	// Only successful saves are recorded: a failure before the fsync would add a 0ms sample.
+	defer func() {
+		if saveErr == nil {
+			recordSave(time.Since(start), fsyncTook)
+		}
+	}()
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -1585,6 +1676,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	// so the renamed config.json keeps its historical permissions.
 	chmodErr := tmpFile.Chmod(0644)
 	_, writeErr := tmpFile.Write(data)
+	// Sync before rename so a power loss cannot leave a zero-length config.json.
+	syncStart := time.Now()
+	syncErr := syncFile(tmpFile)
+	fsyncTook = time.Since(syncStart)
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1593,6 +1688,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	if writeErr != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync temp config: %w", syncErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1608,6 +1707,51 @@ func saveConfigLocked(config *Config, configPath string) error {
 // SaveConfig exports the saveConfig function for use by other packages.
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// updateConfigMu holds one *sync.Mutex per config path. It is the OUTER lock of
+// UpdateConfig and must stay distinct from saveConfigMu: saveConfig takes that
+// one itself and sync.Mutex is not reentrant.
+var updateConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex
+
+// UpdateConfig is an atomic read-modify-write of config.json: it holds a per-path
+// lock across LoadConfig, fn and the save, so two UpdateConfig callers cannot lose
+// each other's change. Callers that still do an unlocked LoadConfig+SaveConfig can
+// race with it; migrate them here. fn may call setters that save on their own.
+func UpdateConfig(fn func(*Config) error) error {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+	configPath := filepath.Join(configDir, ConfigFileName)
+
+	lock, _ := updateConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Only a missing file starts from defaults; an unreadable or half-written one
+	// must not be overwritten with defaults plus this one change.
+	cfg, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("refusing to update unreadable config %s: %w", configPath, err)
+		}
+		cfg = DefaultConfig()
+	}
+	if err := fn(cfg); err != nil {
+		return err
+	}
+	return saveConfig(cfg, configPath)
+}
+
+// QuotaIsConfigured reports whether the operator has set quota values: the page
+// stamped QuotaConfiguredAt, or a hand edit made Quota differ from the defaults.
+func (c *Config) QuotaIsConfigured() bool {
+	if c.QuotaConfiguredAt != nil {
+		return true
+	}
+	return !reflect.DeepEqual(c.Quota, QuotaConfig{}.QuotaConfigOrDefault())
 }
 
 // GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is
@@ -1639,6 +1783,7 @@ func (g *GitBackendCohortsConfig) UnmarshalJSON(data []byte) error {
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	countConfigRead(path)
 	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
 	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)
@@ -1898,6 +2043,8 @@ const FeatureWebhookManagement = "webhook_management"
 //	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
+//	"inbox_pr_watch" (FeatureInboxPRWatch) — PR-watch inbox consumer: polls the gh-signal
+//	  inbox and steers idle ad-hoc PR sessions on new PR activity. Off by default.
 //	"webhook_management" (FeatureWebhookManagement) — registers the credential-authenticated
 //	  webhook-registration API under /api/integrations/webhooks/v1/. Off by default, and its
 //	  reconcile refuses to create endpoints unless "webhook_triggers" is also on.
@@ -1934,19 +2081,30 @@ func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool 
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
 func (c *Config) SetFeatureFlag(name string, value bool) error {
+	c.ApplyFeatureFlag(name, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlag sets the named flag in memory only. Use it inside
+// UpdateConfig, which saves once itself; SetFeatureFlag there would fsync twice.
+func (c *Config) ApplyFeatureFlag(name string, value bool) {
 	if c.FeatureFlags == nil {
 		c.FeatureFlags = make(map[string]bool)
 	}
 	c.FeatureFlags[name] = value
-	return SaveConfig(c)
 }
 
 // DeleteFeatureFlag removes the named flag entirely — a reader using
 // GetFeatureFlagWithDefault falls back to its default again — and persists
 // the config to disk.
 func (c *Config) DeleteFeatureFlag(name string) error {
-	delete(c.FeatureFlags, name)
+	c.RemoveFeatureFlag(name)
 	return SaveConfig(c)
+}
+
+// RemoveFeatureFlag deletes the named flag in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlag(name string) {
+	delete(c.FeatureFlags, name)
 }
 
 // GetFeatureFlagOverride reports the explicitly-persisted value of the named
@@ -1995,6 +2153,12 @@ func (c *Config) FeatureFlagScopeOverrides(name string) map[string]bool {
 
 // SetFeatureFlagScope persists an explicit value of name at scope.
 func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
+	c.ApplyFeatureFlagScope(name, scope, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlagScope sets name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) ApplyFeatureFlagScope(name, scope string, value bool) {
 	if c.FeatureFlagScopes == nil {
 		c.FeatureFlagScopes = make(map[string]map[string]bool)
 	}
@@ -2002,13 +2166,18 @@ func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
 		c.FeatureFlagScopes[name] = make(map[string]bool)
 	}
 	c.FeatureFlagScopes[name][scope] = value
-	return SaveConfig(c)
 }
 
 // DeleteFeatureFlagScope removes the explicit value of name at scope (inherit)
 // and persists. An emptied flag entry, and then an emptied map, is dropped so
 // the file returns to its previous-version shape.
 func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
+	c.RemoveFeatureFlagScope(name, scope)
+	return SaveConfig(c)
+}
+
+// RemoveFeatureFlagScope deletes name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlagScope(name, scope string) {
 	delete(c.FeatureFlagScopes[name], scope)
 	if len(c.FeatureFlagScopes[name]) == 0 {
 		delete(c.FeatureFlagScopes, name)
@@ -2016,7 +2185,6 @@ func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
 	if len(c.FeatureFlagScopes) == 0 {
 		c.FeatureFlagScopes = nil
 	}
-	return SaveConfig(c)
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature

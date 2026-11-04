@@ -1,6 +1,7 @@
 package unfinished
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -149,7 +150,14 @@ func (s *Scanner) unwatchRepo(repoPath string) {
 	}
 	_ = w.Remove(filepath.Join(repoPath, ".git"))
 	if s.gitwatch.watchWorktreeGitdirs {
-		_ = w.Remove(filepath.Join(repoPath, ".git", "worktrees"))
+		worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+		_ = w.Remove(worktreesDir)
+		// Admin dirs watched while their gitdir file was still missing have no target.
+		if entries, err := os.ReadDir(worktreesDir); err == nil {
+			for _, e := range entries {
+				_ = w.Remove(filepath.Join(worktreesDir, e.Name()))
+			}
+		}
 	}
 	s.disarmDirty(repoPath)
 	type removal struct{ admin, worktree string }

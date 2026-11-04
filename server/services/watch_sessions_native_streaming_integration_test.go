@@ -163,6 +163,15 @@ func sessionIDFromEvent(ev *sessionv1.SessionEvent) string {
 // request straight to the wrapped Connect handler, see ws_stream_bridge_test.go).
 func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_CalledThroughStartRemoteTLSListener(t *testing.T) {
 	services.WithIsolatedStateDir(t)
+	// NewServerWithDeps installs process-wide MCP proof globals that outlive
+	// the server; left set, they make later launch commands reference a proof
+	// config file instead of inlining the MCP URL (breaks -count>1 reruns of
+	// the *Wires*Provider tests, which assert on the inline URL).
+	prevProofs := services.DefaultMcpProofs()
+	t.Cleanup(func() {
+		services.SetDefaultMcpProofs(prevProofs)
+		session.SetMCPProofProvider(nil)
+	})
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
 	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
 	// (server/services/capacity_monitor.go, session_service.go:1387-1389) --

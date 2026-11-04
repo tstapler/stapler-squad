@@ -83,8 +83,8 @@ type julesPollerStorage interface {
 	TouchItemSessionProgress(ctx context.Context, id string, at time.Time) error
 	UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error
 	AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error
-	SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error
-	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error)
+	GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error
+	GatedTransition(ctx context.Context, req TransitionRequest) (*BacklogItemData, error)
 }
 
 // JulesSessionPollerConfig controls polling cadence and staleness thresholds.
@@ -429,7 +429,12 @@ func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry ItemSes
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}
-	if _, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReady, precondition, TriggeredBySystem); err != nil { //nolint:silenttransition tolerated — an abandoned reservation's item may never have left "ready" in the first place (transition to in_progress happens only after CreateSession confirms), so this can be a harmless no-op rather than a real failure
+	// Tolerated: an abandoned reservation's item may never have left "ready" (the
+	// move to in_progress happens only after CreateSession confirms), so a lost
+	// precondition is a harmless no-op, and a gate denial is reported by the gate.
+	if _, err := p.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerJulesFailSession, ItemID: entry.ItemID, To: BacklogStatusReady, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusReady)); err != nil {
@@ -514,9 +519,12 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 			return fmt.Errorf("end session (no pr): %w", err)
 		}
 		note := fmt.Sprintf("Jules finished this session but did not open a pull request. Check the session at %s.", julesSessionWebURL(s))
-		//nolint:silenttransition best-effort status advance — the progress note appended below still records the no-PR outcome on the item regardless of whether this transition succeeded, and UpdateItemSessionEndedWithReason above already closed the session row so no reconciliation sweep will retry it as still-open
-		if _, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReview,
-			&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}, TriggeredBySystem); err != nil {
+		// Best-effort status advance: the progress note below still records the no-PR
+		// outcome, and the session row is already closed so no sweep retries this.
+		if _, err := p.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, To: BacklogStatusReview,
+			Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}, TriggeredBy: TriggeredBySystem,
+		}); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
 		if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusReview)); err != nil {
@@ -530,14 +538,18 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 		return fmt.Errorf("parse PR number from %q: %w", prURL, err)
 	}
 
-	reviewItem, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReview,
-		&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBySystem)
+	reviewItem, err := p.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, To: BacklogStatusReview,
+		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: TriggeredBySystem,
+	})
 	if err != nil {
 		return fmt.Errorf("transition to review: %w", err)
 	}
 
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
-	if err := p.storage.SetBacklogItemPRAndTransition(ctx, reviewItem, prURL, prNumber, summary, nil); err != nil {
+	if err := p.storage.GatedSetPRAndTransition(ctx,
+		TransitionRequest{Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: TriggeredBySystem},
+		PRAssociation{URL: prURL, Number: prNumber, Summary: summary}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, row.ID, now, "jules_completed"); err != nil {

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -443,6 +442,12 @@ type BacklogItemData struct {
 	// issue updated_at value most recently synced from GitHub into this item.
 	// Nil when the item has never been synced from GitHub.
 	GitHubSyncedIssueUpdatedAt *time.Time
+	// ClaimingHostID is the HostID of the host that created this item from an
+	// external issue; empty for items without an ExternalURL.
+	ClaimingHostID string
+	// GitHubLastProgressCommentStatus is the last status a GitHub progress
+	// comment was posted for (duplicate prevention); empty if none yet.
+	GitHubLastProgressCommentStatus string
 	// UserModifiedFields is the JSON-encoded set of field names (title,
 	// description, priority) the user has directly edited via UpdateBacklogItem
 	// — see ParseUserModifiedFields/MergeUserModifiedFields. Empty string means
@@ -691,6 +696,8 @@ type BacklogItemUpdate struct {
 	// ClearGitHubSyncedIssueUpdatedAt to explicitly clear it back to nil.
 	GitHubSyncedIssueUpdatedAt      *time.Time
 	ClearGitHubSyncedIssueUpdatedAt bool
+	// GitHubLastProgressCommentStatus: nil leaves it untouched.
+	GitHubLastProgressCommentStatus *string
 	// ReworkCapOverride follows the same single-pointer presence convention as
 	// the fields above: nil means "leave untouched". A non-nil pointer sets the
 	// item's override (0 = unlimited, >0 = this item's own cap). There is
@@ -786,17 +793,6 @@ type ShellRepository interface {
 type InitialPromptRepository interface {
 	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
 	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
-}
-
-// BundleStorage is the narrow persistence interface SessionBundleService needs
-// to assemble a RUM session diagnostic bundle. *Storage satisfies this interface.
-type BundleStorage interface {
-	// ListAnalyticsBySessionID returns up to 2000 analytics events for the given
-	// session UUID, ordered by created_at DESC (most-recent first).
-	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)
-	// GetSessionArtifactsByUUID returns the artifact blob for the session with
-	// the given UUID, or (nil, nil) when the session has no stored artifacts.
-	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
 }
 
 // RepositoryOption is a function that configures a repository

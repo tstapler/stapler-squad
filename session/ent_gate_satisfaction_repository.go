@@ -66,6 +66,15 @@ func (r *EntGateSatisfactionRepository) GetByItemAndGate(ctx context.Context, it
 	return dataFromEntGateSatisfactionRecord(row), nil
 }
 
+// DeleteByItemAndGate removes the row for (itemID, gateID); a missing row is
+// not an error. It backs gateLatchClearer.
+func (r *EntGateSatisfactionRepository) DeleteByItemAndGate(ctx context.Context, itemID, gateID uuid.UUID) error {
+	_, err := r.client.GateSatisfactionRecord.Delete().
+		Where(gatesatisfactionrecord.ItemID(itemID), gatesatisfactionrecord.GateID(gateID)).
+		Exec(ctx)
+	return err
+}
+
 // Update applies a partial update to the row for (itemID, gateID) via a
 // single conditional bulk update, rather than a separate select-then-
 // UpdateOneID — the latter is a TOCTOU race between two concurrent callers

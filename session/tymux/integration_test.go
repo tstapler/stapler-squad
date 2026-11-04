@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -31,6 +33,7 @@ import (
 // overridable via TYMUXD_ADDR — see transport.go's tymuxdAddr()). Run
 // with: go test -tags integration ./session/tymux/...
 func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
+	t.Setenv(allowSharedDaemonInTestEnv, "1")
 	dir := t.TempDir()
 	sess := NewTymuxGRPCSession(NewRealTransport(""))
 
@@ -72,6 +75,12 @@ func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
 // directive's own convention: `../tymux`), else whatever's on PATH. Skips
 // the test (not a failure) if none is found, since a from-scratch
 // checkout of stapler-squad alone has no reason to have built tymuxd yet.
+// plainShell pins a test pane to /bin/sh so it doesn't wait on the developer's interactive
+// shell rc files (zsh takes ~9s to start on some machines).
+func plainShell(sess interface{ SetCommand(launchcmd.LaunchCommand) }) {
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("sh")}})
+}
+
 func findTymuxdBinary(t *testing.T) string {
 	t.Helper()
 	if v := os.Getenv("TYMUXD_BIN"); v != "" {
@@ -79,6 +88,11 @@ func findTymuxdBinary(t *testing.T) string {
 	}
 	wd, err := os.Getwd()
 	require.NoError(t, err)
+	// The pinned release `make fetch-tymuxd` drops here; prefer it over any locally built daemon.
+	embedded := filepath.Join(wd, "embed", "tymuxd")
+	if _, statErr := os.Stat(embedded); statErr == nil {
+		return embedded
+	}
 	candidate := filepath.Join(wd, "..", "..", "..", "tymux", "target", "debug", "tymuxd")
 	if abs, err := filepath.Abs(candidate); err == nil {
 		if _, statErr := os.Stat(abs); statErr == nil {
@@ -191,6 +205,7 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	defer daemon1.stop(t) // no-op if already stopped below
 
 	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon1.addr))
+	plainShell(sess)
 	dir := t.TempDir()
 	require.NoError(t, sess.Start(dir))
 	defer sess.Close()
@@ -251,12 +266,15 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 // command with arguments must reach the pane as that program, not a bare $SHELL.
 func TestTymuxGRPCSession_LiveTymuxd_StartRunsCommandWithArgs(t *testing.T) {
 	bin := findTymuxdBinary(t)
+	skipIfTymuxdOlderThanPin(t, bin)
 	daemon := startLiveTymuxd(t, bin, t.TempDir(), reserveLoopbackAddr(t))
 	defer daemon.stop(t)
 
 	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon.addr))
 	// Repeats because output printed before the standing Attach stream opens isn't captured.
-	sess.SetCommand("while :; do echo launched-with args; sleep 0.2; done")
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+		launchcmd.Word("sh"), launchcmd.Literal("-c"), launchcmd.Literal("while :; do echo launched-with args; sleep 0.2; done"),
+	}})
 	require.NoError(t, sess.Start(t.TempDir()))
 	defer sess.Close()
 
@@ -264,4 +282,29 @@ func TestTymuxGRPCSession_LiveTymuxd_StartRunsCommandWithArgs(t *testing.T) {
 		content, err := sess.CapturePaneContentRaw()
 		return err == nil && strings.Contains(content, "launched-with args")
 	}, 5*time.Second, 100*time.Millisecond, "pane never showed the launch command's output")
+}
+
+// skipIfTymuxdOlderThanPin skips when bin is older than the Makefile's TYMUX_VERSION:
+// CreateSessionRequest args/env landed in v1.3.0, so an older daemon ignores the launch
+// command and the pane never runs it. Run `make fetch-tymuxd` (or set TYMUXD_BIN) to fix.
+func skipIfTymuxdOlderThanPin(t *testing.T, bin string) {
+	t.Helper()
+	mk, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	require.NoError(t, err)
+	pin := regexp.MustCompile(`(?m)^TYMUX_VERSION \?= v(\d+)\.(\d+)\.(\d+)`).FindStringSubmatch(string(mk))
+	require.NotNil(t, pin, "TYMUX_VERSION not found in Makefile")
+	out, err := exec.Command(bin, "--version").Output()
+	require.NoError(t, err, "%s --version", bin)
+	got := regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`).FindStringSubmatch(string(out))
+	require.NotNil(t, got, "unparseable tymuxd version %q from %s", out, bin)
+	for i := 1; i <= 3; i++ {
+		g, _ := strconv.Atoi(got[i])
+		p, _ := strconv.Atoi(pin[i])
+		if g < p {
+			t.Skipf("tymuxd %s is %s, older than the pinned v%s.%s.%s (needs args/env support); run `make fetch-tymuxd` or set TYMUXD_BIN", bin, got[0], pin[1], pin[2], pin[3])
+		}
+		if g > p {
+			return
+		}
+	}
 }

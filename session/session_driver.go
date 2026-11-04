@@ -24,7 +24,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
@@ -103,6 +102,37 @@ const (
 	driverStopTimeout = 6 * time.Second
 )
 
+// driverAttempt keeps the current run's activity floor separate from durable
+// prompt delivery. Every initial and retry driver constructs one in the core loop.
+type driverAttempt struct {
+	startedAt           time.Time
+	sentInitial         bool
+	initialPromptSentAt time.Time
+	nudgeSentAt         time.Time
+}
+
+func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
+	attempt := driverAttempt{startedAt: now}
+	if initialPrompt == "" {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = now
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = persisted
+	}
+	return attempt
+}
+
+func (a *driverAttempt) idleDuration(now, outputAt time.Time) time.Duration {
+	activityRef := a.startedAt
+	for _, candidate := range []time.Time{a.initialPromptSentAt, outputAt, a.nudgeSentAt} {
+		if candidate.After(activityRef) {
+			activityRef = candidate
+		}
+	}
+	return now.Sub(activityRef)
+}
+
 // dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
 // dialogUnanswered -> dialogAwaitingDismissal -> dialogGaveUp, keyed by a
 // content hash of the (tail-sliced, whitespace-normalized) dialog text.
@@ -156,6 +186,39 @@ type sessionDriverStopper struct {
 	once sync.Once
 }
 
+// sessionDriverStartHook lets a test binary record who started each driver; see
+// SetSessionDriverStartHookForTest.
+var sessionDriverStartHook atomic.Pointer[func(*Instance)]
+
+// SetSessionDriverStartHookForTest registers fn to run synchronously on the
+// goroutine that calls StartSessionDriver, each time it actually spawns a
+// driver. A leak detector uses it to capture the creating test's stack, which
+// the driver goroutine's own stack cannot show. Pass nil to clear.
+func SetSessionDriverStartHookForTest(fn func(*Instance)) {
+	if fn == nil {
+		sessionDriverStartHook.Store(nil)
+		return
+	}
+	sessionDriverStartHook.Store(&fn)
+}
+
+// SessionDriverRunningForTest reports whether inst still has a live driver goroutine.
+func SessionDriverRunningForTest(inst *Instance) bool {
+	return inst.driverRunning.Load()
+}
+
+// StartSessionDriverForTest starts inst's driver and registers its stop+join on
+// t's cleanup in the same call, so a test cannot forget to stop it. Tests outside
+// package session must use this instead of StartSessionDriver (enforced by the
+// nosessiondrivertest analyzer). t is satisfied by testing.TB.
+func StartSessionDriverForTest(t interface{ Cleanup(func()) }, inst *Instance, allowedPath string) {
+	t.Cleanup(func() {
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	StartSessionDriver(inst, allowedPath)
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.
@@ -185,6 +248,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	inst.driverGoroutines++
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
 	// Add(1) must happen before driverStopper is published (and before driverMu is
 	// released): StopSessionDriver reads driverStopper under driverMu and, if
@@ -197,11 +261,54 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
+	if hook := sessionDriverStartHook.Load(); hook != nil {
+		(*hook)(inst)
+	}
 	go func() {
 		defer inst.driverWG.Done()
-		defer inst.driverRunning.Store(false)
+		defer inst.driverGoroutineExited()
 		runSessionDriver(inst, allowedPath, stopper.stop)
 	}()
+}
+
+// registerContinuation registers a continuation driver goroutine spawned by
+// restartForRetry and returns the stop channel it must run with; it pairs with
+// driverGoroutineExited. It refuses (ok=false) once StopSessionDriver has run,
+// and does driverWG.Add(1) under driverMu so it cannot race StopSessionDriver's
+// Wait — the same ordering StartSessionDriver relies on.
+func (i *Instance) registerContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
+	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	if i.driverDestroyed {
+		return nil, false
+	}
+	driverStop = stop
+	if driverStop == nil {
+		if existing := i.driverStopper.Load(); existing != nil {
+			driverStop = existing.stop
+		} else {
+			stopper := &sessionDriverStopper{stop: make(chan struct{})}
+			i.driverStopper.Store(stopper)
+			driverStop = stopper.stop
+		}
+	}
+	i.driverGoroutines++
+	i.driverRunning.Store(true)
+	i.driverWG.Add(1)
+	return driverStop, true
+}
+
+// driverGoroutineExited clears driverRunning only when the last driver
+// goroutine exits: a driver that handed off to a continuation must not mark the
+// instance driverless while the continuation still runs.
+func (i *Instance) driverGoroutineExited() {
+	i.driverMu.Lock()
+	i.driverGoroutines--
+	if i.driverGoroutines <= 0 {
+		i.driverGoroutines = 0
+		i.driverRunning.Store(false)
+	}
+	i.driverMu.Unlock()
 }
 
 // StopSessionDriver signals a running SessionDriver goroutine (started by
@@ -250,26 +357,6 @@ func JoinSessionDriver(inst *Instance) {
 	}
 }
 
-// sanitizeInitialPromptForTmux strips characters that would corrupt the tmux
-// send-keys call: null bytes (which tmux silently drops in unpredictable ways),
-// newlines and carriage returns (collapsed to spaces so the prompt stays on one
-// line), and hard-limits the length to 4096 characters. Returns the trimmed
-// result; an empty return value means the caller should fall back to the static
-// driverInitialPrompt.
-func sanitizeInitialPromptForTmux(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	if len(s) > 4096 {
-		s = s[:4096]
-		// Step back from the truncation point to avoid splitting a multi-byte UTF-8 rune.
-		for !utf8.ValidString(s) && len(s) > 0 {
-			s = s[:len(s)-1]
-		}
-	}
-	return strings.TrimSpace(s)
-}
-
 // runSessionDriver is the thin wrapper that resolves the effective retry
 // policy once and delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) {
@@ -280,7 +367,7 @@ func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) 
 
 	var initialPrompt string
 	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		sanitized := cleanDriverPromptText(inst.InitialPrompt)
 		if sanitized != "" {
 			initialPrompt = sanitized
 		}
@@ -328,42 +415,32 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
+	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
+	// Local tmux only: the snapshot is the local server's list-panes.
+	paneGate := newPaneActivityGate(func() map[string]time.Time {
+		return driverPaneSnapshot(inst.IsRemote())
+	}, time.Now, driverPaneActivityGateEnabled)
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
 	prURLLinked := inst.GitHubPRNumber > 0
 
-	// nudgeSentAt records when the last backlog-work nudge was sent.
-	// Zero means no nudge has been sent yet.
-	var nudgeSentAt time.Time
-
-	// No initial prompt configured — skip the send step; driver still handles
-	// startup dialogs, auto-approval, and monitoring.
-	sentInitial := initialPrompt == ""
-	var initialPromptSentAt time.Time
-	if sentInitial {
-		initialPromptSentAt = time.Now()
-	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
-		// Persisted record of an actual send in a previous service run --
-		// authoritative, checked before the output/JSONL heuristics below
-		// (which only exist for sessions that predate this field, or for the
-		// rare case a send happened but the persist call itself failed).
-		sentInitial = true
-		initialPromptSentAt = persisted
-	} else {
+	attempt := newDriverAttempt(inst, initialPrompt, time.Now())
+	if !attempt.sentInitial {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
 		// Persist the result via SetInitialPromptSentAt either way, so this
 		// session (predating the persisted field, or hit by an earlier failed
 		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -406,7 +483,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		// Stopped after sentInitial = potential unexpected exit.
-		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt); ret {
+		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, attempt.sentInitial, attempt.initialPromptSentAt); ret {
 			return
 		} else if cont {
 			continue
@@ -414,7 +491,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := inst.PreviewContext(ctx)
+		output, previewErr := driverPreview(ctx, paneGate, inst)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
@@ -434,15 +511,15 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			// handleStartupDialogTick's doc comment.
 		}
 
-		if !sentInitial {
-			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &sentInitial, &initialPromptSentAt, &sendAttempts)
+		if !attempt.sentInitial {
+			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &attempt.sentInitial, &attempt.initialPromptSentAt, &sendAttempts)
 			continue
 		}
 
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, &attempt, time.Now())
 			if ret {
 				return
 			}
@@ -456,7 +533,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
-		prURLLinked = scanAndLinkPRURL(inst, sentInitial, prURLLinked, previewErr, output)
+		prURLLinked = scanAndLinkPRURL(inst, attempt.sentInitial, prURLLinked, previewErr, output)
 	}
 }
 
@@ -739,6 +816,14 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 			log.Error("SessionDriver: lease API refused the initial prompt write", "session", inst.Title, "err", err)
 			return
 		}
+		if errors.Is(err, ErrPromptUndeliverable) {
+			// Deterministic: retrying cannot help, so stop and tell the operator.
+			log.Error("SessionDriver: initial prompt cannot be delivered; not sending it",
+				"session", inst.Title, "promptLen", len(initialPrompt), "err", err)
+			markSessionNeedsAttention(inst, "initial prompt not delivered: "+err.Error())
+			markSent()
+			return
+		}
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -803,26 +888,31 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	markSent()
 }
 
-// handleInactivityTick checks for driver inactivity once the initial prompt
-// has been sent, sending a backlog-work nudge or escalating to
-// handleDriverFailure as needed. shouldContinue and shouldReturn tell the
-// caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
-	last := inst.LastMeaningfulOutputTime()
-	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
-	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
-	// from DB before the ReviewQueue poller had a chance to refresh it from live
-	// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
-	// fires immediately after startup.
-	activityRef := initialPromptSentAt
-	if !last.IsZero() && last.After(initialPromptSentAt) {
-		activityRef = last
+func driverWaitingForOperator(inst *Instance) bool {
+	status := inst.GetDetectedStatus()
+	if (InstanceStatusInfo{ClaudeStatus: status}).IsWaitingForUser() {
+		return true
 	}
-	if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
-		activityRef = *nudgeSentAt
+	if inst.HasTag(TagBacklogWork) {
+		return false
 	}
+	switch status {
+	case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
 
-	idle := time.Since(activityRef)
+func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, now time.Time) (shouldContinue, shouldReturn bool) {
+	if driverWaitingForOperator(inst) {
+		// Human response time is not agent inactivity; resumed work gets a fresh budget.
+		attempt.startedAt = now
+		attempt.nudgeSentAt = time.Time{}
+		return false, false
+	}
+	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
+	nudgeSentAt := &attempt.nudgeSentAt
 
 	// For backlog work sessions: send a task-reminder nudge before restarting.
 	// This preserves conversational context when Claude finishes but forgets to
@@ -901,7 +991,12 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 // submitInitialPrompt is a variable only so a test can force a lease-API error
 // out of the otherwise unreachable ErrNoLease/ErrLeaseMismatch branch.
 var submitInitialPrompt = func(ctx context.Context, inst *Instance, lease *HeldLease, prompt string) error {
-	return SubmitDriverContent(ctx, inst, lease, prompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+	typed, err := ParseDriverPrompt(prompt)
+	if err != nil {
+		lease.Release()
+		return err
+	}
+	return SubmitDriverContent(ctx, inst, lease, typed.Keys(), DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
 }
 
 // sendAnswerKeyUnderLease types the affirmative key for a dialog. It is the
@@ -1080,7 +1175,7 @@ func buildRetryContinuationPrompt(inst *Instance, reason string) string {
 	base := buildContinuationPrompt(inst)
 	if base == "Your previous session exited unexpectedly. Please continue from where you left off." &&
 		inst.InitialPrompt != "" {
-		if sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt); sanitized != "" {
+		if sanitized := cleanDriverPromptText(inst.InitialPrompt); sanitized != "" {
 			base = sanitized
 		}
 	}

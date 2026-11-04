@@ -7,8 +7,7 @@ import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
-import {
-  BacklogService,
+import type {
   BacklogItem as BacklogItemProto,
   DependencyInfo,
   AcCriterion as AcCriterionProto,
@@ -18,7 +17,9 @@ import {
   BacklogProgressNote as BacklogProgressNoteProto,
   BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
-  PipelineStageExecutor as PipelineStageExecutorProto,
+  PipelineStageExecutor as PipelineStageExecutorProto} from "@/gen/session/v1/backlog_pb";
+import {
+  BacklogService
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -240,6 +241,7 @@ export interface BacklogItem {
   hasPendingGuidanceRequests?: boolean;
   /** Deep link to the source tracker's issue for this item (e.g. a GitHub issue's html_url), populated for imported items only. */
   externalUrl?: string;
+  claimingHostId?: string;
   /** Labels mirrored from the source tracker (e.g. GitHub issue labels), populated for imported items only. */
   labels?: string[];
   /**
@@ -713,6 +715,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pluginId: p.pluginId || undefined,
     hasPendingGuidanceRequests: p.hasPendingGuidanceRequests || undefined,
     externalUrl: p.externalUrl || undefined,
+    claimingHostId: p.claimingHostId || undefined,
     labels: p.labels ?? [],
     allowedTransitions: p.allowedTransitions ?? [],
   };

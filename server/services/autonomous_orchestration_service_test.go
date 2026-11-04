@@ -1320,3 +1320,53 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 		assert.NotEqual(t, domain.StuckReasonRespawnBlockedActive, s.Reason, "must not self-block on the stuck session it is trying to replace")
 	}
 }
+
+// Task 1.5.6a: the only status write a completed driver run makes is the
+// triage-role idea->ready; the work and review roles perform none.
+func TestOnAutonomousDriverComplete_should_WriteExactlyOneStatusOnlyForTriageDone(t *testing.T) {
+	doneOutcome := session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}
+	cases := []struct {
+		name       string
+		role       string
+		start      session.BacklogStatus
+		outcome    session.AutonomousDriverOutcome
+		wantStatus session.BacklogStatus
+		wantWrites int
+	}{
+		{"triage done", session.SessionRoleTriage, session.BacklogStatusIdea, doneOutcome, session.BacklogStatusReady, 1},
+		{"triage stuck", session.SessionRoleTriage, session.BacklogStatusIdea, stallOutcome, session.BacklogStatusIdea, 0},
+		{"work done", session.SessionRoleWork, session.BacklogStatusInProgress, doneOutcome, session.BacklogStatusInProgress, 0},
+		{"work stall", session.SessionRoleWork, session.BacklogStatusInProgress, stallOutcome, session.BacklogStatusInProgress, 0},
+		{"review done", session.SessionRoleReview, session.BacklogStatusReview, doneOutcome, session.BacklogStatusReview, 0},
+		{"review stall", session.SessionRoleReview, session.BacklogStatusReview, stallOutcome, session.BacklogStatusReview, 0},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCharFixture(t, "status-write-table-"+string(rune('a'+i)), tc.role, tc.start)
+			before, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
+			require.NoError(t, err)
+
+			f.complete(tc.outcome)
+
+			after, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.wantStatus), after.Status)
+			assert.Equal(t, tc.wantWrites, len(after.StatusEvents)-len(before.StatusEvents), "status events written by the run")
+		})
+	}
+}
+
+func TestOnAutonomousDriverComplete_should_LeaveIdeaAndRaiseOneDenial_When_SystemGateBlocksIdeaToReady(t *testing.T) {
+	f := newCharFixture(t, "autonomous-denied", session.SessionRoleTriage, session.BacklogStatusIdea)
+	bs := NewBacklogService(f.storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	h := wireEnforcedGate(t, bs)
+	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
+
+	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
+
+	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusIdea), item.Status)
+	assert.Equal(t, []string{string(session.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
+	assert.Equal(t, []string{"Autonomous fix complete — status update failed"}, notificationTitles(f.drain()), "the existing status-update-failed notification fires once")
+}

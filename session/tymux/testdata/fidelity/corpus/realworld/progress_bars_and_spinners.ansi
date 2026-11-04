@@ -1,0 +1,6 @@
+realworld/progress_bars_and_spinners -- pip/npm/cargo progress output: CR over
+Downloading: [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 25%Downloading: [████████████████████░░░░░░░░░░░░░░░░░░░░] 50%Downloading: [████████████████████████████████████████] 100% done[K
+[2m⠋[0m loading[2m⠙[0m loading[2m⠹[0m loading complete [K
+[1;32m   Compiling[0m foo v0.1.0
+[1;32m    Finished[0m dev [unoptimized + debuginfo] in 1.23s
+test result: [32mok[0m. 12 passed; [31m0 failed[0m; 0 ignored

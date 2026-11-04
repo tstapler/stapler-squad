@@ -1,0 +1,2 @@
+modes/alt_screen_with_modes -- xterm ctlseqs full-screen TUI start-up sequence
+[?1049h[2J[H[?1h[?25l[?1002h[?1006h[?2004h]2;vimalt screen + app keys + mouse + paste + hidden cursor

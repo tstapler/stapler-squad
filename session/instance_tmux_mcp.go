@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 )
 
 const (
@@ -130,7 +131,7 @@ type mcpCredentials struct {
 // whose path is the argument. The inline fallback never carries a secret: when
 // the file cannot be written the session launches without them (its identity
 // is then unverified and the five identity-gated tools refuse it, fail closed).
-func (i *Instance) claudeMCPConfigArgsWithCredentials(mcpURL, configDir string, creds mcpCredentials) (string, string) {
+func (i *Instance) claudeMCPConfigArgsWithCredentials(mcpURL, configDir string, creds mcpCredentials) (launchcmd.Flag, launchcmd.Literal) {
 	public := map[string]string{"X-Stapler-Session-UUID": i.UUID}
 	secret := map[string]string{"X-Stapler-Session-UUID": i.UUID}
 	if creds.Token != "" {
@@ -139,8 +140,9 @@ func (i *Instance) claudeMCPConfigArgsWithCredentials(mcpURL, configDir string, 
 	if creds.Proof != "" {
 		secret[MCPProofHeader] = creds.Proof
 	}
-	inline := func() (string, string) {
-		return "--mcp-config", shellQuote(marshalMCPServerConfig(mcpURL, public))
+	flag := launchcmd.MustFlag("--mcp-config")
+	inline := func() (launchcmd.Flag, launchcmd.Literal) {
+		return flag, launchcmd.Literal(marshalMCPServerConfig(mcpURL, public))
 	}
 	if len(secret) == len(public) {
 		return inline()
@@ -154,22 +156,22 @@ func (i *Instance) claudeMCPConfigArgsWithCredentials(mcpURL, configDir string, 
 		log.Warn("mcp config: could not write credential-bearing config file; launching without credentials", "err", err)
 		return inline()
 	}
-	return "--mcp-config", shellQuote(path)
+	return flag, launchcmd.Literal(path)
 }
 
-// opencodeMCPEnvPrefix returns "OPENCODE_CONFIG='<file>' " for an OpenCode
-// launch, or "" when no verified credential can be delivered. The proof stays
-// in the 0600 proof file; the per-session config references it with
+// opencodeMCPEnv returns the OPENCODE_CONFIG assignment for an OpenCode
+// launch, or false when no verified credential can be delivered. The proof
+// stays in the 0600 proof file; the per-session config references it with
 // OpenCode's {file:} substitution and only the config's path is in the
 // command (spike S5, Task 0.5e).
-func (i *Instance) opencodeMCPEnvPrefix() string {
+func (i *Instance) opencodeMCPEnv() (launchcmd.EnvVar, bool) {
 	configDir, err := config.GetConfigDir()
 	if err != nil || i.mcpProofHeaderValue() == "" || !MCPProofFilePresent(configDir, i.UUID) {
-		return ""
+		return launchcmd.EnvVar{}, false
 	}
 	mcpURL := i.resolveMCPServerURLFrom(i.mcpServerURLProvider.Load())
 	if mcpURL == "" {
-		return ""
+		return launchcmd.EnvVar{}, false
 	}
 	headers := map[string]string{
 		"X-Stapler-Session-UUID": i.UUID,
@@ -182,12 +184,13 @@ func (i *Instance) opencodeMCPEnvPrefix() string {
 		"type": "remote", "url": mcpURL, "enabled": true, "headers": headers,
 	}}})
 	if err != nil { // unreachable: only strings
-		return ""
+		return launchcmd.EnvVar{}, false
 	}
 	path, err := writeMCPConfigFile(configDir, i.UUID+opencodeConfigName, cfg)
 	if err != nil {
 		log.Warn("mcp config: could not write OpenCode config; launching without a verified credential", "err", err)
-		return ""
+		return launchcmd.EnvVar{}, false
 	}
-	return opencodeConfigEnv + "=" + shellQuote(path) + " "
+	env, err := launchcmd.NewEnvVar(opencodeConfigEnv, path)
+	return env, err == nil
 }

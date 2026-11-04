@@ -23,7 +23,7 @@ describe("ShortcutRegistry sequences", () => {
     reg.register("v", { ...base, key: "x", label: "Visible" });
     reg.register("h", { ...base, key: "y", label: "Hidden", hidden: true });
     const all = reg.getAll();
-    expect(Object.keys(all).sort()).toEqual(["approval", "cockpit", "global", "omnibar", "session-list", "terminal"]);
+    expect(Object.keys(all).sort()).toEqual(["approval", "cockpit", "diff", "global", "omnibar", "session-list", "terminal"]);
     expect(all.global.map((s) => s.label)).toEqual(["Visible"]);
   });
 
@@ -77,5 +77,33 @@ describe("ShortcutRegistry sequences", () => {
     expect(r.children.map((c) => c.key)).toEqual(["1"]);
     expect(r.shortcut).toBeUndefined();
     warn.mockRestore();
+  });
+});
+
+describe("ShortcutRegistry owner-token cleanup (Task 4.1.3d)", () => {
+  it("register_should_KeepActiveWindowShortcut_When_HiddenWindowSameIdUnmounts", () => {
+    const reg = new ShortcutRegistry();
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const hiddenAction = jest.fn();
+    const activeAction = jest.fn();
+    const base = { context: "global" as const, key: "k", label: "K" };
+    const cleanupHidden = reg.register("dup", { ...base, action: hiddenAction });
+    reg.register("dup", { ...base, action: activeAction });
+    cleanupHidden(); // hidden window unmounts after the active one re-registered
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+    expect(activeAction).toHaveBeenCalledTimes(1);
+    expect(hiddenAction).not.toHaveBeenCalled();
+    warn.mockRestore();
+    reg.destroy();
+  });
+
+  it("register_should_RemoveOwnRegistration_When_CleanupRunsWithoutOverwrite", () => {
+    const reg = new ShortcutRegistry();
+    const action = jest.fn();
+    const cleanup = reg.register("solo", { context: "global", key: "j", label: "J", action });
+    cleanup();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    expect(action).not.toHaveBeenCalled();
+    reg.destroy();
   });
 });

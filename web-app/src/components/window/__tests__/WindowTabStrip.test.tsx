@@ -43,7 +43,7 @@ describe("WindowTabStrip", () => {
     render(<WindowTabStrip windows={windows} currentWindowId="win-2" {...handlers} />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Alpha" }));
-    expect(handlers.onSwitch).toHaveBeenCalledWith("win-1");
+    expect(handlers.onSwitch).toHaveBeenCalledWith("win-1", "tab-key");
   });
 
   it("calls onCreate when the + button is clicked", () => {

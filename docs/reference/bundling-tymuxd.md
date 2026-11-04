@@ -27,9 +27,14 @@ make build-embedded-tymux  # Build stapler-squad with BOTH tmux and tymuxd embed
 ```
 
 - The release version is pinned by `TYMUX_VERSION` in the `Makefile`
-  (currently `v1.0.0`) — bump it and the
-  `github.com/tstapler/tymux/clients/go/gen/tymux/v1` require in `go.mod`
-  together; nothing enforces that automatically (ADR-001's Consequences).
+  (see the file for the current value), with its release-asset SHA-256s in
+  `scripts/tymuxd-checksums.txt`. Bump it, the
+  `github.com/tstapler/tymux/clients/go` require in `go.mod`, and the cache
+  key in `.github/actions/fetch-tymuxd/action.yml` together.
+  `tools/ci/check-tymux-pin.sh` (the lint workflow's pin check) fails when the
+  Makefile tag and the `go.mod` client pin are not the same tymux commit; the
+  checksums file and the action's cache key are not checked, so update them
+  by hand.
 - `make fetch-tymuxd` shells out to `scripts/fetch-tymuxd.sh`, which resolves
   the release asset for the current `uname -s`/`uname -m`, downloads it, and
   verifies its SHA-256 against a pinned value before extracting
@@ -182,10 +187,12 @@ different `TYMUX_VERSION` does not change the daemon you are talking to. Setting
 "tymuxd version" (and `GetTymuxRolloutStatus.daemon`) shows both versions and whether replacing
 would be an upgrade or a downgrade; `ReplaceTymuxd` does it.
 
-- **Detection** (`session/tymux/version.go`): finds the listener on the configured address
-  (`lsof`, falling back to `ss`), resolves its executable, and runs `--version` on it. The pid file
-  is deliberately not used: it records only the last daemon this process spawned and goes stale.
-  Once tymux ships `GetServerInfo` (tstapler/tymux#56) this should ask the daemon directly.
+- **Detection** (`session/tymux/version.go`): asks the daemon with the `GetServerInfo` RPC
+  (tymuxd 1.4+), which also reports its protocol revision. A daemon that answers `UNIMPLEMENTED`
+  (older than 1.4) or is unreachable over gRPC falls back to finding the listener on the
+  configured address (`lsof`, then `ss`), resolving its executable, and running `--version`.
+  The pid file is deliberately not used: it records only the last daemon this process spawned
+  and goes stale.
 - **Replacement**: SIGTERM (tymuxd flushes its session records), wait for the port to free, SIGKILL
   as a last resort, then `EnsureDaemonRunning` spawns the configured binary. The direction is
   whatever the configured binary is relative to the running one, so a downgrade is: pin an older

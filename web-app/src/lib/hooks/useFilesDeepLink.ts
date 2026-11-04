@@ -12,13 +12,18 @@ interface Options {
   selectedPath: string | null;
   /** Opens `?file=&line=` pinned at the line; absent when the viewer is not buffered. */
   onJump?: (path: string, line: number | undefined) => void;
+  /**
+   * Whether this Files tab owns the URL hash: it is the visible tab of the focused pane. The hash is
+   * global, so an inactive tab must not write it, and releases it (when still ours) on deactivation.
+   */
+  active?: boolean;
 }
 
 /**
  * The only code that writes `#file=` or touches history for the Files tab. Selection changes use
  * `replaceState(history.state, ...)` so a pushed pane entry survives.
  */
-export function useFilesDeepLink({ initialSelectedPath, tree, selectedPath, onJump }: Options): void {
+export function useFilesDeepLink({ initialSelectedPath, tree, selectedPath, onJump, active = true }: Options): void {
   useEffect(() => {
     if (initialSelectedPath) tree.current?.revealPath(initialSelectedPath);
   }, [initialSelectedPath, tree]);
@@ -32,7 +37,9 @@ export function useFilesDeepLink({ initialSelectedPath, tree, selectedPath, onJu
   }, [onJump]);
 
   const first = useRef(true);
+  const written = useRef<string | null>(null);
   useEffect(() => {
+    if (!active) return;
     const hash = fileHash(selectedPath);
     // Skip the mount pass when nothing is selected, so an unrelated hash is not erased.
     if (first.current && !selectedPath) {
@@ -40,7 +47,17 @@ export function useFilesDeepLink({ initialSelectedPath, tree, selectedPath, onJu
       return;
     }
     first.current = false;
+    written.current = hash || null;
     if (window.location.hash === hash) return;
     replaceHash(hash);
-  }, [selectedPath]);
+  }, [selectedPath, active]);
+
+  // Release the hash on tab switch, pane blur, or unmount so it never outlives the viewer.
+  useEffect(() => {
+    if (!active) return;
+    return () => {
+      if (written.current && window.location.hash === written.current) replaceHash("");
+      written.current = null;
+    };
+  }, [active]);
 }

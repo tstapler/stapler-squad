@@ -346,6 +346,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
+	stopSessionDriverOnCleanup(t, instance)
 
 	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
 		instance:        instance,
@@ -488,6 +489,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
+	stopSessionDriverOnCleanup(t, instance)
 
 	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
 		instance:        instance,
@@ -651,6 +653,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, inst.GetStableID()) })
+		stopSessionDriverOnCleanup(t, inst)
 		return inst
 	}
 

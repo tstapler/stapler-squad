@@ -147,8 +147,11 @@ func isGenericWebhookDelivery(r *http.Request) bool {
 	return ok && slug != "" && !strings.Contains(slug, "/") && slug != "github"
 }
 
+// isAPIPath reports paths whose clients are programs, so an unauthenticated
+// request gets a 401 rather than a redirect to the login page. /actuator/* is
+// read by curl and the soak scripts, which cannot follow a login redirect.
 func isAPIPath(path string) bool {
-	return strings.HasPrefix(path, "/api/")
+	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/actuator/")
 }
 
 func isAuthenticated(r *http.Request, validator AuthValidator) bool {

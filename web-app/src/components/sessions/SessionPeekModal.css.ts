@@ -1,5 +1,5 @@
 import { style, keyframes } from "@vanilla-extract/css";
-import { vars, zIndex } from "@/styles/theme-contract.css";
+import { vars, zIndex, breakpoints } from "@/styles/theme-contract.css";
 
 const fadeIn = keyframes({
   from: { opacity: 0 },
@@ -34,6 +34,13 @@ export const modal = style({
   boxShadow: vars.shadow.lg,
   overflow: "hidden",
   animation: `${scaleIn} 140ms ease`,
+  "@media": {
+    // Just under the fold breakpoint, matching ViewportProvider's isMobile (w < 600); fractional so 599.5px still matches.
+    [`screen and (max-width: ${parseFloat(breakpoints.fold) - 0.02}px)`]: {
+      inset: 0,
+      borderRadius: 0,
+    },
+  },
 });
 
 export const modalHeader = style({

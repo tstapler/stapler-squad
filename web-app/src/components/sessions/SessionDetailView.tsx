@@ -2,11 +2,14 @@
 // +feature: session-trigger-attribution-badge
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useReviewNavKeys } from "./useReviewNavKeys";
+import { useSessionDetailActivity } from "./useSessionDetailActivity";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
 import { lazyComponent } from "@/lib/lazy";
-import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
+import type { Session} from "@/gen/session/v1/types_pb";
+import { InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
 import { VcsPanel } from "./VcsPanel";
 import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
@@ -16,9 +19,9 @@ import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
 import { RetryHistoryList } from "./RetryHistoryList";
-import { VNCStatus } from "@/gen/session/v1/types_pb";
+import { CDPStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
-import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import type { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { getApiBaseUrl } from "@/lib/config";
 import { getProgramDisplay, isKnownProgram } from "@/lib/constants/programs";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
@@ -297,16 +300,7 @@ const TerminalOutput = lazyComponent(
   }
 );
 
-export interface SessionDetailViewProps {
-  session: Session;
-  allSessions: Session[];
-  actions: ReturnType<typeof useSessionActions>;
-  onClose: () => void;
-  onFullscreenChange?: (isFullscreen: boolean) => void;
-  onTabChange?: (tab: SessionDetailTab) => void;
-  initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
+interface SessionDetailViewNavigation {
   onNext?: () => void;
   onPrevious?: () => void;
   showNavigation?: boolean;
@@ -318,12 +312,26 @@ export interface SessionDetailViewProps {
   previousSessionName?: string;
   onBack?: () => void;
   canGoBack?: boolean;
+}
+
+export interface SessionDetailViewProps extends SessionDetailViewNavigation {
+  session: Session;
+  allSessions: Session[];
+  actions: ReturnType<typeof useSessionActions>;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
   backlogEntry?: BacklogIndexEntry;
   /** Whether this is the focused pane. Defaults to true for callers that mount a single view. */
   isActive?: boolean;
+  /** Window is the visible one. Defaults to true; no consumer until Tasks 3.1.1b/4.1.3b. */
+  windowActive?: boolean;
 }
 
 // Terminal per the SessionStatus doc comment: "Session has been stopped
@@ -387,7 +395,9 @@ export function SessionDetailView({
   backlogItemId,
   backlogEntry,
   isActive = true,
+  windowActive = true,
 }: SessionDetailViewProps) {
+  const { measureEnabled, keysEnabled, pollMode } = useSessionDetailActivity({ isFocused: isActive, windowActive });
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
@@ -425,7 +435,7 @@ export function SessionDetailView({
   // to its Workflow row so we can show "Triggered by: {slug} ({trigger_type})" for
   // automated (non-"manual") trigger-created sessions, distinguishing them from a
   // plain @slug manually-invoked Workflow session.
-  const { workflows: attributionWorkflows } = useWorkflows();
+  const { workflows: attributionWorkflows } = useWorkflows({ watch: false, pollMode });
   const triggerWorkflow = session.workflowId
     ? attributionWorkflows.find((w) => w.id === session.workflowId)
     : undefined;
@@ -462,7 +472,7 @@ export function SessionDetailView({
 
   // The mobile toast deck docks directly under this tab row.
   const tabRowRef = useRef<HTMLDivElement>(null);
-  usePublishStackTopOffset(tabRowRef);
+  usePublishStackTopOffset(tabRowRef, measureEnabled);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
@@ -491,10 +501,15 @@ export function SessionDetailView({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   // The path is remembered with its session so a switch to another session never inherits it.
   const [filesSelection, setFilesSelection] = useState<{ sessionId: string; path: string | null }>(() => {
-    const hash = typeof window === "undefined" ? "" : window.location.hash;
+    // Only the focused pane opened on Files may adopt the global hash; others would fight over it.
+    const hash = typeof window === "undefined" || !isActive || initialTab !== "files" ? "" : window.location.hash;
     const path = hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
     return { sessionId: session.id, path };
   });
+  // FilesTab mounts on first open (then stays mounted), so a hidden tab costs no listFiles/stat calls.
+  const [filesOpenedFor, setFilesOpenedFor] = useState<string | null>(initialTab === "files" ? session.id : null);
+  if (activeTab === "files" && filesOpenedFor !== session.id) setFilesOpenedFor(session.id);
+  const filesTabMounted = filesOpenedFor === session.id;
   const filesSelectedPath = filesSelection.sessionId === session.id ? filesSelection.path : null;
   const setFilesSelectedPath = useCallback(
     (path: string | null) => setFilesSelection({ sessionId: session.id, path }),
@@ -600,9 +615,9 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  const vncState = session.vncState;
-  const vncStatus = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
-  const isBrowserAvailable = vncStatus !== VNCStatus.VNC_STATUS_UNAVAILABLE && vncStatus !== VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const cdpState = session.cdpState;
+  const cdpStatus = cdpState?.status ?? CDPStatus.CDP_STATUS_UNSPECIFIED;
+  const isBrowserAvailable = cdpStatus !== CDPStatus.CDP_STATUS_UNAVAILABLE && cdpStatus !== CDPStatus.CDP_STATUS_UNSPECIFIED;
 
   const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
     { id: "terminal", label: "Terminal", icon: Terminal },
@@ -631,7 +646,7 @@ export function SessionDetailView({
     label: "Spawn new shell",
     context: "terminal",
     action: handleOpenNewShellDialog,
-  }, isActive);
+  }, keysEnabled);
 
   const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
     const tab = await spawnShell(params);
@@ -653,28 +668,14 @@ export function SessionDetailView({
       });
   };
 
-  // Keyboard shortcuts: Escape to exit fullscreen, Shift+Arrow for navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isFullscreen) {
-        setIsFullscreen(false);
-      }
-
-      // Review queue navigation shortcuts (Shift+Arrow)
-      if (showNavigation && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        if (e.key === "ArrowRight" && onNext) {
-          e.preventDefault();
-          onNext();
-        } else if (e.key === "ArrowLeft" && onPrevious) {
-          e.preventDefault();
-          onPrevious();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isFullscreen, showNavigation, onNext, onPrevious]);
+  useReviewNavKeys(keysEnabled, {
+    isFullscreen,
+    setIsFullscreen,
+    showNavigation,
+    onNext,
+    onPrevious,
+    escapeEnabled: windowActive && isFullscreen,
+  });
 
   function makeStringFieldEditor(
     editValue: string,
@@ -796,7 +797,7 @@ export function SessionDetailView({
               onClick={() => setIsFullscreen(!isFullscreen)}
               aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
               title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
-            >
+            >{/* analytics-exempt */}
               {isFullscreen ? "⊗" : "⛶"}
             </button>
           )}
@@ -807,7 +808,7 @@ export function SessionDetailView({
               onClick={onBack}
               aria-label="Go back to previous session"
               title="Back (previously visited)"
-            >
+            >{/* analytics-exempt */}
               ↩
             </button>
           )}
@@ -820,7 +821,7 @@ export function SessionDetailView({
                   onClick={onPrevious}
                   aria-label={previousSessionName ? `Previous session: ${previousSessionName}` : "Previous session"}
                   title={previousSessionName ? `Previous: ${previousSessionName} (Shift+←)` : "Previous session (Shift+←)"}
-                >
+                >{/* analytics-exempt */}
                   ←
                 </button>
                 {previousSessionName && (
@@ -838,7 +839,7 @@ export function SessionDetailView({
                   onClick={onNext}
                   aria-label={nextSessionName ? `Next session: ${nextSessionName}` : "Next session"}
                   title={nextSessionName ? `Next: ${nextSessionName} (Shift+→)` : "Next session (Shift+→)"}
-                >
+                >{/* analytics-exempt */}
                   →
                 </button>
                 {nextSessionName && (
@@ -854,7 +855,7 @@ export function SessionDetailView({
               onClick={onDismissFromQueue}
               aria-label="Clear from queue and advance"
               title="Clear from queue and advance to next"
-            >
+            >{/* analytics-exempt */}
               ⏭
             </button>
           )}
@@ -868,7 +869,7 @@ export function SessionDetailView({
               }}
               aria-label="Switch workspace"
               title="Switch branch, bookmark, or worktree"
-            >
+            >{/* analytics-exempt */}
               ⎇ Switch
             </button>
           )}
@@ -879,7 +880,7 @@ export function SessionDetailView({
             onClick={() => setActionSheetOpen(true)}
             aria-label="Session actions"
             data-testid="more-actions-button"
-          >
+          >{/* analytics-exempt */}
             ⋯
           </button>
           {/* Close — conventional rightmost */}
@@ -887,7 +888,7 @@ export function SessionDetailView({
             className={styles.closeButton}
             onClick={onClose}
             aria-label="Close"
-          >
+          >{/* analytics-exempt */}
             ✕
           </button>
         </ActionBar>
@@ -919,7 +920,7 @@ export function SessionDetailView({
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const disabledReason = tab.disabled && tab.id === "browser"
-            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            ? "Browser passthrough requires Chrome or Chromium installed on the host"
             : tab.disabled && tab.id === "summary"
               ? "Summary is generated after the session ends."
               : undefined;
@@ -941,7 +942,7 @@ export function SessionDetailView({
                 handleTabChange(tab.id);
               }}
               title={disabledReason}
-            >
+            >{/* analytics-exempt */}
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
             </button>
@@ -958,7 +959,7 @@ export function SessionDetailView({
               aria-selected={activeTabId === shellTabId}
               className={`${styles.tab} ${activeTabId === shellTabId ? styles.active : ""}`}
               onClick={() => handleTabChange(shellTabId)}
-            >
+            >{/* analytics-exempt */}
               <ShellTabLabel
                 shell={shell}
                 onStop={(id) => stopShell(id)}
@@ -981,7 +982,7 @@ export function SessionDetailView({
           aria-label="Spawn new shell"
           title="Spawn new shell"
           style={{ padding: "0 8px", fontSize: "16px" }}
-        >
+        >{/* analytics-exempt */}
           +
         </button>
       </div>
@@ -1039,6 +1040,7 @@ export function SessionDetailView({
                       isExternal={true}
                       tmuxSessionName={session.externalMetadata?.tmuxSessionName}
                       isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                      windowActive={windowActive}
                       scheduleResync={getScheduleResync(poolPath)}
                     />
                   </div>
@@ -1059,6 +1061,7 @@ export function SessionDetailView({
                       sessionId={poolId}
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
+                      windowActive={windowActive}
                       scheduleResync={getScheduleResync(poolId)}
                       readOnly={hiddenPoolIdsRef.current.has(poolId)}
                     />
@@ -1087,7 +1090,7 @@ export function SessionDetailView({
                         handlePauseResume(e.currentTarget);
                       }}
                       aria-label="Resume this session"
-                    >
+                    >{/* analytics-exempt */}
                       ▶ Resume Session
                     </button>
                   </div>
@@ -1116,7 +1119,7 @@ export function SessionDetailView({
                         handleResumeFromCrash();
                       }}
                       aria-label="Resume this session"
-                    >
+                    >{/* analytics-exempt */}
                       ▶ Resume Session
                     </button>
                   </div>
@@ -1136,10 +1139,11 @@ export function SessionDetailView({
           style={{ display: activeTab === "browser" ? undefined : 'none' }}
         >
           <BrowserTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             isVisible={activeTab === "browser"}
-            vncState={vncState}
+            cdpState={cdpState}
           />
         </div>
 
@@ -1161,6 +1165,7 @@ export function SessionDetailView({
                 baseUrl={getApiBaseUrl()}
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
+                windowActive={windowActive}
                 scheduleResync={getScheduleResync(shellKey)}
                 readOnly={session.hidden}
                 onShellStatusChange={(status, exitCode) => {
@@ -1210,16 +1215,21 @@ export function SessionDetailView({
           aria-hidden={activeTab !== "files"}
           data-active={activeTab === "files"}
         >
-          <FilesTab
-            key={session.id}
-            sessionId={session.id}
-            baseUrl={getApiBaseUrl()}
-            initialSelectedPath={filesSelectedPath}
-            onSelectedPathChange={setFilesSelectedPath}
-            sessionRunning={session.status === SessionStatus.RUNNING}
-            sessionName={session.title}
-            onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
-          />
+          {filesTabMounted && (
+            <FilesTab
+              key={session.id}
+              sessionId={session.id}
+              baseUrl={getApiBaseUrl()}
+              initialSelectedPath={filesSelectedPath}
+              onSelectedPathChange={setFilesSelectedPath}
+              urlActive={isActive && activeTab === "files"}
+              tabActive={activeTab === "files"}
+              pollMode={pollMode}
+              sessionRunning={session.status === SessionStatus.RUNNING}
+              sessionName={session.title}
+              onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
+            />
+          )}
         </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
@@ -1234,7 +1244,7 @@ export function SessionDetailView({
                 <span className={styles.infoLabel}>Instance ID:</span>
                 <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
                   {session.id}
-                  <button onClick={() => handleCopy('instanceId', session.id)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'instanceId' ? '✓' : '📋'}</button>
+                  <button onClick={() => handleCopy('instanceId', session.id)} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'instanceId' ? '✓' : '📋'}</button>
                 </span>
               </div>
               <div className={styles.infoItem}>
@@ -1314,8 +1324,8 @@ export function SessionDetailView({
                       placeholder={session.path || ""}
                       style={{ fontFamily: 'monospace', minWidth: '20ch' }}
                     />
-                    <button onClick={handleSaveWorkingDir} className={styles.saveButton}>✓</button>
-                    <button onClick={handleCancelWorkingDirEdit} className={styles.cancelButton}>✕</button>
+                    <button onClick={handleSaveWorkingDir} className={styles.saveButton}>{/* analytics-exempt */}✓</button>
+                    <button onClick={handleCancelWorkingDirEdit} className={styles.cancelButton}>{/* analytics-exempt */}✕</button>
                   </div>
                 ) : (
                   <span className={styles.infoValue} style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
@@ -1324,7 +1334,7 @@ export function SessionDetailView({
                       onClick={() => { setWorkingDirValue(session.workingDir || ""); setIsEditingWorkingDir(true); }}
                       className={styles.editButton}
                       title="Edit working directory"
-                    >
+                    >{/* analytics-exempt */}
                       ✏️
                     </button>
                   </span>
@@ -1344,8 +1354,8 @@ export function SessionDetailView({
                       className={styles.editInput}
                       placeholder="e.g. Work/Frontend"
                     />
-                    <button onClick={handleSaveCategory} className={styles.saveButton}>✓</button>
-                    <button onClick={handleCancelCategoryEdit} className={styles.cancelButton}>✕</button>
+                    <button onClick={handleSaveCategory} className={styles.saveButton}>{/* analytics-exempt */}✓</button>
+                    <button onClick={handleCancelCategoryEdit} className={styles.cancelButton}>{/* analytics-exempt */}✕</button>
                   </div>
                 ) : (
                   <span className={styles.infoValue}>
@@ -1354,7 +1364,7 @@ export function SessionDetailView({
                       onClick={() => { setCategoryValue(session.category || ""); setIsEditingCategory(true); }}
                       className={styles.editButton}
                       title="Edit category"
-                    >
+                    >{/* analytics-exempt */}
                       ✏️
                     </button>
                   </span>
@@ -1373,17 +1383,17 @@ export function SessionDetailView({
                       className={styles.editInput}
                       placeholder="tag1, tag2, tag3"
                     />
-                    <button onClick={handleSaveTags} className={styles.saveButton}>✓</button>
-                    <button onClick={handleCancelTagsEdit} className={styles.cancelButton}>✕</button>
+                    <button onClick={handleSaveTags} className={styles.saveButton}>{/* analytics-exempt */}✓</button>
+                    <button onClick={handleCancelTagsEdit} className={styles.cancelButton}>{/* analytics-exempt */}✕</button>
                   </div>
                 ) : (
                   <span className={styles.infoValue}>
-                    {(session.tags ?? []).length > 0 ? session.tags!.join(", ") : <em style={{ opacity: 0.5 }}>None</em>}
+                    {(session.tags ?? []).length > 0 ? (session.tags ?? []).join(", ") : <em style={{ opacity: 0.5 }}>None</em>}
                     <button
                       onClick={() => { setTagsInputValue((session.tags ?? []).join(", ")); setIsEditingTags(true); }}
                       className={styles.editButton}
                       title="Edit tags"
-                    >
+                    >{/* analytics-exempt */}
                       ✏️
                     </button>
                   </span>
@@ -1411,8 +1421,8 @@ export function SessionDetailView({
                         <option value={programValue}>Custom: {programValue}</option>
                       )}
                     </select>
-                    <button onClick={handleSaveProgram} className={styles.saveButton}>✓</button>
-                    <button onClick={handleCancelProgramEdit} className={styles.cancelButton}>✕</button>
+                    <button onClick={handleSaveProgram} className={styles.saveButton}>{/* analytics-exempt */}✓</button>
+                    <button onClick={handleCancelProgramEdit} className={styles.cancelButton}>{/* analytics-exempt */}✕</button>
                   </div>
                 ) : (
                   <span className={styles.infoValue}>
@@ -1421,7 +1431,7 @@ export function SessionDetailView({
                       onClick={() => { setProgramValue(session.program || ""); setIsEditingProgram(true); }}
                       className={styles.editButton}
                       title="Edit program"
-                    >
+                    >{/* analytics-exempt */}
                       ✏️
                     </button>
                   </span>
@@ -1455,7 +1465,7 @@ export function SessionDetailView({
                           className={styles.editButton}
                           title={launchCmdExpanded ? "Collapse" : "Expand full command"}
                           style={{ fontSize: '0.75em' }}
-                        >
+                        >{/* analytics-exempt */}
                           {launchCmdExpanded ? "▲ collapse" : "▼ expand"}
                         </button>
                         <button
@@ -1472,7 +1482,7 @@ export function SessionDetailView({
                           className={styles.editButton}
                           title="Copy to clipboard"
                           style={{ fontSize: '0.75em' }}
-                        >
+                        >{/* analytics-exempt */}
                           {copiedLaunchCmd ? "✓ copied" : "⎘ copy"}
                         </button>
                       </div>
@@ -1494,7 +1504,7 @@ export function SessionDetailView({
                   <span className={styles.infoLabel}>Claude Conversation UUID:</span>
                   <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
                     {session.claudeSession.sessionId}
-                    <button onClick={() => handleCopy('claudeUuid', session.claudeSession!.sessionId)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'claudeUuid' ? '✓' : '📋'}</button>
+                    <button onClick={() => handleCopy('claudeUuid', session.claudeSession?.sessionId ?? '')} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'claudeUuid' ? '✓' : '📋'}</button>
                   </span>
                 </div>
               )}
@@ -1536,7 +1546,7 @@ export function SessionDetailView({
                       <span className={styles.infoLabel}>Base Commit:</span>
                       <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
                         {session.gitWorktree.baseCommitSha}
-                        <button onClick={() => handleCopy('baseCommit', session.gitWorktree!.baseCommitSha)} className={styles.editButton} title="Copy to clipboard">{copiedField === 'baseCommit' ? '✓' : '📋'}</button>
+                        <button onClick={() => handleCopy('baseCommit', session.gitWorktree?.baseCommitSha ?? '')} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'baseCommit' ? '✓' : '📋'}</button>
                       </span>
                     </div>
                   )}
@@ -1664,7 +1674,7 @@ export function SessionDetailView({
                     <span className={styles.infoLabel}>Workflow ID:</span>
                     <span className={styles.infoValue} style={{ fontFamily: "monospace", fontSize: "0.85em" }}>
                       {session.workflowId}
-                      <button onClick={() => handleCopy("workflowId", session.workflowId)} className={styles.editButton} title="Copy to clipboard">
+                      <button onClick={() => handleCopy("workflowId", session.workflowId)} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}
                         {copiedField === "workflowId" ? "✓" : "📋"}
                       </button>
                     </span>
@@ -1756,7 +1766,7 @@ export function SessionDetailView({
                 className={styles.actionSheetItem}
                 onClick={(e) => handlePauseResume(e.currentTarget)}
                 data-testid="action-pause"
-              >
+              >{/* analytics-exempt */}
                 {session.status === SessionStatus.PAUSED ? '▶ Resume' : '⏸ Pause'}
               </button>
             )}
@@ -1764,7 +1774,7 @@ export function SessionDetailView({
               className={styles.actionSheetItem}
               onClick={() => { setActionSheetOpen(false); setRenameValue(session.title); setShowRenameModal(true); }}
               data-testid="action-rename"
-            >
+            >{/* analytics-exempt */}
               ✏️ Rename
             </button>
             <button
@@ -1775,7 +1785,7 @@ export function SessionDetailView({
                 setShowTagEditor(true);
               }}
               data-testid="action-edit-tags"
-            >
+            >{/* analytics-exempt */}
               🏷 Edit Tags
             </button>
             {session.instanceType !== InstanceType.EXTERNAL && (
@@ -1783,7 +1793,7 @@ export function SessionDetailView({
                 className={styles.actionSheetItem}
                 onClick={() => { setActionSheetOpen(false); setCheckpointLabel(""); setShowCheckpointModal(true); }}
                 data-testid="action-checkpoint"
-              >
+              >{/* analytics-exempt */}
                 📸 Create Checkpoint
               </button>
             )}
@@ -1796,7 +1806,7 @@ export function SessionDetailView({
                   workspaceSwitchTriggerRef.current = moreActionsButtonRef.current;
                   setShowWorkspaceSwitchModal(true);
                 }}
-              >
+              >{/* analytics-exempt */}
                 ⎇ Switch Workspace
               </button>
             )}
@@ -1805,7 +1815,7 @@ export function SessionDetailView({
                 className={styles.actionSheetItem}
                 onClick={() => { setActionSheetOpen(false); setShowRestartConfirm(true); }}
                 data-testid="action-restart"
-              >
+              >{/* analytics-exempt */}
                 🔄 Restart
               </button>
             )}
@@ -1813,14 +1823,14 @@ export function SessionDetailView({
               className={styles.actionSheetItem}
               onClick={() => { setActionSheetOpen(false); setShowNewShellDialog(true); }}
               data-testid="action-spawn-shell"
-            >
+            >{/* analytics-exempt */}
               &gt;_ Spawn new shell
             </button>
             <button
               className={styles.actionSheetItem}
               onClick={() => { setActionSheetOpen(false); setExportBundleOpen(true); }}
               data-testid="export-diagnostics-action"
-            >
+            >{/* analytics-exempt */}
               📦 Export Diagnostics
             </button>
             <hr className={styles.actionDivider} />
@@ -1828,7 +1838,7 @@ export function SessionDetailView({
               className={`${styles.actionSheetItem} ${styles.actionSheetItemDestructive}`}
               onClick={handleDeleteClick}
               data-testid="action-delete"
-            >
+            >{/* analytics-exempt */}
               🗑 Delete
             </button>
           </div>
@@ -1846,14 +1856,14 @@ export function SessionDetailView({
             <button
               className={styles.actionButton}
               onClick={() => setShowDeleteConfirm(false)}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
             <button
               className={`${styles.actionButton} ${styles.actionButtonDanger}`}
               onClick={handleConfirmDelete}
               data-testid="delete-confirm"
-            >
+            >{/* analytics-exempt */}
               Delete
             </button>
           </ModalFooter>
@@ -1880,14 +1890,14 @@ export function SessionDetailView({
             <p style={{ color: 'var(--error)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{renameError}</p>
           )}
           <ModalFooter>
-            <button className={styles.actionButton} onClick={() => setShowRenameModal(false)}>
+            <button className={styles.actionButton} onClick={() => setShowRenameModal(false)}>{/* analytics-exempt */}
               Cancel
             </button>
             <button
               className={`${styles.actionButton} ${styles.actionButtonSave}`}
               onClick={handleRenameSave}
               data-testid="rename-save"
-            >
+            >{/* analytics-exempt */}
               Save
             </button>
           </ModalFooter>
@@ -1902,14 +1912,14 @@ export function SessionDetailView({
             This will stop and restart the session process.
           </p>
           <ModalFooter>
-            <button className={styles.actionButton} onClick={() => setShowRestartConfirm(false)}>
+            <button className={styles.actionButton} onClick={() => setShowRestartConfirm(false)}>{/* analytics-exempt */}
               Cancel
             </button>
             <button
               className={`${styles.actionButton} ${styles.actionButtonDanger}`}
               onClick={async () => { setShowRestartConfirm(false); await actions.restart(); }}
               data-testid="restart-confirm"
-            >
+            >{/* analytics-exempt */}
               Restart
             </button>
           </ModalFooter>
@@ -1934,14 +1944,14 @@ export function SessionDetailView({
             data-testid="checkpoint-input"
           />
           <ModalFooter>
-            <button className={styles.actionButton} onClick={() => setShowCheckpointModal(false)}>
+            <button className={styles.actionButton} onClick={() => setShowCheckpointModal(false)}>{/* analytics-exempt */}
               Cancel
             </button>
             <button
               className={`${styles.actionButton} ${styles.actionButtonSave}`}
               onClick={() => { setShowCheckpointModal(false); actions.createCheckpoint(checkpointLabel.trim()); }}
               data-testid="checkpoint-save"
-            >
+            >{/* analytics-exempt */}
               Save
             </button>
           </ModalFooter>

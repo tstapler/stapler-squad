@@ -4,6 +4,7 @@ import * as path from "path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { AppRouterProvider, createAppRouter } from "@/lib/nav/entry";
 import { ROUTE_PATHS } from "@/lib/nav/paths";
 import { NotFound } from "./NotFound";
@@ -69,6 +70,7 @@ afterEach(() => jest.restoreAllMocks());
 
 beforeEach(() => {
   window.scrollTo = jest.fn();
+  resetFlagStoreForTest();
   mockGetFeatureFlags.mockReset();
   mockGetFeatureFlags.mockResolvedValue({ flags: [] });
 });

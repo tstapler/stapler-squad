@@ -5,8 +5,7 @@
 `setAdapter of undefined`. The patch swaps it for `vm` plus `createRequire`. Why this approach:
 `project_plans/web-app-bun-build/decisions/ADR-008-vanilla-extract-eval-bun-patch.md`.
 
-Next.js builds are unaffected: webpack's vanilla-extract plugin evaluates under Node, where the
-patched `eval` behaves the same.
+The oracle (`bun run oracle:ve`) checks that the Bun output equals Node's byte for byte.
 
 ## Guards
 

@@ -1,0 +1,8 @@
+sgr/reset_forms -- ECMA-48 SGR 0 / empty; esctest2 sgr.py; libvterm !Reset
+[1;31;42mset[mempty-SGR-resets[0m|[1;31mset[;mtwo-empty-params[0m|[1;31mset[0mexplicit-0[0m
+[1mbold[0;3mreset-then-italic[0m [1;0;3m1;0;3-resets-mid[0m [3;0m3;0[0m
+[1m[1;;4mempty-middle-param[0m [1;;;;;4mmany-empty[0m
+[1mbold[1mbold-again [22m[22mdouble-22[0m [31m[31m[31mred-x3[0m
+[1;31ma[31mb[1mc[0m
+[1;2;3;4m1;2;3;4[0m [31;32;33mlast-fg-wins[0m [41;42;43mlast-bg-wins[0m
+[31;38;5;21;32mmixed-fg-forms[0m

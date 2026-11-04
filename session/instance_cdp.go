@@ -29,13 +29,19 @@ import (
 // files within the session package can reference it without importing cdp directly.
 type CDPStreamManager = cdp.CDPStreamManager
 
+// BrowserPassthroughEnabled reports whether browser passthrough is on, through
+// either the "browser-passthrough" feature flag or the explicit config field.
+func BrowserPassthroughEnabled(appCfg *config.Config) bool {
+	return appCfg.BrowserPassthrough.IsEnabled() || appCfg.GetFeatureFlag("browser-passthrough")
+}
+
 // initCDPManager creates the CDPStreamManager for this instance using the
 // application config. Browser passthrough is enabled when either the feature
 // flag or the explicit config field is set. If disabled or Chrome is not found,
 // a no-op manager is returned.
 func (i *Instance) initCDPManager(appCfg *config.Config) {
 	cfg := &appCfg.BrowserPassthrough
-	if !cfg.IsEnabled() && !appCfg.GetFeatureFlag("browser-passthrough") {
+	if !BrowserPassthroughEnabled(appCfg) {
 		i.cdpManager = cdp.New(cdp.CDPConfig{})
 		return
 	}

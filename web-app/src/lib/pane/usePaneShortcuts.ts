@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, RefObject } from "react";
+import type { RefObject } from "react";
+import { useCallback } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { PaneState } from "./paneTypes";
 import { getAdjacentLeaf } from "./paneUtils";
@@ -24,7 +25,9 @@ import type { PaneAction } from "./paneTypes";
 export function usePaneShortcuts(
   state: PaneState,
   dispatch: React.Dispatch<PaneAction>,
-  containerRef: RefObject<HTMLElement | null>
+  containerRef: RefObject<HTMLElement | null>,
+  /** False in a retained-but-hidden window: registers nothing, so it can neither fire nor clobber the active window's ids. */
+  windowActive = true,
 ): void {
   // ── Split ──────────────────────────────────────────────────────────────────
   const splitVertical = useCallback(() => {
@@ -139,7 +142,7 @@ export function usePaneShortcuts(
     label: "Split pane vertically",
     context: "cockpit",
     action: splitVertical,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.split-horizontal", {
     key: "-",
@@ -147,7 +150,7 @@ export function usePaneShortcuts(
     label: "Split pane horizontally",
     context: "cockpit",
     action: splitHorizontal,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.close-pane", {
     key: "w",
@@ -155,7 +158,7 @@ export function usePaneShortcuts(
     label: "Close focused pane",
     context: "cockpit",
     action: closePane,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.focus-right", {
     key: "ArrowRight",
@@ -163,7 +166,7 @@ export function usePaneShortcuts(
     label: "Focus pane right",
     context: "cockpit",
     action: focusRight,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.focus-left", {
     key: "ArrowLeft",
@@ -171,7 +174,7 @@ export function usePaneShortcuts(
     label: "Focus pane left",
     context: "cockpit",
     action: focusLeft,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.focus-up", {
     key: "ArrowUp",
@@ -179,7 +182,7 @@ export function usePaneShortcuts(
     label: "Focus pane up",
     context: "cockpit",
     action: focusUp,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.focus-down", {
     key: "ArrowDown",
@@ -187,7 +190,7 @@ export function usePaneShortcuts(
     label: "Focus pane down",
     context: "cockpit",
     action: focusDown,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.resize-right", {
     key: "ArrowRight",
@@ -195,7 +198,7 @@ export function usePaneShortcuts(
     label: "Resize right",
     context: "cockpit",
     action: nudgeRight,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.resize-left", {
     key: "ArrowLeft",
@@ -203,7 +206,7 @@ export function usePaneShortcuts(
     label: "Resize left",
     context: "cockpit",
     action: nudgeLeft,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.resize-up", {
     key: "ArrowUp",
@@ -211,7 +214,7 @@ export function usePaneShortcuts(
     label: "Resize up",
     context: "cockpit",
     action: nudgeUp,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.resize-down", {
     key: "ArrowDown",
@@ -219,7 +222,7 @@ export function usePaneShortcuts(
     label: "Resize down",
     context: "cockpit",
     action: nudgeDown,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.zoom-pane", {
     key: "z",
@@ -227,7 +230,7 @@ export function usePaneShortcuts(
     label: "Zoom/unzoom focused pane",
     context: "cockpit",
     action: zoomPane,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.swap-right", {
     key: "ArrowRight",
@@ -235,7 +238,7 @@ export function usePaneShortcuts(
     label: "Swap pane right",
     context: "cockpit",
     action: swapRight,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.swap-left", {
     key: "ArrowLeft",
@@ -243,7 +246,7 @@ export function usePaneShortcuts(
     label: "Swap pane left",
     context: "cockpit",
     action: swapLeft,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.swap-up", {
     key: "ArrowUp",
@@ -251,7 +254,7 @@ export function usePaneShortcuts(
     label: "Swap pane up",
     context: "cockpit",
     action: swapUp,
-  });
+  }, windowActive);
 
   useShortcut("cockpit.swap-down", {
     key: "ArrowDown",
@@ -259,5 +262,5 @@ export function usePaneShortcuts(
     label: "Swap pane down",
     context: "cockpit",
     action: swapDown,
-  });
+  }, windowActive);
 }

@@ -1563,3 +1563,9 @@ func TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled(t *tes
 		t.Errorf("expected immediate return on cancelled context, took %v", elapsed)
 	}
 }
+
+// CapturePaneContent reports no capture so submit confirmation falls back to
+// HasUpdated, which this fake scripts.
+func (f *fakeSendKeysProcessManager) CapturePaneContent() (string, error) {
+	return "", errors.New("capture unsupported by fake")
+}

@@ -17,6 +17,7 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { ScrollGestureProps } from "./XtermTerminal";
 import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
 import * as poolStyles from "@/lib/terminal/TerminalPool.css";
+import { clearTerminalConnectionStatus, setTerminalConnectionStatus } from "@/lib/terminal/terminalConnectionStatus";
 import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
@@ -47,7 +48,7 @@ import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import { isWorktreeMissingError } from "@/lib/utils/backoff";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
@@ -57,6 +58,8 @@ interface TerminalOutputProps {
   isExternal?: boolean;
   tmuxSessionName?: string; // For external sessions, the tmux session name
   isVisible?: boolean; // When provided, triggers fit+focus on visibility change
+  /** False while the owning window is hidden (keep-alive); the terminal stays docked but skips fit/WebGL. Default true. */
+  windowActive?: boolean;
   /** When set, routes the terminal stream to a custom shell PTY. */
   shellId?: string;
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
@@ -117,7 +120,7 @@ function blockedToastCopy(reason: ScrollBlockedReason, program: string): string 
   }
 }
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, windowActive = true, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
   const { track } = useAnalytics();
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
@@ -125,8 +128,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const overflowRowRef = useRef<HTMLDivElement>(null);
-  // Only the visible terminal anchors the phone deck; a background pane must not move it.
-  usePublishDeckTopOffset(toolbarRef, isVisible !== false, overflowRowRef);
+  // Only the visible terminal in the current window anchors the phone deck; a background pane, or a
+  // keep-alive background window's otherwise-"visible" pane, must not move it.
+  usePublishDeckTopOffset(toolbarRef, windowActive && isVisible !== false, overflowRowRef);
   // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
   // plain, otherwise-childless node (see TerminalPool.tsx's module doc
   // comment for why it must never receive JSX children of its own): the
@@ -889,13 +893,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // per open terminal pane).
   const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   if (!retrySessionClientRef.current) {
-    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+    retrySessionClientRef.current = createClient(SessionService, getConnectTransport({ baseUrl }));
   }
   const reconnectViaHook = useCallback(() => {
     bumpConnectionEpoch();
     handleHookReconnect();
   }, [bumpConnectionEpoch, handleHookReconnect]);
   const [isRetryingSession, setIsRetryingSession] = useState(false);
+  // Feeds the keep-alive "Connecting <title>..." placeholder (components/window/ConnectingPlaceholder).
+  const connectionStatus = connectionAttempts >= 5 ? "failed" : isLoadingInitialContent ? "connecting" : "connected";
+  useEffect(() => {
+    if (shellId || isExternal) return;
+    setTerminalConnectionStatus(effectiveSessionId, connectionStatus, reconnectViaHook);
+  }, [effectiveSessionId, connectionStatus, reconnectViaHook, shellId, isExternal]);
+  useEffect(() => {
+    if (shellId || isExternal) return;
+    return () => clearTerminalConnectionStatus(effectiveSessionId);
+  }, [effectiveSessionId, shellId, isExternal]);
+
   const handleRetryNow = useCallback(async () => {
     setIsRetryingSession(true);
     try {
@@ -962,7 +977,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [terminalState]);
 
   // Remote browser log streaming for mobile debugging
-  useBrowserLogStream({ enabled: logStreamEnabled, sessionId, baseUrl });
+  useBrowserLogStream({ enabled: logStreamEnabled, sessionId });
 
   // Update sendFlowControl ref when available + sync it into TerminalStreamManager
   useEffect(() => {
@@ -1215,7 +1230,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       else netPagesUp.pageDown();
     }
     sendKey(bytes, countsTowardNetPages);
-  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking, xtermRef]);
 
   // Handle terminal resize with size stability detection
   const sizingRefs = {
@@ -1415,6 +1430,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onAltScreenScrollUp,
     scrollGesture: scrollGestureProps,
     onScrollModeChange: handleScrollModeChange,
+    windowActive,
   });
 
   // Read-only view: xterm itself stops emitting keystrokes. handleTerminalData and the flow-control
@@ -1503,6 +1519,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   useSessionConnectionBootstrap({
     sessionId,
     containerWidth: containerSize.width,
+    containerHeight: containerSize.height,
     terminalContainerRef,
     xtermRef,
     isConnected,
@@ -1547,7 +1564,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         });
       },
     });
-  }, [netPagesUp]);
+  }, [netPagesUp, xtermRef]);
 
   const handleManualReconnect = useCallback(() => {
     console.log("[TerminalOutput] Manual reconnect requested");

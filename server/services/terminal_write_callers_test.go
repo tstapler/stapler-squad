@@ -90,8 +90,8 @@ func updateSessionFields() []string {
 // T-RO-17
 func TestUIRpcSurface_ShouldClassifyEveryRPCAsWriteOrNot_WhenReflectingSessionServiceDescriptors(t *testing.T) {
 	desc := sessionV1Descriptors()
-	if len(desc) != 16 {
-		t.Fatalf("expected 16 services in session.v1, found %d; a new service must be classified", len(desc))
+	if len(desc) != 17 {
+		t.Fatalf("expected 17 services in session.v1, found %d; a new service must be classified", len(desc))
 	}
 	for _, f := range rpcClassificationFindings(desc, terminalWriteRPCs, notTerminalWriteRPCs) {
 		t.Error(f)
@@ -212,7 +212,7 @@ func realCallerConfig() callerConfig {
 		exemptFiles: set("tmux_process_manager.go", "native_process_manager.go", "native_process_manager_windows.go",
 			"tmux_backend.go", "backend_tymux.go", "instance_tmux.go"),
 		exemptUnits: set("Instance.SendKeys", "Instance.SendKeysN", "Instance.SendPrompt", "Instance.TapEnter", "Instance.WriteToPTY",
-			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent"),
+			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent", "sendKeysChunked"),
 	}
 }
 

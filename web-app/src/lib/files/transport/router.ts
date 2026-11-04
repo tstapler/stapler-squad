@@ -23,7 +23,8 @@ export interface RouterOptions {
   /** Higher rungs; each is used only when the server advertises its wire and the op. */
   adapters?: readonly FileTransport[];
   /** May throw a ConnectError `Unimplemented` (older server): the router then pins `full`. */
-  fetchCapabilities(sessionId: string): Promise<FileCapabilities>;
+  /** `observedEpoch` is set when a response carried an epoch different from the cached caps, so a shared cache must refetch. */
+  fetchCapabilities(sessionId: string, observedEpoch?: number): Promise<FileCapabilities>;
   analytics?: Pick<FilesEmitter, "emit">;
   /** Clock for demotion cool-downs (tests). */
   now?: () => number;
@@ -88,15 +89,15 @@ export class FileTransportRouter {
     }
   }
 
-  private ensureCaps(sessionId: string): Promise<void> {
+  private ensureCaps(sessionId: string, observedEpoch?: number): Promise<void> {
     if (this.caps || this.pin) return Promise.resolve();
-    this.capsPromise ??= this.loadCaps(sessionId).finally(() => { this.capsPromise = null; });
+    this.capsPromise ??= this.loadCaps(sessionId, observedEpoch).finally(() => { this.capsPromise = null; });
     return this.capsPromise;
   }
 
-  private async loadCaps(sessionId: string): Promise<void> {
+  private async loadCaps(sessionId: string, observedEpoch?: number): Promise<void> {
     try {
-      const caps = await this.opts.fetchCapabilities(sessionId);
+      const caps = await this.opts.fetchCapabilities(sessionId, observedEpoch);
       if (caps.protocolVersion > SUPPORTED_PROTOCOL_MAJOR) this.pin = "version";
       else this.caps = caps;
       this.capsFailure = null;
@@ -116,7 +117,7 @@ export class FileTransportRouter {
   private async checkEpoch(sessionId: string, epoch: number | undefined): Promise<void> {
     if (epoch === undefined || !this.caps || epoch === this.caps.capsEpoch) return;
     this.caps = null;
-    await this.ensureCaps(sessionId);
+    await this.ensureCaps(sessionId, epoch);
     this.announce();
   }
 

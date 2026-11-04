@@ -58,7 +58,7 @@ Sessions cannot see each other's environment variables, terminal state, or worki
 
 ## Bundled tmux
 
-For single-binary deployment without requiring a system tmux install, stapler-squad can bundle a pinned version of tmux (3.4):
+For single-binary deployment without requiring a system tmux install, stapler-squad can bundle a pinned version of tmux (3.8):
 
 ```bash
 git submodule update --init third_party/tmux

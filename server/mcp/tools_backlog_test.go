@@ -2989,11 +2989,30 @@ func TestDecideOverridePolicy(t *testing.T) {
 // another session sharing the worktree. With a matching self-authored PR and
 // a non-empty override_reason, the item must still transition to pr_pending,
 // and the override use must be audited via a structured log.Warn line.
+// lockedLogBuffer is a slog sink safe against writes from goroutines that outlive the test that
+// started them (e.g. an async TriggerTriage), which a bare strings.Builder races with under -race.
+type lockedLogBuffer struct {
+	mu sync.Mutex
+	sb strings.Builder
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sb.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sb.String()
+}
+
 func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOverrideReason(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
-	var buf strings.Builder
+	var buf lockedLogBuffer
 	origLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(origLogger) })
 
@@ -5541,7 +5560,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
@@ -7563,7 +7582,7 @@ func TestResumeWork_PreconditionFailedOnConcurrentTransition(t *testing.T) {
 		}
 		// Simulate another actor (e.g. the dequeuer) transitioning the item
 		// out of ready between this read and resumeWork's own CAS write.
-		_, transErr := storage.TransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
+		_, transErr := storage.RawTransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByAgent)
 		require.NoError(t, transErr)
 		return item, nil

@@ -206,3 +206,35 @@ func TestWatchRepo_TierA_ShouldRegisterWorktreeAddedAfterWorktreesDirExists(t *t
 		return ok
 	}, wait.FastWaitConfig()), "the new admin dir is registered without any other .git event")
 }
+
+// `git worktree add` mkdirs the admin dir before writing <admin>/gitdir. If the
+// worktrees-dir event is handled in between (forced here by calling watchRepo
+// directly), the later gitdir write must still register the worktree.
+func TestWatchRepo_TierA_ShouldRegisterWorktree_WhenGitdirFileWrittenAfterAdminDirSeen(t *testing.T) {
+	t.Parallel()
+	f := newLinkedFixture(t)
+	s, w := newWatchingScanner(t)
+	s.gitwatch.watchWorktreeGitdirs = true
+	s.fsDebounce = 0
+	s.watchRepo(f.mainDir)
+	worktreesDir := filepath.Join(f.mainDir, ".git", "worktrees")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.fsnotifyLoop(ctx)
+
+	admin3 := filepath.Join(worktreesDir, "wt3")
+	require.NoError(t, os.MkdirAll(admin3, 0o755))
+	s.watchRepo(f.mainDir) // the handler ran before git wrote the gitdir file
+	_, registered := s.worktreeTargetFor(admin3)
+	require.False(t, registered, "precondition: no gitdir file yet")
+	require.Contains(t, w.WatchList(), admin3, "the pending admin dir is watched")
+
+	linked3 := filepath.Join(testrepo.TempDir(t), "wt3")
+	require.NoError(t, os.WriteFile(filepath.Join(admin3, "gitdir"), []byte(filepath.Join(linked3, ".git")+"\n"), 0o644))
+
+	require.NoError(t, wait.WaitForCondition(func() bool {
+		_, ok := s.worktreeTargetFor(admin3)
+		return ok
+	}, wait.FastWaitConfig()), "the gitdir write registers the admin dir")
+}

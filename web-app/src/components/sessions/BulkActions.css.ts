@@ -46,7 +46,7 @@ export const selectAllButton = style({
   fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover": {
       background: vars.color.surfaceSubtle,
@@ -64,7 +64,7 @@ export const clearButton = style({
   fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover": {
       background: vars.color.surfaceSubtle,
@@ -90,7 +90,7 @@ export const actionButton = style({
   fontWeight: 500,
   fontSize: "0.9375rem",
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   background: vars.color.primary,
   color: "white",
   selectors: {

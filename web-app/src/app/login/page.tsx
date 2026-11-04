@@ -82,6 +82,7 @@ function LoginContent() {
               onClick={handleRegister}
               disabled={status === "working"}
             >
+              {/* analytics-exempt */}
               {status === "working" ? "Registering…" : "Register Passkey"}
             </button>
           </>
@@ -96,6 +97,7 @@ function LoginContent() {
               onClick={handleLogin}
               disabled={status === "working"}
             >
+              {/* analytics-exempt */}
               {status === "working" ? "Signing in…" : "Sign in with Passkey"}
             </button>
           </>
@@ -106,7 +108,7 @@ function LoginContent() {
         )}
 
         {!hasCredentials && !setupToken && (
-          <p className={styles.hint} style={{ marginTop: "1rem", opacity: 0.6 }}>
+          <p className={styles.setupHint}>
             To register, use the setup URL printed in the server console.
           </p>
         )}

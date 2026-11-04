@@ -28,7 +28,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({})),
 }));
 
-jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}) }));
+jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}), getConnectTransport: () => ({}) }));
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: () => "http://localhost",
   createAuthInterceptor: () => jest.fn(),
@@ -53,8 +53,8 @@ jest.mock("@/components/unfinished/UnfinishedRepoGroup", () => ({
   }) => (
     <div data-testid="unfinished-repo-group">
       {props.repoName}
-      <button onClick={() => props.onDismiss(props.worktrees[0].repoPath, props.worktrees[0].branch)}>dismiss</button>
-      <button onClick={() => props.onSnooze(props.worktrees[0].repoPath, props.worktrees[0].branch)}>snooze</button>
+      <button onClick={() => props.onDismiss(props.worktrees[0].repoPath, props.worktrees[0].branch)}>{/* analytics-exempt */}dismiss</button>
+      <button onClick={() => props.onSnooze(props.worktrees[0].repoPath, props.worktrees[0].branch)}>{/* analytics-exempt */}snooze</button>
     </div>
   ),
 }));

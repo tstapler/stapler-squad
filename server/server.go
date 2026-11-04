@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -57,26 +58,34 @@ type Server struct {
 	addr                       atomic.Pointer[string]
 	httpServer                 *http.Server
 	mux                        *http.ServeMux
-	unfinishedScanner          *unfinished.Scanner             // serves /actuator/unfinished-scanner; nil without deps
-	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
-	requiresAuth               bool                            // explicit: a real validator is wired
-	httpsURL                   atomic.Pointer[string]          // set when remote access is enabled
-	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
-	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
-	origins                    []string                        // allowed CORS origins
-	shutdownHooks              []func()                        // called before HTTP server stops
-	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
-	availablePrograms          []string                        // cached once at startup; programs change only on system changes
-	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
-	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
-	finalStatsFlush            func()                          // delivery-gate stats flush; deferred at the top of Shutdown
-	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
-	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
-	selfAuthMu                 sync.RWMutex                    // guards selfAuthPaths
-	selfAuthPaths              []func(path string) bool        // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
-	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
+	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
+	terminalMuxBridge          atomic.Pointer[services.TerminalMuxBridge] // serves /actuator/terminal-mux
+	unfinishedScanner          *unfinished.Scanner                        // serves /actuator/unfinished-scanner; nil without deps
+	tlsConfig                  *tls.Config                                // non-nil when TLS is enabled
+	authMiddleware             func(http.Handler) http.Handler            // nil when auth is disabled
+	requiresAuth               bool                                       // explicit: a real validator is wired
+	dispatchersMu              sync.RWMutex                               // guards dispatchers
+	dispatchers                map[string]http.Handler                    // listener name -> dispatcher the unary WS bridge re-enters
+	httpsURL                   atomic.Pointer[string]                     // set when remote access is enabled
+	hostnames                  atomic.Pointer[[]string]                   // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]                   // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
+	origins                    []string                                   // allowed CORS origins
+	shutdownHooks              []func()                                   // called before HTTP server stops
+	closeAfterJoin             []func()                                   // run after background tasks join (databases whose writers those tasks drive)
+	connCtxCancel              context.CancelFunc                         // cancels BaseContext → closes active streams on shutdown
+	availablePrograms          []string                                   // cached once at startup; programs change only on system changes
+	startedAt                  time.Time                                  // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler            *services.ApprovalHandler                  // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled   bool                                       // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                                     // delivery-gate stats flush; deferred at the top of Shutdown
+	backgroundTasksWG          sync.WaitGroup                             // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
+	backgroundTasksJoinTimeout time.Duration                              // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	selfAuthMu                 sync.RWMutex                               // guards selfAuthPaths
+	selfAuthPaths              []func(path string) bool                   // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
+	hookIPC                    *hookIPCState                              // resident instance-scoped PreToolUse classifier; started with the HTTP server
+
+	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
+	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -134,6 +143,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// — see that file's doc comment for why this is the natural place
 			// to maintain the count.
 			ConnState: trackHTTPConnState,
+			ErrorLog:  serverErrorLog(listenerMain),
 		},
 	}
 	srv.addr.Store(&addr)
@@ -234,6 +244,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
 	}
 
+	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
+
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	// Known startup race: the initial ScanAll in Start fires before the
@@ -256,6 +268,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			<-deps.ClaudeSettingsWatcher.Stopped()
 		})
 		log.Info("ClaudeSettingsWatcher started")
+	}
+
+	// Shadow ledger recorder: flushes the soak window every minute and once more
+	// when serverCtx ends; the actuator reads the same recorder.
+	if we := deps.WorkflowEngine; we != nil {
+		srv.SetWorkflowEngineSoakSource(we.Soak)
+		srv.goBackground(func() { we.Recorder.Run(serverCtx) })
 	}
 
 	// Start UnfinishedWork scanner.
@@ -472,6 +491,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
 	log.Info("Registered ConnectRPC WebSocket handler", "path", wsPath)
 
+	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
+	muxPool := services.TerminalMuxPoolSizeFromEnv()
+	muxBridge := services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
+		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		services.WithTerminalMuxDispatchers(srv.unaryDispatcher))
+	srv.terminalMuxBridge.Store(muxBridge)
+	srv.mux.Handle(services.TerminalMuxPath, muxBridge)
+	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
+
 	// Register VNC browser-passthrough WebSocket proxy.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
 	vncProxy := services.NewVNCProxyHandler(deps.ReviewQueuePoller)
@@ -516,6 +544,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.Handle(watchReviewQueuePath, wsBridge.Handler("/api"))
 	srv.mux.Handle(watchWorkflowsPath, wsBridge.Handler("/api"))
 	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
+
+	// Unary multiplex over one socket (Epic 5). Calls re-enter the listener's
+	// dispatcher (published by Start/StartRemote); the remote listener upgrades only
+	// with an authenticated session and an allow-listed Origin.
+	unaryBridge := services.NewUnaryWsBridge(srv.unaryDispatcher,
+		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+	srv.wsUnaryBridge.Store(unaryBridge)
+	srv.mux.Handle(services.UnaryWsPath, unaryBridge)
+	// HTTP request batching (flag batch_unary): same per-call re-entry as the bridge.
+	srv.mux.Handle(services.UnaryBatchPath, services.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -662,7 +700,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc := services.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -737,9 +775,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		blOpts := append(
 			ConnectOptions(deps.ErrorRegistry),
-			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", func() bool {
-				return config.LoadConfig().GetFeatureFlag("backlog")
-			})),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", services.BacklogFlagEnabled)),
 		)
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
@@ -770,6 +806,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("WorkflowScheduler started")
 	}
 	startWakes(serverCtx, srv, deps, guidanceRequestSvc, wakeTriggerSvc) // ADR-006 wake timer; server/wakes_module.go
+	startPRWatch(serverCtx, srv, deps)                                   // PR watch inbox consumer; server/prwatch_module.go
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
@@ -802,6 +839,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
 		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
+	// QuotaService: live-editable quota gate settings (always registered; the gate
+	// re-reads config.json each reconcile).
+	{
+		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
+			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
+		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}
 
 	// Register ImportService handler (import-external-session, Phase 1).
@@ -1222,15 +1268,27 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cfg := config.LoadConfig()
 	if deps.AnalyticsEntClient != nil {
 		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(),
-			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), &srv.backgroundTasksWG)
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
+	// Escape events have their own database and retention.
+	if deps.EscapeEventsClient != nil {
+		escapedb.StartRetentionEnforcer(serverCtx, deps.EscapeEventsClient,
+			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+		srv.closeAfterJoin = append(srv.closeAfterJoin, func() {
+			if err := deps.EscapeEventsClient.Close(); err != nil {
+				log.Warn("escape events DB close failed", "err", err)
+			}
+		})
+		srv.startEscapeEventsMigration(serverCtx, deps, cfg)
+	}
+
+	srv.startDBMaintenance(serverCtx, deps)
 
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
-	if deps.AnalyticsEntClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
-		escapeWriter := analytics.NewEscapeEventBatchWriter(deps.AnalyticsEntClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+	if deps.EscapeEventsClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := escapedb.NewEscapeEventBatchWriter(deps.EscapeEventsClient, cfg.EscapeAnalyticsMaxRowsPerSession)
 		srv.goBackground(func() { escapeWriter.Start(serverCtx) })
 		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
 		log.Info("Escape analytics batch writer started",
@@ -1241,10 +1299,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Escape analytics disabled (no DB client or captureLevel=off)")
 	}
 
-	// Wire analytics ent client into SessionService for escape analytics RPC handlers.
-	if deps.AnalyticsEntClient != nil {
-		deps.SessionService.SetAnalyticsClient(deps.AnalyticsEntClient)
-		log.Info("Wired analytics ent client into SessionService for escape analytics RPCs")
+	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
+	if deps.EscapeEventsClient != nil {
+		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
+		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
@@ -1259,6 +1317,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
+
+		progressSyncDone := services.StartBacklogGitHubProgressSyncSubscriber(serverCtx, deps.EventBus, services.GitHubIssueProgressCommentsEnabled, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		srv.backgroundTasksWG.Go(func() { <-progressSyncDone })
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
 		// flag per event, so it is live-togglable from Settings > Feature Flags.
@@ -1427,6 +1488,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 }
 
+// getWebDistFS is a test seam so tests need not depend on a built web-app.
+var getWebDistFS = web.GetDistFS //nolint:gochecknoglobals
+
 // registerStaticRoutes mounts routes that are always registered regardless of
 // whether dependencies were successfully built (image upload, server-info, web UI).
 func registerStaticRoutes(srv *Server) {
@@ -1447,7 +1511,7 @@ func registerStaticRoutes(srv *Server) {
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
-	distFS, err := web.GetDistFS()
+	distFS, err := getWebDistFS()
 	if err != nil {
 		log.Error("Failed to load web UI filesystem", "err", err)
 	} else {
@@ -1581,12 +1645,14 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
+	localDispatcher := s.localDispatcherWith(guardedProcedures)
+	s.setUnaryDispatcher(services.ListenerLocal, localDispatcher)
 	handler := otelhttp.NewHandler(
-		s.localChain(),
+		wrapOuterMiddleware(localDispatcher, s.origins),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
-	s.httpServer.Handler = handler
+	s.httpServer.Handler = stampArrival(handler)
 
 	scheme := "http"
 	if s.tlsConfig != nil {
@@ -1602,7 +1668,12 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", s.GetAddr())
 			log.Info("Web UI", "url", scheme+"://"+s.GetAddr())
 			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
-			err = s.httpServer.ListenAndServeTLS("", "")
+			ln, lerr := net.Listen("tcp", s.GetAddr())
+			if lerr != nil {
+				errCh <- lerr
+				return
+			}
+			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
 			if lerr != nil {
@@ -1616,7 +1687,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
 			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
 			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
-			err = s.httpServer.Serve(ln)
+			err = s.httpServer.Serve(meterListener(listenerMain, ln))
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -1694,6 +1765,15 @@ func (s *Server) Shutdown() error {
 	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
 	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
 		log.Warn("[shutdown] background tasks (sweepers, pollers, watchers, subscribers, tmux tickers) did not all exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
+	} else {
+		// Writers have drained and stopped; close (and checkpoint) their databases once
+		// in-flight RPC handlers are done too. Skipped on a join timeout, where a task
+		// may still be writing; WAL replays on next open.
+		defer func() {
+			for _, closeFn := range s.closeAfterJoin {
+				closeFn()
+			}
+		}()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1919,12 +1999,37 @@ func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 // TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
 // always passes middleware.Auth, so nil only occurs in tests.
 func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
+	return wrapOuterMiddleware(s.remoteDispatcher(authMW, requiresAuth), s.origins)
+}
+
+// remoteDispatcher is remoteChain minus Logging/CORS/Compress (see localDispatcherWith).
+func (s *Server) remoteDispatcher(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return s.stampRequest(services.ListenerRemote, requiresAuth)(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerRemote, requiresAuth)(inner)
+}
+
+// setUnaryDispatcher publishes the listener's dispatcher for the unary WebSocket
+// bridge; called from Start()/StartRemote() once the chain's inputs are final.
+func (s *Server) setUnaryDispatcher(listener string, h http.Handler) {
+	s.dispatchersMu.Lock()
+	defer s.dispatchersMu.Unlock()
+	next := make(map[string]http.Handler, len(s.dispatchers)+1)
+	for k, v := range s.dispatchers {
+		next[k] = v
+	}
+	next[listener] = h
+	s.dispatchers = next
+}
+
+// unaryDispatcher returns the dispatcher for a listener, or nil when that
+// listener has not started; the bridge treats nil as fail-closed.
+func (s *Server) unaryDispatcher(listener string) http.Handler {
+	s.dispatchersMu.RLock()
+	defer s.dispatchersMu.RUnlock()
+	return s.dispatchers[listener]
 }
 
 // stampRequest stamps the raw request record and the in-handler verdict's live
@@ -1950,16 +2055,19 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
+	remoteDispatcher := s.remoteDispatcher(authMW, requiresAuth)
+	s.setUnaryDispatcher(services.ListenerRemote, remoteDispatcher)
 	handler := otelhttp.NewHandler(
-		s.remoteChain(authMW, requiresAuth),
+		wrapOuterMiddleware(remoteDispatcher, s.origins),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
 
 	remoteSrv := &http.Server{
 		Addr:         remoteAddr,
-		Handler:      handler,
+		Handler:      stampArrival(handler),
 		TLSConfig:    tlsCfg,
+		ErrorLog:     serverErrorLog(listenerRemote),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -1985,7 +2093,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 			}
 		}()
 
-		if serveErr := remoteSrv.ServeTLS(ln, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := remoteSrv.ServeTLS(meterListener(listenerRemote, ln), "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("Remote HTTPS server error", "err", serveErr)
 		}
 	}()
@@ -2155,6 +2263,8 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 		connect.WithInterceptors(
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
+			interceptors.NewDBQueryCountInterceptor(),
+			interceptors.NewRequestFlowInterceptor(),
 		),
 	}
 }

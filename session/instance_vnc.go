@@ -30,7 +30,7 @@ type VNCProcessManager = vnc.VNCProcessManager
 // If disabled or deps are unavailable, a no-op manager is returned.
 func (i *Instance) initVNCManager(appCfg *config.Config) {
 	cfg := &appCfg.BrowserPassthrough
-	if !cfg.IsEnabled() && !appCfg.GetFeatureFlag("browser-passthrough") {
+	if !BrowserPassthroughEnabled(appCfg) {
 		i.vncManager = vnc.New(vnc.VNCConfig{})
 		return
 	}

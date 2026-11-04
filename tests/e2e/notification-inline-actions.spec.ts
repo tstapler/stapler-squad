@@ -30,8 +30,9 @@ import {
   setFeatureFlag,
 } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 // Any toast about a failed or refused action; unrelated toasts (a new approval) may be on screen.
 const ERROR_COPY = /couldn.t|failed|error|isn.t valid|not sent/i;
 const BACKLOG_FLAG = 'backlog';
@@ -82,7 +83,8 @@ for (const key of ['V1', 'V2'] as const) {
       await row.press(row.deny);
       await row.row.getByTestId('deny-reason').fill('not now');
       await row.press(row.sendDenial);
-      await expect(row.row).toContainText(/Denied/);
+      // Denial commits through the same hold window as approval, so it gets the same budget.
+      await expect(row.row).toContainText(/Denied/, { timeout: HOLD_TIMEOUT });
       await expect(row.deny).toHaveCount(0);
       expect(await approval.decision).toMatchObject({ behavior: 'deny' });
     });

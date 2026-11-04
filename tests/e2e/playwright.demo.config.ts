@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
 /**
  * Playwright configuration for demo video recording.
@@ -6,7 +7,7 @@ import { defineConfig, devices } from '@playwright/test';
  * No globalSetup/globalTeardown — lifecycle is managed by Go.
  */
 
-const serverURL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const serverURL = baseUrl();
 const outputDir = process.env.PLAYWRIGHT_VIDEO_OUTPUT_DIR || '/tmp/demo-video-output';
 
 export default defineConfig({
