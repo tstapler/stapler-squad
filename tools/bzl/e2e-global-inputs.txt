@@ -1,0 +1,19 @@
+# Files whose change selects every e2e target (ADR-009 decision 3, Task 12.2c). One glob per line; ** crosses directories.
+go.mod
+go.sum
+MODULE.bazel*
+.bazelrc*
+proto/**
+server/web/embed.go
+tests/e2e/playwright.config.ts
+tests/e2e/global-setup.ts
+tests/e2e/helpers/**
+tests/e2e/fixtures/**
+tests/e2e/bun.lock
+tools/bzl/e2e/**
+tools/bzl/e2e-global-inputs.txt
+# Conservative additions beyond ADR-009's list: the web bundle build inputs are not per-file observable.
+web-app/package.json
+web-app/bun.lock
+web-app/build/**
+web-app/tsconfig*.json

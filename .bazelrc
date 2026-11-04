@@ -71,6 +71,18 @@ test --run_under=//tools/bzl:test_wrapper
 test --test_env=STAPLER_SQUAD_INSTANCE=bazel-test
 test --sandbox_default_allow_network=false
 
+# e2e (Story 12.3, ADR-009): the server binary reaches the tests out of band so it never enters a test key.
+# The value-less --test_env forms inherit the client environment; the paths are constant, so a rebuilt binary
+# does not change the key. Run `e2eguard` first (the revision guard); it is not a flag, see docs.
+test:e2e --test_env=TEST_SERVER_BINARY
+test:e2e --test_env=TEST_SEED_DEMO
+test:e2e --test_env=TEST_SEED_HIDDEN
+test:e2e --test_env=TEST_SSHD_BINARY
+test:e2e --test_env=E2E_REPO_ROOT
+test:e2e --test_env=PLAYWRIGHT_BROWSERS_PATH
+test:e2e --test_tag_filters=e2e
+test:e2e --cache_test_results=auto
+
 # TagConfig set (sealed: tools/bzl/configs.txt, checked by check-configs.sh). rules_go's `tags`
 # flag is last-wins, not additive (spike S7), so each config lists its FULL tag set in ONE line
 # and these configs cannot be combined pairwise; a combination needs its own named config.

@@ -1,0 +1,6 @@
+on: [pull_request, push]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bazel test --remote_upload_local_results=true //...

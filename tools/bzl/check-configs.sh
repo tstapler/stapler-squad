@@ -11,7 +11,7 @@ list=tools/bzl/configs.txt
 [ -f "$list" ] || { echo "check-configs: $list not found" >&2; exit 2; }
 
 # hyphen is allowed so ci-cache-read is not collapsed into ci
-used=$(grep -oE '^(build|test):[a-z_-]+' "$rc" | cut -d: -f2 | sort -u)
+used=$(grep -oE '^(build|test):[a-z0-9_-]+' "$rc" | cut -d: -f2 | sort -u)
 documented=$(grep -vE '^[[:space:]]*(#|$)' "$list" | sort -u)
 
 status=0

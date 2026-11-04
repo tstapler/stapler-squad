@@ -1,0 +1,6 @@
+on: [pull_request]
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bazel test --config=ci-cache-write //...

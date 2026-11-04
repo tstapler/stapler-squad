@@ -3,6 +3,7 @@ ci
 ci-cache-read
 ci-cache-write
 dev
+e2e
 embed_tmux
 embed_tymux
 gitoracle
