@@ -73,3 +73,62 @@ export const urlToggleButton = style({
     "&:hover": { textDecoration: "underline" },
   },
 });
+
+export const lists = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["6"],
+});
+
+export const header = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space["2"],
+});
+
+export const statusLine = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const hint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const actions = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+// 44px minimum touch target (mobile).
+export const actionButton = style({
+  minHeight: "44px",
+  minWidth: "44px",
+  padding: `0 ${vars.space["4"]}`,
+  cursor: "pointer",
+  color: vars.color.primary,
+  background: "none",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  fontSize: vars.fontSize.sm,
+  selectors: {
+    "&:hover": { textDecoration: "underline" },
+  },
+});
+
+export const alert = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space["2"],
+  padding: vars.space["3"],
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  borderRadius: "6px",
+  overflowWrap: "anywhere",
+});
