@@ -4,6 +4,10 @@
 //
 //	testsummary -testlogs <bazel-testlogs dir> [-module <path>] [-failed]
 //	testsummary -gojson <file>                  [-failed]
+//	testsummary -testlogs <dir> -summary [-cached N] [-max-lines 60]
+//
+// -summary is the `make test` view under BUILD_SYSTEM=bazel: failing tests per target with the
+// bazel-testlogs/<pkg>/<target>/test.log path, capped at -max-lines lines.
 //
 // Bazel names are keyed by the target's package directory under the testlogs tree, prefixed with
 // -module (default github.com/tstapler/stapler-squad), matching the Package field of go test JSON.
@@ -11,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
@@ -137,12 +142,145 @@ func sorted(set map[string]bool) []string {
 	return out
 }
 
+// failure is one failing test target found under a testlogs tree.
+type failure struct {
+	pkg, target string
+	names       []string
+}
+
+func (f failure) key() string { return f.pkg + "/" + f.target }
+
+// targetOf splits <root>/<pkg>/<target>[/shard_i_of_n]/test.xml into its package and target names.
+func targetOf(root, xmlPath string) (pkg, target string) {
+	rel, _ := filepath.Rel(root, filepath.Dir(xmlPath))
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if n := len(parts); n > 0 && strings.HasPrefix(parts[n-1], "shard_") {
+		parts = parts[:n-1]
+	}
+	if n := len(parts); n > 0 {
+		target = parts[n-1]
+		parts = parts[:n-1]
+	}
+	return strings.Join(parts, "/"), target
+}
+
+// suiteFailed returns the failing case names and whether the suite failed with no named case (a timeout or crash).
+func suiteFailed(path string) (names []string, targetLevel bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	var raw bytes.Buffer
+	if _, err := io.Copy(&raw, f); err != nil {
+		return nil, false, err
+	}
+	_, failed, err := parseXML(bytes.NewReader(raw.Bytes()))
+	if err != nil {
+		return nil, false, err
+	}
+	var suites struct {
+		Suites []struct {
+			Failures int `xml:"failures,attr"`
+			Errors   int `xml:"errors,attr"`
+		} `xml:"testsuite"`
+	}
+	_ = xml.Unmarshal(raw.Bytes(), &suites)
+	for _, s := range suites.Suites {
+		if s.Failures+s.Errors > 0 {
+			targetLevel = true
+		}
+	}
+	return failed, targetLevel && len(failed) == 0, nil
+}
+
+func collectFailures(root string) ([]failure, error) {
+	byKey := map[string]*failure{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "test.xml" {
+			return err
+		}
+		names, targetLevel, err := suiteFailed(p)
+		if err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		if len(names) == 0 && !targetLevel {
+			return nil
+		}
+		pkg, target := targetOf(root, p)
+		f := failure{pkg: pkg, target: target}
+		cur, ok := byKey[f.key()]
+		if !ok {
+			cur = &f
+			byKey[f.key()] = cur
+		}
+		cur.names = append(cur.names, names...)
+		return nil
+	})
+	out := make([]failure, 0, len(byKey))
+	for _, f := range byKey {
+		sort.Strings(f.names)
+		out = append(out, *f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
+	return out, err
+}
+
+// writeSummary prints the failing tests and log paths in at most maxLines lines, then the cached note.
+func writeSummary(w io.Writer, fails []failure, cached, maxLines int) {
+	var lines []string
+	for _, f := range fails {
+		label := "//" + f.pkg + ":" + f.target
+		if f.pkg == "" {
+			label = "//:" + f.target
+		}
+		lines = append(lines, "FAIL "+label)
+		for _, n := range f.names {
+			lines = append(lines, "  "+n)
+		}
+		if len(f.names) == 0 {
+			lines = append(lines, "  (no failing test case recorded; timeout or crash)")
+		}
+		lines = append(lines, "  log: "+filepath.ToSlash(filepath.Join("bazel-testlogs", f.pkg, f.target, "test.log")))
+	}
+	tail := ""
+	if cached > 0 {
+		tail = fmt.Sprintf("(%d test targets cached; rerun with FORCE=1)", cached)
+	}
+	budget := maxLines
+	if tail != "" {
+		budget--
+	}
+	if len(lines) > budget {
+		omitted := len(lines) - (budget - 1)
+		lines = append(lines[:budget-1], fmt.Sprintf("... %d more lines omitted; see bazel-testlogs/", omitted))
+	}
+	for _, l := range lines {
+		fmt.Fprintln(w, l)
+	}
+	if tail != "" {
+		fmt.Fprintln(w, tail)
+	}
+}
+
 func main() {
 	testlogs := flag.String("testlogs", "", "bazel-testlogs directory")
 	gojson := flag.String("gojson", "", "gotestsum --jsonfile file")
 	module := flag.String("module", "github.com/tstapler/stapler-squad", "Go module path prefixed to Bazel package dirs")
 	failed := flag.Bool("failed", false, "print failing names instead of passing names")
+	summary := flag.Bool("summary", false, "with -testlogs: print failing tests and test.log paths (make test view)")
+	cached := flag.Int("cached", 0, "with -summary: number of test targets served from the cache")
+	maxLines := flag.Int("max-lines", 60, "with -summary: line cap")
 	flag.Parse()
+	if *summary && *testlogs != "" && *gojson == "" {
+		fails, err := collectFailures(*testlogs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "testsummary:", err)
+			os.Exit(1)
+		}
+		writeSummary(os.Stdout, fails, *cached, *maxLines)
+		return
+	}
 	var names []string
 	var err error
 	switch {
