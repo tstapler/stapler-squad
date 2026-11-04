@@ -80,10 +80,10 @@ go_test(
         "//docs/how-to:inbox-pr-watch.md",
         "//server/prwatch/inbox:go_sources",
     ],
-    tags = ["manual"],  # keep
     deps = [
         "//config",
         "//executor/safeexec",
+        "//internal/testenv",
         "//server/prwatch/inbox",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

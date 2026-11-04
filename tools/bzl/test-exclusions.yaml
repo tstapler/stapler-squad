@@ -7,19 +7,7 @@ exclusions:
     owner: tstapler
     issue: https://github.com/tstapler/stapler-squad/issues/1422
     reason: >-
-      Imports github.com/tstapler/stapler-squad/testutil/wait and github.com/linkdata/deadlock, neither of which tuitest/go.mod requires, so `cd tuitest && go vet ./...` already fails ("no required module provides package github.com/linkdata/deadlock"). Under Bazel it also needs //testutil/wait, which exists after Epic 1.
-  - target: //jules:jules_test
-    sandbox_class: exec-host-binary
-    owner: tstapler
-    issue: https://github.com/tstapler/stapler-squad/issues/1423 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
-    reason: >-
-      Testdata and source files are now declared in data and the cwd tests pass; TestJulesPackage_should_NotImportSessionOrServer_When_DepsListed still runs `go list -deps` over the whole module, which needs the module source tree plus module cache that a Bazel sandbox does not have (Story 4.10c follow-up).
-  - target: //server/prwatch:prwatch_test
-    sandbox_class: exec-host-binary
-    owner: tstapler
-    issue: https://github.com/tstapler/stapler-squad/issues/1423 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
-    reason: >-
-      testdata/status_text.golden is now in data; deps_test.go's two TestPackageDirection_* tests run `go list` over the whole module, which needs the module source tree plus module cache that a Bazel sandbox does not have (Story 4.10c follow-up).
+      Build fixed by adding the missing requires to tuitest/go.mod (`cd tuitest && go vet ./...` now passes). The test itself is stale and is expected to fail outside Bazel too (INFERRED from the source, not run): it launches `go run .` from the repo root and waits for the text "Claude Squad", which no non-test Go source prints any more (TUI replaced by the web UI), and nothing in the Makefile or CI runs tuitest. Needs an owner decision to rewrite or delete (not done here).
   - target: //tools/bzl/spike:spike_test
     sandbox_class: tmpdir-socket
     owner: tstapler

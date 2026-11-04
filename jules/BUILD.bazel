@@ -38,13 +38,13 @@ go_test(
         "types_test.go",
     ],
     embed = [":jules"],
-    tags = ["manual"],  # keep
     data = glob([
         "*.go",
         "testdata/**",
     ]),
     deps = [
         "//executor/safeexec",
+        "//internal/testenv",
         "//log",
         "//testutil/wait",
         "@com_github_zalando_go_keyring//:go-keyring",

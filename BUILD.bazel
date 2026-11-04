@@ -162,6 +162,7 @@ go_test(
     deps = [
         "//config",
         "//envtest",
+        "//internal/testenv",
         "//log",
         "//server",
         "//server/auth",

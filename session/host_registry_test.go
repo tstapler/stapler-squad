@@ -601,6 +601,10 @@ func TestADR002PointerFile_should_ExistAtDocsAdrPath_When_RepoChecked(t *testing
 	if !strings.Contains(string(data), canonical) {
 		t.Errorf("pointer file does not link to %s", canonical)
 	}
+	if _, err := os.Stat(filepath.Join("..", "project_plans")); os.IsNotExist(err) {
+		t.Log("project_plans is .bazelignore'd, so the canonical record is not in the Bazel sandbox; existence is checked under go test")
+		return
+	}
 	if _, err := os.Stat(filepath.Join("..", canonical)); err != nil {
 		t.Errorf("canonical decision record missing: %v", err)
 	}

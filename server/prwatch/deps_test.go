@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/testenv"
 )
 
 const modulePath = "github.com/tstapler/stapler-squad"
@@ -15,6 +16,7 @@ const modulePath = "github.com/tstapler/stapler-squad"
 // goList runs `go list` and returns whitespace-separated fields of its output.
 func goList(t *testing.T, args ...string) []string {
 	t.Helper()
+	testenv.SkipGoListUnderBazel(t)
 	out, err := safeexec.CommandContext(context.Background(), "go", append([]string{"list"}, args...)...).Output()
 	require.NoError(t, err)
 	return strings.Fields(string(out))

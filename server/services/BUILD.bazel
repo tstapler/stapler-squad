@@ -1007,3 +1007,10 @@ go_test(
         "//conditions:default": [],
     }),
 )
+
+# Read by session's wake-polling guard, which scans Go sources for the client-side wake tool.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)

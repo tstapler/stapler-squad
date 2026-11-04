@@ -82,3 +82,14 @@ func requireUnder(what, dir, root string) error {
 	}
 	return nil
 }
+
+// SkipGoListUnderBazel skips a test that shells out to `go list` over the module.
+// A Bazel test sandbox has neither the synced gen/ and session/ent trees nor the Go
+// module cache, so `go list` cannot resolve the graph there; the same test still runs
+// under `go test`. Tracked in https://github.com/tstapler/stapler-squad/issues/1423.
+func SkipGoListUnderBazel(t testing.TB) {
+	t.Helper()
+	if os.Getenv("TEST_TMPDIR") != "" && os.Getenv("TEST_SRCDIR") != "" {
+		t.Skip("go list needs the module cache and generated trees, absent in a Bazel sandbox (#1423); runs under go test")
+	}
+}
