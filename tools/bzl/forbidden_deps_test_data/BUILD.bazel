@@ -1,0 +1,95 @@
+# Seeded graph for forbidden_deps_test: top -> mid -> bad/inner, leaf alone. Hand-written.
+# gazelle:ignore
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
+load("//tools/bzl:forbidden_deps_test.bzl", "guard_fails_test")
+
+_PKG = "//tools/bzl/forbidden_deps_test_data"
+
+go_library(
+    name = "leaf",
+    importpath = "example.invalid/leaf",
+)
+
+go_library(
+    name = "mid",
+    importpath = "example.invalid/mid",
+    deps = ["//tools/bzl/forbidden_deps_test_data/bad/inner"],
+)
+
+go_library(
+    name = "top",
+    importpath = "example.invalid/top",
+    deps = [":mid"],
+)
+
+# Passing guards (run by the wildcard).
+forbidden_deps_test(
+    name = "top_direct_only_ok",  # bad/inner is only transitive from top
+    direct_only = True,
+    forbidden = [_PKG + "/bad/inner"],
+    required = [_PKG + ":mid"],
+    target = ":top",
+)
+
+forbidden_deps_test(
+    name = "leaf_ok",
+    forbidden = [_PKG + "/..."],
+    target = ":leaf",
+)
+
+# Seeded failures: manual so the wildcard skips them; guard_fails_test asserts each fails analysis.
+forbidden_deps_test(
+    name = "transitive_bad",
+    forbidden = [_PKG + "/bad/inner"],
+    tags = ["manual"],
+    target = ":top",
+    why = "seeded transitive",
+)
+
+forbidden_deps_test(
+    name = "prefix_bad",
+    forbidden = [_PKG + "/bad/..."],
+    tags = ["manual"],
+    target = ":top",
+)
+
+forbidden_deps_test(
+    name = "direct_bad",
+    direct_only = True,
+    forbidden = [_PKG + "/bad/inner"],
+    tags = ["manual"],
+    target = ":mid",
+)
+
+forbidden_deps_test(
+    name = "required_missing",
+    forbidden = [],
+    required = [_PKG + ":mid"],
+    tags = ["manual"],
+    target = ":leaf",
+)
+
+guard_fails_test(
+    name = "transitive_bad_test",
+    msg = "seeded transitive\n  forbidden dep //tools/bzl/forbidden_deps_test_data/bad/inner:inner (pattern //tools/bzl/forbidden_deps_test_data/bad/inner) reached via: //tools/bzl/forbidden_deps_test_data:top -> //tools/bzl/forbidden_deps_test_data:mid -> //tools/bzl/forbidden_deps_test_data/bad/inner:inner",
+    target_under_test = ":transitive_bad",
+)
+
+guard_fails_test(
+    name = "prefix_bad_test",
+    msg = "(pattern //tools/bzl/forbidden_deps_test_data/bad/...)",
+    target_under_test = ":prefix_bad",
+)
+
+guard_fails_test(
+    name = "direct_bad_test",
+    msg = "reached via: //tools/bzl/forbidden_deps_test_data:mid -> //tools/bzl/forbidden_deps_test_data/bad/inner:inner",
+    target_under_test = ":direct_bad",
+)
+
+guard_fails_test(
+    name = "required_missing_test",
+    msg = "required dep //tools/bzl/forbidden_deps_test_data:mid is missing",
+    target_under_test = ":required_missing",
+)

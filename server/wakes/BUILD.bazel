@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
 load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
@@ -95,4 +96,15 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@org_uber_go_goleak//:goleak",
     ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    forbidden = [
+        "//server/services",
+        "//server/mcp",
+    ],
+    required = ["//session"],
+    target = ":wakes",
+    why = "the ports exist so server/services can depend on server/wakes; the reverse import must never appear (replaces deps_test.go)",
 )

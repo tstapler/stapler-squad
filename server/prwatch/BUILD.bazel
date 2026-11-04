@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
 load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
@@ -72,7 +73,6 @@ go_test(
         "status_text_test.go",
         "watchset_test.go",
     ],
-    embed = [":prwatch"],
     data = glob([
         "*.go",
         "testdata/**",
@@ -80,6 +80,7 @@ go_test(
         "//docs/how-to:inbox-pr-watch.md",
         "//server/prwatch/inbox:go_sources",
     ],
+    embed = [":prwatch"],
     deps = [
         "//config",
         "//executor/safeexec",
@@ -89,4 +90,20 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@org_uber_go_goleak//:goleak",
     ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    direct_only = True,
+    forbidden = [
+        "//server/services",
+        "//server/mcp",
+        "//server/wakes",
+        "//github",
+        "//config",
+        "//session/git",
+    ],
+    required = ["//server/prwatch/inbox"],
+    target = ":prwatch",
+    why = "prwatch direct imports only: adapters in server/ own the bridging (replaces deps_test.go)",
 )

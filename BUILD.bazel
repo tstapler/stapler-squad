@@ -1,6 +1,7 @@
 load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
 load("//tools/bzl:go_test.bzl", "go_test")
 load("//tools/bzl:otel_weave.bzl", "otel_weave")
 load("//tools/bzl:otel_weave_hermetic.bzl", "otel_modcache", "otel_weave_hermetic")
@@ -195,6 +196,7 @@ otel_modcache(name = "otel_modcache")
 otel_weave_hermetic(
     name = "stapler-squad_otel_hermetic",
     ent = ["//tools/bzl/ent:ent_gen"],
+    extra_libs = ["//instrumentation/otelc/safeexec"],
     gen = ["//proto/session/v1:gen_go"],
     go_tags = select({
         ":embed_tmux_and_tymux": [
@@ -204,7 +206,6 @@ otel_weave_hermetic(
         "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
         "//conditions:default": [],
     }),
-    extra_libs = ["//instrumentation/otelc/safeexec"],
     lib = ":stapler-squad_lib",
     modcache = ":otel_modcache",
     stage = select({
@@ -249,4 +250,14 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@org_uber_go_goleak//:goleak",
     ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    forbidden = [
+        "@com_github_shoenig_go_m1cpu//...",
+        "@com_github_shirou_gopsutil_v3//...",
+    ],
+    target = ":stapler-squad_plain",
+    why = "go-m1cpu's cgo init() segfaults at startup on some Apple Silicon machines (PR #129); gopsutil/v3 pulls it in (replaces deps_guard_test.go)",
 )
