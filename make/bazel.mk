@@ -18,6 +18,7 @@ define wrap
 $(BAZEL) $(1)
 endef
 
+.PHONY: nogo-twins-check nogo-seed-check
 .PHONY: gazelle gazelle-check buildifier-check sync gen-freshness go-build go-vet go-test ready-bazel-guards bazel-doctor gen-gate gen-gate-strict
 
 bazel-doctor: ## Nine host/worktree Bazel health checks (version, cache, disk, slots, memory, BUILD freshness); exit 0 unless one fails
@@ -26,6 +27,12 @@ bazel-doctor: ## Nine host/worktree Bazel health checks (version, cache, disk, s
 gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel), then refresh the .gitattributes collapse rules
 	$(call wrap,run //:gazelle)
 	@bash tools/bzl/gen-gitattributes.sh
+
+nogo-twins-check: ## Fail when tools/lint analyzers, the nogo twin list and cmd/linter disagree (plain go; no Bazel)
+	go run ./tools/bzl/nogotwins
+
+nogo-seed-check: ## Build the manual seeded-violation targets; every analyzer must fail its own seed under nogo (needs Bazel)
+	BAZEL_REAL=$$(command -v bazelisk || command -v bazel) go run ./tools/bzl/nogoseed
 
 gazelle-check: ## Fail if BUILD files or MODULE.bazel are out of date (bazel run //:gazelle -- -mode=diff, then bazel mod tidy diff); needs Bazel, skipped under BUILD_SYSTEM=make
 ifeq ($(BUILD_SYSTEM),make)

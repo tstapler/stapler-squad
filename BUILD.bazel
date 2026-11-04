@@ -38,8 +38,8 @@ load("//tools/bzl:otel_weave_hermetic.bzl", "otel_weave_hermetic")
 # attempts there claim the same importpaths, so Gazelle needs these to disambiguate.
 # gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1 //proto/session/v1:sessionv1_go
 # gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect //proto/session/v1:sessionv1connect_go
-# The S12 nogo twin library (tools/bzl/spike-nogo:norawgitcli_rootdeps) reuses norawgitcli's importpath.
-# gazelle:resolve go github.com/tstapler/stapler-squad/tools/lint/norawgitcli //tools/lint/norawgitcli:norawgitcli
+# The nogo twin libraries (tools/bzl/nogo) reuse each analyzer's importpath; prefer the real package.
+# gazelle:resolve_regexp go ^github.com/tstapler/stapler-squad/tools/lint/(.+)$ //tools/lint/$1
 
 gazelle(name = "gazelle")
 

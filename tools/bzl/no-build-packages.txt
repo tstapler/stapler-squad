@@ -2,8 +2,6 @@
 # Checked by the Task 1.1a verify (every Go package has a BUILD file unless listed here).
 gen/proto/go/session/v1  # gitignored generated protobuf; built by //proto/session/v1 (S1)
 gen/proto/go/session/v1/sessionv1connect  # gitignored generated connect stubs; built by //proto/session/v1 (S1)
-tools/bzl/spike-nogo/clean  # S12 spike; its hand-written BUILD.bazel owns the file (gazelle:exclude)
-tools/bzl/spike-nogo/seed  # S12 spike; its hand-written BUILD.bazel owns the file (gazelle:exclude)
 tools/bzl/spike-tags/cmd  # S7 spike; excluded from Gazelle (gazelle:exclude cmd), parent BUILD owns it
 session/ent  # gitignored generated ent code; built by //tools/bzl/ent (S2)
 session/ent/analyticsevent  # gitignored generated ent code; built by //tools/bzl/ent (S2)

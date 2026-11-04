@@ -12,7 +12,7 @@ func TestIsolatedHome_should_GiveGitAnIdentity(t *testing.T) {
 	if os.Getenv("HOME") != home {
 		t.Fatal("HOME not set")
 	}
-	out, err := exec.Command("git", "config", "--global", "user.email").Output()
+	out, err := exec.Command("git", "config", "--global", "user.email").Output() //nolint:norawexec test probe, one short-lived git read
 	if err != nil || !strings.Contains(string(out), "@") {
 		t.Fatalf("git identity missing: %q %v", out, err)
 	}

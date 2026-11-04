@@ -38,7 +38,7 @@ func TestEnv(t *testing.T) {
 			t.Errorf("%s not on test PATH: %v", tool, err)
 		}
 	}
-	out, err := exec.Command("git", "config", "--global", "user.name").Output()
+	out, err := exec.Command("git", "config", "--global", "user.name").Output() //nolint:norawexec test probe, one short-lived git read
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		t.Errorf("git identity: %q %v", out, err)
 	}

@@ -1,6 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
+exports_files(["analyzer.go"])
+
 go_library(
     name = "tmuxsocketscope",
     srcs = ["analyzer.go"],
@@ -23,8 +25,10 @@ alias(
 go_test(
     name = "tmuxsocketscope_test",
     srcs = ["analyzer_test.go"],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
     deps = [
         ":tmuxsocketscope",
+        "//tools/lint/internal/gotool",
         "@lint_x_tools//go/analysis/analysistest",
     ],
 )

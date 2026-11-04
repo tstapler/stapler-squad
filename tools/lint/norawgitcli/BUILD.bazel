@@ -1,7 +1,7 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
-# Spike S12: lets tools/bzl/spike-nogo recompile the analyzer against the root x/tools.
+# Lets the tools/bzl/nogo twin recompile this analyzer against the root x/tools.
 exports_files(["analyzer.go"])
 
 go_library(

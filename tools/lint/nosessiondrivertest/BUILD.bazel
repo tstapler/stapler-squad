@@ -1,6 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
+exports_files(["analyzer.go"])
+
 go_library(
     name = "nosessiondrivertest",
     srcs = ["analyzer.go"],
@@ -24,6 +26,11 @@ go_test(
         "analyzer_test.go",
         "export_test.go",
     ],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
     embed = [":nosessiondrivertest"],
-    deps = ["@lint_x_tools//go/analysis/analysistest"],
+    # keep: gazelle adds the embedded library as a dep, which rules_go rejects as a duplicate link.
+    deps = [
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
 )

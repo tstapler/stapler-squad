@@ -1,5 +1,7 @@
 load("@rules_go//go:def.bzl", "go_library")
 
+exports_files(["nolintcomment.go"])
+
 go_library(
     name = "nolintcomment",
     srcs = ["nolintcomment.go"],

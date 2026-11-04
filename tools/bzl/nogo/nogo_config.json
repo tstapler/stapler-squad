@@ -1,0 +1,10 @@
+{
+  "_base": {
+    "description": "applies to every analyzer; the analyzers scope themselves by package path and file name",
+    "exclude_files": {
+      "external/.*": "third-party code is not ours to lint",
+      "bazel-out/.*": "generated code (proto, ent, tools) is not hand-written",
+      "tools/lint/.*": "the analyzers themselves are a separate module that make lint-custom does not lint either"
+    }
+  }
+}

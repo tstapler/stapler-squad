@@ -1,6 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
+exports_files(["analyzer.go"])
+
 go_library(
     name = "hotpolllog",
     srcs = ["analyzer.go"],
@@ -25,8 +27,10 @@ go_test(
         "analyzer_test.go",
         "integration_test.go",
     ],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
     deps = [
         ":hotpolllog",
+        "//tools/lint/internal/gotool",
         "@lint_x_tools//go/analysis/analysistest",
     ],
 )

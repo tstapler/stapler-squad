@@ -1,7 +1,0 @@
-{
-  "norawgitcli": {
-    "exclude_files": {
-      "external/.*": "third-party code is not ours to lint"
-    }
-  }
-}

@@ -1,6 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
+exports_files(["analyzer.go"])
+
 go_library(
     name = "silenttransition",
     srcs = ["analyzer.go"],
@@ -23,9 +25,13 @@ alias(
 go_test(
     name = "silenttransition_test",
     srcs = ["analyzer_test.go"],
-    data = ["//session:transition_callers.go"],
+    data = glob(["testdata/**"]) + [
+        "//session:transition_callers.go",
+        "@rules_go//go",
+    ],
     deps = [
         ":silenttransition",
+        "//tools/lint/internal/gotool",
         "@lint_x_tools//go/analysis/analysistest",
     ],
 )

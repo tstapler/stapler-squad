@@ -984,6 +984,7 @@ LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testd
 lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawdb, norawexec, norawghrequest, norawgitcli, norawgitopen, nosessiondrivertest, nowrongdbentity, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) ./...
+	@go run ./tools/bzl/nogotwins
 	@go -C tools/lint test -count=1 ./norawgitcli/...
 	@echo "custom lint: ok"
 
