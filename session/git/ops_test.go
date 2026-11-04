@@ -392,7 +392,7 @@ func TestResolveLocalBranchSHA_ReturnsErrRefNotFound_When_BranchMissing(t *testi
 
 	_, err := ResolveLocalBranchSHA(work, "nonexistent")
 	require.ErrorIs(t, err, backend.ErrRefNotFound)
-	assert.Contains(t, err.Error(), "nonexistent")
+	assert.Contains(t, err.Error(), "failed to resolve local branch nonexistent")
 }
 
 // A missing origin branch normally fails at the fetch step; dropping the clone's fetch
@@ -404,8 +404,11 @@ func TestResolveOriginBranchSHA_ReturnsErrRefNotFound_When_NoRemoteTrackingRef(t
 	runGit(t, origin, "branch", "feature-x")
 	runGit(t, work, "config", "--unset-all", "remote.origin.fetch")
 
+	require.NoError(t, FetchBranch(work, "feature-x"), "precondition: fetch must succeed so the error comes from ResolveRef")
+
 	_, err := ResolveOriginBranchSHA(work, "feature-x")
 	require.ErrorIs(t, err, backend.ErrRefNotFound)
+	assert.Contains(t, err.Error(), "failed to resolve origin/feature-x")
 }
 
 // TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the
