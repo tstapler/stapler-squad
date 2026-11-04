@@ -19,3 +19,15 @@ Complexity 1. Domain glossary, migration, observability, risk-control: N/A.
 ## Risks
 - go-git ignores `config.worktree` (per-worktree overrides); acceptable for ref/remote resolution.
 - Bump go.mod only after tag is fetchable.
+
+## Adversarial-review resolution (adversarial-review.md, verdict was BLOCKED)
+- B1 (AC3): resolved by option (a): `partialclone` and `preciousobjects` are added to `builtinExtensions` with a caveat
+  comment (promisor objects cannot be lazy-fetched; go-git never gc's). T1.1/T1.2 amended; fork tests expect success for
+  V0 worktreeConfig, V1 worktreeConfig, V0 partialClone+preciousObjects; V0 + unsupported extension still rejected.
+- C1: `project_plans/fix-worktreeconfig-extension-compat/` is a pre-existing untracked parallel plan (its "Bug 3" would
+  route resolvers through the backend). Not adopted: the fork fix alone makes `OpenRepo` succeed (verified by red/green
+  tests); left untouched for the owner to reconcile.
+- M5: fork open test uses an on-disk repo and `PlainOpenWithOptions{DetectDotGit, EnableDotGitCommonDir}`.
+- C4: `docs/how-to/roll-back-go-git-fork.md` warns that rollback reintroduces the bug.
+- C3 (latent): go-git V1 config writes emit an empty `objectformat =`; production config writes go through the CLI. Not
+  addressed here.
