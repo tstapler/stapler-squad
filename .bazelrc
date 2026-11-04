@@ -62,4 +62,24 @@ build:ci-cache-write --remote_cache_compression
 build:ci-cache-write --remote_download_toplevel
 # Test-only jobs use --remote_download_minimal instead of --remote_download_toplevel.
 
+# TagConfig set (sealed: tools/bzl/configs.txt, checked by check-configs.sh). rules_go's `tags`
+# flag is last-wins, not additive (spike S7), so each config lists its FULL tag set in ONE line
+# and these configs cannot be combined pairwise; a combination needs its own named config.
+build:embed_tmux --@rules_go//go/config:tags=embed_tmux
+build:embed_tmux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --@rules_go//go/config:tags=embed_tmux,embed_tymux
+build:embed_tymux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --//tools/bzl/flags:embed_tymux=true
+build:sinkguard --@rules_go//go/config:tags=sinkguard
+build:gitoracle --@rules_go//go/config:tags=gitoracle
+build:integration --@rules_go//go/config:tags=integration
+# Race needs cgo, so it turns off the pure-Go default (build:linux pure arrives in Task 1.1c).
+build:race --@rules_go//go/config:pure=false
+build:race --@rules_go//go/config:race
+# release == embed_tymux, repeated rather than `--config=embed_tymux` (no spike-verified row for
+# --config yet, and the full tag set must stay in one line anyway).
+build:release --@rules_go//go/config:tags=embed_tmux,embed_tymux
+build:release --//tools/bzl/flags:embed_tmux=true
+build:release --//tools/bzl/flags:embed_tymux=true
+
 try-import %workspace%/user.bazelrc

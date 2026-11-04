@@ -118,7 +118,7 @@ if [ -z "${BZL_CHECK_SKIP_HELP:-}" ]; then
     grep -qE -- "^ *--(\[no\])?${n}( |\$)" "$hf" \
       || { n2=${n#no}; grep -qE -- "^ *--\[no\]${n2}( |\$)" "$hf"; } \
       || fail "$flag ($cmd) is not in 'bazel help $helpcmd --long' for $(cat .bazelversion 2>/dev/null)"
-  done < <(rcbody "${rcfiles[@]}" | awk '{c=$1; sub(/:.*/,"",c); for(i=2;i<=NF;i++){f=$i; sub(/=.*/,"",f); if (f ~ /^--/) print c, f}}' | sort -u)
+  done < <(rcbody "${rcfiles[@]}" | awk '{c=$1; sub(/:.*/,"",c); for(i=2;i<=NF;i++){f=$i; sub(/=.*/,"",f); if (f ~ /^--[a-z]/) print c, f}}' | sort -u)
 fi
 
 # every flag in the rc files needs a spike-verified row (Task 0.2b) in spike-results.md
