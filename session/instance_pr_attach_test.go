@@ -14,6 +14,14 @@ type fakePRPersister struct {
 	calls []fakePRCall
 	err   error
 	res   PRLinkResult
+	// terminalWrites records UpdateGitHubPRStatusTerminal calls; terminalErr is returned from them.
+	terminalWrites []terminalWrite
+	terminalErr    error
+}
+
+type terminalWrite struct {
+	title    string
+	terminal bool
 }
 
 type fakePRCall struct {
@@ -28,6 +36,13 @@ func (f *fakePRPersister) AttachSessionPR(_ context.Context, uuid string, ref PR
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakePRCall{uuid, ref, link, m})
 	return f.res, f.err
+}
+
+func (f *fakePRPersister) UpdateGitHubPRStatusTerminal(title string, terminal bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminalWrites = append(f.terminalWrites, terminalWrite{title, terminal})
+	return f.terminalErr
 }
 
 func (f *fakePRPersister) callCount() int {

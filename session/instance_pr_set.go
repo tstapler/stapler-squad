@@ -31,6 +31,7 @@ func prMirrorOf(g GitHubIntegration) PRMirror {
 // only implementation.
 type prSetPersister interface {
 	AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error)
+	UpdateGitHubPRStatusTerminal(title string, terminal bool) error
 }
 
 // SetPRPersister injects the storage backend AttachPR persists through.
@@ -284,5 +285,49 @@ func (i *Instance) attachLegacyPR(number int, source AttachSource, initial PRIni
 	default:
 		log.Warn("attach PR failed; writing the legacy PR scalar only", "session", i.Snapshot().Title, "err", err)
 		return false
+	}
+}
+
+// AttachScannedPR links a PR the terminal scan found in push or `gh pr create`
+// output. The caller has already matched the URL's host, owner and repo to the
+// session's. A session that cannot hold a link (no uuid) takes the legacy scalar
+// write instead, clearing the stored terminal flag when the number changes so a
+// merged PR's true does not ride onto the new one.
+func (i *Instance) AttachScannedPR(prURL string, number int) {
+	if i.attachLegacyPR(number, AttachSourcePushScan, PRInitial{URL: prURL}) {
+		return
+	}
+	changed, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
+		inst := s.inst
+		inst.mu.Lock()
+		changed := inst.GitHubPRNumber != number
+		inst.GitHubPRURL, inst.GitHubPRNumber = prURL, number
+		if changed {
+			inst.GitHubPRStatusTerminal = false
+		}
+		snap := buildSnapshot(inst)
+		inst.mu.Unlock()
+		inst.snapshot.Store(snap)
+		return changed, nil
+	})
+	if changed {
+		i.persistTerminalClear()
+	}
+}
+
+// persistTerminalClear writes terminal=false to the session row at once (title
+// keyed, so it works without a uuid or a link). When that is not possible the
+// terminalClearPending bit makes the next full save write it.
+func (i *Instance) persistTerminalClear() {
+	i.prPersistMu.Lock()
+	defer i.prPersistMu.Unlock()
+	if i.prPersister == nil {
+		i.terminalClearPending.Store(true)
+		return
+	}
+	title := i.Snapshot().Title
+	if err := i.prPersister.UpdateGitHubPRStatusTerminal(title, false); err != nil {
+		i.terminalClearPending.Store(true)
+		log.Warn("clear stored PR terminal flag failed; the next save retries", "session", title, "err", err)
 	}
 }

@@ -890,70 +890,53 @@ func TestOutputShowsConversationStarted(t *testing.T) {
 	}
 }
 
-// prURLCase is the shared case shape for TestScanTerminalForPRURL.
-type prURLCase struct {
-	name      string
-	output    string
-	wantURL   string
-	wantPRNum int
+// pushedPRURLCase is the case shape for TestScanTerminalForPushedPRURLs.
+type pushedPRURLCase struct {
+	name   string
+	output string
+	want   []string
 }
 
-// scanTerminalForPRURLMatchCases covers output containing a GitHub PR URL.
-func scanTerminalForPRURLMatchCases() []prURLCase {
-	return []prURLCase{
+func scanTerminalForPushedPRURLsCases() []pushedPRURLCase {
+	return []pushedPRURLCase{
 		{
 			name: "git push output with PR create link",
 			output: `remote: Create a pull request for 'feat/my-feature' on GitHub by visiting:
 remote:      https://github.com/tstapler/stapler-squad/pull/128
 remote:`,
-			wantURL:   "https://github.com/tstapler/stapler-squad/pull/128",
-			wantPRNum: 128,
+			want: []string{"https://github.com/tstapler/stapler-squad/pull/128"},
 		},
 		{
 			name: "git push output with PR update link",
 			output: `To github.com:tstapler/stapler-squad.git
    5353e50..abcd123  feat/my-feature -> feat/my-feature
 remote: https://github.com/tstapler/stapler-squad/pull/42`,
-			wantURL:   "https://github.com/tstapler/stapler-squad/pull/42",
-			wantPRNum: 42,
+			want: []string{"https://github.com/tstapler/stapler-squad/pull/42"},
 		},
 		{
-			name:      "URL with trailing punctuation stripped",
-			output:    `See: https://github.com/tstapler/stapler-squad/pull/99.`,
-			wantURL:   "https://github.com/tstapler/stapler-squad/pull/99",
-			wantPRNum: 99,
+			name:   "gh pr create prints the bare URL",
+			output: "Creating pull request for feat/x into main in acme/app\n\nhttps://github.com/acme/app/pull/7\n",
+			want:   []string{"https://github.com/acme/app/pull/7"},
 		},
+		{
+			name:   "two push results are returned oldest first",
+			output: "remote: https://github.com/acme/app/pull/12\nremote: https://github.com/acme/app/pull/13\n",
+			want:   []string{"https://github.com/acme/app/pull/12", "https://github.com/acme/app/pull/13"},
+		},
+		{name: "a mention inside other text is not a push result", output: "See: https://github.com/tstapler/stapler-squad/pull/99.", want: nil},
+		{name: "no PR URL in output", output: "remote: Resolving deltas: 100% (3/3), done.", want: nil},
+		{name: "empty output", output: "", want: nil},
 	}
 }
 
-// scanTerminalForPRURLNoMatchCases covers output with no GitHub PR URL.
-func scanTerminalForPRURLNoMatchCases() []prURLCase {
-	return []prURLCase{
-		{
-			name:      "no PR URL in output",
-			output:    `remote: Resolving deltas: 100% (3/3), done.`,
-			wantURL:   "",
-			wantPRNum: 0,
-		},
-		{
-			name:      "empty output",
-			output:    "",
-			wantURL:   "",
-			wantPRNum: 0,
-		},
-	}
-}
-
-func TestScanTerminalForPRURL(t *testing.T) {
+func TestScanTerminalForPushedPRURLs(t *testing.T) {
 	t.Parallel()
-	cases := append(scanTerminalForPRURLMatchCases(), scanTerminalForPRURLNoMatchCases()...)
-	for _, tc := range cases {
+	for _, tc := range scanTerminalForPushedPRURLsCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gotURL, gotNum := scanTerminalForPRURL(tc.output)
-			if gotURL != tc.wantURL || gotNum != tc.wantPRNum {
-				t.Errorf("scanTerminalForPRURL() = (%q, %d), want (%q, %d)",
-					gotURL, gotNum, tc.wantURL, tc.wantPRNum)
+			got := scanTerminalForPushedPRURLs(tc.output)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("scanTerminalForPushedPRURLs() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -1544,26 +1527,22 @@ func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutine
 }
 
 // TestScanAndLinkPRURL_RepublishesSnapshot is a regression test for a
-// staleness bug a code review of backlog 10fc3913 caught: scanAndLinkPRURL
-// wrote GitHubPRURL/GitHubPRNumber under inst.mu but never republished the
-// snapshot, so GitHub() (and instance_adapter.go's API responses, which
-// already read via Snapshot()) could never observe the auto-linked PR.
+// staleness bug a code review of backlog 10fc3913 caught: the scan wrote the PR
+// fields without republishing the snapshot, so GitHub() (and the API responses,
+// which read via Snapshot()) could never observe the auto-linked PR.
 func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 	inst := &Instance{Title: "scan-pr-url-test", GitHubOwner: "octocat", GitHubRepo: "Hello-World"}
 	finishInstanceConstruction(inst)
 
 	output := "remote: Create a pull request for 'foo' on GitHub by visiting:\nremote:      https://github.com/octocat/Hello-World/pull/42\n"
-	linked := scanAndLinkPRURL(inst, true, false, nil, output)
+	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, output)
 
-	if !linked {
-		t.Fatal("expected scanAndLinkPRURL to report the PR as linked")
-	}
 	gh := inst.GitHub()
 	if gh.PRNumber != 42 {
-		t.Errorf("GitHub().PRNumber = %d, want 42 (snapshot was not republished after the raw write)", gh.PRNumber)
+		t.Errorf("GitHub().PRNumber = %d, want 42 (snapshot was not republished)", gh.PRNumber)
 	}
 	if gh.PRURL == "" {
-		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished after the raw write)")
+		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished)")
 	}
 }
 

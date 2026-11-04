@@ -765,6 +765,8 @@ func setGitHubPRMirrorFields(sessionUpdate *ent.SessionUpdateOne, data InstanceD
 		}
 		if data.GitHubPRStatusTerminal {
 			sessionUpdate.SetGithubPrStatusTerminal(true)
+		} else if data.TerminalClearPending {
+			sessionUpdate.SetGithubPrStatusTerminal(false)
 		}
 	}
 }

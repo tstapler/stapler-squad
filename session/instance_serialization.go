@@ -166,6 +166,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		PRs:                    snap.GitHub.PRs,
 		LegacyPRUnrepresented:  snap.GitHub.LegacyPRUnrepresented,
 		HasPRLinks:             snap.GitHub.HasPRLinks,
+		TerminalClearPending:   i.terminalClearPending.Load(),
 		// Crew autonomy mode
 		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata

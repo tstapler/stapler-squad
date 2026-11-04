@@ -401,6 +401,9 @@ type Instance struct {
 	prPersistPending atomic.Bool
 	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
 	prLegacyPathLogged atomic.Bool
+	// terminalClearPending marks a failed immediate clear of the stored terminal
+	// flag; the next full save writes false (guarded by prPersistMu).
+	terminalClearPending atomic.Bool
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 

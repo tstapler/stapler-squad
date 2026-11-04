@@ -89,6 +89,9 @@ type InstanceData struct {
 	PRs                   []PRView `json:"-"`
 	LegacyPRUnrepresented bool     `json:"-"`
 	HasPRLinks            bool     `json:"-"`
+	// TerminalClearPending asks the full save to write terminal=false even for a
+	// session without links, whose normal save only ever sets the flag.
+	TerminalClearPending bool `json:"-"`
 	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
 	AutonomousMode bool `json:"autonomous_mode,omitempty"`
 
@@ -418,6 +421,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
 			}
 		}
 		inst.clearPRPersistPending()
+		inst.terminalClearPending.Store(false)
 		return true
 	})
 }
@@ -874,6 +878,15 @@ func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, ter
 	if !terminal {
 		return nil
 	}
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
+	})
+}
+
+// UpdateGitHubPRStatusTerminal writes the stored terminal flag of one session by
+// title. Unlike UpdateInstancePRStatus it also writes false, which the terminal
+// scan needs to clear a merged PR's flag that would otherwise ride onto a new PR.
+func (s *Storage) UpdateGitHubPRStatusTerminal(title string, terminal bool) error {
 	return s.writeRow(title, func() error {
 		return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
 	})
