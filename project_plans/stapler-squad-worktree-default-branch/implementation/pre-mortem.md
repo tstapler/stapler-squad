@@ -18,8 +18,8 @@ Evidence labels: VERIFIED = command run while writing this note; INFERRED = reas
 | 7 | The fork tag or pin regresses later: `v5.19.3-ssq.3` is moved or deleted, or a dependency bump swaps in upstream or an older fork tag. Everything except the two ResolveRef-ported functions fails again, and no test in this plan guards it. | `go.mod:232` diff in a PR; build fails on a missing tag; error reappears after a later deploy. | Keep Task 2.1c (pin and `git ls-remote` check) and add a one-line follow-up backlog item for a CI test that opens a worktreeConfig repo fixture through each go-git consumer, rather than widening this plan. | P3 |
 
 ## P1 Items (address before implementation)
-- [ ] Failure #1 — In `plan.md` Story 1.2.3, make the deterministic `session/repo_path_test.go` worktreeconfig test run (named, exit 0, not skipped) plus a new-worktree session start the required controls, relabel the 15:25:17 record as weak (glossary `positive control` and Story 1.2.3 AC), and gate Task 3.1b so AC11 is reported only when they pass.
-- [ ] Failure #2 — In `plan.md` Task 1.1a, add the pre-run checks (WIP count, `uptime`, `free -g`), private tmux socket confirmation or an exported `STAPLER_SQUAD_TMUX_SOCKET`, scratch on disk, and before/after `ActiveEnterTimestamp` capture with an abort rule and a recovery note.
+- [x] Failure #1 — In `plan.md` Story 1.2.3, make the deterministic `session/repo_path_test.go` worktreeconfig test run (named, exit 0, not skipped) plus a new-worktree session start the required controls, relabel the 15:25:17 record as weak (glossary `positive control` and Story 1.2.3 AC), and gate Task 3.1b so AC11 is reported only when they pass.
+- [x] Failure #2 — In `plan.md` Task 1.1a, add the pre-run checks (WIP count, `uptime`, `free -g`), private tmux socket confirmation or an exported `STAPLER_SQUAD_TMUX_SOCKET`, scratch on disk, and before/after `ActiveEnterTimestamp` capture with an abort rule and a recovery note.
 
 ## Count
 P1: 2, P2: 4, P3: 1.
