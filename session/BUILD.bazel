@@ -845,6 +845,14 @@ go_test(
         "worktree_pr_poller_test.go",
         "worktree_type_mismatch_metrics_test.go",
     ],
+    data = glob(["*.go"]) + [
+        "//:go.mod",
+        "//docs/adr:ADR-002-workspace-host-registry-gossip.md",
+        "//jules:types.go",
+        "//session/detection:testdata",
+        "//session/testdata:all",
+        "//session/tokens:testdata",
+    ],
     embed = [":session"],
     deps = [
         "//config",
@@ -852,6 +860,7 @@ go_test(
         "//executor/safeexec",
         "//github",
         "//internal/fsevents",
+        "//internal/reporoot",
         "//internal/sqlitedsn",
         "//jira",
         "//jules",
@@ -951,4 +960,23 @@ go_test(
         ],
         "//conditions:default": [],
     }),
+)
+
+exports_files(
+    ["transition_callers.go"],
+    visibility = ["//tools/lint/silenttransition:__pkg__"],
+)
+
+# Read by session/tymux's metrics guard test, which scans these sources.
+# Read by server/services tests that scan session sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)
+
+filegroup(
+    name = "backend_sources",
+    srcs = glob(["backend_*.go"]),
+    visibility = ["//session/tymux:__pkg__"],
 )

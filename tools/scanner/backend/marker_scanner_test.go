@@ -9,7 +9,7 @@ import (
 
 func testdataDir() string {
 	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "testdata")
+	return filepath.Join(callerDir(file), "testdata")
 }
 
 func TestScanMarkers_HandlerFile(t *testing.T) {

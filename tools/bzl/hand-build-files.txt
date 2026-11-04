@@ -12,3 +12,8 @@ web-app/BUILD.bazel  # planned: Task 0.6
 macos/BUILD.bazel  # planned: Epic 6
 session/tmux/embed/BUILD.bazel  # planned: Task 0.7
 session/tymux/embed/BUILD.bazel  # planned: Task 0.7
+docs/how-to/BUILD.bazel  # planned: Task 4.10a
+contracts/BUILD.bazel  # planned: Task 4.10a
+session/testdata/BUILD.bazel  # planned: Task 4.10a
+docs/adr/BUILD.bazel  # planned: Task 4.10a
+scripts/BUILD.bazel  # planned: Task 4.10a

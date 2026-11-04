@@ -65,3 +65,10 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by session/unfinished tests that walk the in-module import graph and scan sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

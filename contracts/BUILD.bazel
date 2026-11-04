@@ -1,0 +1,9 @@
+# Hand-written: exposes contract fixtures read by tests (Gazelle ignores BUILD files without Go sources).
+filegroup(
+    name = "webhook_management_v1",
+    srcs = glob(["webhook-management/**"]),
+    visibility = [
+        "//server/integrations/contractarchive:__pkg__",
+        "//server/services:__pkg__",
+    ],
+)

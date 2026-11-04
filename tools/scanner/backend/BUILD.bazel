@@ -28,5 +28,9 @@ go_test(
         "service_pattern_parity_test.go",
         "testhelpers_test.go",
     ],
+    data = glob(["testdata/**"]) + [
+        "//proto/session/v1:protos",
+        "//tools/scanner:list-backend-protos.sh",
+    ],
     embed = [":backend"],
 )

@@ -16,7 +16,8 @@ def _host_coupled_gets_external_impl(ctx):
     env = unittest.begin(ctx)
     asserts.equals(env, ["x", "external"], go_test_defaults("session/vc", {"tags": ["x"]})["tags"])
     asserts.equals(env, ["external"], go_test_defaults("session", {})["tags"])
-    asserts.equals(env, ["external"], go_test_defaults("executor", {"tags": ["external"]})["tags"])
+    asserts.equals(env, ["external"], go_test_defaults("tuitest/integration/claude_squad", {"tags": ["external"]})["tags"])
+    asserts.false(env, "tags" in go_test_defaults("executor", {}))
     asserts.false(env, "tags" in go_test_defaults("github", {}))
     return unittest.end(env)
 

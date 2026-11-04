@@ -1,0 +1,19 @@
+# Hand-written: exposes fixtures read by tests (Gazelle excludes **/testdata; this directory is its own Bazel package).
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    visibility = [
+        "//server/services:__pkg__",
+        "//server/wakes:__pkg__",
+        "//session:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "panes",
+    srcs = glob(["panes/**"]),
+    visibility = ["//session/detection/binaries:__pkg__"],
+)

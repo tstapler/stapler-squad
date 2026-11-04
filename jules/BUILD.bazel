@@ -39,10 +39,19 @@ go_test(
     ],
     embed = [":jules"],
     tags = ["manual"],  # keep
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]),
     deps = [
         "//executor/safeexec",
         "//log",
         "//testutil/wait",
         "@com_github_zalando_go_keyring//:go-keyring",
     ],
+)
+
+exports_files(
+    ["types.go"],
+    visibility = ["//session:__pkg__"],
 )

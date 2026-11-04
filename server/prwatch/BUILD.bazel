@@ -73,6 +73,13 @@ go_test(
         "watchset_test.go",
     ],
     embed = [":prwatch"],
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]) + [
+        "//docs/how-to:inbox-pr-watch.md",
+        "//server/prwatch/inbox:go_sources",
+    ],
     tags = ["manual"],  # keep
     deps = [
         "//config",

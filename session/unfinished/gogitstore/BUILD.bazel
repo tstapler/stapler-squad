@@ -58,7 +58,13 @@ go_test(
         "trunc_fault_signal_test.go",
     ],
     embed = [":gogitstore"],
-    tags = ["manual"],  # keep
+    data = [
+        "//:go.mod",
+        "//config/workspacepath:go_sources",
+        "//log:go_sources",
+        "//session/unfinished:gogit_vcs_reader.go",
+        ":go_sources",
+    ],
     deps = [
         "//executor/safeexec",
         "//session/unfinished/internal/testrepo",
@@ -72,4 +78,11 @@ go_test(
         "@com_github_go_git_go_git_v5//plumbing/object",
         "@org_uber_go_goleak//:goleak",
     ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
 )

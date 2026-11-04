@@ -97,7 +97,7 @@ go_test(
         "runner_test.go",
     ],
     embed = [":clihelp"],
-    tags = ["manual"],  # keep
+    data = glob(["testdata/**"]),
     deps = [
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
@@ -180,4 +180,10 @@ go_test(
         ],
         "//conditions:default": [],
     }),
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//server/services:__pkg__"],
 )

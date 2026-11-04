@@ -122,6 +122,7 @@ go_test(
         "wake_tools_identity_test.go",
         "wake_tools_rig_test.go",
     ],
+    data = glob(["*.go"]),
     embed = [":mcp"],
     deps = [
         "//config",
@@ -155,4 +156,11 @@ go_test(
         "@com_github_zalando_go_keyring//:go-keyring",
         "@org_uber_go_goleak//:goleak",
     ],
+)
+
+# Read by server/services tests that scan MCP tool sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
 )

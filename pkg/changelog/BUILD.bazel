@@ -22,7 +22,7 @@ go_test(
     name = "changelog_test",
     srcs = ["parser_test.go"],
     embed = [":changelog"],
-    tags = ["manual"],  # keep
+    data = ["//:CHANGELOG.md"],
     deps = [
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

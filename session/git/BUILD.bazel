@@ -87,7 +87,7 @@ go_test(
         "worktree_test.go",
     ],
     embed = [":git"],
-    tags = ["manual"],  # keep
+    data = ["//:.gitignore"],
     deps = [
         "//executor/safeexec",
         "//session/git/backend",

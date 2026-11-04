@@ -66,6 +66,7 @@ go_test(
         "straggler_test.go",
         "system_ids_test.go",
     ],
+    data = glob(["*.go"]),
     embed = [":deliverygate"],
     deps = [
         "//config",

@@ -78,6 +78,10 @@ go_test(
         "storm_test.go",
         "timer_test.go",
     ],
+    data = [
+        "//pkg/events:types.go",
+        "//session/testdata:all",
+    ],
     embed = [":wakes"],
     deps = [
         "//executor/safeexec",

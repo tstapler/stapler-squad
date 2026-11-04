@@ -58,6 +58,7 @@ go_test(
         "spend_rate_test.go",
         "store_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":tokens"],
     deps = [
         "//config",
@@ -68,5 +69,14 @@ go_test(
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+    ],
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
     ],
 )

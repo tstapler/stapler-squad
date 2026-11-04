@@ -23,7 +23,7 @@ alias(
 go_test(
     name = "silenttransition_test",
     srcs = ["analyzer_test.go"],
-    tags = ["manual"],  # keep
+    data = ["//session:transition_callers.go"],
     deps = [
         ":silenttransition",
         "@lint_x_tools//go/analysis/analysistest",

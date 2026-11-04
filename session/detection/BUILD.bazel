@@ -66,6 +66,7 @@ go_test(
         "terminal_detector_test.go",
         "testmain_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":detection"],
     deps = [
         "//proto/session/v1:sessionv1_go",
@@ -74,4 +75,10 @@ go_test(
         "//testutil/wait",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//session:__pkg__"],
 )

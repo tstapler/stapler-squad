@@ -80,7 +80,7 @@ go_test(
         "worktree_remove_test.go",
     ],
     embed = [":native"],
-    tags = ["manual"],  # keep
+    data = glob(["testdata/**"]),
     deps = [
         "//executor/safeexec",
         "//log",
@@ -98,4 +98,11 @@ go_test(
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//codes",
     ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
 )
