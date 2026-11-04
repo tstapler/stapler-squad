@@ -20,3 +20,10 @@ Fixed and merged in afbc063dd (#1430): go-git fork `v5.19.3-ssq.3` plus `ops.go`
 - AC 11: no `does not support extension: worktreeconfig` lines in `~/.stapler-squad/logs/staplersquad.log` after deploying a binary built from the fix. Zero matches against the old binary is not proof.
 
 ACs 1-8 and 10 are already marked passing.
+
+## Clarifications (phase 4 triad review)
+
+- **Who is affected:** the backlog dispatcher/operator; async session start fails for any repo with a linked worktree.
+- **AC11 log path:** the AC text names `~/.stapler-squad/logs/staplersquad.log`, which is stale for this host. The live log is `~/.stapler-squad/workspaces/d685c4b1a423cca3/logs/staplersquad.log`. Count only real errors (`err`/`error` JSON field), not the description echoed in session prompts; the window starts at the service's `ActiveEnterTimestamp` (2026-11-04 12:27:48 PST) and the report states its length.
+- **Deployed binary:** `go version -m` shows `vcs.revision=afbc063dd` (the merge commit, which contains the ops.go port) and go-git `v5.19.3-ssq.3`; `vcs.modified=true` is noted.
+- **Out of scope:** redeploying from this worktree; code changes unless verification finds a defect; extensions the fork still rejects (`objectformat`, `refstorage`, `relativeworktrees`), which get a separate follow-up.
