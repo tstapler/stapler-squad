@@ -8,6 +8,7 @@ go_library(
         "graph.go",
         "main.go",
         "manifest.go",
+        "quarantine.go",
         "registry.go",
         "replay.go",
         "selector.go",

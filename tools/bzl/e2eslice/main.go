@@ -22,7 +22,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
 func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errw, "usage: e2eslice <check-manifest|merge|list-groups|specs-of|registry-coverage|select|replay|universal-share|gen-build|plan-shards|check-global-inputs|check-no-binary-dep> [flags]")
+		fmt.Fprintln(errw, "usage: e2eslice <check-manifest|check-quarantine|merge|list-groups|specs-of|registry-coverage|select|replay|universal-share|gen-build|plan-shards|check-global-inputs|check-no-binary-dep> [flags]")
 		return 2
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -163,6 +163,19 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 					fmt.Fprintln(out, strings.TrimPrefix(sp, e2eDir+"/"))
 				}
 			}
+		}
+	case "check-quarantine":
+		rows, err := readQuarantine(R(e2eDir + "/quarantine.json"))
+		if err != nil {
+			return fail(err)
+		}
+		build, _ := os.ReadFile(R(e2eDir + "/BUILD.bazel"))
+		bad := checkQuarantine(rows, string(build))
+		for _, b := range bad {
+			fmt.Fprintln(errw, "quarantine:", b)
+		}
+		if len(bad) > 0 {
+			return 1
 		}
 	case "universal-share":
 		return universalShare(*root, *rev, *n, *root1, out, errw)

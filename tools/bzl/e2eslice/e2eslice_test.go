@@ -311,3 +311,56 @@ func TestGlobs(t *testing.T) {
 		t.Error("false match")
 	}
 }
+
+func TestListGroupsAndSpecsOfCLI(t *testing.T) {
+	root := t.TempDir()
+	for _, s := range fixtureSpecs {
+		mustWrite(t, filepath.Join(root, s), "")
+	}
+	b, _ := json.Marshal(fixtureManifest())
+	mustWrite(t, filepath.Join(root, manifestPath), string(b))
+	mustWrite(t, filepath.Join(root, globalsPath), "go.mod\n")
+	var out, errw bytes.Buffer
+	if code := run([]string{"list-groups", "-root", root}, nil, &out, &errw); code != 0 || strings.TrimSpace(out.String()) != "//tests/e2e:misc" {
+		t.Fatalf("list-groups: %d %q %s", code, out.String(), errw.String())
+	}
+	out.Reset()
+	if code := run([]string{"specs-of", "-root", root, "-group", "//tests/e2e:misc"}, nil, &out, &errw); code != 0 || !strings.Contains(out.String(), "alias.spec.ts") {
+		t.Fatalf("specs-of: %d %q", code, out.String())
+	}
+}
+
+func TestUniversalShareCountsClosureHits(t *testing.T) {
+	g := parseGraph(mod + "/server " + mod + "/session\n" + mod + "/session\n" + mod + "/github\n")
+	cl := map[string]bool{}
+	for _, p := range g.Closure([]string{mod + "/server"}) {
+		cl[p] = true
+	}
+	if !cl[mod+"/session"] || cl[mod+"/github"] {
+		t.Fatalf("closure %v", cl)
+	}
+}
+
+func TestCheckQuarantine(t *testing.T) {
+	ok := QuarantineRow{Spec: "a", Owner: "o", Issue: "#1", Date: "2099-01-01", Expiry: "2099-01-30"}
+	if bad := checkQuarantine([]QuarantineRow{ok}, ""); len(bad) != 0 {
+		t.Fatalf("valid row rejected: %v", bad)
+	}
+	long := ok
+	long.Expiry = "2099-03-01"
+	noOwner := ok
+	noOwner.Owner = ""
+	for name, c := range map[string]struct {
+		rows  []QuarantineRow
+		build string
+	}{
+		"expiry over 30 days": {[]QuarantineRow{long}, ""},
+		"no owner":            {[]QuarantineRow{noOwner}, ""},
+		"flaky=True":          {nil, "e2e_test(flaky = True)"},
+		"flaky attempts":      {nil, "--flaky_test_attempts=3"},
+	} {
+		if len(checkQuarantine(c.rows, c.build)) == 0 {
+			t.Errorf("%s not rejected", name)
+		}
+	}
+}
