@@ -95,6 +95,8 @@ endif
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
+	@echo "precondition: Bazel needs no generated code; plain go and gopls need 'make sync' (check this host with 'make bazel-doctor')."
+	@echo "  gen/ is not a Bazel input; 'make go-build' / 'make go-test' (when present) run the sync first."
 	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # BUILD_SYSTEM switch, Bazel skeleton targets and the Bazel repo guards. Included after `help`

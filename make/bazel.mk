@@ -12,7 +12,10 @@ define wrap
 BAZEL_REAL=$$(command -v bazelisk || command -v bazel) tools/bazel $(1)
 endef
 
-.PHONY: gazelle gazelle-check sync ready-bazel-guards
+.PHONY: gazelle gazelle-check sync ready-bazel-guards bazel-doctor
+
+bazel-doctor: ## Nine host/worktree Bazel health checks (version, cache, disk, slots, memory, BUILD freshness); exit 0 unless one fails
+	bash tools/bzl/doctor.sh
 
 gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel)
 	$(call wrap,run //:gazelle)
@@ -39,5 +42,10 @@ ready-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, .bazelr
 	bash tools/bzl/check-bazelrc_test.sh
 	bash tools/bzl/check-configs.sh
 	bash tools/bzl/check-no-force-push.sh
+	bash tools/bzl/translate-errors_test.sh
+	bash tools/bzl/translate-errors_test.sh --negative
+	bash tools/bzl/check-build-fresh-cheap_test.sh
+	bash tools/bzl/doctor_test.sh
+	bash tools/bzl/check-make-help.sh
 	bash tools/bzl/check-no-force-push_test.sh
 	bash scripts/hooks/pre-push-no-force_test.sh

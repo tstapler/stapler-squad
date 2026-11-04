@@ -41,6 +41,15 @@ jobs:
           bash tools/bzl/check-bazelrc.sh
           bash tools/bzl/check-configs.sh
           bash tools/bzl/check-no-force-push.sh
+          bash tools/bzl/translate-errors_test.sh
+          bash tools/bzl/translate-errors_test.sh --negative
+          bash tools/bzl/check-build-fresh-cheap_test.sh
+          bash tools/bzl/doctor_test.sh
+          bash tools/bzl/check-make-help.sh
+
+      # T5 collector for P10 (Task 7.5g): every seeded failure shows a Remedy: line within 20 lines.
+      - name: First-error legibility
+        run: bash tools/bzl/check-error-legibility.sh | tee legibility.txt | tail -n 1
 
       - name: PR title is a Conventional Commit
         if: github.event_name == 'pull_request'
