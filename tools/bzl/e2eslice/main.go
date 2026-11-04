@@ -39,12 +39,17 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 	root1 := fs.String("universal-root", modulePath+"/server", "universal-share: package every spec observes")
 	shards := fs.Int("shards", 5, "plan-shards: runner count")
 	durations := fs.String("durations", "", "plan-shards: durations.json {target: seconds}")
+	onlyManaged := fs.Bool("only-managed", false, "select/replay: treat only manifest specs as existing (partial-manifest sample runs)")
+	groupSize := fs.Int("group-size", 0, "override specs per target (1 measures per-spec share on a sample)")
 	group := fs.String("group", "", "specs-of: target name")
 	check := fs.Bool("check", false, "gen-build: fail if the committed file differs")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	rest := fs.Args()
+	if *groupSize > 0 {
+		maxGroup = *groupSize
+	}
 	R := func(p string) string {
 		if filepath.IsAbs(p) {
 			return p
@@ -121,7 +126,7 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 				cov.Specs, cov.WithFeatureID, cov.WithResolvableID, cov.AllIDsResolve, cov.WithExistingFile, cov.WithGoFile, cov.WithWebFile, cov.DistinctIDs, len(cov.UnresolvedIDs))
 		}
 	case "select", "replay":
-		sel, err := buildSelector(*root, *mp, *gp, *closureMode)
+		sel, err := buildSelector(*root, *mp, *gp, *closureMode, *onlyManaged)
 		if err != nil {
 			return fail(err)
 		}
@@ -150,7 +155,7 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 		st := replay(cs, sel.Select)
 		emit(st)
 	case "list-groups", "specs-of":
-		sel, err := buildSelector(*root, *mp, *gp, "none")
+		sel, err := buildSelector(*root, *mp, *gp, "none", false)
 		if err != nil {
 			return fail(err)
 		}
@@ -311,18 +316,30 @@ func loadQuarantine(p string) map[string]bool {
 	return q
 }
 
-func buildSelector(root, mp, gp, closureMode string) (*Selector, error) {
-	m, err := readManifest(filepath.Join(root, mp))
+func buildSelector(root, mp, gp, closureMode string, onlyManaged bool) (*Selector, error) {
+	abs := func(p string) string {
+		if filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(root, p)
+	}
+	m, err := readManifest(abs(mp))
 	if err != nil {
 		return nil, fmt.Errorf("%w (no manifest: run the capture first, see Task 12.1a)", err)
 	}
-	globs, err := loadGlobs(filepath.Join(root, gp))
+	globs, err := loadGlobs(abs(gp))
 	if err != nil {
 		return nil, err
 	}
 	specs, err := listSpecs(root, e2eDir)
 	if err != nil {
 		return nil, err
+	}
+	if onlyManaged {
+		specs = nil
+		for _, e := range m.Specs {
+			specs = append(specs, e.Spec)
+		}
 	}
 	var closure func([]string) []string
 	if closureMode == "static" {
