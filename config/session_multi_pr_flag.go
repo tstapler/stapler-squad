@@ -66,5 +66,5 @@ func SessionMultiPRRefresher() bool { return LoadConfig().SessionMultiPRRefreshe
 
 // ArtifactScanV2Enabled reports whether the artifact blob v2 rescan may run.
 func (c *Config) ArtifactScanV2Enabled() bool {
-	return c.GetFeatureFlagWithDefault(ArtifactScanV2Flag, false)
+	return c.GetFeatureFlag(ArtifactScanV2Flag)
 }
