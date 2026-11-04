@@ -654,3 +654,97 @@ Evidence (VERIFIED, commands run in `stapler-squad.worktrees/bazel-otel-default`
 Non-hermetic (why this is not `Pass`): the action is `local`/`no-sandbox`/`no-remote`/`no-cache`/`requires-network`; `otelc` bumps and resolves modules from the host module cache or network; the source copy is the live checkout (Go changes still re-trigger it through the `:stapler-squad_lib` input); `otelc` itself is `go install`ed into `~/.cache/ssq-otel` at the pinned v1.0.1, not a Bazel repository. The private Go cache reached 4.6 GB across the stamped and unstamped variants; `otel_weave.sh` now drops it past 2 GB.
 
 Not verified: `--config=release` / `embed_tmux` staging through the rule (needs the tmux and tymuxd builds; wiring mirrors ADR-007's selects), macOS (`CGO_LDFLAGS` Info.plist branch lives only in the Makefile), and Windows (cross builds use `//:stapler-squad_plain`, which is uninstrumented).
+
+## S15b hermetic otel weave: findings (2026-11-03, Bazel 9.3.1, branch `sdd/bazel-otel-hermetic`, PROVISIONAL)
+
+**Result: a sandboxed, remote-cacheable woven build works (`//:stapler-squad_otel_hermetic`, non-default).** `//:stapler-squad` is untouched. The approach is not one of the four listed alternatives: keep otelc's toolexec build exactly as is, but remove `otelc setup` from the build by committing its output as an overlay, and feed the build only declared inputs (call it option (e) below). No otelc fork was needed. Commits on the branch: `8a03cbc6b`, `eab12059a`, `200bbf7cb`, `c98efbd7b` (plus this doc).
+
+### 1. How otelc v1.0.1 works (VERIFIED: source at `~/go/pkg/mod/go.opentelemetry.io/otelc@v1.0.1/tool`, plus runs)
+
+| Phase | What it does | Evidence |
+|---|---|---|
+| `otelc setup` (run twice by `scripts/otel-auto-build.sh`) | Extracts the embedded rule bundle (`tool/data/otelc-bundle.tgz`, `//go:embed` in `data/export.go`) to `.otelc-build/{instrumentation,pkg}` (1.1 MB tar); writes `otel.instrumentation.go` and root `otelc.runtime.go`; **rewrites go.mod** (bumps `gofrs/flock` v0.12.1 to v0.13.0, `otlptracegrpc` v1.39.0 to v1.44.0, `otelc/pkg` to v0.0.0, adds 12 `otelc/instrumentation/*` requires, 24 indirect requires, a `tool` directive, `otelc v1.0.1` and 14 absolute-path `replace` lines into `.otelc-build`) and go.sum (+ lines); runs `go build -a -x -n` (build plan, `internal/setup/find.go:38`) and, when `otel.instrumentation.go` already exists (pass 2), `go mod tidy` (`internal/setup/pin.go:368`); writes `.otelc-build/matched.json`. | `diff` of go.mod before/after `otelc setup .` in a scratch copy; offline rerun with the overlay applied failed at `failed to run command "go" ... [mod tidy]`. |
+| matched ruleset | 10 packages: std `log`, `log/slog`, `database/sql`, `net/http`, `runtime` (struct + raw rule), third-party `otel`, `otel/trace`, `otel/sdk/trace`, `grpc`, plus `main`. | `.otelc-build/matched.json` (python count). **It stores absolute paths**: GOROOT std files, module-cache files, the source dir, `.otelc-build`. |
+| `-toolexec=otelc toolexec` | Intercepts each `compile` (`internal/instrument/toolexec.go:94`), rewrites the AST of matched packages into `$WORK`, swaps the file in the compile argv by **absolute-path equality** with `matched.json` (`apply_func.go:319-328`). | Run with a different GOMODCACHE than setup: `cannot replace ../../../../go/pkg/mod/.../context.go with $WORK/b221/context.go`. |
+| vendor | When `vendor/modules.txt` exists otelc **forces `-mod=mod`** (`internal/setup/setup.go:344`, `vendor.go:forceModMod`). A vendor dir therefore cannot make the build offline; a module cache can. | source |
+
+Trace (`strace -f -e trace=openat,execve,connect`, one cold-GOCACHE woven build of the unmodified flow, filtered to unique paths, files under `~/.cache/tmp/ssq-otel-hermetic/trace.{open,exec}`, deleted afterwards): 50,275 unique opens outside the build copy and GOCACHE, **zero `connect` calls** (warm host module cache, so the network need is latent, see below). Reads outside the tree: host module cache `~/go/pkg/mod` (40,674 opens, 895 under `cache/download`, of which 106 are sumdb tile/lookup files), the rules_go SDK repo (5,466), scratch, `/usr/lib/gcc`, `/usr/include`, `/usr/local/include` (cgo), `~/.config/go/env` and `~/.config/go/telemetry/*` (Go telemetry counters), `$PATH` probes of ~15 home directories for `bash` and `as`, host `gcc`, `ld`, `as`, `collect2`, `sha256sum`. The latent network need: with an empty module cache and `GOPROXY=off`, pass 1 fails with `go: downloading github.com/gofrs/flock v0.12.1 ... module lookup disabled by GOPROXY=off`.
+
+### 2. Why each non-hermetic piece exists, and the removal (ranked by cost, lowest first)
+
+| Piece in S15 | Why it exists | Removal (proved unless noted) |
+|---|---|---|
+| source copied from the live checkout (`git ls-files`) | the generated `otelc.runtime.go`/go.mod must live in a writable tree | **Done.** Sources come from the `GoArchive` closure of `:stapler-squad_lib` (+ the safeexec lib the weave alone imports); generated proto/ent/web/staging from their Bazel targets; 1,872 files in 175 dirs, written to a manifest. |
+| `otelc setup` network/`go mod tidy`/go.mod mutation | otelc computes the rule set and module pins at build time | **Done.** Committed overlay `tools/bzl/otel_overlay/` (go.mod/go.sum with otelc pins, both generated Go files, rule bundle tar, `matched.json.tmpl` with `@SRC@ @GOROOT@ @MODCACHE@` placeholders). The weave runs only the toolexec build, `-mod=readonly`. go.mod/go.sum of the repo are never modified (`git diff` empty). |
+| otelc binary `go install`ed into `~/.cache/ssq-otel` | external tool | **Done.** Built inside the action from the module cache (`go build go.opentelemetry.io/otelc/tool/cmd/otelc`), hash-pinned by go.sum. |
+| host module cache and network | `-mod=mod` resolves and downloads | **Done (prototype form).** Action `OtelModcache` runs `go mod download` (`requires-network`, go.sum-verified, `-mod=readonly`) into a deterministic tarball (994 MB, 295 module zips). The weave extracts it to a private GOMODCACHE, `GOPROXY=off`. Better form (task 4): synthesize it from `go_deps` repos. |
+| host Go cache | speed | **Done.** Private `GOCACHE` per execution. Price: every miss is cold (section 6). |
+| `HOME`, `GOFLAGS`, `GOENV` leaks | default shell env | **Done.** `GOENV=off`, empty `HOME`, `GOFLAGS` set explicitly, `PATH=<sdk>:/usr/bin:/bin`. |
+| `local`/`no-sandbox`/`no-remote`/`no-cache` tags | all of the above | **Done.** Only `no-remote-exec` remains (run locally, cache remotely). |
+| host C toolchain (`gcc`, `ld`, `as`) | cgo packages; the weave bypasses rules_cc | **Not removed.** Still the host's `/usr/bin` seen read-only through the sandbox. Route: run cgo through the rules_cc toolchain (`CC=` from `cc_toolchain`), task 7. |
+| nondeterministic otelc output | map iteration order in setup | **Not removed**: the overlay generator is not byte-stable (see break 8). |
+
+### 3. What I ran in `linux-sandbox` and what broke, in order
+
+Run: `BAZEL_REAL=$(command -v bazelisk) tools/bazel build //:stapler-squad_otel_hermetic --jobs=4 --local_resources=memory=3000 --strategy=OtelWeaveHermetic=linux-sandbox --strategy=OtelModcache=linux-sandbox`. The weave action has no `requires-network`, so linux-sandbox gives it an empty network namespace; `GOPROXY=off` is set as well. Result: `Build completed successfully`, binary `strings | grep -c go.opentelemetry.io/otelc` = 523 (plain build: 0, same as S15), `./binary version` logs `OpenTelemetry initialized ... go.opentelemetry.io/otelc`. Before Bazel, the same recipe ran in `unshare -rn` with an empty HOME and a read-only module cache: exit 0 in 40 s.
+
+1. `otelc setup` cannot run offline against the pristine go.mod: it needs `flock v0.12.1` and `otlptracegrpc v1.39.0`, which the woven build does not (it needs v0.13.0/v1.44.0). Fix: do not run setup in the action (overlay).
+2. With the overlay present, setup still runs `go mod tidy`, which needs every module including test-only ones (`go: downloading github.com/bufbuild/buf ...`). Fix: also commit `matched.json` as a template, and skip setup entirely.
+3. `matched.json` absolute-path coupling (`cannot replace ... with $WORK/...`, above). Fix: placeholders substituted in the action from `go env GOROOT`, the extracted module cache and the work dir. Setup and build must agree on GOMODCACHE, which they do because both are the same action now.
+4. A tree-artifact module cache is symlinked into the sandbox and `//go:embed` rejects symlinks: `cannot embed irregular file otelc-bundle.tgz`, `pattern autocomplete: cannot embed directory ... contains no embeddable files`. Fix: ship the cache as one tarball and extract inside the action (a tree artifact also meant 50,187 symlinks per run).
+5. `cannot find module providing package .../instrumentation/otelc/safeexec ... -mod=readonly`: the custom rule package is not in the closure of `:stapler-squad_lib`. Fix: `extra_libs`.
+6. `-trimpath` as a CLI flag: `link: fingerprint mismatch: go.opentelemetry.io/otelc/pkg/runtime has ..., import from .../database/sql expecting ...` (otelc's nested hook-package builds do not see CLI flags). Fix: `-trimpath` in `GOFLAGS`.
+7. Output differed run to run by 59 bytes (Go and GNU build IDs): the toolexec string was a sandbox path, which cmd/go hashes into action IDs. Fix: `otelc` by name on `PATH`. **Still differs** after that fix (59 bytes, link action ID); cause not isolated (candidates: GOROOT path under the sandbox, cgo environment). Does not affect cache hits, only cross-machine bit-identity.
+8. `gen.sh CHECK=1` reports drift on an unchanged tree: otelc setup output is order-nondeterministic (go.mod `replace` order, `otelc.runtime.go` stub numbering, `matched.json` order). go.mod is equal after sorting; the other two are not canonicalized. Not fixed.
+
+### 4. Remote-cacheability (VERIFIED on the local disk cache, same action-cache protocol as a remote)
+
+`bazel build` of the target: 89 s (cold weave, host load ~15). After `rm bazel-bin/stapler-squad_otel_hermetic` and an identical rebuild: `INFO: 2 processes: 3 action cache hit, 1 disk cache hit` in **1.3 s**. The S15 rule re-ran its local action in 47.7 s after the same deletion (`no-cache`).
+
+### 5. Cross-compile (VERIFIED for Windows)
+
+`bazel build //:stapler-squad_otel_hermetic --platforms=@rules_go//go/toolchain:windows_amd64 ...` succeeded in 53 s and produced `PE32+ executable for MS Windows 6.01 (console), x86-64` with 549 otelc strings. Mechanism: the source closure is resolved under the target platform (so `_windows.go` files come with it), and the script sets `GOOS/GOARCH/CGO_ENABLED=0` when `go.mode` differs from the SDK host. Minimal change needed to retire `//:stapler-squad_plain` for Windows: point the Windows release target at this rule and run the Windows parity tests (Epic 6). Darwin is **UNVERIFIED**: the Makefile build uses cgo plus the Info.plist `CGO_LDFLAGS` branch, so a CGO-off woven Darwin build needs its own check (and a macOS runner, or osxcross).
+
+### 6. Cost (VERIFIED, bash `time`, load average 10 to 18 from another worker, so wall times are noisy; CPU-seconds are the stable column)
+
+| Build | wall | user + sys CPU |
+|---|---|---|
+| plain `go build`, cold private GOCACHE | 40.7 s | 322 s |
+| woven toolexec build, cold private GOCACHE, no setup | 41.9 s | 349 s (+8%) |
+| plain, 1-line change in `main.go`, warm cache | 7.2 s | 14.5 s |
+| woven, same | 5.8 s | 14.8 s |
+| S15 rule (Bazel, local, cold otelc and cache) | 59 s | not measured |
+| hermetic rule, cold (Bazel, includes sandbox setup, tar extraction of 994 MB) | 89 s | not measured |
+| hermetic rule, action-cache hit | 1.3 s | 0 |
+
+This does **not** reproduce `adoption-recommendation.md`'s 1.79x wall / 4.81x CPU: here the weave itself costs about +8% CPU; the earlier ratio likely included the two `otelc setup` passes and `go build -a -x -n` plan, which the overlay removes (UNVERIFIED explanation). The price of hermeticity is the cold GOCACHE: every action miss costs the full ~350 CPU-seconds, where S15's persistent cache made incremental rebuilds ~6 s. CI estimate (INFERRED): in the last 300 first-parent commits on `main`, 212 (71%) touch a weave input (`.go`, `.proto`, web sources, `go.mod/go.sum`, embed staging, `instrumentation/`) and 88 (29%) do not; each of the 29% skips about 350 CPU-seconds per platform job, and every further job in a PR run that needs the binary hits the entry the first one uploaded. The module-cache action is keyed only by go.mod/go.sum/overlay and is a hit almost always.
+
+### 7. Options
+
+| Option | What | Pros | Cons | Cost |
+|---|---|---|---|---|
+| (a) toolexec compile inside rules_go (`go_binary` with a wrapped `compile`) | Wrap the SDK `compile` with `otelc toolexec`, build everything with rules_go | per-package caching, incremental, best end state | otelc rewrites **std** (`runtime`, `net/http`, `log`, `database/sql`), but rules_go uses a precompiled stdlib (`go.sdk.libs`) and a rules_go `stdlib` rebuild would need forking; `matched.json` absolute paths do not survive per-action sandboxes; hook packages are built by otelc's nested `go build`, outside rules_go's importcfg | XL (fork rules_go stdlib + otelc) |
+| (b) weave as source-to-source action, compile hermetic | Emit instrumented files plus a Go `-overlay` JSON, then plain compile | weave output small and cacheable | std rewrites need `-overlay` support, which rules_go does not have; otelc has no "emit only" mode (rewrite and compile are fused in toolexec); compile is still cmd/go in a sandbox, so no cache gain over (e) | L (needs otelc fork) |
+| (c) fork otelc, add `--hermetic` | no go.mod mutation, no setup, path-independent matching, deterministic output | removes the overlay-template coupling and nondeterminism | owner-approved fork cost; still need modcache and cold GOCACHE | M |
+| (d) keep S15, harden | pin otelc, restrict env | cheap | stays local, no-cache, no remote cache, unsandboxed | S |
+| (e) **this prototype**: pre-computed overlay + sandboxed toolexec build | as above | proven today, no fork, remote-cacheable, Windows cross works, `go.mod` untouched | cold GOCACHE per miss, 994 MB cache tarball input, overlay must be regenerated when go.mod/otelc/custom rule change, host cgo toolchain | S to promote, M to harden |
+
+### 8. Recommendation
+
+Promote (e), then spend effort on (c) only if the overlay upkeep proves annoying. Rationale: (e) already satisfies the stated goal (sandboxed, declared inputs, no network in the build, remote-cacheable, cross-compile) at S cost; (a) and (b) are XL/L and need a rules_go stdlib fork. Do the task list below; the first four make (e) shippable, the rest harden it.
+
+### 9. Next tasks (task format: id, cost class, Files, boolean Verify)
+
+- **S15b-1 Promote** (S). Files: `BUILD.bazel`, `tools/bzl/otel_weave.bzl` (delete), `tools/bzl/otel_weave.sh` (delete). Verify: `bazel build //:stapler-squad` exits 0, `strings -a bazel-bin/stapler-squad | grep -c go.opentelemetry.io/otelc` is > 0, the action mnemonic is `OtelWeaveHermetic`, and a second build after deleting the output reports `disk cache hit`.
+- **S15b-2 Stamping and embed staging parity** (S). Files: `tools/bzl/otel_weave_hermetic.sh`. Verify: `--stamp --workspace_status_command=tools/bzl/workspace_status.sh` binary prints the same `version` as S15's, and `--//tools/bzl/flags:embed_tmux=true --//tools/bzl/flags:embed_tymux=true` produces a binary larger than the unembedded one (the `go_tags` and `stage` selects were copied but not exercised in this spike).
+- **S15b-3 Windows release target on the hermetic rule** (S). Files: root `BUILD.bazel` (Windows cross targets), `tools/bzl/windows/BUILD.bazel`. Verify: the Windows target builds with `--platforms=@rules_go//go/toolchain:windows_amd64` and `file` reports PE32+ with otelc strings, and Epic 6's Windows parity test passes.
+- **S15b-4 Module cache from `go_deps`** (M). Files: `MODULE.bazel` (isolated `go_deps` with `from_file(tools/bzl/otel_overlay/go.mod.overlay)`, like `lint_go_deps`), `tools/bzl/otel_weave_hermetic.bzl`, `tools/bzl/otel_weave_hermetic.sh`. Verify: the `OtelModcache` action has no `requires-network` and `bazel build //:stapler-squad` succeeds with the network namespace empty for every action (`--sandbox_default_allow_network=false`); `MODULE.bazel.lock` pins every module hash.
+- **S15b-5 Cut the cold-GOCACHE cost** (M). Files: `tools/bzl/otel_weave_hermetic.{bzl,sh}`. Verify: a boolean timing gate, e.g. a 1-line change to `main.go` rebuilds the weave in < 30 s wall (design: a separate action builds all non-`main` packages into a GOCACHE seed keyed only by go.mod, overlay, SDK and otelc, whose tarball seeds the final action).
+- **S15b-6 Canonicalize the overlay generator, add the drift check** (S). Files: `tools/bzl/otel_overlay/gen.sh`, a CI step. Verify: `CHECK=1 tools/bzl/otel_overlay/gen.sh` exits 0 on a clean tree and non-zero after editing `go.mod` (needs sorted `replace`, sorted `matched.json`, canonical stub order or a build-equivalence check).
+- **S15b-7 cgo through rules_cc** (M). Files: `tools/bzl/otel_weave_hermetic.{bzl,sh}`. Verify: the action's `PATH` no longer contains `/usr/bin` for `gcc`, and `bazel build` succeeds with the host `gcc` hidden (`--sandbox_block_path=/usr/bin/gcc`).
+- **S15b-8 Byte-reproducibility** (S). Files: `tools/bzl/otel_weave_hermetic.sh`. Verify: two real executions (output deleted, `--modify_execution_info=OtelWeaveHermetic=+no-cache`) produce `cmp`-identical binaries.
+- **S15b-9 ADR-008 starlark cap** (S). Files: `tools/bzl/*.bzl`, `tools/bzl/check-starlark-size.sh` limit. Verify: `tools/bzl/check-starlark-size.sh` exits 0. The cap was already exceeded before this spike (510 > 500 at `9ca6ef7ba`); this branch adds 103 lines (613), promotion removes 64 (549).
+
+### 10. Uncertain / not done
+
+Darwin woven cross-compile; stamped and embedded builds through the hermetic rule; byte-reproducibility; whether the 994 MB tarball (or its 50k-file tree form) is acceptable for a remote cache (the cache stores it once, each cold weave extracts it to disk: ~1.1 GB writes); overlay regeneration cadence (go.mod changes require `gen.sh`, which needs `bazel build` of the generated inputs first). `go_deps`-based modcache (S15b-4) and `go test` under toolexec were not tried. A permission classifier denial did not occur. /tmp was 100% full during the run (other sessions' data, not mine): tool output was lost twice mid-run, so evidence was captured to files under `~/.cache/tmp/ssq-otel-hermetic`.
