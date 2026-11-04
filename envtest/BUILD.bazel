@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "envtest",
+    srcs = [
+        "claude_cli.go",
+        "envtest.go",
+        "nonet.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/envtest",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":envtest",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "envtest_test",
+    srcs = ["nonet_test.go"],
+    embed = [":envtest"],
+)

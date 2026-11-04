@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "interfaces",
+    srcs = [
+        "registry.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/cmd/interfaces",
+    visibility = ["//visibility:public"],
+    deps = ["//session"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":interfaces",
+    visibility = ["//visibility:public"],
+)

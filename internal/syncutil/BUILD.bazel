@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "syncutil",
+    srcs = ["syncutil.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/syncutil",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":syncutil",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "syncutil_test",
+    srcs = ["syncutil_test.go"],
+    embed = [":syncutil"],
+)

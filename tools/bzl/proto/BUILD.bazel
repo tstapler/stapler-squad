@@ -1,6 +1,6 @@
-load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
 # Spike S1 (Story 0.3, Task 0.3a): connect-go as a rules_go proto compiler.
 load("@rules_go//proto:compiler.bzl", "go_proto_compiler")
+load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
 
 alias(
     name = "protoc_gen_connect_go",

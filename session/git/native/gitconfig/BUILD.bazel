@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gitconfig",
+    srcs = [
+        "parse.go",
+        "readfile.go",
+        "readfile_other.go",
+        "readfile_unix.go",
+        "resolver.go",
+        "values.go",
+        "wildmatch.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/git/native/gitconfig",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitconfig",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gitconfig_test",
+    srcs = [
+        "oracle_helpers_test.go",
+        "parse_cases_test.go",
+        "parse_oracle_test.go",
+        "parse_test.go",
+        "readfile_test.go",
+        "resolver_oracle_test.go",
+        "resolver_scenarios_test.go",
+        "resolver_symlink_oracle_test.go",
+        "resolver_test.go",
+        "wildmatch_cases_test.go",
+        "wildmatch_oracle_test.go",
+        "wildmatch_test.go",
+    ],
+    embed = [":gitconfig"],
+    deps = [
+        "//testutil/gitoracle",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

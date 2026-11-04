@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "jira",
+    srcs = [
+        "adf.go",
+        "keychain.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/jira",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_zalando_go_keyring//:go-keyring"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jira",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jira_test",
+    srcs = [
+        "adf_test.go",
+        "keychain_test.go",
+        "main_test.go",
+    ],
+    embed = [":jira"],
+    deps = ["@com_github_zalando_go_keyring//:go-keyring"],
+)

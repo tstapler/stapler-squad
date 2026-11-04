@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "artifacts",
+    srcs = [
+        "extractor.go",
+        "jsonl.go",
+        "scan.go",
+        "store.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/artifacts",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/scanqueue",
+        "//session/scanstate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":artifacts",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "artifacts_test",
+    srcs = [
+        "extractor_test.go",
+        "resume_test.go",
+        "store_test.go",
+    ],
+    embed = [":artifacts"],
+    deps = ["//session/scanstate"],
+)

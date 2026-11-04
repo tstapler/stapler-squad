@@ -1,0 +1,62 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "features",
+    srcs = [
+        "analytics.go",
+        "approval.go",
+        "backlog.go",
+        "browser.go",
+        "checkpoint.go",
+        "claude_config.go",
+        "client_event.go",
+        "database.go",
+        "debug.go",
+        "defaults.go",
+        "directory_rule.go",
+        "error.go",
+        "file.go",
+        "flags.go",
+        "history.go",
+        "insights.go",
+        "interaction.go",
+        "logs.go",
+        "misc_session.go",
+        "notification.go",
+        "path.go",
+        "pr.go",
+        "profile.go",
+        "project.go",
+        "review_queue.go",
+        "rules.go",
+        "session.go",
+        "shell.go",
+        "terminal.go",
+        "unfinished.go",
+        "unfinished_work.go",
+        "upload.go",
+        "window.go",
+        "workflow.go",
+        "workspace.go",
+        "worktree.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/features",
+    visibility = ["//visibility:public"],
+    deps = ["//server/featureregistry"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":features",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "features_test",
+    srcs = ["features_test.go"],
+    deps = [
+        ":features",
+        "//server/featureregistry",
+    ],
+)

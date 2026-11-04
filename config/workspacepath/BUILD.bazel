@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workspacepath",
+    srcs = ["workspacepath.go"],
+    importpath = "github.com/tstapler/stapler-squad/config/workspacepath",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workspacepath",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workspacepath_test",
+    srcs = ["workspacepath_test.go"],
+    embed = [":workspacepath"],
+)

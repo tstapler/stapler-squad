@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "safeexec",
+    srcs = ["hook.go"],
+    importpath = "github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//telemetry",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@io_opentelemetry_go_otelc_pkg//hook",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":safeexec",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "safeexec_test",
+    srcs = ["hook_test.go"],
+    embed = [":safeexec"],
+    deps = [
+        "//telemetry",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+    ],
+)

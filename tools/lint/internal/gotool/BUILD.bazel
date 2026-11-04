@@ -6,3 +6,9 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/tools/lint/internal/gotool",
     visibility = ["//tools/lint:__subpackages__"],
 )
+
+alias(
+    name = "go_default_library",
+    actual = ":gotool",
+    visibility = ["//tools/lint:__subpackages__"],
+)

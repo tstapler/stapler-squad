@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "socket",
+    srcs = ["socket.go"],
+    importpath = "github.com/tstapler/stapler-squad/testutil/socket",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":socket",
+    visibility = ["//visibility:public"],
+)

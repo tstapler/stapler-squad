@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "pricing",
+    srcs = [
+        "anthropic.go",
+        "google.go",
+        "openai.go",
+        "pricing.go",
+        "provider.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/pricing",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pricing",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pricing_test",
+    srcs = ["pricing_test.go"],
+    embed = [":pricing"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

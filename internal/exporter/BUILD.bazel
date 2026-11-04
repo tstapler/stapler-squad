@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "exporter",
+    srcs = [
+        "agent.go",
+        "bash.go",
+        "zsh.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/exporter",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/history"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":exporter",
+    visibility = ["//:__subpackages__"],
+)

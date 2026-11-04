@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scanqueue",
+    srcs = ["queue.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/scanqueue",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_shirou_gopsutil_v4//load"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scanqueue",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scanqueue_test",
+    srcs = ["queue_test.go"],
+    embed = [":scanqueue"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

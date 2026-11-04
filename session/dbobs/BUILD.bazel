@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "dbobs",
+    srcs = [
+        "caller_label.go",
+        "driver.go",
+        "normalize.go",
+        "otel_gauges.go",
+        "querycount.go",
+        "statements.go",
+        "stats.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/dbobs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_entgo_ent//dialect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbobs",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbobs_test",
+    srcs = [
+        "busy_test.go",
+        "caller_label_test.go",
+        "commit_busy_test.go",
+        "driver_test.go",
+        "querycount_test.go",
+    ],
+    embed = [":dbobs"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)

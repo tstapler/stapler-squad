@@ -1,0 +1,80 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "streamhub",
+    srcs = [
+        "batch.go",
+        "capture_tap.go",
+        "clock.go",
+        "doc.go",
+        "fake_clock.go",
+        "hub.go",
+        "memory_transport.go",
+        "observability.go",
+        "ownership.go",
+        "quiescence.go",
+        "resize.go",
+        "sequence.go",
+        "session_controller.go",
+        "snapshot_prepare.go",
+        "subscriber.go",
+        "tap_owner_unix.go",
+        "tap_owner_windows.go",
+        "tap_registry.go",
+        "transport.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/streamhub",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session/resize",
+        "//telemetry",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_puzpuzpuz_xsync_v4//:xsync",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":streamhub",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "streamhub_test",
+    srcs = [
+        "batch_test.go",
+        "capture_tap_test.go",
+        "failure_modes_test.go",
+        "full_state_test.go",
+        "hub_test.go",
+        "lifecycle_test.go",
+        "memory_transport_test.go",
+        "observability_test.go",
+        "output_observer_test.go",
+        "ownership_test.go",
+        "quiescence_internal_test.go",
+        "quiescence_test.go",
+        "reconnect_storm_integration_test.go",
+        "resize_concurrency_test.go",
+        "resize_test.go",
+        "snapshot_prepare_test.go",
+        "subscriber_test.go",
+        "tap_registry_test.go",
+        "types_test.go",
+    ],
+    embed = [":streamhub"],
+    deps = [
+        "//log",
+        "//session/tmux",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)

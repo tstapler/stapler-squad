@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "dbsplit",
+    srcs = ["dbsplit.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/dbsplit",
+    visibility = ["//visibility:public"],
+    deps = ["@io_entgo_ent//dialect"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbsplit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbsplit_test",
+    srcs = ["dbsplit_test.go"],
+    embed = [":dbsplit"],
+    deps = [
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)

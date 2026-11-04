@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "wait",
+    srcs = [
+        "eventually.go",
+        "load.go",
+        "wait.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/testutil/wait",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_shirou_gopsutil_v4//load"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":wait",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "wait_test",
+    srcs = [
+        "eventually_test.go",
+        "load_test.go",
+        "wait_test.go",
+    ],
+    embed = [":wait"],
+)

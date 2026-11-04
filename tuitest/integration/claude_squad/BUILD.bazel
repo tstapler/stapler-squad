@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_test")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 go_test(
     name = "claude_squad_test",

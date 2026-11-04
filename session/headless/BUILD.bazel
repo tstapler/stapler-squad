@@ -1,0 +1,61 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "headless",
+    srcs = [
+        "backend.go",
+        "backend_impls.go",
+        "backend_selector.go",
+        "caller.go",
+        "capability_check.go",
+        "client.go",
+        "cost_ceiling.go",
+        "fake_runner.go",
+        "fanout.go",
+        "features.go",
+        "gemini_caller.go",
+        "pool.go",
+        "runner.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/headless",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//pkg/classifier",
+        "//session/tokens",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":headless",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "headless_test",
+    srcs = [
+        "backend_selector_test.go",
+        "caller_test.go",
+        "capability_check_test.go",
+        "cost_ceiling_test.go",
+        "fanout_test.go",
+        "feature_model_test.go",
+        "features_test.go",
+        "gemini_caller_test.go",
+        "integration_test.go",
+        "pool_test.go",
+        "runner_test.go",
+    ],
+    embed = [":headless"],
+    deps = [
+        "//log",
+        "//pkg/classifier",
+        "//session/tokens",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/ent/entc",
     visibility = ["//visibility:private"],
     deps = [
-        "//session/ent/schema",
+        "//tools/bzl/ent:schema",
         "@io_entgo_ent//:ent",
         "@io_entgo_ent//entc/gen",
         "@io_entgo_ent//entc/load",

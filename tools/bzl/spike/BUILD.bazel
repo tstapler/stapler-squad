@@ -12,3 +12,11 @@ go_test(
     srcs = ["sock_long_test.go"],
     tags = ["manual"],
 )
+
+go_test(
+    name = "spike_test",
+    srcs = [
+        "sock_long_test.go",
+        "sock_test.go",
+    ],
+)

@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "warren",
+    srcs = [
+        "app.go",
+        "binding.go",
+        "doc.go",
+        "errors.go",
+        "goroutines.go",
+        "health.go",
+        "testing.go",
+        "wire.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/pkg/warren",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":warren",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "warren_test",
+    srcs = [
+        "app_test.go",
+        "binding_test.go",
+        "goroutines_test.go",
+        "wire_test.go",
+    ],
+    deps = [
+        ":warren",
+        "//testutil/wait",
+    ],
+)

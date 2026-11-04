@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "portguard",
+    srcs = ["portguard.go"],
+    importpath = "github.com/tstapler/stapler-squad/pkg/portguard",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_shirou_gopsutil_v4//process"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":portguard",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "portguard_test",
+    srcs = ["portguard_test.go"],
+    embed = [":portguard"],
+    deps = [
+        "//executor/safeexec",
+        "//testutil/wait",
+    ],
+)

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "seed-hidden_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tests/e2e/seed-hidden",
+    visibility = ["//visibility:private"],
+    deps = ["//session"],
+)
+
+go_binary(
+    name = "seed-hidden",
+    embed = [":seed-hidden_lib"],
+    visibility = ["//visibility:public"],
+)

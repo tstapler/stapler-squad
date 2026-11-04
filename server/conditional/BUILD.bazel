@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "conditional",
+    srcs = ["conditional.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/conditional",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":conditional",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "conditional_test",
+    srcs = ["conditional_test.go"],
+    embed = [":conditional"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//types/known/wrapperspb",
+    ],
+)

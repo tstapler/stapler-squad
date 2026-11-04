@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "daemon",
+    srcs = ["daemon.go"],
+    importpath = "github.com/tstapler/stapler-squad/daemon",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":daemon",
+    visibility = ["//visibility:public"],
+)

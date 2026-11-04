@@ -1,3 +1,5 @@
+# gazelle:exclude clean
+# gazelle:exclude seed
 load("@rules_go//go:def.bzl", "go_library", "nogo")
 
 # Spike S12: the analyzer comes from the isolated tools/lint module (@lint_x_tools universe).

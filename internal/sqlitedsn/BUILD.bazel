@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sqlitedsn",
+    srcs = ["sqlitedsn.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/sqlitedsn",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sqlitedsn",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "sqlitedsn_test",
+    srcs = [
+        "sqlitedsn_pragma_test.go",
+        "sqlitedsn_test.go",
+    ],
+    embed = [":sqlitedsn"],
+    deps = ["@org_modernc_sqlite//:sqlite"],
+)

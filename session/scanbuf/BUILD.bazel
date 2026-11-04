@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scanbuf",
+    srcs = ["scanbuf.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/scanbuf",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scanbuf",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scanbuf_test",
+    srcs = ["scanbuf_test.go"],
+    embed = [":scanbuf"],
+)

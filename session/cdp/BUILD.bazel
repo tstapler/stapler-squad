@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "cdp",
+    srcs = [
+        "deps_check.go",
+        "inspect.go",
+        "manager.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/cdp",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "@com_github_gorilla_websocket//:websocket",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cdp",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cdp_test",
+    srcs = [
+        "deps_check_test.go",
+        "inspect_test.go",
+        "manager_test.go",
+        "reconcile_isolation_test.go",
+        "screencast_test.go",
+    ],
+    embed = [":cdp"],
+    deps = [
+        "@com_github_gorilla_websocket//:websocket",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

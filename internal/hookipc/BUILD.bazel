@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "hookipc",
+    srcs = [
+        "client.go",
+        "endpoint.go",
+        "protocol.go",
+        "server.go",
+        "transport.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/hookipc",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//config",
+        "//internal/unixsocket",
+        "//pkg/classifier",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":hookipc",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "hookipc_test",
+    srcs = [
+        "client_test.go",
+        "endpoint_test.go",
+        "protocol_test.go",
+        "server_test.go",
+    ],
+    embed = [":hookipc"],
+    deps = [
+        "//pkg/classifier",
+        "//testutil/socket",
+    ],
+)

@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "vcs",
+    srcs = [
+        "detect.go",
+        "git.go",
+        "jj.go",
+        "vcs.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/vcs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//log",
+        "//session/git/backend",
+        "//session/gitprovider",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":vcs",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "vcs_test",
+    srcs = [
+        "git_realgit_test.go",
+        "git_refs_test.go",
+        "gitwiring_test.go",
+    ],
+    embed = [":vcs"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "//session/gitwiring",
+        "//testutil/gitfake",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

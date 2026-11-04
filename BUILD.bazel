@@ -1,4 +1,6 @@
 load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
 # gazelle:go_naming_convention import_alias
@@ -33,9 +35,106 @@ load("@gazelle//:def.bzl", "gazelle")
 # attempts there claim the same importpaths, so Gazelle needs these to disambiguate.
 # gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1 //proto/session/v1:sessionv1_go
 # gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect //proto/session/v1:sessionv1connect_go
+# The S12 nogo twin library (tools/bzl/spike-nogo:norawgitcli_rootdeps) reuses norawgitcli's importpath.
+# gazelle:resolve go github.com/tstapler/stapler-squad/tools/lint/norawgitcli //tools/lint/norawgitcli:norawgitcli
 # server/web/fixture (S3 spike) reuses server/web's importpath.
 # gazelle:resolve go github.com/tstapler/stapler-squad/server/web //server/web:web
 
 gazelle(name = "gazelle")
 
-exports_files(["buf.yaml", "buf.gen.bazel.yaml", "buf.gen.bazel-ts.yaml"])
+exports_files([
+    "buf.yaml",
+    "buf.gen.bazel.yaml",
+    "buf.gen.bazel-ts.yaml",
+])
+
+go_library(
+    name = "stapler-squad_lib",
+    srcs = [
+        "changelog_embed.go",
+        "contract_bundle_cmd.go",
+        "desktop_registration.go",
+        "hostname_detector.go",
+        "hostname_detector_endpoint.go",
+        "infoplist_darwin.go",
+        "integration_credential_cmd.go",
+        "local_auth.go",
+        "main.go",
+        "main_cleanup.go",
+        "netchange_source.go",
+        "open_url.go",
+    ],
+    cgo = True,
+    embedsrcs = ["CHANGELOG.md"],
+    importpath = "github.com/tstapler/stapler-squad",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd",
+        "//cmd/commands",
+        "//config",
+        "//daemon",
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//pkg/buildinfo",
+        "//pkg/changelog",
+        "//pkg/localtoken",
+        "//pkg/warren",
+        "//profiling",
+        "//server",
+        "//server/auth",
+        "//server/integrations/contractarchive",
+        "//server/mcp",
+        "//server/middleware",
+        "//server/services",
+        "//session",
+        "//session/deeplink",
+        "//session/detection",
+        "//session/git",
+        "//session/scrollback",
+        "//session/tmux",
+        "//session/tymux",
+        "//telemetry",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_tailscale//net/netmon",
+        "@com_tailscale//types/logger",
+        "@com_tailscale//util/eventbus",
+    ],
+)
+
+go_binary(
+    name = "stapler-squad",
+    embed = [":stapler-squad_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "stapler-squad_test",
+    srcs = [
+        "deps_guard_test.go",
+        "desktop_registration_test.go",
+        "hostname_detector_endpoint_test.go",
+        "hostname_detector_test.go",
+        "local_auth_test.go",
+        "main_cleanup_test.go",
+        "main_integration_test.go",
+        "main_test.go",
+        "netchange_source_integration_test.go",
+        "netchange_source_test.go",
+        "open_url_test.go",
+    ],
+    embed = [":stapler-squad_lib"],
+    deps = [
+        "//config",
+        "//envtest",
+        "//log",
+        "//server",
+        "//server/auth",
+        "//server/middleware",
+        "//session",
+        "//session/deeplink",
+        "//session/tymux",
+        "@com_github_stretchr_testify//assert",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)

@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "dbmaint",
+    srcs = [
+        "config.go",
+        "dbmaint.go",
+        "registry.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/dbmaint",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbmaint",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbmaint_test",
+    srcs = ["dbmaint_test.go"],
+    embed = [":dbmaint"],
+    deps = [
+        "//session/dbobs",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)

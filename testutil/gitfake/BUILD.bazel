@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gitfake",
+    srcs = ["gitfake.go"],
+    importpath = "github.com/tstapler/stapler-squad/testutil/gitfake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/git/backend",
+        "//session/gitprovider",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitfake",
+    visibility = ["//visibility:public"],
+)

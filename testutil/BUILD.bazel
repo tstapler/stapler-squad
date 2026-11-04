@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "testutil",
+    srcs = [
+        "expect.go",
+        "mocks.go",
+        "session.go",
+        "tls.go",
+        "tmux.go",
+        "wait.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/testutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor",
+        "//executor/safeexec",
+        "//session",
+        "//session/tmux",
+        "@com_github_creack_pty//:pty",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@com_github_netflix_go_expect//:go-expect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "testutil_test",
+    srcs = [
+        "expect_test.go",
+        "tmux_integration_test.go",
+        "tmux_polling_test.go",
+        "tmux_test.go",
+        "tui_exit_test.go",
+        "tui_session_creation_test.go",
+        "tui_shutdown_diagnostic_test.go",
+    ],
+    embed = [":testutil"],
+    deps = [
+        "//executor/safeexec",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

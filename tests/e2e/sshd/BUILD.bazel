@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "sshd_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tests/e2e/sshd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//executor/safeexec",
+        "@com_github_gliderlabs_ssh//:ssh",
+        "@org_golang_x_crypto//ssh",
+    ],
+)
+
+go_binary(
+    name = "sshd",
+    embed = [":sshd_lib"],
+    visibility = ["//visibility:public"],
+)

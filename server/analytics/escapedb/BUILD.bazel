@@ -1,0 +1,55 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "escapedb",
+    srcs = [
+        "db.go",
+        "escape_event_batch_writer.go",
+        "escape_event_eviction.go",
+        "migrate.go",
+        "retention.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/analytics/escapedb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/analytics",
+        "//session",
+        "//session/dbobs",
+        "//session/dbpool",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:escapeevent",
+        "//tools/bzl/ent:migrate",
+        "@io_entgo_ent//dialect/sql/schema",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":escapedb",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "escapedb_test",
+    srcs = [
+        "escape_event_batch_writer_test.go",
+        "helpers_test.go",
+        "index_usage_test.go",
+        "migrate_test.go",
+        "retention_test.go",
+        "wall_time_test.go",
+    ],
+    embed = [":escapedb"],
+    deps = [
+        "//pkg/analytics",
+        "//server/analytics",
+        "//session/dbobs",
+        "//session/dbpool",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:escapeevent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

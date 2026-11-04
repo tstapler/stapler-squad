@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "contexthistory",
+    srcs = [
+        "recorder.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/contexthistory",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/tokens",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:compactionevent",
+        "//tools/bzl/ent:contextsample",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":contexthistory",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "contexthistory_test",
+    srcs = [
+        "nextindex_test.go",
+        "recorder_test.go",
+    ],
+    embed = [":contexthistory"],
+    deps = [
+        "//session",
+        "//session/tokens",
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//:ent",
+    ],
+)

@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "treewatch",
+    srcs = [
+        "treewatch.go",
+        "watcher_linux.go",
+        "watcher_other.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/treewatch",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/fsevents",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "@com_github_fsnotify_fsnotify//:fsnotify",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@com_github_fsnotify_fsnotify//:fsnotify",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":treewatch",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "treewatch_test",
+    srcs = [
+        "export_linux_test.go",
+        "watcher_linux_test.go",
+    ],
+    embed = [":treewatch"],
+    deps = select({
+        "@rules_go//go/platform:android": [
+            "//internal/fsevents",
+            "@com_github_fsnotify_fsnotify//:fsnotify",
+            "@com_github_stretchr_testify//require",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//internal/fsevents",
+            "@com_github_fsnotify_fsnotify//:fsnotify",
+            "@com_github_stretchr_testify//require",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "//conditions:default": [],
+    }),
+)

@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "interceptors",
+    srcs = [
+        "db_query_count.go",
+        "error_recorder.go",
+        "feature_flag_interceptor.go",
+        "request_flow.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/interceptors",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/dbobs",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":interceptors",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "interceptors_test",
+    srcs = [
+        "db_query_count_test.go",
+        "feature_flag_interceptor_test.go",
+    ],
+    embed = [":interceptors"],
+    deps = [
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//types/known/emptypb",
+    ],
+)
