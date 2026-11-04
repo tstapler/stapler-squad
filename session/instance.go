@@ -393,6 +393,14 @@ type Instance struct {
 	PRs                   []PRView `json:"-"`
 	LegacyPRUnrepresented bool     `json:"-"`
 	HasPRLinks            bool     `json:"-"`
+	// prPersistMu serializes this session's PR persists; prPersister is the
+	// storage seam (nil until injected); prPersistPending marks a PR set change
+	// the next full save must write. See instance_pr_set.go.
+	prPersistMu      sync.Mutex
+	prPersister      prSetPersister
+	prPersistPending atomic.Bool
+	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
+	prLegacyPathLogged atomic.Bool
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 

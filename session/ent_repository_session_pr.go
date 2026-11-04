@@ -30,6 +30,11 @@ var (
 	ErrInvalidPROwner = errors.New("session: PR owner must set exactly one of session uuid and backlog item id")
 	// ErrSessionPRLinkCap means a session already holds maxSessionPRLinks links.
 	ErrSessionPRLinkCap = errors.New("session: session already has the maximum number of PR links")
+	// ErrNoSessionUUID means the session has no uuid, so no link row can reference it.
+	ErrNoSessionUUID = errors.New("session: session has no uuid")
+	// ErrSessionNotPersisted means the session row does not exist yet; the first
+	// full save writes the PR set instead.
+	ErrSessionNotPersisted = errors.New("session: session row not persisted yet")
 )
 
 const (
@@ -96,6 +101,8 @@ type PRLink struct {
 	Role    PRRole // requested role; primary is downgraded to followup when the session already has one
 	Source  AttachSource
 	Initial PRInitial
+	// AttachedAt, when set, is stored as the link's attached_at instead of now.
+	AttachedAt time.Time
 }
 
 // PRLinkResult reports what UpsertSessionPR did.
@@ -209,6 +216,9 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef
 	create := tx.SessionPR.Create().
 		SetPullRequestStateID(stateID).SetSessionUUID(owner.SessionUUID).SetBacklogItemID(owner.BacklogItemID).
 		SetRole(string(role)).SetAttachSource(string(link.Source))
+	if !link.AttachedAt.IsZero() {
+		create.SetAttachedAt(link.AttachedAt)
+	}
 	if err := create.Exec(ctx); err != nil {
 		return PRLinkResult{}, fmt.Errorf("create session pr link: %w", err)
 	}

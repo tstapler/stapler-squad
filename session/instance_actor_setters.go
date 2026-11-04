@@ -284,7 +284,13 @@ func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {
 
 // SetGitHubPR atomically sets the GitHub PR URL and PR number discovered after a
 // RunOneShot or PR-discovery poll.  Pass prNumber=0 if not yet known.
+//
+// With a resolved owner/repo and a uuid the PR joins the session's PR set through
+// AttachPR; otherwise only the legacy scalars are written and no link is created.
 func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
+	if i.attachLegacyPR(prNumber, AttachSourcePRCreationService, PRInitial{URL: prURL}) {
+		return
+	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setGitHubPRURLLocked(s, prURL, prNumber)
 		return nil
@@ -304,7 +310,13 @@ func setGitHubPRNumberLocked(s *instanceState, n int) {
 // SetGitHubPRNumber atomically updates the in-memory GitHubPRNumber field.
 // Replaces the stateMutex-based implementation; now actor-routed so it is
 // serialised with buildSnapshot.
+//
+// Like SetGitHubPR it attaches through AttachPR (as a branch discovery) when the
+// session can hold a link, and writes only the scalar when it cannot.
 func (i *Instance) SetGitHubPRNumber(n int) {
+	if i.attachLegacyPR(n, AttachSourceBranchDiscovery, PRInitial{}) {
+		return
+	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setGitHubPRNumberLocked(s, n)
 		return nil
