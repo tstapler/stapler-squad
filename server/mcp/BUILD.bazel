@@ -156,3 +156,10 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by server/services tests that scan MCP tool sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)

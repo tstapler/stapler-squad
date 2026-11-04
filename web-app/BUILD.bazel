@@ -95,3 +95,9 @@ bun_jest_test(
     size = "large",
     tags = ["no-remote-cache"],
 )
+
+filegroup(
+    name = "transport_fixtures",
+    srcs = glob(["src/lib/transport/__fixtures__/**"]),
+    visibility = ["//server/services:__pkg__"],
+)

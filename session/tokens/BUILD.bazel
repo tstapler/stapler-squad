@@ -70,3 +70,9 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//server/services:__pkg__"],
+)

@@ -181,3 +181,9 @@ go_test(
         "//conditions:default": [],
     }),
 )
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//server/services:__pkg__"],
+)

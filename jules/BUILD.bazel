@@ -50,3 +50,8 @@ go_test(
         "@com_github_zalando_go_keyring//:go-keyring",
     ],
 )
+
+exports_files(
+    ["types.go"],
+    visibility = ["//session:__pkg__"],
+)
