@@ -157,5 +157,3 @@ func writeLoginRedirectPage(loginURL string) (string, error) {
 	}
 	return f.Name(), nil
 }
-
-// ci-observability: temporary change to exercise test-affected; reverted afterwards.
