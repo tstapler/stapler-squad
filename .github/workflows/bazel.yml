@@ -125,6 +125,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -138,13 +140,12 @@ jobs:
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
-      - name: MODULE.bazel is tidy
+      # Gate logic lives in tools/ci/bazel-gates (offline-testable); each failure prints its remedy command.
+      # Run the built binary, not `bazel run`: the gazelle gate itself calls bazel and would wait on the server lock.
+      - name: Freshness gates (gazelle, mod tidy)
         run: |
-          bazel mod tidy --config=ci --lockfile_mode=update
-          git diff --exit-code MODULE.bazel MODULE.bazel.lock
-
-      - name: Gazelle is up to date
-        run: bazel run --config=ci //:gazelle -- -mode=diff
+          bazel build --config=ci //tools/ci/bazel-gates
+          bazel-bin/tools/ci/bazel-gates/bazel-gates_/bazel-gates gazelle mod-tidy
 
       # Isolated HOME with a git identity: tests that commit must not read the runner's HOME.
       - name: Test HOME fixture
@@ -185,12 +186,34 @@ jobs:
           go_sdk="$(bazel info output_base)/external/rules_go++go_sdk+main___download_0_linux_amd64/bin/go"
           GO="$go_sdk" CHECK=1 bash tools/bzl/otel_overlay/gen.sh
 
+      # Informational until Story 7.6: what the graph-derived AffectedSet would select for this PR (Story 7.3).
+      - name: Affected targets (informational)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          bazel build --config=ci //tools/ci/affected-targets
+          bazel-bin/tools/ci/affected-targets/affected-targets_/affected-targets -base "$BASE_SHA" | tee affected.txt
+          echo "affected selection: $(grep -c '^//' affected.txt || true) target(s), see affected.txt"
+
+      # Driver metrics and the cache-credential counter from the BEP (Task 7.1a); a ::warning shows on auth failures.
+      - name: Build metrics (bazel-trend)
+        if: always()
+        run: |
+          [ -f bep.json ] || { echo "no bep.json, skipping trend"; exit 0; }
+          bazel build --config=ci //tools/ci/bazel-trend
+          bazel-bin/tools/ci/bazel-trend/bazel-trend_/bazel-trend -prom -run-id "$GITHUB_RUN_ID" -ref "$GITHUB_REF" \
+            -append bazel-trend.jsonl bep.json | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload BEP
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bazel-bep
-          path: bep.json
+          path: |
+            bep.json
+            bazel-trend.jsonl
+            affected.txt
           if-no-files-found: warn
 
       - name: Upload profile
