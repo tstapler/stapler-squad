@@ -73,7 +73,8 @@ func ScanByUserOptions() ([]*DiscoveredSession, error) {
 
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer scanCancel()
-	args := prependIsolatedSocket([]string{"list-sessions", "-F", format})
+	// Force UTF-8 output: non-UTF-8 clients replace tab separators with underscores.
+	args := prependIsolatedSocket([]string{"-u", "list-sessions", "-F", format})
 	cmd := safeexec.CommandContext(scanCtx, tmux.Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {

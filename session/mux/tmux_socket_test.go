@@ -33,13 +33,21 @@ func TestListStaplerSquadSessionsWithInfo_UsesIsolatedSocket(t *testing.T) {
 	assertMuxInvocationUsesIsolatedSocket(t, logPath, "list-sessions")
 }
 
-func TestScanByUserOptions_UsesIsolatedSocket(t *testing.T) {
+func TestScanByUserOptions_UsesIsolatedSocketAndUTF8(t *testing.T) {
 	logPath := installFakeTmuxBinaryForMuxTest(t)
 
 	// The fake binary always exits non-zero; only the recorded argv matters here.
 	_, _ = ScanByUserOptions()
 
 	assertMuxInvocationUsesIsolatedSocket(t, logPath, "list-sessions")
+	args, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without -u, a C-locale tmux client sanitizes the parser's tabs to underscores.
+	if !strings.Contains(string(args), " -u list-sessions ") {
+		t.Fatalf("expected UTF-8 client flag before list-sessions, got %q", args)
+	}
 }
 
 // installFakeTmuxBinaryForMuxTest points TMUX_BIN (auto-restored by t.Setenv) at a
