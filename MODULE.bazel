@@ -77,30 +77,68 @@ http_archive(
     urls = ["https://github.com/tstapler/tymux/releases/download/v1.12.0/tymux-aarch64-unknown-linux-musl.tar.gz"],
 )
 
-# Spike S4 (Story 0.6): pinned Bun + Node and a repository rule that runs `bun install --frozen-lockfile`.
+# Story 3.1 (ADR-003): pinned Bun and Node per OS/arch (sha256 from the upstream SHASUMS256.txt of each
+# release), a `host_tool` repository per binary that selects the matching archive, and a repository rule
+# that runs `bun install --frozen-lockfile`. Keep these versions equal to .tool-versions.
+_BUN_VERSION = "1.4.3"
+_NODE_VERSION = "24.13.1"
 
-http_archive(
-    name = "bun_linux_x64",
-    build_file_content = 'exports_files(["bun-linux-x64/bun"])',
-    sha256 = "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
-    urls = ["https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip"],
+_BUN_ARCHIVES = {
+    "linux_x64": ("bun-linux-x64", "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18"),
+    "linux_arm64": ("bun-linux-aarch64", "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21"),
+    "darwin_x64": ("bun-darwin-x64", "62660e6438eb872278877acca77e1152d5d031324df368d4a81b428211489d2d"),
+    "darwin_arm64": ("bun-darwin-aarch64", "80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403"),
+}
+
+_NODE_ARCHIVES = {
+    "linux_x64": ("node-v24.13.1-linux-x64", "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089"),
+    "linux_arm64": ("node-v24.13.1-linux-arm64", "c827d3d301e2eed1a51f36d0116b71b9e3d9e3b728f081615270ea40faac34c1"),
+    "darwin_x64": ("node-v24.13.1-darwin-x64", "013a8f786a022ad1729cf435e3675e097a77d5a42eaf139a2d5d1d5309a027d4"),
+    "darwin_arm64": ("node-v24.13.1-darwin-arm64", "d82a321541d65109c696505135be3b7dd46e3358f0f04d664f50f0d1e1ccb8a6"),
+}
+
+[
+    http_archive(
+        name = "bun_" + platform,
+        build_file_content = 'exports_files(["%s/bun"])' % dir,
+        sha256 = sha,
+        urls = ["https://github.com/oven-sh/bun/releases/download/bun-v%s/%s.zip" % (_BUN_VERSION, dir)],
+    )
+    for platform, (dir, sha) in _BUN_ARCHIVES.items()
+]
+
+[
+    http_archive(
+        name = "node_" + platform,
+        build_file_content = 'exports_files(["bin/node"])',
+        sha256 = sha,
+        strip_prefix = dir,
+        urls = ["https://nodejs.org/dist/v%s/%s.tar.xz" % (_NODE_VERSION, dir)],
+    )
+    for platform, (dir, sha) in _NODE_ARCHIVES.items()
+]
+
+host_tool = use_repo_rule("//tools/bzl/bun:bun.bzl", "host_tool")
+
+host_tool(
+    name = "bun_host",
+    tool = "bun",
+    tools = {"@bun_%s//:%s/bun" % (platform, dir): platform for platform, (dir, _) in _BUN_ARCHIVES.items()},
 )
 
-http_archive(
-    name = "node_linux_x64",
-    build_file_content = 'exports_files(["bin/node"])',
-    sha256 = "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089",
-    strip_prefix = "node-v24.13.1-linux-x64",
-    urls = ["https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz"],
+host_tool(
+    name = "node_host",
+    tool = "node",
+    tools = {"@node_%s//:bin/node" % platform: platform for platform, _ in _NODE_ARCHIVES.items()},
 )
 
 bun_install = use_repo_rule("//tools/bzl/bun:bun.bzl", "bun_install")
 
 bun_install(
     name = "web_node_modules",
-    bun = "@bun_linux_x64//:bun-linux-x64/bun",
+    bun = "@bun_host//:bun",
     bun_lock = "//web-app:bun.lock",
-    bun_version = "1.4.3",
+    bun_version = _BUN_VERSION,
     bunfig = "//web-app:bunfig.toml",
     files = [
         "//web-app:eslint-plugin-analytics/index.js",
@@ -120,6 +158,6 @@ bun_install(
         "//web-app:eslint-plugin-rpc-lifecycle/rules/require-abort-signal.js",
         "//web-app:patches/eval@0.1.8.patch",
     ],
-    node = "@node_linux_x64//:bin/node",
+    node = "@node_host//:node",
     package_json = "//web-app:package.json",
 )

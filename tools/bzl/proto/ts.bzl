@@ -1,4 +1,4 @@
-"""Spike S1-ts: `buf generate` with protoc-gen-es from the hermetic Bun install, as a tree artifact."""
+"""`buf generate` with protoc-gen-es from the hermetic Bun install (ADR-003), as a tree artifact equal to web-app/src/gen."""
 
 _SCRIPT = r"""
 set -eu
@@ -13,7 +13,7 @@ cp -R "$T/out/web-app/src/gen/." "{out}/"
 """
 
 def _buf_gen_ts_impl(ctx):
-    out = ctx.actions.declare_directory(ctx.label.name)
+    out = ctx.actions.declare_directory(ctx.attr.out or ctx.label.name)
     ctx.actions.run_shell(
         mnemonic = "BufGenTs",
         tools = [ctx.executable.buf],
@@ -27,6 +27,7 @@ def _buf_gen_ts_impl(ctx):
             out = out.path,
         ),
         use_default_shell_env = False,
+        execution_requirements = {"no-remote-cache": "1"},
     )
     return [DefaultInfo(files = depset([out]))]
 
@@ -34,6 +35,7 @@ buf_gen_ts = rule(
     implementation = _buf_gen_ts_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = [".proto"]),
+        "out": attr.string(doc = "Tree artifact name; defaults to the target name."),
         "template": attr.label(allow_single_file = True, mandatory = True),
         "buf_yaml": attr.label(allow_single_file = True, mandatory = True),
         "buf": attr.label(allow_single_file = True, mandatory = True, cfg = "exec", executable = True),

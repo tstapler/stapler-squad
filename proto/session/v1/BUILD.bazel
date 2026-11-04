@@ -7,6 +7,7 @@
 load("@rules_go//go:def.bzl", "go_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
 
 # buf generate (managed mode, buf.gen.bazel.yaml) with local pinned plugins. buf.yaml has no deps, so
 # nothing is fetched. HOME/BUF_CACHE_DIR point into the action's scratch dir.
@@ -133,6 +134,21 @@ go_library(
         ":sessionv1_go",
         "@com_connectrpc_connect//:connect",
     ],
+)
+
+# TypeScript half of buf.gen.yaml as a tree artifact equal to web-app/src/gen (bazel-bin/proto/session/v1/ts).
+# protoc-gen-es comes from the pinned Bun install (ADR-003). The consuming web actions carry
+# no-remote-cache because that install is not proven byte-reproducible (Story 7.7); the action carries it too.
+buf_gen_ts(
+    name = "session_ts",
+    srcs = [":protos"],
+    out = "ts",
+    buf = "@com_github_bufbuild_buf//cmd/buf",
+    buf_yaml = "//:buf.yaml",
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
+    template = "//:buf.gen.bazel-ts.yaml",
+    visibility = ["//visibility:public"],
 )
 
 filegroup(

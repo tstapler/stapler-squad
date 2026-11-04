@@ -1,22 +1,15 @@
 # Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
 # gazelle:ignore
-load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
-
 alias(
     name = "protoc_gen_connect_go",
     actual = "@com_connectrpc_connect//cmd/protoc-gen-connect-go",
     visibility = ["//visibility:public"],
 )
 
-# web-app/src/gen as a tree artifact, protoc-gen-es from @web_node_modules.
-buf_gen_ts(
+# web-app/src/gen comes from //proto/session/v1:session_ts (Story 2.2); this alias keeps the old label.
+alias(
     name = "gen_ts",
-    srcs = ["//proto/session/v1:protos"],
-    buf = "@com_github_bufbuild_buf//cmd/buf",
-    buf_yaml = "//:buf.yaml",
-    node = "@node_linux_x64//:bin/node",
-    node_modules = "@web_node_modules//:node_modules",
-    template = "//:buf.gen.bazel-ts.yaml",
+    actual = "//proto/session/v1:session_ts",
     visibility = ["//visibility:public"],
 )
 

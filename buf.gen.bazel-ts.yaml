@@ -1,4 +1,4 @@
-# Bazel spike S1-ts (Task 0.6e): the TypeScript half of buf.gen.yaml with the plugin taken from the
+# The TypeScript half of buf.gen.yaml with the plugin taken from the
 # hermetic Bun install. Same managed block as buf.gen.yaml (it changes the descriptors embedded in
 # *_pb.ts). @PROTOC_GEN_ES@ is replaced by tools/bzl/proto/ts.bzl with the plugin's execroot path.
 version: v2
