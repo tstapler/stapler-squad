@@ -1,0 +1,2 @@
+# Known test-layering inversions (tools/bzl/scoping inversions --allow). A ratchet: only delete lines.
+# Format: <package> <package its tests import that depends on it>. Currently empty.

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -1410,7 +1411,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if retentionConfigDir, retentionConfigErr := config.GetConfigDir(); retentionConfigErr == nil {
 		diagnosticsDir := filepath.Join(retentionConfigDir, "diagnostics")
 		go func() {
-			if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+			if err := sessionbundle.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
 				log.Warn("diagnostics retention startup sweep failed", "error", err)
 			}
 		}()
@@ -1418,7 +1419,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for range ticker.C {
-				if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+				if err := sessionbundle.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
 					log.Warn("diagnostics retention daily sweep failed", "error", err)
 				}
 			}

@@ -77,7 +77,7 @@ linters:
             - "**/session/**"
             - "**/config/**"
             - "**/log/**"
-            - "!**/*_test.go"
+            - "!**/*_test.go" # test files are covered by `make ready-test-inversions` (tools/bzl/scoping), not here
           deny:
             - pkg: "github.com/tstapler/stapler-squad/server"
               desc: "core packages (session/config/log) must not import the server layer"

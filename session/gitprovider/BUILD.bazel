@@ -1,5 +1,4 @@
 load("@rules_go//go:def.bzl", "go_library")
-load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "gitprovider",
@@ -17,16 +16,4 @@ alias(
     name = "go_default_library",
     actual = ":gitprovider",
     visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "gitprovider_test",
-    srcs = ["gitprovider_test.go"],
-    deps = [
-        ":gitprovider",
-        "//session/git/backend",
-        "//testutil/gitfake",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-    ],
 )

@@ -24,6 +24,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -499,18 +501,18 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register VNC browser-passthrough WebSocket proxy.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
-	vncProxy := services.NewVNCProxyHandler(deps.ReviewQueuePoller)
+	vncProxy := devtools.NewVNCProxyHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("/api/sessions/{id}/vnc", vncProxy.HandleWebSocket)
 	log.Info("Registered VNC WebSocket proxy at /api/sessions/{id}/vnc")
 
 	// Register CDP browser-streaming WebSocket handler.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
-	cdpStream := services.NewCDPStreamHandler(deps.ReviewQueuePoller)
+	cdpStream := devtools.NewCDPStreamHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("/api/sessions/{id}/cdp-stream", cdpStream.HandleWebSocket)
 	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
 
 	// Register one-shot element inspection for Browser Passthrough (CDP).
-	inspectElement := services.NewInspectElementHandler(deps.ReviewQueuePoller)
+	inspectElement := devtools.NewInspectElementHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("POST /api/sessions/{id}/inspect-element", inspectElement.ServeHTTP)
 	log.Info("Registered element inspect handler at POST /api/sessions/{id}/inspect-element")
 
@@ -689,15 +691,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// Wrap concrete pointers in their interface types here so a nil concrete
 		// pointer becomes a nil interface value — not a non-nil interface holding
 		// a nil pointer, which would bypass the nil guards inside SessionBundleService.
-		var bundleCtxHistory services.ContextHistoryReader
+		var bundleCtxHistory sessionbundle.ContextHistoryReader
 		if deps.CtxHistoryStore != nil {
 			bundleCtxHistory = deps.CtxHistoryStore
 		}
-		var bundleScrollback services.ScrollbackReader
+		var bundleScrollback sessionbundle.ScrollbackReader
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc := sessionbundle.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)

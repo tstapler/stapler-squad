@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scoping_lib",
+    srcs = [
+        "golist.go",
+        "main.go",
+        "model.go",
+        "move.go",
+        "replay.go",
+        "t9.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/scoping",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@org_golang_x_tools//go/ast/astutil",
+        "@org_golang_x_tools//go/packages",
+    ],
+)
+
+go_binary(
+    name = "scoping",
+    embed = [":scoping_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scoping_test",
+    srcs = [
+        "move_test.go",
+        "scoping_test.go",
+    ],
+    embed = [":scoping_lib"],
+)

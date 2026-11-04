@@ -6,8 +6,8 @@
   "httpMethod": "GET",
   "httpPath": "/api/sessions/{id}/vnc",
   "markerFound": true,
-  "handlerFile": "server/services/vnc_proxy_handler.go",
+  "handlerFile": "server/services/devtools/vnc_proxy_handler.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-17T16:40:58.394565822-07:00"
+  "lastModified": "2026-11-03T20:59:56.779369664-08:00"
 }

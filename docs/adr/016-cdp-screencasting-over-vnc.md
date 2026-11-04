@@ -78,4 +78,4 @@ Use **Chrome DevTools Protocol `Page.startScreencast`** as the primary browser p
 - VNC auth model (unchanged): ADR-014
 - CDP `Page.startScreencast`: https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-startScreencast
 - CDP `Input.dispatchMouseEvent`: https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
-- Implementation: `session/cdp/manager.go`, `server/services/cdp_stream_handler.go`
+- Implementation: `session/cdp/manager.go`, `server/services/devtools/cdp_stream_handler.go`

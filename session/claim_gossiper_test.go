@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/internal/peeraddr"
 )
 
 // claimPeer is an httptest TLS server standing in for a remote host's claim
@@ -82,9 +84,9 @@ type gossipFixture struct {
 
 func newGossipFixture(t *testing.T) *gossipFixture {
 	t.Helper()
-	prev := allowImplausibleAddressesForTest
-	allowImplausibleAddressesForTest = true
-	t.Cleanup(func() { allowImplausibleAddressesForTest = prev })
+	prev := peeraddr.AllowImplausible
+	peeraddr.AllowImplausible = true
+	t.Cleanup(func() { peeraddr.AllowImplausible = prev })
 
 	f := &gossipFixture{self: newTestIdentity(t), clock: &fakeClock{now: time.Now()}}
 	registry, err := NewHostRegistryWithClock(t.TempDir(), DefaultHostRegistryTTL, f.clock)

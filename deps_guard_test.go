@@ -10,6 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/internal/testenv"
 )
 
+// Test-layering inversions (a package's tests importing a package that depends on it) are not checked here: the
+// guard is `make ready-test-inversions` (tools/bzl/scoping).
+//
 // TestNoForbiddenDependencies asserts that no banned package is actually compiled
 // into the module. It inspects `go list -deps ./...` (the real compiled set, not
 // just go.mod) so an indirect reintroduction is caught too.
