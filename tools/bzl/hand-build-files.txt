@@ -17,3 +17,4 @@ contracts/BUILD.bazel  # planned: Task 4.10a
 session/testdata/BUILD.bazel  # planned: Task 4.10a
 docs/adr/BUILD.bazel  # planned: Task 4.10a
 scripts/BUILD.bazel  # planned: Task 4.10a
+tools/bzl/otel_overlay/BUILD.bazel  # planned: S15b (otel_weave_hermetic)
