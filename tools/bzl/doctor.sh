@@ -158,7 +158,10 @@ fi
 
 # --- 9 merge drivers ---
 drv=$(git config --get merge.bazel-lockfile-merge.driver 2>/dev/null || true)
-if [ -n "$drv" ]; then ok "9 merge driver: merge.bazel-lockfile-merge is configured"
+if [ -x scripts/git-merge-bazel-lock.sh ]; then
+  if msg=$(scripts/git-merge-bazel-lock.sh --check 2>&1); then ok "9 merge driver: $msg"
+  else fail "9 merge driver: $msg"; fi
+elif [ -n "$drv" ]; then ok "9 merge driver: merge.bazel-lockfile-merge is configured"
 else fail "9 merge driver: merge.bazel-lockfile-merge.driver is unset; run 'make setup-git'"; fi
 
 line "to reproduce a failing test: bazel test <target> --sandbox_debug --test_output=streamed --nocache_test_results"

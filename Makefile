@@ -1122,7 +1122,8 @@ setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward p
 	@echo "git hooks: core.hooksPath=$$(git config core.hooksPath)"
 	git config merge.bazel-lockfile-merge.name "Merge driver for the Bazel lockfile (MODULE.bazel.lock)"
 	git config merge.bazel-lockfile-merge.driver "scripts/git-merge-bazel-lock.sh %O %A %B"
-	@command -v jq >/dev/null || echo "WARNING: jq 1.5+ is required by the MODULE.bazel.lock merge driver"
+	@scripts/git-merge-bazel-lock.sh --check || echo "WARNING: jq 1.5+ is required by the MODULE.bazel.lock merge driver"
+	@echo "note: these git config entries are per clone; re-run 'make setup-git' after every fresh git clone"
 
 test-tymux-pin: ## Test tools/ci/check-tymux-pin.sh against a local fixture remote (no network)
 	tools/ci/check-tymux-pin_test.sh
