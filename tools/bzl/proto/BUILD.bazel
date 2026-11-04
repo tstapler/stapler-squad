@@ -19,3 +19,8 @@ buf_gen_ts(
     template = "//:buf.gen.bazel-ts.yaml",
     visibility = ["//visibility:public"],
 )
+
+exports_files([
+    "buf_lint.sh",
+    "buf-lint-baseline.txt",
+])

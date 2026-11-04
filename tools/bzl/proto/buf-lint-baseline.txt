@@ -1,0 +1,74 @@
+# buf lint findings tolerated until the owner decides to fix them (tools/bzl/proto/buf_lint.sh ratchet).
+# Regenerate: bazel run //proto/session/v1:buf_lint_update_baseline. Entries only ever leave this file.
+proto/session/v1/backlog.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/backlog.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BacklogItemEvent\" should be named \"WatchBacklogItemsResponse\" or \"BacklogServiceWatchBacklogItemsResponse\".
+proto/session/v1/diagnose.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"AT_TOP\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"BLOCKED\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"DELIVERED\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"LEASE_CONTENTION\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"MULTIPLE_VIEWERS\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"NO_CAPABILITY\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
+proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"UNSUPPORTED_STREAMING_PATH\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
+proto/session/v1/events.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/github_user.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRDraftToggleRequest\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRDraftToggleRequest\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_STANDARD_NAME RPC request type \"PRDraftToggleRequest\" should be named \"ConvertPRToDraftRequest\" or \"GitHubUserServiceConvertPRToDraftRequest\".
+proto/session/v1/github_user.proto RPC_REQUEST_STANDARD_NAME RPC request type \"PRDraftToggleRequest\" should be named \"MarkPRReadyRequest\" or \"GitHubUserServiceMarkPRReadyRequest\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"AddGitHubAccountWithTokenResponse\" should be named \"AddGitHubAccountFromCLIResponse\" or \"GitHubUserServiceAddGitHubAccountFromCLIResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"ClosePRDirectResponse\" or \"GitHubUserServiceClosePRDirectResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"ConvertPRToDraftResponse\" or \"GitHubUserServiceConvertPRToDraftResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"MarkPRReadyResponse\" or \"GitHubUserServiceMarkPRReadyResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"MergePRDirectResponse\" or \"GitHubUserServiceMergePRDirectResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UserPREvent\" should be named \"WatchUserPRsResponse\" or \"GitHubUserServiceWatchUserPRsResponse\".
+proto/session/v1/guidance_request.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/handoff_summary.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/headless.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/import.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/insights.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/insights.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"InsightsEvent\" should be named \"WatchInsightsResponse\" or \"InsightsServiceWatchInsightsResponse\".
+proto/session/v1/llm_backend.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/notification_action.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/quota.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/remote.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/rum_bundle.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/rum_bundle.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BundleChunk\" should be named \"ExportSessionBundleResponse\" or \"SessionBundleServiceExportSessionBundleResponse\".
+proto/session/v1/session.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE RPC \"StreamTerminal\" has the same type \"session.v1.TerminalData\" for the request and response.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_STANDARD_NAME RPC request type \"TerminalData\" should be named \"StreamTerminalRequest\" or \"SessionServiceStreamTerminalRequest\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"ReviewQueueEvent\" should be named \"WatchReviewQueueResponse\" or \"SessionServiceWatchReviewQueueResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"SessionEvent\" should be named \"WatchSessionsResponse\" or \"SessionServiceWatchSessionsResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"CompleteStreamHubRollbackRehearsalResponse\" or \"SessionServiceCompleteStreamHubRollbackRehearsalResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"GetStreamHubRolloutStatusResponse\" or \"SessionServiceGetStreamHubRolloutStatusResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"SetStreamHubGlobalOverrideResponse\" or \"SessionServiceSetStreamHubGlobalOverrideResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"SetStreamHubSessionOverrideResponse\" or \"SessionServiceSetStreamHubSessionOverrideResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TerminalData\" should be named \"StreamTerminalResponse\" or \"SessionServiceStreamTerminalResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"WorkflowEvent\" should be named \"WatchWorkflowsResponse\" or \"SessionServiceWatchWorkflowsResponse\".
+proto/session/v1/session_summary.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/tymux_rollout.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"CompleteTymuxRollbackRehearsalResponse\" or \"TymuxRolloutServiceCompleteTymuxRollbackRehearsalResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"GetTymuxRolloutStatusResponse\" or \"TymuxRolloutServiceGetTymuxRolloutStatusResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"ReplaceTymuxdResponse\" or \"TymuxRolloutServiceReplaceTymuxdResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxGlobalOverrideResponse\" or \"TymuxRolloutServiceSetTymuxGlobalOverrideResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxSessionOverrideResponse\" or \"TymuxRolloutServiceSetTymuxSessionOverrideResponse\".
+proto/session/v1/types.proto ENUM_NO_ALLOW_ALIAS Enum option \"allow_alias\" on enum \"SessionStatus\" must be false.
+proto/session/v1/types.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/unfinished.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.
+proto/session/v1/unfinished.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UnfinishedWorkEvent\" should be named \"WatchUnfinishedWorkResponse\" or \"UnfinishedWorkServiceWatchUnfinishedWorkResponse\".
+proto/session/v1/wake_trigger.proto PACKAGE_SAME_GO_PACKAGE Files in package \"session.v1\" have both values \"github.com/tstapler/stapler-squad/gen/proto/go/session/v1\" and no value for option \"go_package\" and all values must be equal.

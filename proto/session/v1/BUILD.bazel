@@ -5,6 +5,8 @@
 # (spike S1: rules_go go_proto_library cannot reproduce buf managed mode, so it is not used).
 # The root BUILD.bazel `gazelle:resolve` lines name :sessionv1_go and :sessionv1connect_go below.
 load("@rules_go//go:def.bzl", "go_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # buf generate (managed mode, buf.gen.bazel.yaml) with local pinned plugins. buf.yaml has no deps, so
 # nothing is fetched. HOME/BUF_CACHE_DIR point into the action's scratch dir.
@@ -137,4 +139,42 @@ filegroup(
     name = "protos",
     srcs = glob(["*.proto"]),
     visibility = ["//visibility:public"],
+)
+
+# buf lint (STANDARD, buf.yaml) as hermetic tests with the Go-built buf (no rules_buf toolchain, no
+# network). Findings listed in the baseline are tolerated (owner decision pending); anything new fails
+# with its rule name, and a baseline entry that stops firing fails too (ratchet).
+_BUF_LINT_ARGS = [
+    "$(rootpath @com_github_bufbuild_buf//cmd/buf)",
+    "$(rootpath //:buf.yaml)",
+    "$(rootpath //tools/bzl/proto:buf-lint-baseline.txt)",
+    "$(rootpaths :protos)",
+]
+
+_BUF_LINT_DATA = [
+    ":protos",
+    "//:buf.yaml",
+    "//tools/bzl/proto:buf-lint-baseline.txt",
+    "@com_github_bufbuild_buf//cmd/buf",
+]
+
+sh_test(
+    name = "buf_lint_test",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
+)
+
+sh_test(
+    name = "buf_lint_seeded_test",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = ["--seeded"] + _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
+)
+
+sh_binary(
+    name = "buf_lint_update_baseline",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = ["--update"] + _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
 )
