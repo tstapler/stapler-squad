@@ -12,6 +12,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/ent"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
 )
 
@@ -548,4 +549,74 @@ func TestNewEntRepository_ShouldNotRunPRMaintenance(t *testing.T) {
 
 	assert.Equal(t, 3, stateOf(t, repo, ref).PollFailCount, "counters untouched")
 	assert.Equal(t, 0, countLinks(t, repo), "no link imported")
+}
+
+// oldBinaryWritesLegacyNumber is what a reverted binary does: it records a PR in
+// the legacy columns only and creates no link.
+func oldBinaryWritesLegacyNumber(t *testing.T, s *Storage, title string, n int) {
+	t.Helper()
+	require.NoError(t, s.repo.client.Session.Update().Where(entsession.Title(title)).
+		SetGithubPrNumber(n).SetGithubPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", n)).Exec(context.Background()))
+}
+
+func rollbackSequence(t *testing.T, s *Storage, title string) *Instance {
+	t.Helper()
+	require.NoError(t, s.RunPRStartupMaintenance(context.Background()))
+	inst := loadByTitle(t, s, title)
+	require.NoError(t, s.UpdateInstance(inst)) // full save
+	return inst
+}
+
+func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyOnly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	prLoadFixture(t, storage, "rolled-back", "u-rb", "acme", "app", 0)
+	linkPR(t, storage, "u-rb", 11, PRRolePrimary, time.Now())
+	oldBinaryWritesLegacyNumber(t, storage, "rolled-back", 12)
+	t.Cleanup(storage.StopPRMaintenance)
+	driftBefore := PRMirrorDriftCorrected()
+
+	inst := rollbackSequence(t, storage, "rolled-back")
+
+	links, err := storage.repo.ListBySessionUUIDs(context.Background(), []string{"u-rb"})
+	require.NoError(t, err)
+	byNumber := map[int]PRView{}
+	for _, v := range links["u-rb"] {
+		byNumber[v.Ref.Number()] = v
+	}
+	require.Contains(t, byNumber, 12, "the legacy-only PR must be imported before projection")
+	assert.Equal(t, PRRoleFollowup, byNumber[12].Role, "a session with a primary imports as followup")
+	assert.Equal(t, AttachSourceBackfill, byNumber[12].AttachSource)
+	assert.Equal(t, PRRolePrimary, byNumber[11].Role)
+
+	snap := inst.Snapshot().GitHub
+	require.Len(t, snap.PRs, 2)
+	want, ok := ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
+	require.True(t, ok)
+	row := sessionMirror(t, storage, "rolled-back")
+	assert.Equal(t, want.Number, row.GitHubPRNumber, "the stored columns read ActivePR of {11,12}")
+	assert.Equal(t, want.URL, row.GitHubPRURL)
+
+	corrected, _ := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	assert.Zero(t, corrected, "the import is not drift")
+	assert.Equal(t, driftBefore, PRMirrorDriftCorrected())
+
+	again := loadByTitle(t, storage, "rolled-back")
+	assert.Len(t, again.Snapshot().GitHub.PRs, 2, "a second boot loses nothing")
+}
+
+func TestRollbackRedeploy_ShouldNotImportTombstonedValue_AndOverwriteItWithTheProjection(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	prLoadFixture(t, storage, "detached", "u-dt", "acme", "app", 0)
+	linkPR(t, storage, "u-dt", 11, PRRolePrimary, time.Now())
+	_, err := storage.repo.DeleteSessionPR(context.Background(), SessionPROwner("u-dt"), mustPRRef(t, "", "acme", "app", 12))
+	require.NoError(t, err)
+	oldBinaryWritesLegacyNumber(t, storage, "detached", 12)
+	t.Cleanup(storage.StopPRMaintenance)
+
+	inst := rollbackSequence(t, storage, "detached")
+
+	require.Len(t, inst.Snapshot().GitHub.PRs, 1, "the tombstoned PR is not imported")
+	assert.Equal(t, 11, sessionMirror(t, storage, "detached").GitHubPRNumber, "the projection overwrites it")
 }
