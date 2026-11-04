@@ -44,7 +44,8 @@ type tymuxGRPCSession struct {
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
 	// them, capture/introspection methods and IsAlive/HasSession read them,
 	// and nothing here assumes single-threaded callers.
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	closeMu sync.Mutex
 
 	// previousContent is the last successful, banner-filtered activity snapshot.
 	previousContent   string
@@ -939,6 +940,8 @@ func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Sessi
 // is a no-op (nothing to kill) rather than an error, matching the
 // zero-value-friendly shape other ProcessManager implementations use.
 func (s *tymuxGRPCSession) Close() error {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
 	s.mu.RLock()
 	sessionID := s.sessionID
 	recordOwned := s.recordOwned
@@ -972,39 +975,37 @@ func (s *tymuxGRPCSession) Close() error {
 		}
 		recordOwned = true
 	}
-	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
-	// take down a session another Instance adopted.
-	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || (recordOwned && !viewOnly)
+	// Keep the claim until cleanup is confirmed, including across failed Close retries.
+	owned := claimedSessions.holds(sessionID, s) || (recordOwned && !viewOnly)
 	if !owned && recordOwned && viewOnly {
 		_, claimed := claimedSessions.LoadOrStore(sessionID, any(s))
-		if !claimed {
-			owned = claimedSessions.CompareAndDelete(sessionID, any(s))
-		}
+		owned = !claimed
 	}
 	var err error
 	if owned {
-		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
+		ctx, cancel := context.WithTimeout(context.Background(), lifecycleRPCTimeout)
+		defer cancel()
+		_, err = s.transport.KillSession(ctx, connect.NewRequest(&v1.KillSessionRequest{
 			SessionId: sessionID,
 		}))
 	} else {
 		log.Info("tymux: Close skipping kill, claim not held", logKeySessionID, sessionID)
 	}
 	killFailed := err != nil && connect.CodeOf(err) != connect.CodeNotFound
-	switch {
-	case killFailed && unrestored:
-		// Not marked closed, which would hide the id from PersistedSessionID; the
-		// stored id stays so a retry can still kill the session.
-	default:
+	if !killFailed {
+		claimedSessions.CompareAndDelete(sessionID, any(s))
 		s.mu.Lock()
 		s.closed = true
-		s.recordOwned = false // a repeat Close must not kill again
+		s.recordOwned = false
 		s.liveness = v1.Liveness_LIVENESS_DEAD
 		s.restartIsPending = false
-		if killFailed {
-			s.killFailedID = sessionID // still running: keep persisting its id
-		} else {
-			s.setStoredIDLocked("")
-		}
+		s.killFailedID = ""
+		s.setStoredIDLocked("")
+		s.mu.Unlock()
+	} else {
+		s.mu.Lock()
+		s.closed = true
+		s.killFailedID = sessionID
 		s.mu.Unlock()
 	}
 	if connect.CodeOf(err) == connect.CodeNotFound {

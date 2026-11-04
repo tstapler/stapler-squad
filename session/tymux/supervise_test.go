@@ -13,6 +13,28 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 )
 
+func TestEnsureDaemonRunning_CancelledCallerDoesNotSpawn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
+		t.Fatal("cancelled caller must not spawn")
+		return nil, context.Canceled
+	})()
+	_, err := EnsureDaemonRunning(ctx, DaemonConfig{Addr: "http://127.0.0.1:19991"})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestValidateTymuxdProcess_RejectsUnrelatedExecutable(t *testing.T) {
+	original := processExeFn
+	t.Cleanup(func() { processExeFn = original })
+	processExeFn = func(context.Context, int) (string, error) { return "/usr/bin/unrelated", nil }
+	require.Error(t, validateTymuxdProcess(context.Background(), 123, "/usr/bin/tymuxd"))
+	require.Error(t, validateTymuxdProcess(context.Background(), 0, "/usr/bin/tymuxd"))
+	processExeFn = func(context.Context, int) (string, error) { return "/usr/bin/tymuxd", nil }
+	require.NoError(t, validateTymuxdProcess(context.Background(), 123, "/usr/bin/tymuxd"))
+}
+
 // --- Injection-seam stubs ---
 //
 // EnsureDaemonRunning is exported with a fixed (ctx, cfg) signature, so unit

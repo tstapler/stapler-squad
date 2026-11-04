@@ -444,28 +444,10 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 	return nil
 }
 
-// ReconnectLoop re-opens Attach{pane_id} with jittered exponential backoff
-// after readAttachLoop observes a non-deliberate stream end. Runs on
-// readAttachLoop's own reader goroutine; blocking here is fine since
-// nothing else waits on it except via s.streamDone.
-//
-// Each attempt dials Attach{pane_id}; a pane reported Dead (errPaneDead)
-// triggers one ReviveSession + redial before giving up on that attempt. A
-// successful dial resyncs once and returns the new stream — s.streamDone
-// stays untouched, so a transient drop that recovers is invisible to
-// Attach()'s callers.
-//
-// On giving up (attempts exhausted, or a deliberate Close()/
-// DetachSafely() interrupts a backoff wait) it returns ok=false along with
-// the lifecycle.Reason (ReasonDeliberateClose vs ReasonReconnectExhausted)
-// it already determined internally from the same s.closing.Load() check —
-// callers must reuse that returned Reason rather than re-deriving it via a
-// second, later s.closing.Load() call, which races against
-// Close()/DetachSafely() setting it from another goroutine (see
-// project_plans/session-lifecycle-state-machine/decisions/). genCtx (the
-// generation context from openStandingStream's lifecycle.StartGeneration)
-// is used to record that Reason via lifecycle.RecordEnd; true exhaustion
-// also delivers a distinguishable failure via deliverExit.
+// ReconnectLoop keeps transport outages recoverable with capped backoff until
+// Close or DetachSafely interrupts it. Confirmed pane loss is terminal; an
+// unconfirmed NotFound retains the bounded reconciliation budget. The returned
+// reason is authoritative so callers do not race a later closing-state read.
 func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
 	recordReconnect(cause)
 	sessionID := s.GetSessionIdentifier()
@@ -485,8 +467,8 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 	s.mu.Unlock()
 
 	lastDialNotFound := false
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if s.closing.Load() {
+	for attempt := 1; ; attempt++ {
+		if s.closing.Load() || genCtx.Err() != nil {
 			break
 		}
 		lastDialNotFound = false
@@ -537,6 +519,9 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 				return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
 			}
 			lastDialNotFound = true
+			if attempt >= maxAttempts {
+				break
+			}
 			// Unconfirmed, or the session respawned its pane: daemonConfirmsPaneGone
 			// repointed s.paneID, so redial that one.
 			s.mu.RLock()

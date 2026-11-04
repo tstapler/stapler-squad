@@ -422,11 +422,36 @@ var (
 				// entry there triggers startup supervision even when the global default
 				// is tmux, so a session pinned to tymux by a prior process finds a daemon
 				// running when it resumes.
+				monitorTymuxd := func(ctx context.Context, daemonCfg tymux.DaemonConfig) {
+					var stop func() error
+					if !tymuxdKeepServerFlag {
+						stop = tymux.StopTymuxd
+					}
+					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
+						current := config.LoadConfig()
+						if tymuxNeeded(current, session.ResolveSessionBackend(current, "", "")) {
+							return true
+						}
+						rows, err := coreDeps.Storage.ListInstanceData()
+						if err != nil {
+							log.Warn("Unable to check persisted tymux demand", "err", err)
+							return false
+						}
+						for _, row := range rows {
+							if row.Backend == session.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
+								return true
+							}
+						}
+						return false
+					}, stop)
+				}
 				if tymuxNeeded(cfg, resolvedBackend) {
-					if err := superviseTymuxd(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
-						tymux.EnsureDaemonRunning, a.OnStop); err != nil {
+					if err := startTymuxdSupervisor(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
+						tymux.EnsureDaemonRunning, a.OnStop, a.Go, monitorTymuxd); err != nil {
 						return err
 					}
+				} else {
+					a.Go("tymuxd-supervisor", func(ctx context.Context) { monitorTymuxd(ctx, tymux.ResolveDaemonConfig()) })
 				}
 
 				// --tmux-keep-server intentionally keeps the tmux server (and anything
@@ -1014,6 +1039,18 @@ func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup,
 	default:
 		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
 	}
+	return nil
+}
+
+func startTymuxdSupervisor(ctx context.Context, cfg tymux.DaemonConfig, strictStartup, keepServer bool,
+	ensure func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error),
+	registerStop func(string, func(context.Context) error),
+	startWorker func(string, func(context.Context)),
+	monitor func(context.Context, tymux.DaemonConfig)) error {
+	if err := superviseTymuxd(ctx, cfg, strictStartup, keepServer, ensure, registerStop); err != nil {
+		return err
+	}
+	startWorker("tymuxd-supervisor", func(ctx context.Context) { monitor(ctx, cfg) })
 	return nil
 }
 

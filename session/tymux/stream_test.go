@@ -523,43 +523,62 @@ func TestReconnectLoop_TransparentlyReattaches_OnTransientDrop_WithoutClosingAtt
 	assert.False(t, reconnecting, "ReconnectState must clear once the reconnect succeeds")
 }
 
-func TestReconnectLoop_GivesUp_AfterMaxAttempts_ClosesAttachChannel_AndFiresDistinctExitReason(t *testing.T) {
+func TestReconnectLoop_RecoversAfterInitialRetryBudget(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 2)
+	sess.DetachSafely()
+	concrete.mu.Lock()
+	concrete.abortReconnect = make(chan struct{})
+	concrete.mu.Unlock()
+	concrete.closing.Store(false)
+	var attempts atomic.Int32
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		if attempts.Add(1) <= 3 {
+			st.sendFn = func(*v1.AttachRequest) error { return errors.New("daemon unavailable") }
+		} else {
+			st.push(&v1.AttachEvent{})
+		}
+		return st
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, _, ok, _ := concrete.ReconnectLoop(ctx, testPaneID, "error")
+	require.True(t, ok, "a daemon outage must remain recoverable beyond the initial retry budget")
+	stream.CloseResponse()
+	assert.EqualValues(t, 4, attempts.Load())
+}
+
+func TestReconnectLoop_TransportOutageRemainsRecoverableUntilCanceled(t *testing.T) {
 	sess, stream, transport := startedSessionWithStream(t)
 	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 2)
-
+	var attempts atomic.Int32
 	transport.attachFn = func(ctx context.Context) attachStream {
-		s := newFakeAttachStream(ctx)
-		s.sendFn = func(*v1.AttachRequest) error { return errors.New("boom: unreachable") }
-		return s
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error {
+			if attempts.Add(1) == 4 {
+				go sess.DetachSafely()
+			}
+			return errors.New("daemon unavailable")
+		}
+		return st
 	}
-
 	reasons := make(chan string, 1)
 	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
-
-	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
-
 	done, err := sess.Attach()
 	require.NoError(t, err)
-
-	close(stream.events) // drop
-
+	close(stream.events)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Attach's channel never closed after ReconnectLoop exhausted its attempts")
+		t.Fatal("DetachSafely did not interrupt persistent reconnect")
 	}
-
+	assert.GreaterOrEqual(t, attempts.Load(), int32(4))
 	select {
 	case reason := <-reasons:
-		assert.Contains(t, reason, "reconnect failed", "the give-up reason must be distinguishable from an ordinary process exit")
-	case <-time.After(time.Second):
-		t.Fatal("exit callback never fired after ReconnectLoop exhaustion")
+		t.Fatalf("transport outage must not deliver process exit: %s", reason)
+	default:
 	}
-
-	// REQ-10: true exhaustion (closing never observed) must be recorded
-	// distinctly from a deliberate-close interruption.
-	after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
-	assert.Equal(t, before+1, after, "session_lifecycle_ends_total{subsystem=tymux_reconnect,reason=reconnect_exhausted} must increment by exactly 1")
 }
 
 // TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary is

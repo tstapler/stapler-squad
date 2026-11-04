@@ -2,12 +2,16 @@ package tymux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
@@ -325,8 +329,14 @@ func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason stri
 	if sharedDaemonBlockedInTest(cfg.Addr) {
 		return TymuxdReady{}, ErrSharedDaemonInTest
 	}
+	if err := ctx.Err(); err != nil {
+		return TymuxdReady{}, err
+	}
 	if checkDaemonHealthyFn(ctx, cfg) {
 		return TymuxdReady{}, nil // reuse case: correct steady-state outcome
+	}
+	if err := ctx.Err(); err != nil {
+		return TymuxdReady{}, err
 	}
 
 	v, err, _ := spawnSF.Do(cfg.Addr, func() (interface{}, error) {
@@ -345,7 +355,7 @@ func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason stri
 		// cfg.Addr. Idempotent/safe to call unconditionally: a no-op when no
 		// PID file exists (the normal cold-start case).
 		if stopErr := stopTymuxdFn(); stopErr != nil {
-			log.Warn("[tymux] failed to stop unhealthy tymuxd before respawn attempt", "err", stopErr)
+			return nil, fmt.Errorf("tymux: cannot safely stop unhealthy daemon: %w", stopErr)
 		}
 
 		spawnedAt := time.Now()
@@ -393,18 +403,33 @@ func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason stri
 	return v.(TymuxdReady), nil
 }
 
-// StopTymuxd kills whatever process is recorded in $configDir/tymuxd.pid and
-// removes the PID file; no-op (returns nil) if the PID file doesn't exist --
-// mirrors daemon/daemon.go's StopDaemon's idempotent-stop contract exactly.
-//
-// This is idempotent, NOT ownership-aware: it has no way to tell whether the
-// recorded PID belongs to a tymuxd this process itself started, or one a
-// different process (sharing the same configDir -- see TymuxdReady.Spawned's
-// doc comment) started and is still relying on. A caller registering this as
-// an App.OnStop hook MUST gate that registration on
-// EnsureDaemonRunning's TymuxdReady.Spawned being true for a spawn this
-// process performed -- calling it unconditionally risks killing another
-// process's daemon out from under it.
+func validateTymuxdProcess(ctx context.Context, pid int, binary string) error {
+	if pid <= 1 {
+		return fmt.Errorf("tymux: refusing unsafe daemon PID %d", pid)
+	}
+	exe, err := processExeFn(ctx, pid)
+	if err != nil {
+		return fmt.Errorf("tymux: cannot verify daemon PID %d: %w", pid, err)
+	}
+	configured, err := exec.LookPath(binary)
+	if err != nil {
+		configured = binary
+	}
+	actual := strings.TrimSuffix(exe, " (deleted)")
+	if filepath.Clean(actual) == filepath.Clean(configured) {
+		return nil
+	}
+	a, aerr := os.Stat(actual)
+	b, berr := os.Stat(configured)
+	if aerr == nil && berr == nil && os.SameFile(a, b) {
+		return nil
+	}
+	return fmt.Errorf("tymux: refusing to kill PID %d: executable %q does not match %q", pid, exe, configured)
+}
+
+// StopTymuxd stops the recorded daemon after verifying its executable identity.
+// A missing PID file is a no-op. Shutdown callers must first establish spawn
+// ownership; executable identity alone does not establish ownership.
 func StopTymuxd() error {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
@@ -428,6 +453,15 @@ func StopTymuxd() error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("failed to find tymuxd process: %w", err)
+	}
+	defer func() { _ = proc.Release() }()
+	if err := proc.Signal(syscall.Signal(0)); errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return os.Remove(pidFile)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), daemonHealthCheckTimeout)
+	defer cancel()
+	if err := validateTymuxdProcess(ctx, pid, TymuxdBinary()); err != nil {
+		return err
 	}
 
 	if err := proc.Kill(); err != nil {

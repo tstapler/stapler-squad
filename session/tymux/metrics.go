@@ -87,6 +87,12 @@ const (
 )
 
 var (
+	daemonRecoveryCounter = mustInt64Counter("tymux_daemon_recovery_attempts_total",
+		metric.WithDescription("Automatic daemon recovery attempts by outcome"))
+	daemonHealthyGauge = mustInt64Gauge("tymux_daemon_healthy",
+		metric.WithDescription("1 when the last daemon probe or recovery succeeded, otherwise 0"))
+	daemonFailureGauge = mustInt64Gauge("tymux_daemon_consecutive_failures",
+		metric.WithDescription("Consecutive unsuccessful daemon probes"))
 	daemonRestartCounter = mustInt64Counter("tymux_daemon_restarts_total",
 		metric.WithDescription("tymuxd spawns/restarts observed by this process, by reason (cold_start, replace, detected_restart)"))
 	daemonStartDuration = mustFloat64Histogram("tymux_daemon_start_duration_ms",
@@ -101,6 +107,15 @@ const (
 	daemonStartOK     = "ok"
 	daemonStartFailed = "failed"
 )
+
+func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
+	value := int64(0)
+	if healthy {
+		value = 1
+	}
+	daemonHealthyGauge.Record(ctx, value)
+	daemonFailureGauge.Record(ctx, int64(failures))
+}
 
 func recordDaemonRestart(reason string) {
 	daemonRestartCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", reason)))
