@@ -32,6 +32,9 @@ type MoveSpec struct {
 	// Lower moves a cluster the staying files depend on (a test-support package): staying files are re-pointed at
 	// the new package instead of reported, and a moved file that uses a stay-behind symbol is an error.
 	Lower bool
+	// AllowCollisions skips the capitalisation-collision refusal: the result does not compile and is only good for
+	// `scoping replay` (SC6 measurement of a cluster whose boundary has not been prepared yet).
+	AllowCollisions bool
 }
 
 type edit struct {
@@ -338,7 +341,7 @@ func (m *mover) apply() error {
 		}
 	}
 	for from, up := range m.rename {
-		if _, taken := m.declared[up]; taken {
+		if _, taken := m.declared[up]; taken && !m.spec.AllowCollisions {
 			return fmt.Errorf("capitalising %s would collide with the existing declaration %s: use that symbol (or rename one) before moving", from, up)
 		}
 	}

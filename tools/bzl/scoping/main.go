@@ -266,6 +266,7 @@ func runMove(args []string, stdout io.Writer) int {
 	fs.StringVar(&spec.ToDir, "to", "", "new package directory, relative to the root")
 	fs.StringVar(&spec.Root, "root", workspace(), "repository root")
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
+	fs.BoolVar(&spec.AllowCollisions, "allow-collisions", false, "measurement only: skip the capitalisation-collision refusal (the result does not compile)")
 	fs.BoolVar(&spec.Lower, "lower", false, "the staying files depend on the cluster (test-support package): re-point them instead of reporting")
 	if fs.Parse(args) != nil || spec.FromDir == "" || spec.ToDir == "" || *files == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping move --from DIR --to DIR --files a.go,b.go [--dry-run]")
