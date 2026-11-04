@@ -653,8 +653,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
+			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
+			if deps.BacklogService != nil {
+				backlogTransitions = deps.BacklogService
+			}
 			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
-				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService, Cancels: wakeTriggerSvc,
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: backlogTransitions, Cancels: wakeTriggerSvc,
 			})
 		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)

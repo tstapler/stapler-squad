@@ -332,7 +332,7 @@ func clsCallerRefs(t *testing.T, root string, consts map[string]string) map[stri
 // request, so a constant they mention is reachable (bounded by the tests above).
 var clsDynamicProducerKeys = []string{
 	"server/services/backlog_service_triage.go guardedTransitionCaller",
-	"server/services/backlog_service_lifecycle.go resolveTransitionCaller",
+	"server/services/backlog_ports.go resolveTransitionCaller",
 }
 
 // clsUnusedCallers returns the non-forwarding registry entries with no call path:

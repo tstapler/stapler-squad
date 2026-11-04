@@ -29,6 +29,7 @@ go_library(
         "backlog_github_progress_sync.go",
         "backlog_item_event_publisher.go",
         "backlog_notifier.go",
+        "backlog_ports.go",
         "backlog_service.go",
         "backlog_service_background_models.go",
         "backlog_service_chat.go",

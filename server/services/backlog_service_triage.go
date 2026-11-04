@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -400,7 +399,6 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 // live tmux process and can be safely tombstoned on re-trigger.
 // headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
 const (
-	headlessTriageUUIDPrefix   = "headless-triage-"
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 
 	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
@@ -1467,40 +1465,6 @@ func findConfirmedLiveWorkSession(stopper SessionStopper, priorSessions []sessio
 		}
 	}
 	return nil
-}
-
-// findSupersededSessions returns every tmux-backed (work or review role)
-// ItemSession in sessions that is NOT the current round for its role — i.e.
-// a strictly newer ItemSession of the same role exists for this item. This is
-// the single source of truth for "which round is current," reusing
-// findMostRecentSessions' exact per-role tie-break (latest CreatedAt wins) —
-// the same helper TriggerReReview itself already calls to find the prior
-// review round to archive — rather than defining a second, competing notion
-// of "current." findActiveWorkSession/findConfirmedLiveWorkSession answer a
-// different question ("is there a still-open/still-live work session at
-// all," by EndedAt/IsSessionLive, not CreatedAt) for spawnSessionAfterGates'
-// concurrency guard, not "which round is current," so this deliberately does
-// not reuse their tie-break. The two can disagree in theory (e.g. the
-// newest-by-CreatedAt round already ended while an older one is still open) —
-// archiveIfNotLive's IsSessionLive check is what actually protects a
-// genuinely-attached session from being archived on such a disagreement, not
-// this function agreeing with those two on "current."
-// Pure — no I/O, no locking — so it's table-testable without tmux/storage.
-func findSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
-	currentReview, currentWork := findMostRecentSessions(sessions)
-
-	var superseded []session.ItemSessionSummary
-	for i := range sessions {
-		is := &sessions[i]
-		if !session.IsTmuxBackedSessionRole(is.Role) {
-			continue
-		}
-		if is == currentReview || is == currentWork {
-			continue
-		}
-		superseded = append(superseded, *is)
-	}
-	return superseded
 }
 
 // findActiveJulesSession returns the open (not yet ended) jules_work-role
@@ -2908,30 +2872,6 @@ func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string 
 // maxErrorDetailRunes bounds ItemSession.error_detail.
 const maxErrorDetailRunes = 500
 
-// errorDetailSecretPattern matches common credential shapes that could ride along in a
-// wrapped exec/network error: vendor token prefixes, JWTs, bearer/basic auth, and
-// key/value or --flag secrets with =, :, quoted-JSON or (for --flags) space separators.
-var errorDetailSecretPattern = regexp.MustCompile(`(?i)(` +
-	`\bsk-[a-z0-9_-]{8,}` +
-	`|\b(?:gh[pousr]|github_pat)_[a-z0-9_]{20,}` +
-	`|\bxox[abpr]-[a-z0-9-]{8,}` +
-	`|\b(?:akia|asia)[a-z0-9]{16}\b` +
-	`|\beyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]*` +
-	`|\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}` +
-	`|(?:api[_-]?key|token|secret|passw(?:or)?d|authorization)\b["']?\s*[:=]\s*["']?(?:(?:bearer|basic)\s+)?[^\s"',;&]+` +
-	`|--(?:api[_-]?key|token|secret|passw(?:or)?d)\s+[^\s"',;&]+` +
-	`)`)
-
-// errorDetailURLUserinfoPattern captures a URL's scheme so only its user:pass@ part is masked.
-var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@`)
-
-// redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
-// log rotation and is shown in the UI, so it must not become a durable secret store.
-func redactErrorDetail(s string) string {
-	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
-	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
-}
-
 // truncateErrorDetail returns err.Error() cut to at most maxRunes runes (never splitting a
 // multi-byte rune), or "" for a nil error.
 func truncateErrorDetail(err error, maxRunes int) string {
@@ -3756,25 +3696,6 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 //     signal about our own process lifecycle for it.
 func shouldAttributeTombstoneToShutdown(isHeadless, isStale, live bool, createdAt, bootTime time.Time) bool {
 	return isHeadless && !isStale && !live && createdAt.Before(bootTime)
-}
-
-// findMostRecentSessions returns the most recently created review and work ItemSessions
-// from the provided list. Either return value may be nil if no session of that role exists.
-func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
-	for i := range sessions {
-		is := &sessions[i]
-		switch is.Role {
-		case session.SessionRoleReview:
-			if reviewSession == nil || is.CreatedAt.After(reviewSession.CreatedAt) {
-				reviewSession = is
-			}
-		case session.SessionRoleWork:
-			if workSession == nil || is.CreatedAt.After(workSession.CreatedAt) {
-				workSession = is
-			}
-		}
-	}
-	return
 }
 
 // resolveCodebaseWorkDir returns the directory the headless codebase-read review call

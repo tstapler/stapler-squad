@@ -15,12 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// crossHostClaimDedupFlagName gates every cross-host claim check. Off by
-// default: with it off, creation and dequeue behave exactly as they did before
-// the claim substrate existed. Claim recording (Storage.CreateBacklogItem) is
-// always on.
-const crossHostClaimDedupFlagName = "cross_host_claim_dedup"
-
 // minClaimOverrideReasonLength mirrors the web app's MIN_OVERRIDE_REASON_LENGTH
 // (GateVerdictBox) so the server enforces what the UI form already requires.
 const minClaimOverrideReasonLength = 5
