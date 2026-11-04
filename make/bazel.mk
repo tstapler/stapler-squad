@@ -12,7 +12,7 @@ define wrap
 BAZEL_REAL=$$(command -v bazelisk || command -v bazel) tools/bazel $(1)
 endef
 
-.PHONY: gazelle gazelle-check sync ready-bazel-guards
+.PHONY: gazelle gazelle-check sync gen-freshness go-build go-vet go-test ready-bazel-guards
 
 gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel)
 	$(call wrap,run //:gazelle)
@@ -20,12 +20,40 @@ gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel)
 gazelle-check: ## Fail if BUILD files are out of date with the Go sources (Gazelle -mode=diff; needs Bazel)
 	$(call wrap,run //:gazelle -- -mode=diff)
 
-sync: ## Generate code plain go/gopls need (BUILD_SYSTEM=make: proto-gen ent-gen; Bazel branch lands in Epic 2)
+sync: ## Generate code plain go/gopls need into gen/ and session/ent (BUILD_SYSTEM=make: proto-gen ent-gen; bazel: bazel run //:sync-gen)
 ifeq ($(BUILD_SYSTEM),make)
 	$(MAKE) proto-gen ent-gen
+	@bash tools/bzl/check-gen-fresh-cheap.sh --write
 else
-	@echo "sync: the BUILD_SYSTEM=bazel branch arrives with Tasks 2.4a-2.4d; use BUILD_SYSTEM=make" >&2; exit 1
+	$(call wrap,run --ui_event_filters=-info --noshow_progress //:sync-gen)
 endif
+
+gen-freshness: ## Fail (exit 1, "run: make sync") if gen/ and session/ent are stale; BUILD_SYSTEM=bazel only (skipped under make)
+ifeq ($(BUILD_SYSTEM),make)
+	@echo "skipped: BUILD_SYSTEM=make"
+else
+	@bash tools/bzl/check-gen-fresh-cheap.sh || { echo "run: make sync"; exit 1; }
+	@bash tools/bzl/check-gen-fresh.sh
+endif
+
+# Native-go shims (Task 2.4e): raw `go build` after a pull is unprotected by design; these run `make sync`
+# when the inputs stamp is stale, then the native tool, translating a failure when translate-errors.sh exists.
+NATIVE_GO_BANNER = [native go - not authoritative; Bazel is the build of record]
+define native_go
+@echo "$(NATIVE_GO_BANNER)"
+@case "$$(bash tools/bzl/check-gen-fresh-cheap.sh --warn)" in *STALE*) $(MAKE) sync;; esac
+@out=$$($(1) 2>&1); rc=$$?; \
+ if [ $$rc != 0 ] && [ -f tools/bzl/translate-errors.sh ]; then printf '%s\n' "$$out" | bash tools/bzl/translate-errors.sh --source go; else printf '%s\n' "$$out"; fi; exit $$rc
+endef
+
+go-build: ## Native go build ./... with auto-sync of stale generated code (not authoritative; Bazel is)
+	$(call native_go,go build ./...)
+
+go-vet: ## Native go vet ./... with auto-sync of stale generated code (not authoritative; Bazel is)
+	$(call native_go,go vet ./...)
+
+go-test: ## Native go test with auto-sync: make go-test PKG=./config RUN=TestFoo (not authoritative; Bazel is)
+	$(call native_go,go test $(or $(PKG),./...) $(if $(RUN),-run '$(RUN)',))
 
 # check-bazelrc.sh fails closed without bazel; under BUILD_SYSTEM=make with none on PATH its
 # bazel-backed probes (flag existence via `bazel help`, `bazel mod graph`) are skipped, loudly.
@@ -38,6 +66,7 @@ ready-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, .bazelr
 	$(BZL_NO_BAZEL_ENV) bash tools/bzl/check-bazelrc.sh
 	bash tools/bzl/check-bazelrc_test.sh
 	bash tools/bzl/check-configs.sh
+	bash tools/bzl/check-gen-fresh-cheap_test.sh
 	bash tools/bzl/check-no-force-push.sh
 	bash tools/bzl/check-no-force-push_test.sh
 	bash scripts/hooks/pre-push-no-force_test.sh

@@ -95,7 +95,7 @@ endif
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
-	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk -v c="$$([ -t 1 ] && printf '\033[36m')" -v r="$$([ -t 1 ] && printf '\033[0m')" 'BEGIN {FS = ":.*?## "}; {printf "%s%-20s%s %s\n", c, $$1, r, $$2}'
 
 # BUILD_SYSTEM switch, Bazel skeleton targets and the Bazel repo guards. Included after `help`
 # so the default goal stays `help`; BUILD_SYSTEM validation runs at parse time.
@@ -1106,7 +1106,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-bazel-guards proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci ready-bazel-guards $(if $(filter bazel,$(BUILD_SYSTEM)),gen-freshness,) proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh

@@ -1,5 +1,6 @@
 load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:go_test.bzl", "go_test")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
@@ -41,6 +42,20 @@ load("//tools/bzl:go_test.bzl", "go_test")
 # gazelle:resolve go github.com/tstapler/stapler-squad/server/web //server/web:web
 
 gazelle(name = "gazelle")
+
+# `make sync` (BUILD_SYSTEM=bazel) runs this: copies proto Go/connect and ent outputs into the tree.
+sh_binary(
+    name = "sync-gen",
+    srcs = ["//tools/bzl:sync_gen.sh"],
+    args = [
+        "$(rootpaths //proto/session/v1:gen_go)",
+        "$(rootpaths //tools/bzl/ent:ent_gen)",
+    ],
+    data = [
+        "//proto/session/v1:gen_go",
+        "//tools/bzl/ent:ent_gen",
+    ],
+)
 
 exports_files([
     "buf.yaml",

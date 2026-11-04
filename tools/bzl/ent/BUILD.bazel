@@ -25,7 +25,10 @@ ent_packages(
     packages = ENT_PACKAGES,
     packages_file = "packages.bzl",
     schema_srcs = ["//session/ent/schema:schema_srcs"],
-    visibility = ["//tools/bzl:__pkg__"],
+    visibility = [
+        "//:__pkg__",
+        "//tools/bzl:__pkg__",
+    ],
 )
 
 # ent_gen's -expect check fails the build with `Run: bazel run //tools/bzl/ent:update_packages` when

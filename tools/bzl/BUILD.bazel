@@ -6,6 +6,7 @@ load("//tools/bzl:ent_test.bzl", "ent_gen_action_test")
 exports_files([
     "ent.bzl",
     "go_test.bzl",
+    "sync_gen.sh",
 ])
 
 ent_gen_action_test(
