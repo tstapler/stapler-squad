@@ -21,7 +21,15 @@ _HOST_COUPLED = {
 _EXTERNAL = "external"  # tag-reason: host-coupled result must rerun, never cache (pre-mortem #3) (#1423)
 
 def go_test_defaults(package, kwargs):
-    """Returns kwargs with the table's size, shard_count and cache-policy tags applied."""
+    """Returns kwargs with the table's size, shard_count and cache-policy tags applied.
+
+    Args:
+      package: the Bazel package name, the key into the size and host-coupling tables.
+      kwargs: the go_test keyword arguments to adjust.
+
+    Returns:
+      A copy of kwargs with size, shard_count and tags filled in.
+    """
     if kwargs.get("flaky"):
         fail("flaky = True is banned (Task 0.2g): fix the test instead of retrying it")
     out = dict(kwargs)

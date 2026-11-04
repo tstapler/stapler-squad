@@ -1,10 +1,14 @@
 # gazelle:ignore
 load("//tools/bzl/bun:bun.bzl", "bun_dist", "bun_jest_test")
 
-
 package(default_visibility = ["//visibility:public"])
+
 exports_files(
-    ["package.json", "bun.lock", "bunfig.toml"] + glob([
+    [
+        "package.json",
+        "bun.lock",
+        "bunfig.toml",
+    ] + glob([
         "eslint-plugin-analytics/**",
         "eslint-plugin-rpc-lifecycle/**",
         "patches/**",
@@ -21,16 +25,17 @@ genrule(
 
 filegroup(
     name = "dist_srcs",
-    srcs = glob(
+    srcs = [
+        "bun.lock",
+        "bunfig.toml",
+        "index.html",
+        "package.json",
+        "scripts/verify-eval-patch.mjs",
+    ] + glob(
         [
-            "index.html",
-            "bunfig.toml",
-            "package.json",
-            "bun.lock",
             "tsconfig*.json",
             "build/**",
             "patches/**",
-            "scripts/verify-eval-patch.mjs",
             "src/**",
             "public/**",
         ],
@@ -45,8 +50,8 @@ bun_dist(
     name = "dist",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
-    gen = "//proto/session/v1:session_ts",
     bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
 )
@@ -56,8 +61,8 @@ bun_dist(
     name = "dist_trace",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
-    gen = "//proto/session/v1:session_ts",
     bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
     trace = True,
@@ -66,17 +71,24 @@ bun_dist(
 # Jest inputs: everything jest.config.js's web-app project reads.
 filegroup(
     name = "jest_srcs",
-    srcs = [":dist_srcs"] + glob(["jest.config.js", "jest.setup.js", "eslint.config.mjs", "eslint-plugin-analytics/**", "eslint-plugin-rpc-lifecycle/**"]),
+    srcs = [
+        "eslint.config.mjs",
+        "jest.config.js",
+        "jest.setup.js",
+        ":dist_srcs",
+    ] + glob([
+        "eslint-plugin-analytics/**",
+        "eslint-plugin-rpc-lifecycle/**",
+    ]),
 )
 
 # Full Jest suite (web-app project of jest.config.js), split by jest's --shard over the sorted test list.
 bun_jest_test(
     name = "jest",
+    size = "large",
     srcs = [":jest_srcs"],
     bun = "@bun_host//:bun",
     gen = "//proto/session/v1:session_ts",
-    node = "@node_host//:node",
-    node_modules = "@web_node_modules//:node_modules",
     # Suites that read docs/, project_plans/ (.bazelignore'd), tests/e2e or tests/terminal-conformance
     # through ../ paths; those directories are not Bazel packages. Epic 4 (sandbox remediation) owns them.
     ignore_patterns = [
@@ -87,11 +99,12 @@ bun_jest_test(
         "src/lib/files/analytics/__tests__/events\\.test",
         "src/lib/terminal/__tests__/conformance/conformance\\.(xterm|ghostty)\\.test",
     ],
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
     repo_data = [
         "//server/analytics:client_metrics.go",
         "//server/analytics:client_pages.json",
     ],
     shard_count = 4,
-    size = "large",
     tags = ["no-remote-cache"],
 )
