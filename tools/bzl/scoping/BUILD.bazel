@@ -8,6 +8,7 @@ go_library(
         "main.go",
         "model.go",
         "move.go",
+        "relocate.go",
         "replay.go",
         "t9.go",
     ],
@@ -16,6 +17,7 @@ go_library(
     deps = [
         "@org_golang_x_tools//go/ast/astutil",
         "@org_golang_x_tools//go/packages",
+        "@org_golang_x_tools//imports",
     ],
 )
 
@@ -29,6 +31,7 @@ go_test(
     name = "scoping_test",
     srcs = [
         "move_test.go",
+        "relocate_test.go",
         "scoping_test.go",
     ],
     embed = [":scoping_lib"],
