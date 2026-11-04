@@ -115,6 +115,24 @@ def eg4(m, i):
     return _result("EG4", "TRIP" if c > lim else "CLEAR", "re-costed %.2fM CU vs limit %.2fM (1.25 x %.2fM)" % (c, lim, VERIFIED_CU_M))
 
 
+RA2_PROJECTED_LIMIT = 0.90  # plan Task 0.14e: post-selection RA2 projection limit (ADR-009)
+
+
+def selected_share(i, spike_results=None):
+    """e2e_selected_share_median from the inputs file, else spike-results.yaml (spike S14); None when S14 has no number."""
+    v = num(i, "e2e_selected_share_median")
+    if v is not None:
+        return v
+    path = spike_results or os.path.join(IMPL, "spike-results.yaml")
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                m = re.match(r"^\s*e2e_selected_share_median:\s*([0-9.]+)\s*$", line)
+                if m:
+                    return float(m.group(1))
+    return None
+
+
 def eg5(m, i):
     ra1, ra2 = num(m, "ra1_median_fanout"), num(m, "ra2_non_go_share")
     miss = [n for n, v in (("ra1_median_fanout", ra1), ("ra2_non_go_share", ra2)) if v is None]
@@ -123,9 +141,25 @@ def eg5(m, i):
     trips = []
     if ra1 > EG5_LIMIT:
         trips.append("RA1 %.3f > %.2f" % (ra1, EG5_LIMIT))
-    if ra2 > EG5_LIMIT:
-        trips.append("RA2 %.3f > %.2f" % (ra2, EG5_LIMIT))
-    return _result("EG5", "TRIP" if trips else "CLEAR", "; ".join(trips) or "RA1 %.3f, RA2 %.3f both <= %.2f" % (ra1, ra2, EG5_LIMIT))
+    comp = m.get("ra2_median_components_s")
+    span = num(comp, "span") if isinstance(comp, dict) else None
+    parts = [num(comp, k) for k in ("setup_and_queue", "lint", "go_or_other", "e2e")] if span else []
+    if span and all(p is not None for p in parts):
+        # ADR-009 / Task 0.14e: RA2 on the post-selection projection. Unknown s is 1.0 (never assumed better).
+        setup, lint, go, e2e = parts
+        s_known = selected_share(i)
+        s = 1.0 if s_known is None else s_known
+        residual, projected = (setup + lint + go) / span, (setup + lint + go + e2e * s) / span
+        if residual > EG5_LIMIT:
+            trips.append("RA2 residual %.3f > %.2f" % (residual, EG5_LIMIT))
+        if projected > RA2_PROJECTED_LIMIT:
+            trips.append("RA2 projected %.3f > %.2f (s=%.2f%s)" % (projected, RA2_PROJECTED_LIMIT, s, "" if s_known is not None else ", S14 undecided"))
+        detail = "RA1 %.3f; RA2 residual %.3f, projected %.3f at s=%.2f" % (ra1, residual, projected, s)
+    else:
+        if ra2 > EG5_LIMIT:
+            trips.append("RA2 %.3f > %.2f" % (ra2, EG5_LIMIT))
+        detail = "RA1 %.3f, RA2 %.3f both <= %.2f" % (ra1, ra2, EG5_LIMIT)
+    return _result("EG5", "TRIP" if trips else "CLEAR", "; ".join(trips) or detail)
 
 
 def mid_t1(m, i):
