@@ -898,7 +898,6 @@ go_test(
         "@com_github_go_git_go_git_v5//plumbing/object",
         "@com_github_google_uuid//:uuid",
         "@com_github_linkdata_deadlock//:deadlock",
-        "@com_github_mattn_go_sqlite3//:go-sqlite3",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@com_github_zalando_go_keyring//:go-keyring",

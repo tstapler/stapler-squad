@@ -13,8 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver, for the raw-connection schema surgery below
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
+	_ "modernc.org/sqlite" // SQLite driver, for the raw-connection schema surgery below
 )
 
 // TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithNonDefaultSlug
@@ -751,7 +752,7 @@ func TestNewEntRepository_should_MigrateExistingDatabaseSuccessfully_When_Backlo
 	// Step 2: reconstruct the pre-feature schema by dropping the new join table via a raw
 	// connection. backlog_items itself gained no new columns for this feature (only two new
 	// edges to an entirely new entity), so this is the only DDL delta to undo.
-	rawDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	rawDB, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithWAL().WithBusyTimeout(5*time.Second).WithForeignKeys().Build())
 	require.NoError(t, err)
 	_, err = rawDB.Exec(`DROP TABLE IF EXISTS backlog_item_dependencies;`)
 	require.NoError(t, err)
@@ -1034,9 +1035,9 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 	require.NoError(t, repo.Close())
 
 	// Step 2: reconstruct the pre-migration ("before up") schema state by
-	// dropping the public_id column via a raw connection — sqlite (bundled
-	// via mattn/go-sqlite3 v1.14.40) supports ALTER TABLE ... DROP COLUMN.
-	rawDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	// dropping the public_id column via a raw connection — sqlite (via
+	// modernc.org/sqlite) supports ALTER TABLE ... DROP COLUMN.
+	rawDB, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithWAL().WithBusyTimeout(5*time.Second).WithForeignKeys().Build())
 	require.NoError(t, err)
 	// sqlite refuses ALTER TABLE ... DROP COLUMN when the column still backs
 	// an index, so the unique index over public_id (Story 1.2) must be
@@ -1091,7 +1092,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 
 	// Verify the re-added column is Optional (nullable) and Unique+indexed,
 	// per Story 1.2's schema decision.
-	verifyDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	verifyDB, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithWAL().WithBusyTimeout(5*time.Second).WithForeignKeys().Build())
 	require.NoError(t, err)
 	require.True(t, backlogItemsHasColumn(t, verifyDB, "public_id"), "public_id column must exist after the up migration")
 
