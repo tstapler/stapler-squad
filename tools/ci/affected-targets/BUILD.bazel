@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "affected-targets_lib",
+    srcs = [
+        "affected.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/ci/affected-targets",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "affected-targets",
+    embed = [":affected-targets_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "affected-targets_test",
+    srcs = ["affected_test.go"],
+    embed = [":affected-targets_lib"],
+)
