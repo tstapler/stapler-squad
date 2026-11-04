@@ -478,3 +478,29 @@ func TestLiveWorkHoldExpired_ShouldExpireAtMaxHold(t *testing.T) {
 		})
 	}
 }
+
+func TestAssignRole_ShouldFollowTable_WhenAttachSourceAndOrderVary(t *testing.T) {
+	withRole := func(v PRView, r PRRole) PRView { v.Role = r; return v }
+	primary := withRole(prRow(t, 11, PRStateMerged, "feat/a"), PRRolePrimary)
+	tests := []struct {
+		name     string
+		existing []PRView
+		base     string
+		want     PRRole
+	}{
+		{"empty session gets primary", nil, "main", PRRolePrimary},
+		{"only followups, no primary yet", []PRView{withRole(prRow(t, 12, PRStateOpen, "b"), PRRoleFollowup)}, "main", PRRolePrimary},
+		{"primary exists, unrelated base", []PRView{primary}, "main", PRRoleFollowup},
+		{"base equals another head", []PRView{primary}, "feat/a", PRRoleStacked},
+		{"base equals head of non-primary link", []PRView{primary, withRole(prRow(t, 12, PRStateOpen, "feat/b"), PRRoleFollowup)}, "feat/b", PRRoleStacked},
+		{"empty base never stacks", []PRView{withRole(prRow(t, 11, PRStateOpen, ""), PRRolePrimary)}, "", PRRoleFollowup},
+		{"backfill import into session with merged primary", []PRView{primary}, "", PRRoleFollowup},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AssignRole(tt.existing, tt.base); got != tt.want {
+				t.Errorf("AssignRole = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

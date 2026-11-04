@@ -178,3 +178,25 @@ func LiveWorkHoldExpired(now, latestMergedAt time.Time, maxHold time.Duration) b
 	}
 	return now.Sub(latestMergedAt) >= maxHold
 }
+
+// AssignRole picks the display role for a PR about to be attached to a session
+// that already holds existing links: primary when none of them is primary;
+// otherwise stacked when baseBranch is another attached PR's head branch, else
+// followup. How the PR arrived (attach source) does not change the role.
+func AssignRole(existing []PRView, baseBranch string) PRRole {
+	hasPrimary := false
+	for _, v := range existing {
+		hasPrimary = hasPrimary || v.Role == PRRolePrimary
+	}
+	if !hasPrimary {
+		return PRRolePrimary
+	}
+	if baseBranch != "" {
+		for _, v := range existing {
+			if v.HeadBranch == baseBranch {
+				return PRRoleStacked
+			}
+		}
+	}
+	return PRRoleFollowup
+}
