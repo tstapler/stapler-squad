@@ -2483,16 +2483,16 @@ Source: `spike-results.md` and `epic0-seal.md` on branch `sdd/bazel-epic0`. Each
 
 | Correction | Where applied |
 |---|---|
-| `@rules_go//`, not `@io_bazel_rules_go//` (bzlmod) | Story 0.8 AC, Task 4.x `.bazelrc` text |
-| `--disk_cache=` (empty), not `--nodisk_cache` | Task 0.2b, Task 0.10 E4 |
+| `@rules_go//`, not `@io_bazel_rules_go//` (bzlmod) | Story 0.8 AC, Task 1.1c |
+| `--disk_cache=` (empty), not `--nodisk_cache` | Task 0.2b, Task 0.10e (E4) |
 | `proto_library` loads from `@protobuf//bazel:proto_library.bzl` | Task 0.3a |
 | `toolchains_protoc` unnecessary (prebuilt protoc already resolved) | Task 0.3f |
-| No `UpsertRule` symbol; evidence is `OnConflict*` builders (46 vs 0) | risk table, S2 gate, Task 0.4 AC, Epic 1 verify |
-| Package list is generated `packages.bzl`, not `packages.txt` | Task 0.4a |
-| Generated ent libraries are `//tools/bzl/ent:*`; `//session/ent/...` builds only `schema` | S2 gate, Task 0.4 AC |
-| `make test PKG=` does not exist today; baselines use `go test ./config`; Task 8.2e introduces `PKG` | T4, Task 0.1f, Task 7.5 |
+| No `UpsertRule` symbol; evidence is `OnConflict*` builders (46 vs 0) | Tech Debt Disposition, S2 gate, Story 0.4 AC, Story 2.3 |
+| Package list is generated `packages.bzl`, not `packages.txt` | Task 0.4b |
+| Generated ent libraries are `//tools/bzl/ent:*`; `//session/ent/...` builds only `schema` | S2 gate, Story 0.4 AC |
+| `make test PKG=` does not exist today; baselines use `go test ./config`; Task 8.2e introduces `PKG` | T4 row, Task 0.1f, Task 7.5g |
 | Task 1.1a fails on any Gazelle `matches multiple rules` line | Task 1.1a |
-| `bazel query` rejects `--config=agent`; wrapper must not add it for `query` | Story 6.x wrapper task |
+| `bazel query` rejects `--config=agent`; wrapper must not add it for `query` | Task 1.6b |
 | Delete `.bazel-out` only after `chmod -R u+w` | Task 0.2f |
 | `tools/bazel` needs `BAZEL_REAL`; not directly invocable | Task 0.2f |
 | `.bazelignore` also lists `web-app/node_modules`, `web-app/out` | Task 0.2a |
