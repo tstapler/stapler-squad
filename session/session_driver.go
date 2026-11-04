@@ -888,11 +888,29 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	markSent()
 }
 
-// handleInactivityTick checks for driver inactivity once the initial prompt
-// has been sent, sending a backlog-work nudge or escalating to
-// handleDriverFailure as needed. shouldContinue and shouldReturn tell the
-// caller which loop control-flow to apply; at most one is ever true.
+func driverWaitingForOperator(inst *Instance) bool {
+	status := inst.GetDetectedStatus()
+	if (InstanceStatusInfo{ClaudeStatus: status}).IsWaitingForUser() {
+		return true
+	}
+	if inst.HasTag(TagBacklogWork) {
+		return false
+	}
+	switch status {
+	case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
+
 func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, now time.Time) (shouldContinue, shouldReturn bool) {
+	if driverWaitingForOperator(inst) {
+		// Human response time is not agent inactivity; resumed work gets a fresh budget.
+		attempt.startedAt = now
+		attempt.nudgeSentAt = time.Time{}
+		return false, false
+	}
 	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
 	nudgeSentAt := &attempt.nudgeSentAt
 
