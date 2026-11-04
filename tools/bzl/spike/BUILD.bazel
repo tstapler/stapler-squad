@@ -16,6 +16,7 @@ go_test(
 go_test(
     name = "spike_test",
     srcs = [
+        "env_test.go",
         "sock_long_test.go",
         "sock_test.go",
     ],

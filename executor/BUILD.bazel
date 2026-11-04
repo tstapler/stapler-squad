@@ -59,7 +59,7 @@ go_test(
 # Prebuilt test helper (testdata is invisible to Gazelle, so this rule is hand-kept).
 go_binary(
     name = "helper",
-    srcs = ["testdata/helper/main.go"],
     testonly = True,
+    srcs = ["testdata/helper/main.go"],
     visibility = ["//visibility:private"],
 )

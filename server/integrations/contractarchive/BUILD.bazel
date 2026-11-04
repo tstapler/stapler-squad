@@ -17,8 +17,8 @@ alias(
 go_test(
     name = "contractarchive_test",
     srcs = ["archive_test.go"],
-    embed = [":contractarchive"],
     data = ["//contracts:webhook_management_v1"],
+    embed = [":contractarchive"],
     deps = [
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

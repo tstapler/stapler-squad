@@ -79,8 +79,8 @@ go_test(
         "worktree_prune_test.go",
         "worktree_remove_test.go",
     ],
-    embed = [":native"],
     data = glob(["testdata/**"]),
+    embed = [":native"],
     deps = [
         "//executor/safeexec",
         "//log",

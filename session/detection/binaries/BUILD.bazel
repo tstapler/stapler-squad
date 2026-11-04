@@ -34,8 +34,8 @@ go_test(
         "opencode_test.go",
         "pi_test.go",
     ],
-    embed = [":binaries"],
     data = ["//session/testdata:panes"],
+    embed = [":binaries"],
     deps = [
         "//session/detection/dtypes",
         "@com_github_stretchr_testify//assert",

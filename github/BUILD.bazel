@@ -101,8 +101,8 @@ go_test(
         "user_pr_nudge_track_test.go",
         "user_pr_token_test.go",
     ],
-    embed = [":github"],
     data = glob(["testdata/**"]),
+    embed = [":github"],
     deps = [
         "//config",
         "//envtest",

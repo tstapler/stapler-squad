@@ -32,13 +32,13 @@ go_test(
     name = "testrepo_test",
     srcs = ["testrepo_test.go"],
     data = [
+        ":go_sources",
         "//:go.mod",
         "//config/workspacepath:go_sources",
         "//log:go_sources",
         "//session/git/native:go_sources",
         "//session/git/redact:go_sources",
         "//telemetry:go_sources",
-        ":go_sources",
     ],
     deps = [
         ":testrepo",

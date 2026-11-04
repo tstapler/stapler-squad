@@ -57,14 +57,14 @@ go_test(
         "soak_test.go",
         "trunc_fault_signal_test.go",
     ],
-    embed = [":gogitstore"],
     data = [
+        ":go_sources",
         "//:go.mod",
         "//config/workspacepath:go_sources",
         "//log:go_sources",
         "//session/unfinished:gogit_vcs_reader.go",
-        ":go_sources",
     ],
+    embed = [":gogitstore"],
     deps = [
         "//executor/safeexec",
         "//session/unfinished/internal/testrepo",

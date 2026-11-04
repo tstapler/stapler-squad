@@ -86,8 +86,8 @@ go_test(
         "worktree_remote_env_test.go",
         "worktree_test.go",
     ],
-    embed = [":git"],
     data = ["//:.gitignore"],
+    embed = [":git"],
     deps = [
         "//executor/safeexec",
         "//session/git/backend",

@@ -21,8 +21,8 @@ alias(
 go_test(
     name = "changelog_test",
     srcs = ["parser_test.go"],
-    embed = [":changelog"],
     data = ["//:CHANGELOG.md"],
+    embed = [":changelog"],
     deps = [
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
