@@ -542,11 +542,15 @@ endif
 install-service-preflight: ## Story 8.5 guard: fail before install-service builds anything if the deployed unit lacks --tmux-keep-server (override with ACCEPT_SESSION_LOSS=1)
 	@:$(if $(filter 1,$(ACCEPT_SESSION_LOSS)),,$(if $(strip $(INSTALL_SERVICE_KEEP_SERVER_FLAG)),,$(error install-service preflight: the deployed stapler-squad unit does not pass --tmux-keep-server. Restarting it now would destroy every live tmux session, including any session this command runs from -- see docs/explanation/tmux-keep-server-on-restart.md. Re-deploy with the flag first, or re-run with ACCEPT_SESSION_LOSS=1 to explicitly accept the loss)))
 
-install-service: install-service-preflight backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+# The BUILD_SYSTEM=bazel recipe lives in make/bazel.mk; it is the same flow with a --config=release build,
+# a copy to ./stapler-squad and install-service.sh's post-build assertions (docs/how-to/build-with-bazel.md).
+ifneq ($(BUILD_SYSTEM),bazel)
+install-service: install-service-preflight backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS); Bazel: bazel build --config=release //:stapler-squad, copied to ./stapler-squad, verified, then installed (owner-run)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif
 	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
+endif
 
 sync-worktrees: ## Merge main into every worktree (skips dirty ones, reports conflicts for manual resolution)
 	@./scripts/sync-worktrees.sh
@@ -564,7 +568,8 @@ ifeq ($(UNAME_S),Darwin)
 endif
 	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 
-_codesign-binary: ## Sign the binary with StaplerSquadDev cert (called by install-service on macOS)
+BIN ?= $(CURDIR)/stapler-squad
+_codesign-binary: ## Sign the binary with StaplerSquadDev cert (called by install-service on macOS); BIN=<path> signs another copy, e.g. a Bazel-built one
 	@if ! ./scripts/check-codesign.sh; then \
 		echo "  StaplerSquadDev signing cert not found."; \
 		echo "   Run 'make setup-codesign' once to create it, then retry."; \
@@ -574,7 +579,7 @@ _codesign-binary: ## Sign the binary with StaplerSquadDev cert (called by instal
 	codesign --force \
 		--sign "StaplerSquadDev" \
 		--entitlements "$(CURDIR)/entitlements.plist" \
-		"$(CURDIR)/stapler-squad"
+		"$(BIN)"
 	@echo "Binary signed"
 
 uninstall-service: ## Remove the system service and disable auto-start on login

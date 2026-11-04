@@ -69,10 +69,39 @@ supported for editor tooling, golangci-lint, quick local iteration and bisecting
 
 ## Run a manual instance, never against the live service
 
-Build, then copy the output to `~/.stapler-squad/manual-builds/manual-<N>/stapler-squad` and follow the manual-instance
-recipe in `CLAUDE.md` (ports 62871-62880, private tmux socket). Do not `bazel run` the main binary against `:8543` and
-do not overwrite `./stapler-squad`, the live unit's `ExecStart`. See also
+Use the isolated manual instance (parity row P9): `bazel run //tools/bzl/manual-instance -- --dry-run` prints the exact
+commands and runs nothing, and without `--dry-run` it builds, copies the binary to
+`~/.stapler-squad/manual-builds/manual-1/stapler-squad` and starts it on ports 62871/62872 with
+`STAPLER_SQUAD_INSTANCE=claude-manual-test` and the private tmux socket `ssq-manual-1` (`--stop` stops it; source:
+`tools/bzl/manual-instance/main.go`, a Go tool rather than the `scripts/bazel-manual-instance.sh` the plan named). The
+manual recipe in `CLAUDE.md` is the same thing by hand. Do not `bazel run` the main binary against `:8543` and do not
+overwrite `./stapler-squad`, the live unit's `ExecStart`. See also
 [protect-live-service-from-bazel](protect-live-service-from-bazel.md).
+
+## Install the service from the Bazel binary (owner-run, never by an agent)
+
+`make install-service` replaces the live `:8543` service. Agents must not run it, nor `scripts/install-service.sh`, to
+test a change: use the manual instance above, or `make -n install-service` and
+`sh scripts/install-service.sh --dry-run` (Linux; prints the unit it would write and touches nothing).
+
+Order, no shortcuts:
+
+1. Parity gate P9 (the manual instance above) passes the smoke list.
+2. You record the attestation in the PR (the owner decision; nothing automates it).
+3. You run `BUILD_SYSTEM=bazel make install-service` from a clean checkout of the commit you mean to ship.
+
+Under `BUILD_SYSTEM=bazel` the target runs the preflight and `backup-binary` (as under make), then
+`bazel build --config=release //:stapler-squad //tools/bzl/verifybin ...`, copies the result to `./stapler-squad`
+(never `bazel-bin`; `ExecStart` never points into `bazel-*`), signs that copy on macOS, and runs
+`scripts/install-service.sh`. Before the script stops the old unit it runs `tools/bzl/verifybin`, which aborts the
+install (old service untouched) unless the binary is a regular file outside any Bazel output tree, `version` prints a
+stamped version (not `dev`), the staged tmux and tymuxd outputs are embedded byte for byte (their sha256 is printed;
+the pins themselves are checked by `tools/ci/check-tymux-pin.sh`), and, on macOS, `codesign -d -r-` equals the
+designated requirement recorded in [macos-codesigning](macos-codesigning.md). Under the default
+`BUILD_SYSTEM=make` none of this applies and the recipe is unchanged.
+
+The generated unit sets `OOMScoreAdjust=-900` and `OOMPolicy=continue`; an operator drop-in still overrides the score,
+see [protect-live-service-from-bazel](protect-live-service-from-bazel.md).
 
 ## Merge conflicts in `MODULE.bazel.lock`
 

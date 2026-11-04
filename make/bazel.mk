@@ -156,7 +156,7 @@ endef
 
 ifeq ($(BUILD_SYSTEM),bazel)
 
-.PHONY: build stapler-squad build-embedded build-embedded-tymux build-tmux web-build proto-gen ent-gen \
+.PHONY: build stapler-squad build-embedded build-embedded-tymux build-tmux web-build proto-gen ent-gen install-service \
         test test-race test-integration test-oracle test-delivery-guards test-affected
 
 build: stapler-squad
@@ -208,6 +208,23 @@ test-delivery-guards: gen-gate
 		[ -n "$$names" ] || continue; \
 		bash tools/bzl/run-bazel-test.sh --config=sinkguard "--test_filter=^($$names)$$" //$$d:all; \
 	done
+
+# install-service (Task 9.1a): build the release binary and the verifier in ONE invocation (one output tree, so
+# bazel-bin holds both), copy it to the stable ./stapler-squad (atomic rename; ExecStart never points into bazel-*),
+# sign the copy on macOS, then install-service.sh runs verifybin before it stops the old unit. Owner-run only.
+BZL_RELEASE_TARGETS := //:stapler-squad //tools/bzl/verifybin //session/tmux/embed:tmux_staged //session/tymux/embed:tymuxd_staged
+install-service: install-service-preflight backup-binary gen-gate install-hooks
+	$(call bzl_build,--config=release,$(BZL_RELEASE_TARGETS))
+	@cp bazel-bin/stapler-squad ./stapler-squad.new && chmod 0755 ./stapler-squad.new && mv -f ./stapler-squad.new ./stapler-squad
+	@echo "[build-system=bazel] copied bazel-bin/stapler-squad -> ./stapler-squad"
+ifeq ($(UNAME_S),Darwin)
+	@$(MAKE) _codesign-binary BIN=$(CURDIR)/stapler-squad
+endif
+	@SSQ_VERIFY_BIN_TOOL="$(CURDIR)/bazel-bin/tools/bzl/verifybin/verifybin_/verifybin" \
+		SSQ_VERIFY_TMUX="$(CURDIR)/bazel-bin/session/tmux/embed/tmux" \
+		SSQ_VERIFY_TYMUXD="$(CURDIR)/bazel-bin/session/tymux/embed/tymuxd" \
+		$(if $(filter Darwin,$(UNAME_S)),SSQ_VERIFY_DR_DOC="$(CURDIR)/docs/how-to/macos-codesigning.md") \
+		STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 
 test-affected: gen-gate
 	@echo "[build-system=bazel] bazel test <labels tools/ci/affected-targets selects vs $(or $(BASE),origin/main)>"

@@ -19,11 +19,16 @@
 #   ./scripts/install-service.sh --no-profile # install without profiling
 #   ./scripts/install-service.sh --profile-port 6061  # install with custom profiling port
 #   ./scripts/install-service.sh --uninstall  # remove
+#   ./scripts/install-service.sh --dry-run    # Linux: print the unit it would write; change nothing
 #
 # Environment:
 #   STAPLER_SQUAD_BIN          Override binary path (default: auto-detected)
 #   PROFILE_PORT               Override profiling port (default: 6060)
 #   STAPLER_SQUAD_HEALTH_TIMEOUT  Seconds to wait for /health after (re)start (default: 300)
+#   SSQ_VERIFY_BIN_TOOL        Path to the built tools/bzl/verifybin; when set (BUILD_SYSTEM=bazel
+#                              installs) the binary is verified before the old unit is stopped.
+#                              SSQ_VERIFY_TMUX / SSQ_VERIFY_TYMUXD name the staged build outputs it
+#                              must embed; SSQ_VERIFY_DR_DOC enables the macOS designated-requirement check.
 #
 # Durable service env vars:
 #   Both install_linux and install_macos below regenerate the unit/plist from
@@ -89,7 +94,7 @@ dedup_path() {
 # ── Durable extra environment variables ──────────────────────────────────────
 # See the "Durable service env vars" header comment above for why this file
 # exists rather than hand-editing the generated unit/plist directly.
-SERVICE_ENV_FILE="$HOME/.stapler-squad/service.env"
+SERVICE_ENV_FILE="${SERVICE_ENV_FILE:-$HOME/.stapler-squad/service.env}"
 
 # Reads SERVICE_ENV_FILE and, for each valid KEY=value line, calls
 # `"$1" "$key" "$value"` (the emitter callback each caller below supplies).
@@ -259,9 +264,14 @@ install_linux() {
     service_file="$service_dir/stapler-squad.service"
     log_dir="$HOME/.stapler-squad/logs"
 
+    if [ "$DRY_RUN" = "1" ]; then
+        service_file=/dev/stdout
+        log_dir="${TMPDIR:-/tmp}/stapler-squad-dry-run-logs"
+    fi
+
     # Verify systemd --user is available before writing any files.
     # Use timeout to avoid hanging indefinitely if D-Bus is unresponsive.
-    if ! timeout 5 systemctl --user is-system-running >/dev/null 2>&1 && \
+    if [ "$DRY_RUN" != "1" ] && ! timeout 5 systemctl --user is-system-running >/dev/null 2>&1 && \
        ! timeout 5 systemctl --user status >/dev/null 2>&1; then
         log_error "systemd user session is not available."
         log_info  "On WSL or minimal containers, try adding stapler-squad to ~/.profile instead:"
@@ -270,9 +280,11 @@ install_linux() {
     fi
 
     log_info "Creating systemd user service..."
-    mkdir -p "$service_dir"
-    mkdir -p "$log_dir"
-    rotate_log_if_large "$log_dir/service.log"
+    if [ "$DRY_RUN" != "1" ]; then
+        mkdir -p "$service_dir"
+        mkdir -p "$log_dir"
+        rotate_log_if_large "$log_dir/service.log"
+    fi
 
     # Build a PATH that preserves the current shell's PATH first (so custom
     # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
@@ -345,13 +357,15 @@ WorkingDirectory=$HOME
 Restart=on-failure
 RestartSec=5s
 KillMode=process
-# Mild protective bias for the coordinator process itself (also inherited by
-# spawned children — a coarse, honestly-scoped tradeoff; per-session cgroup
-# delegation would be needed to bias only the coordinator, which is out of
-# scope here). In practice the kernel's OOM badness score is dominated by RSS,
-# and Claude agent subprocesses are the memory-heavy ones, so this mostly just
-# nudges ties in the coordinator's favor.
-OOMScoreAdjust=-500
+# Protect the coordinator from the kernel OOM killer (also inherited by spawned
+# children — a coarse tradeoff; per-session cgroup delegation would be needed to
+# bias only the coordinator). A user manager may lack CAP_SYS_RESOURCE, and an
+# operator drop-in (oom.conf) overrides this value: see
+# docs/how-to/protect-live-service-from-bazel.md.
+OOMScoreAdjust=-900
+# One OOM-killed child (a Claude session or tmux) must not take the whole unit
+# down; the default (stop) kills every process in the cgroup.
+OOMPolicy=continue
 $memory_limit_lines
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
@@ -363,6 +377,10 @@ $(service_env_systemd_lines)
 WantedBy=default.target
 EOF
 
+    if [ "$DRY_RUN" = "1" ]; then
+        log_info "Dry run: nothing was written, no systemctl call was made."
+        return 0
+    fi
     log_success "Service file written to: $service_file"
     echo ""
 
@@ -959,17 +977,38 @@ uninstall_service() {
 # ── Main ──────────────────────────────────────────────────────────────────────
 UNINSTALL=0
 ENABLE_PROFILE=1
+DRY_RUN=0
 PROFILE_PORT="${PROFILE_PORT:-6060}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --uninstall)      UNINSTALL=1 ;;
+        --dry-run)        DRY_RUN=1 ;;
         --no-profile)     ENABLE_PROFILE=0 ;;
         --profile-port)   shift; PROFILE_PORT="$1" ;;
         --profile-port=*) PROFILE_PORT="${1#*=}" ;;
     esac
     shift
 done
+
+# verify_binary_assertions: Bazel-built installs only (SSQ_VERIFY_BIN_TOOL set by the Makefile).
+# Runs before anything touches the live unit and aborts the install on a mismatch.
+verify_binary_assertions() {
+    vba_bin="$1"
+    vba_os="$2"
+    [ -n "${SSQ_VERIFY_BIN_TOOL:-}" ] || return 0
+    log_info "Verifying the Bazel-built binary before touching the service..."
+    set -- -bin "$vba_bin"
+    [ -z "${SSQ_VERIFY_TMUX:-}" ] || set -- "$@" -tmux "$SSQ_VERIFY_TMUX"
+    [ -z "${SSQ_VERIFY_TYMUXD:-}" ] || set -- "$@" -tymuxd "$SSQ_VERIFY_TYMUXD"
+    if [ "$vba_os" = "macos" ] && [ -n "${SSQ_VERIFY_DR_DOC:-}" ]; then
+        set -- "$@" -codesign -dr-doc "$SSQ_VERIFY_DR_DOC"
+    fi
+    if ! "$SSQ_VERIFY_BIN_TOOL" "$@"; then
+        log_error "Binary verification failed; the existing service was not touched."
+        exit 1
+    fi
+}
 
 main() {
     os=$(detect_os)
@@ -995,11 +1034,21 @@ main() {
     bin_path=$(resolve_binary)
     log_info "Using binary: $bin_path"
     print_binary_provenance "$bin_path"
+    verify_binary_assertions "$bin_path" "$os"
+
+    if [ "$DRY_RUN" = "1" ] && [ "$os" != "linux" ]; then
+        log_error "--dry-run is only implemented for Linux."
+        exit 1
+    fi
 
     case "$os" in
         linux) install_linux "$bin_path" ;;
         macos) install_macos "$bin_path" ;;
     esac
+
+    if [ "$DRY_RUN" = "1" ]; then
+        return 0
+    fi
 
     if health_check_and_rollback "$bin_path"; then
         post_grafana_deploy_annotation "$bin_path"

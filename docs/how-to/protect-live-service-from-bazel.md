@@ -27,9 +27,17 @@ both on this unit. Decide which you want:
 
 - Keep as is: Bazel (500) is killed before the service and its sessions only if their score
   is lower than 500, which it is not (1000). Under pressure the service and sessions die first.
-- Protect the service: sessions stop being the first victims and the desktop loses that margin.
+- Protect the service: sessions stop being the first victims and the desktop loses that margin. This is the owner's
+  choice (next section).
 
-## Apply (if you choose to protect the service)
+## Owner decision: protect the service
+
+Decided: protect the service and continue after a child OOM kill. That is `OOMScoreAdjust=-900` plus
+`OOMPolicy=continue`. `scripts/install-service.sh` now generates both in the unit it writes
+(`sh scripts/install-service.sh --dry-run` prints them), but the `oom.conf` drop-in above still wins on the score until
+you replace it, and the unit change only lands at the next owner-run `make install-service`. Agents applied nothing.
+
+## Apply (owner-run)
 
 Drop-ins apply in lexical order and later files win. `oom-protect.conf` sorts before `oom.conf`
 (`-` is before `.`), so it would be silently overridden. Either edit `oom.conf`, or name the new
@@ -40,6 +48,7 @@ mkdir -p ~/.config/systemd/user/stapler-squad.service.d
 cat > ~/.config/systemd/user/stapler-squad.service.d/zz-oom-protect.conf <<'CONF'
 [Service]
 OOMScoreAdjust=-900
+OOMPolicy=continue
 CONF
 systemctl --user daemon-reload
 systemctl --user restart stapler-squad   # tmux sessions survive: the unit runs --tmux-keep-server
@@ -64,4 +73,5 @@ change than this page covers.
 
 ## Not done by agents
 
-Nothing in `~/.config/systemd` was changed. The final protection is Task 9.1b of the plan.
+Nothing in `~/.config/systemd` was changed. The generated-unit half of Task 9.1b is in
+`scripts/install-service.sh`; the drop-in above is the owner-run half.
