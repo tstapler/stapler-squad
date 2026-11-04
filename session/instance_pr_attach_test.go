@@ -306,6 +306,18 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 	}
 }
 
+func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
+	inst := newPRTestInstance(t)
+	ref := mustPRRef(t, "", "acme", "app", 12)
+	require.NoError(t, inst.AttachPR(ref, AttachSourceManual, PRInitial{State: PRStateOpen, Terminal: true}))
+	require.True(t, inst.DetachPR(ref))
+
+	snap := inst.Snapshot().GitHub
+	assert.Zero(t, snap.GitHubPRNumber)
+	assert.Empty(t, snap.GitHubPRURL)
+	assert.False(t, snap.GitHubPRStatusTerminal)
+}
+
 func intAttr(r capturedRecord, key string) int64 {
 	switch v := r.attrs[key].(type) {
 	case int:

@@ -167,6 +167,10 @@ func detachPRLocked(inst *Instance, ref PRRef) bool {
 	if inst.LegacyPRUnrepresented && inst.GitHubPRNumber == ref.Number() {
 		inst.LegacyPRUnrepresented = false
 	}
+	if len(inst.PRs) == 0 && !inst.LegacyPRUnrepresented {
+		// Removing the last link leaves nothing to project; PersistPRMirror clears the row the same way.
+		inst.GitHubPRNumber, inst.GitHubPRURL, inst.GitHubPRStatusTerminal = 0, "", false
+	}
 	publishPRSetLocked(inst, before)
 	return true
 }
