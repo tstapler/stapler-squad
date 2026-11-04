@@ -8,7 +8,7 @@ from collections import Counter
 
 REQUIRED = ["S-gomod", "S1", "S1-ts", "S2", "S3", "S4", "S5", "S6", "S7", "S8",
             "S9", "S10", "S10-redaction", "S11", "S12", "S13"]
-OPTIONAL = ["S14", "S15"]
+OPTIONAL = ["S14", "S15", "S15b"]
 VERDICTS = ("Pass", "FallbackWorkaround", "FallbackFork", "Fail")
 FALLBACKS = ("FallbackWorkaround", "FallbackFork")
 DEFAULT = "project_plans/bazel-conversion/implementation/spike-results.yaml"

@@ -2,7 +2,7 @@ load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//tools/bzl:go_test.bzl", "go_test")
-load("//tools/bzl:otel_weave_hermetic.bzl", "otel_modcache", "otel_weave_hermetic")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_weave_hermetic")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
 # gazelle:go_naming_convention import_alias
@@ -156,7 +156,10 @@ config_setting(
 # The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment, spike S15b).
 # Sandboxed and remote-cacheable (tools/bzl/otel_weave_hermetic.bzl): declared inputs only, the committed otelc
 # overlay in tools/bzl/otel_overlay, and a go.sum-verified module cache. Stamping comes from --stamp.
-otel_modcache(name = "otel_modcache")
+otel_weave_hermetic(
+    name = "otel_modcache",
+    mode = "modcache",
+)
 
 otel_weave_hermetic(
     name = "stapler-squad",
@@ -170,16 +173,18 @@ otel_weave_hermetic(
         "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
         "//conditions:default": [],
     }),
-    extra_libs = ["//instrumentation/otelc/safeexec"],
-    lib = ":stapler-squad_lib",
+    libs = [
+        ":stapler-squad_lib",
+        "//instrumentation/otelc/safeexec",
+    ],
     modcache = ":otel_modcache",
     stage = select({
-        ":embed_tmux_and_tymux": {
-            "//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux",
-            "//session/tymux/embed:tymuxd_staged": "session/tymux/embed/tymuxd",
-        },
-        "//tools/bzl/flags:embed_tmux_on": {"//session/tmux/embed:tmux_staged": "session/tmux/embed/tmux"},
-        "//conditions:default": {},
+        ":embed_tmux_and_tymux": [
+            "//session/tmux/embed:tmux_staged",
+            "//session/tymux/embed:tymuxd_staged",
+        ],
+        "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
     web = "//server/web:dist_staged",

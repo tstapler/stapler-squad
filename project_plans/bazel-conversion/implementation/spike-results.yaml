@@ -53,5 +53,9 @@
   cost: S
 - spike: S15
   verdict: FallbackWorkaround
-  path: "otel_weave rule (tools/bzl/otel_weave.bzl + otel_weave.sh): unsandboxed local action, no remote cache, runs the pinned otelc through scripts/otel-auto-build.sh in a private copy of the checkout; Bazel supplies the Go SDK, generated proto/ent, web dist and embed staging, but the weave itself is non-hermetic (module resolution, host go cache); windows cross-builds stay on //:stapler-squad_plain"
+  path: "SUPERSEDED by S15b (otel_weave deleted). otel_weave rule (tools/bzl/otel_weave.bzl + otel_weave.sh): unsandboxed local action, no remote cache, runs the pinned otelc through scripts/otel-auto-build.sh in a private copy of the checkout; Bazel supplies the Go SDK, generated proto/ent, web dist and embed staging, but the weave itself is non-hermetic (module resolution, host go cache); windows cross-builds stay on //:stapler-squad_plain"
+  cost: M
+- spike: S15b
+  verdict: FallbackWorkaround
+  path: "otel_weave_hermetic rule behind //:stapler-squad (tools/bzl/otel_weave_hermetic.{bzl,sh}, committed overlay tools/bzl/otel_overlay): sandboxed, remote-cacheable toolexec build, byte-reproducible, stamped/embedded/Windows verified; residual non-hermetic parts: the module cache comes from a networked go mod download action (S15b-4), cgo uses the host gcc (S15b-7), every cache miss is a cold GOCACHE (S15b-5), darwin cross not run"
   cost: M

@@ -1,7 +1,7 @@
 # Hand-written (HandBuildFile). Windows is cross-compile only, never tested under Bazel (ADR-005).
 load("@rules_go//go:def.bzl", "go_cross_binary")
-load("//tools/bzl:otel_weave_hermetic.bzl", "otel_cross_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_cross_binary")
 
 platform(
     name = "windows_amd64",
