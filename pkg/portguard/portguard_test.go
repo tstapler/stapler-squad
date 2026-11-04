@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"testing"
@@ -97,7 +98,7 @@ func TestEnsureReleased_KillsGracefulHolder(t *testing.T) {
 
 	err := EnsureReleased(context.Background(), Options{
 		Ports:               []int{port},
-		ProcessNameContains: "portguard.test",
+		ProcessNameContains: filepath.Base(os.Args[0]), // "portguard.test" under go test, "portguard_test" under Bazel
 		Timeout:             500 * time.Millisecond,
 		PollInterval:        20 * time.Millisecond,
 	})
@@ -120,7 +121,7 @@ func TestEnsureReleased_EscalatesToSIGKILL(t *testing.T) {
 
 	err := EnsureReleased(context.Background(), Options{
 		Ports:               []int{port},
-		ProcessNameContains: "portguard.test",
+		ProcessNameContains: filepath.Base(os.Args[0]), // "portguard.test" under go test, "portguard_test" under Bazel
 		Timeout:             300 * time.Millisecond,
 		PollInterval:        20 * time.Millisecond,
 	})

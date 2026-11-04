@@ -8,24 +8,12 @@ exclusions:
     issue: https://github.com/tstapler/stapler-squad/issues/1422
     reason: >-
       Imports github.com/tstapler/stapler-squad/testutil/wait and github.com/linkdata/deadlock, neither of which tuitest/go.mod requires, so `cd tuitest && go vet ./...` already fails ("no required module provides package github.com/linkdata/deadlock"). Under Bazel it also needs //testutil/wait, which exists after Epic 1.
-  - target: //executor:executor_test
-    sandbox_class: exec-host-binary
-    owner: tstapler
-    issue: https://github.com/tstapler/stapler-squad/issues/1423 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
-    reason: >-
-      Builds testdata/helper with exec "go"; Bazel's test PATH is /usr/bin:/bin and has no go toolchain.
   - target: //jules:jules_test
     sandbox_class: exec-host-binary
     owner: tstapler
     issue: https://github.com/tstapler/stapler-squad/issues/1423 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
     reason: >-
       Testdata and source files are now declared in data and the cwd tests pass; TestJulesPackage_should_NotImportSessionOrServer_When_DepsListed still runs `go list -deps` over the whole module, which needs the module source tree plus module cache that a Bazel sandbox does not have (Story 4.10c follow-up).
-  - target: //pkg/portguard:portguard_test
-    sandbox_class: runtime-caller
-    owner: tstapler
-    issue: https://github.com/tstapler/stapler-squad/issues/1424 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
-    reason: >-
-      TestEnsureReleased_* match the helper by process name containing "portguard.test" (the go test binary name); Bazel names it portguard_test, so 0 processes match and the port stays bound.
   - target: //server/prwatch:prwatch_test
     sandbox_class: exec-host-binary
     owner: tstapler

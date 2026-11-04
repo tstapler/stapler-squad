@@ -11,7 +11,6 @@ _SIZES = {
 # package -> SandboxClasses (Epic 0 census S8/S9 and test-exclusions.yaml) that make a result depend on the host.
 # A ratchet: entries leave as Story 4.10 sweeps declare each test's inputs; none may be added without a census row.
 _HOST_COUPLED = {
-    "executor": ["exec-host-binary"],
     "server/services": ["exec-host-binary"],
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],

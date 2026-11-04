@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
@@ -46,11 +46,20 @@ go_test(
         "timeout_executor_unix_test.go",
         "timeout_executor_windows_test.go",
     ],
+    data = [":helper"],
     embed = [":executor"],
-    tags = ["manual"],  # keep
+    env = {"SSQ_EXECUTOR_HELPER": "$(rootpath :helper)"},
     deps = [
         "//executor/safeexec",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Prebuilt test helper (testdata is invisible to Gazelle, so this rule is hand-kept).
+go_binary(
+    name = "helper",
+    srcs = ["testdata/helper/main.go"],
+    testonly = True,
+    visibility = ["//visibility:private"],
 )

@@ -28,6 +28,10 @@ func TestMain(m *testing.M) {
 // buildHelper compiles the testdata/helper binary and returns its path.
 // The binary is placed in a temporary directory that persists for the test run.
 func buildHelper() (string, error) {
+	// Bazel supplies the helper prebuilt (go_binary :helper); the runfiles path is workspace-relative.
+	if rel := os.Getenv("SSQ_EXECUTOR_HELPER"); rel != "" {
+		return filepath.Join(os.Getenv("TEST_SRCDIR"), os.Getenv("TEST_WORKSPACE"), rel), nil
+	}
 	tmpDir, err := os.MkdirTemp("", "safeexec-helper-*")
 	if err != nil {
 		return "", err

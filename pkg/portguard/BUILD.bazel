@@ -19,7 +19,6 @@ go_test(
     name = "portguard_test",
     srcs = ["portguard_test.go"],
     embed = [":portguard"],
-    tags = ["manual"],  # keep
     deps = [
         "//executor/safeexec",
         "//testutil/wait",
