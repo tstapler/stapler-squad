@@ -189,7 +189,7 @@ func matchLiveWorktree(candidate SessionWorktreeCandidate, entries []git.NativeW
 	var matches []*git.NativeWorktreeEntry
 	for i := range entries {
 		entry := &entries[i]
-		if expectedRef != "" && entry.BranchRef == expectedRef {
+		if entry.HoldsBranch(expectedRef) {
 			matches = append(matches, entry)
 			continue
 		}

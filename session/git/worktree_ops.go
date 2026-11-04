@@ -208,6 +208,21 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 		return nil
 	}
 
+	entries, listErr := nativeListWorktrees(g.repoPath)
+	if listErr != nil {
+		return fmt.Errorf("list existing worktrees before reuse: %w", listErr)
+	}
+	for _, entry := range entries {
+		if entry.Locked || !entry.HoldsBranch(plumbing.NewBranchReferenceName(g.branchName).String()) {
+			continue
+		}
+		if info, err := os.Stat(entry.WorktreePath); err == nil && info.IsDir() {
+			g.worktreePath = CanonicalizeWorktreePath(entry.WorktreePath)
+			g.initBaseCommitSHA()
+			return nil
+		}
+	}
+
 	// Clean up any existing worktree first. Unlock before removing: a worktree left
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
@@ -358,7 +373,7 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 			continue
 		}
 		for _, entry := range entries {
-			if entry.BranchRef != branchRef {
+			if entry.Locked || !entry.HoldsBranch(branchRef) {
 				continue
 			}
 			path := CanonicalizeWorktreePath(entry.WorktreePath)
@@ -372,21 +387,9 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 	return "", false
 }
 
-// nativeSetupNewWorktreeWithSelfHeal wraps nativeSetupNewWorktree with a Ground-Truth
-// Re-Query (ADR-001, Story 2.5.2): two concurrent spawns computing the identical
-// deterministic branch name can race, so the loser's nativeSetupNewWorktree
-// (Worktree.Checkout with Create: true) fails.
-//
-// Task 2.5.2a's plan text names git.ErrBranchExists/plumbing.ErrReferenceNotFound as the
-// errors to catch, framed against subprocess-stderr matching (which doesn't apply here at
-// all). Reading the pinned v5.19.2 source directly (Worktree.createBranch,
-// go-git/go-git/v5@v5.19.2/worktree.go:204-230) shows the actual collision error is
-// neither of those: it's an unwrapped fmt.Errorf("a branch named %q already exists", ...),
-// so errors.Is against either sentinel can never match it. Rather than pattern-matching
-// error text instead (exactly what Ground-Truth Re-Query exists to avoid), any
-// nativeSetupNewWorktree failure re-queries actual git state via
-// branchExistsAfterAddFailure, falling through to the original error only if the branch
-// genuinely never appears.
+// nativeSetupNewWorktreeWithSelfHeal re-queries branch state after checkout fails:
+// go-git returns an untyped branch-collision error, so sentinel matching cannot detect
+// a concurrent creator's branch. Only reuse it once ground truth confirms it exists.
 func (g *GitWorktree) nativeSetupNewWorktreeWithSelfHeal() error {
 	err := g.nativeSetupNewWorktree()
 	if err == nil {

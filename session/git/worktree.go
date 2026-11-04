@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -461,7 +462,19 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	// Detect the current branch name in the worktree
 	branchName, err := getCurrentBranchName(existingWorktreePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect branch name for worktree '%s': %w", existingWorktreePath, err)
+		entries, listErr := nativeListWorktrees(repoPath)
+		if listErr != nil {
+			return nil, fmt.Errorf("list worktrees for rebase attachment: %w", listErr)
+		}
+		for _, entry := range entries {
+			if CanonicalizeWorktreePath(entry.WorktreePath) == existingWorktreePath && entry.RebaseBranchRef != "" {
+				branchName = strings.TrimPrefix(entry.RebaseBranchRef, "refs/heads/")
+				break
+			}
+		}
+		if branchName == "" {
+			return nil, fmt.Errorf("failed to detect branch name for worktree '%s': %w", existingWorktreePath, err)
+		}
 	}
 
 	// Get the base commit SHA (HEAD commit)
@@ -498,7 +511,7 @@ func nativeFindExistingWorktreeForBranch(repoPath, targetBranch string) (string,
 	}
 	targetRef := plumbing.NewBranchReferenceName(targetBranch).String()
 	for _, entry := range entries {
-		if entry.BranchRef == targetRef {
+		if entry.HoldsBranch(targetRef) {
 			return entry.WorktreePath, true
 		}
 	}

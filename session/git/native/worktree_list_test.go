@@ -13,6 +13,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWorktreeEntry_HoldsBranch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		entry WorktreeEntry
+		ref   string
+		want  bool
+	}{
+		{"checked out", WorktreeEntry{BranchRef: "refs/heads/topic"}, "refs/heads/topic", true},
+		{"rebasing", WorktreeEntry{BranchRef: "abc123", RebaseBranchRef: "refs/heads/topic"}, "refs/heads/topic", true},
+		{"other branch", WorktreeEntry{RebaseBranchRef: "refs/heads/topic"}, "refs/heads/other", false},
+		{"detached", WorktreeEntry{BranchRef: "abc123"}, "abc123", false},
+		{"empty", WorktreeEntry{}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, tc.entry.HoldsBranch(tc.ref))
+		})
+	}
+}
+
 // TestNativeListWorktrees_LiveWorktree covers Story 2.3.1's first acceptance criterion:
 // a live, on-disk worktree is listed with Locked=false, Prunable=false.
 func TestNativeListWorktrees_LiveWorktree(t *testing.T) {

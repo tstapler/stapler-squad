@@ -295,6 +295,18 @@ func TestMatchLiveWorktree_should_ReturnUniqueMatch_When_OneEntryMatchesBranchRe
 	assert.Equal(t, "/tmp/sess-b8ccca59", match.WorktreePath)
 }
 
+func TestMatchLiveWorktree_RecognizesRebaseBranch(t *testing.T) {
+	t.Parallel()
+	candidate := SessionWorktreeCandidate{Data: InstanceData{Branch: "backlog/rebase"}}
+	entries := []git.NativeWorktreeEntry{{
+		BranchRef: "detached-head", RebaseBranchRef: "refs/heads/backlog/rebase", WorktreePath: "/tmp/rebase",
+	}}
+	match, count := matchLiveWorktree(candidate, entries)
+	require.Equal(t, 1, count)
+	require.NotNil(t, match)
+	assert.Equal(t, "/tmp/rebase", match.WorktreePath)
+}
+
 func TestMatchLiveWorktree_should_ReturnNilWithCountTwo_When_MultipleEntriesMatchSameBranch(t *testing.T) {
 	t.Parallel()
 	candidate := SessionWorktreeCandidate{Data: InstanceData{Branch: "work/b8ccca59"}}

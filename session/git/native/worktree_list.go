@@ -24,6 +24,8 @@ type WorktreeEntry struct {
 	// dir's HEAD file, or the raw content of HEAD when it isn't a symbolic ref (detached
 	// HEAD) — empty if HEAD is missing or unreadable.
 	BranchRef string
+	// RebaseBranchRef is the branch reserved by an interrupted rebase while HEAD is detached.
+	RebaseBranchRef string
 	// Locked reports whether the admin dir's LockedMarker ("locked") is present.
 	Locked bool
 	// Prunable is this project's deliberately scoped-down classification (stack.md
@@ -98,12 +100,32 @@ func buildNativeWorktreeEntry(name, adminDir string) (WorktreeEntry, error) {
 	prunable := !locked && !worktreeDirExists
 
 	return WorktreeEntry{
-		Name:         name,
-		WorktreePath: worktreePath,
-		BranchRef:    readWorktreeHEADRef(adminDir),
-		Locked:       locked,
-		Prunable:     prunable,
+		Name:            name,
+		WorktreePath:    worktreePath,
+		BranchRef:       readWorktreeHEADRef(adminDir),
+		RebaseBranchRef: readRebaseBranchRef(adminDir),
+		Locked:          locked,
+		Prunable:        prunable,
 	}, nil
+}
+
+// HoldsBranch includes a rebase's original branch, which Git reserves even with detached HEAD.
+func (e WorktreeEntry) HoldsBranch(ref string) bool {
+	return strings.HasPrefix(ref, "refs/heads/") && (e.BranchRef == ref || e.RebaseBranchRef == ref)
+}
+
+func readRebaseBranchRef(adminDir string) string {
+	for _, stateDir := range []string{"rebase-merge", "rebase-apply"} {
+		content, err := os.ReadFile(filepath.Join(adminDir, stateDir, "head-name"))
+		if err != nil {
+			continue
+		}
+		ref := strings.TrimSpace(string(content))
+		if strings.HasPrefix(ref, "refs/heads/") {
+			return ref
+		}
+	}
+	return ""
 }
 
 // freshAdminDirGrace is how long an admin dir with no readable gitdir is presumed to be a
