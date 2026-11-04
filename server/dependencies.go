@@ -443,9 +443,11 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 
 	storage := sessionService.GetStorage()
 
-	stopPRMaintenance, err := runPRMaintenanceIfRequested(opts, storage)
-	if err != nil {
-		return nil, err
+	var stopPRMaintenance func()
+	if opts.RunPRMaintenance {
+		if stopPRMaintenance, err = runPRMaintenance(opts, storage); err != nil {
+			return nil, err
+		}
 	}
 
 	// Wire the ErrorRegistry using the existing ent client from Storage.
@@ -471,14 +473,11 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	}, nil
 }
 
-// runPRMaintenanceIfRequested runs the PR startup maintenance for the service
-// bootstrap. Maintenance never fails the boot, so an error here means only that a
-// test runner returned one. The retry ticker, if any, is owned by storage and
-// stopped through the returned function.
-func runPRMaintenanceIfRequested(opts BuildOptions, storage *session.Storage) (func(), error) {
-	if !opts.RunPRMaintenance {
-		return nil, nil
-	}
+// runPRMaintenance runs the PR startup maintenance for the service bootstrap.
+// Maintenance never fails the boot, so an error here means only that a test
+// runner returned one. The retry ticker, if any, is owned by storage and stopped
+// through the returned function.
+func runPRMaintenance(opts BuildOptions, storage *session.Storage) (func(), error) {
 	run := opts.PRMaintenanceRunner
 	if run == nil {
 		run = func(ctx context.Context, st *session.Storage) error { return st.RunPRStartupMaintenance(ctx) }

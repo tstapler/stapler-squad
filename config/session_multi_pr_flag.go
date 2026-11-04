@@ -28,10 +28,11 @@ func SessionMultiPRScopes() []string {
 	}
 }
 
-// sessionMultiPRReaderOrder lists each reader scope with the scopes that must
-// also be on, so a later reader never runs ahead of the data it depends on.
-var sessionMultiPRReaderOrder = []string{
-	SessionMultiPRScopePoller, SessionMultiPRScopeBacklog, SessionMultiPRScopeActions, SessionMultiPRScopeUI,
+// sessionMultiPRReaderOrder lists the reader scopes in dependency order: a
+// reader is effective only when every earlier one is, so it never runs ahead of
+// the data it depends on.
+func sessionMultiPRReaderOrder() []string {
+	return []string{SessionMultiPRScopePoller, SessionMultiPRScopeBacklog, SessionMultiPRScopeActions, SessionMultiPRScopeUI}
 }
 
 // SessionMultiPR reports whether the reader scope is effective: its own value
@@ -39,7 +40,7 @@ var sessionMultiPRReaderOrder = []string{
 // order poller, backlog, actions, ui. The order is applied here, at read time;
 // the write path stores whatever value it is given. An unknown scope is off.
 func (c *Config) SessionMultiPR(scope string) bool {
-	for _, s := range sessionMultiPRReaderOrder {
+	for _, s := range sessionMultiPRReaderOrder() {
 		if !c.GetFeatureFlagScoped(SessionMultiPRFlag, s, false) {
 			return false
 		}

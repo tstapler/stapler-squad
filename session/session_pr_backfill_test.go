@@ -480,7 +480,7 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 	assert.Equal(t, 1, countLinks(t, repo), "no link from the failing candidate persisted")
 	assert.False(t, repo.prVerifyCountersTrusted.Load(), "counters stay untrusted until a pass succeeds")
 
-	clock.tick <- time.Now() // the 5-minute ticker's next pass
+	clock.tick <- time.Now()        // the 5-minute ticker's next pass
 	storage.prMaintenance.wg.Wait() // the ticker stops itself after its first success
 	storage.StopPRMaintenance()
 

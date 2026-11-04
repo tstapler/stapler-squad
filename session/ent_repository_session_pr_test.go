@@ -605,7 +605,7 @@ func TestListPollableStates_ShouldOrderNonTerminalFirstAndSkipExhaustedAndLinkle
 
 	got, err := repo.ListPollableStates(ctx)
 	require.NoError(t, err)
-	var order []int
+	order := make([]int, 0, len(got))
 	for _, v := range got {
 		order = append(order, v.Ref.Number())
 	}
