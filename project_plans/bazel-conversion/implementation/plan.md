@@ -1691,7 +1691,7 @@ Serialising shared files: `Makefile` (8.x, 2.4b, 3.6a, 5.2a, 9.1a), `.bazelrc` (
 #### Story 6.1: Cross-compiled Windows binary
 **As the** owner, **I want** the `build/windows_amd64` artifact to keep being produced, **so that** the Windows target is not lost.
 **Acceptance Criteria**:
-- *Given* a Linux host, *When* `bazel build //tools/bzl/windows:stapler-squad_windows_amd64` runs, *Then* exit 0 and `file bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe` contains `PE32+`.
+- *Given* a Linux host, *When* `bazel build //tools/bzl/windows:stapler-squad_windows_amd64` runs, *Then* exit 0 and `file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe` contains `PE32+`.
 - *Given* `target_compatible_with` on windows-only test targets, *When* `bazel test //...` runs on Linux, *Then* those targets are reported incompatible (skipped), not failed.
 **Files**: `tools/bzl/windows/BUILD.bazel`, `.bazelrc`, `.github/workflows/bazel.yml`
 

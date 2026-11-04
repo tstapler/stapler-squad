@@ -102,6 +102,18 @@ jobs:
             --test_env=GO_TEST_WRAP_TESTV=1 \
             --target_pattern_file="$RUNNER_TEMP/targets.txt"
 
+      # Windows is cross-compile only (ADR-005): build both goreleaser windows arches and check the
+      # PE header; the windows-only probe must be reported incompatible, not failed (Task 6.1b).
+      - name: Cross-compile Windows
+        run: |
+          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            //tools/bzl/windows:stapler-squad_windows_amd64 //tools/bzl/windows:stapler-squad_windows_arm64 \
+            //tools/bzl/windows:ssq-mux_windows_amd64 //tools/bzl/windows:ssq-mux_windows_arm64 \
+            //tools/bzl/windows:ssq-hooks_windows_amd64 //tools/bzl/windows:ssq-hooks_windows_arm64
+          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false //tools/bzl/windows:all
+          file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe | grep -q 'PE32+'
+          bash tools/bzl/check-platform-targets.sh
+
       - name: Upload BEP
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

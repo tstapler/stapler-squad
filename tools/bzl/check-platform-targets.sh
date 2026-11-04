@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Task 6.1b: on this host //... must analyse with zero errors, and at least one target must be
+# reported incompatible by the platform provider (the windows-only canary, ADR-005).
+# Needs bazel (use through tools/bazel; honours BAZEL_REAL). Exits 1 on failure.
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 2
+bz=tools/bazel
+
+errs=$($bz build --nobuild --keep_going //... 2>&1 | grep -c '^ERROR')
+if [ "$errs" -ne 0 ]; then
+  echo "check-platform-targets: $errs ERROR lines from 'bazel build --nobuild --keep_going //...'" >&2
+  exit 1
+fi
+
+incompat=$($bz cquery --keep_going --output=starlark \
+  --starlark:expr='"incompatible" if "IncompatiblePlatformProvider" in providers(target) else "ok"' \
+  '//...' 2>/dev/null | grep -c incompatible)
+if [ "$incompat" -lt 1 ]; then
+  echo "check-platform-targets: no target is reported incompatible; windows-only target_compatible_with is not taking effect" >&2
+  exit 1
+fi
+echo "check-platform-targets: ok ($incompat incompatible targets)"
