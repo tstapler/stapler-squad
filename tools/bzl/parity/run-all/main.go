@@ -9,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ type Check struct {
 	Cmd       []string
 	WaiverRow string
 	Attest    string
+	// Needs is a collector output file; when it is absent the check is UNMEASURED rather than run.
+	Needs string
 }
 
 // Row is one parity row.
@@ -45,6 +48,21 @@ const (
 	waived  = "WAIVED"
 	unmeas  = "UNMEASURED"
 )
+
+// Collector outputs: written by tools/bzl/parity/perf, collect-improvement and bazel-trend, read here. A missing
+// file makes its check UNMEASURED.
+const (
+	PerfFile        = "bazel-perf.json"
+	ImprovementFile = "bazel-improvement.json"
+	TrendFile       = "bazel-trend.jsonl"
+)
+
+func perf(checks string) []string {
+	return []string{"//tools/bzl/parity/perf", "check", "-perf", PerfFile, "-check", checks}
+}
+
+// exitUnmeasured is the exit code a collector-backed check uses for "no verdict number".
+const exitUnmeasured = 4
 
 func sh(script string, args ...string) []string {
 	return append([]string{"bash", scripts + script}, args...)
@@ -70,10 +88,10 @@ func Rows() []Row {
 		{"P9", "deploy dry run on the isolated manual instance", []Check{
 			{Name: "manual-instance smoke", Cmd: []string{"//tools/bzl/manual-instance", "--smoke"}}}},
 		{"P10", "performance and improvement targets", []Check{
-			{Name: "improvement T1-T8", Cmd: []string{"//tools/bzl/parity/improvement"}},
-			{Name: "cache hit-ratio floor", Cmd: []string{"//tools/ci/bazel-trend", "hit-floor", "-trend", "bazel-trend.jsonl"}, WaiverRow: "P10.hit_ratio_floor"},
-			{Name: "disk ceiling (perf collector, Task 7.5d, not built)", WaiverRow: "P10.disk_ceiling"},
-			{Name: "warm no-op build, cold row, per-workflow p50 (perf collector, Task 7.5d, not built)"}}},
+			{Name: "improvement T1-T8 (collect-improvement output)", Cmd: []string{"//tools/bzl/parity/improvement", "-measurements", ImprovementFile}, Needs: ImprovementFile},
+			{Name: "cache hit-ratio floor", Cmd: []string{"//tools/ci/bazel-trend", "hit-floor", "-trend", TrendFile}, WaiverRow: "P10.hit_ratio_floor", Needs: TrendFile},
+			{Name: "disk ceiling (perf collector)", Cmd: perf("disk"), WaiverRow: "P10.disk_ceiling", Needs: PerfFile},
+			{Name: "warm no-op build, cold row, per-workflow p50 (perf collector)", Cmd: perf("warm,cold,ttg"), Needs: PerfFile}}},
 	}
 }
 
@@ -83,6 +101,7 @@ type Env struct {
 	Attest  func(key string) bool
 	Waivers []waivers.Waiver
 	DryRun  bool
+	Exists  func(path string) bool
 }
 
 // RowResult is the outcome of one row.
@@ -135,8 +154,14 @@ func checkStatus(c Check, env Env) string {
 		return unmeas
 	case len(c.Cmd) == 0:
 		return unmeas
-	case env.Run(c.Cmd) == 0:
+	case c.Needs != "" && !env.Exists(c.Needs):
+		return unmeas
+	}
+	switch env.Run(c.Cmd) {
+	case 0:
 		return pass
+	case exitUnmeasured:
+		return unmeas
 	}
 	return fail
 }
@@ -195,7 +220,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	env := Env{Waivers: ws, DryRun: *dry, Attest: attestor(*attFile), Run: runner(*bin, stdout, stderr)}
+	env := Env{Waivers: ws, DryRun: *dry, Attest: attestor(*attFile), Run: runner(*bin, stdout, stderr), Exists: fileExists}
 	rows := Rows()
 	results := Execute(rows, env)
 	for _, r := range results {
@@ -248,6 +273,8 @@ func attestor(path string) func(string) bool {
 	}
 }
 
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
 func runner(bin string, stdout, stderr io.Writer) func([]string) int {
 	return func(cmd []string) int {
 		argv := append([]string(nil), cmd...)
@@ -259,6 +286,10 @@ func runner(bin string, stdout, stderr io.Writer) func([]string) int {
 		c := exec.Command(argv[0], argv[1:]...)
 		c.Stdout, c.Stderr = stdout, stderr
 		if err := c.Run(); err != nil {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				return ee.ExitCode()
+			}
 			return 1
 		}
 		return 0

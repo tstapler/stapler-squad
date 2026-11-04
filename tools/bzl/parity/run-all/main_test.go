@@ -11,11 +11,11 @@ import (
 func okRun([]string) int { return 0 }
 
 func env(run func([]string) int, ws ...waivers.Waiver) Env {
-	return Env{Run: run, Attest: func(string) bool { return true }, Waivers: ws}
+	return Env{Run: run, Attest: func(string) bool { return true }, Waivers: ws, Exists: func(string) bool { return false }}
 }
 
 func TestAllPassIsPlainPass(t *testing.T) {
-	// P10 contains collector checks with no command, so even a full "pass" environment leaves it UNMEASURED.
+	// No collector output files exist in this environment, so P10 is UNMEASURED even when every command would pass.
 	res := Execute(Rows(), env(okRun))
 	line, ok := Verdict(res, nil)
 	if ok || line != "PARITY: FAIL P10" {
@@ -85,5 +85,44 @@ func TestExpiredWaiverFailsGate(t *testing.T) {
 	code := run([]string{"-dry-run", "-today", "2026-11-04", "-waivers", "../testdata/waiver-expired.yaml", "-attestations", "../testdata/waiver-expired.yaml"}, &out, &errb)
 	if code != 1 || !strings.Contains(out.String(), "PARITY: FAIL WAIVER P10.disk_ceiling") {
 		t.Fatalf("%d %s", code, out.String())
+	}
+}
+
+func TestP10UsesCollectorOutputWhenPresent(t *testing.T) {
+	e := env(okRun)
+	e.Exists = func(string) bool { return true }
+	if line, ok := Verdict(Execute(Rows(), e), nil); !ok || line != "PARITY: PASS" {
+		t.Fatal(line)
+	}
+}
+
+func TestP10CollectorExitFourIsUnmeasuredNotFail(t *testing.T) {
+	e := env(func(cmd []string) int {
+		if strings.Contains(strings.Join(cmd, " "), "perf") {
+			return 4
+		}
+		return 0
+	})
+	e.Exists = func(string) bool { return true }
+	rs := Execute(Rows(), e)
+	last := rs[len(rs)-1]
+	if last.Row.ID != "P10" || last.Status != "UNMEASURED" {
+		t.Fatalf("%+v", last)
+	}
+}
+
+func TestP10DiskCeilingWaivableButWarmNot(t *testing.T) {
+	e := env(func(cmd []string) int {
+		if strings.Contains(strings.Join(cmd, " "), "-check warm,cold,ttg") {
+			return 0
+		}
+		if strings.Contains(strings.Join(cmd, " "), "-check disk") {
+			return 1
+		}
+		return 0
+	}, waivers.Waiver{Row: "P10.disk_ceiling", Reason: "owner accepts a larger output base for now", Granted: "2026-11-03", Expires: "2027-01-31"})
+	e.Exists = func(string) bool { return true }
+	if line, _ := Verdict(Execute(Rows(), e), nil); line != "PARITY: PASS" {
+		t.Fatal(line)
 	}
 }
