@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "economic-midpoint_lib",
+    srcs = [
+        "main.go",
+        "midpoint.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/economic-midpoint",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "economic-midpoint",
+    embed = [":economic-midpoint_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "economic-midpoint_test",
+    srcs = ["midpoint_test.go"],
+    embed = [":economic-midpoint_lib"],
+)

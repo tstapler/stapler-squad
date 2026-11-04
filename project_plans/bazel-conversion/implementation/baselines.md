@@ -7,31 +7,31 @@ Status legend: **DONE** measured and verified; **PARTIAL** measured with a state
 | Task | Status |
 |---|---|
 | 0.1a CI time-to-green | DONE |
-| 0.1b cold build and disk per worktree | PENDING-QUIET-HOST |
+| 0.1b cold build and disk per worktree | DONE (2026-11-03, 5 runs at `7cfd08a69`, includes the otelc weave) |
 | 0.1c fresh-clone hermeticity gap | DONE |
 | 0.1d scale recount | DONE |
-| 0.1e Go test pass set | PENDING-QUIET-HOST |
-| 0.1f measured pain | PARTIAL (CI, regen steps, RA1, RA2, PR classes measured; cold build, disk, warm one-package latency pending) |
+| 0.1e Go test pass set | PENDING-QUIET-HOST (`test-set.sh` not run in the 2026-11-03 window; warm one-package latency measured, see Measured pain) |
+| 0.1f measured pain | DONE except the Go test pass set (0.1e `test-set.sh`, NOT RUN) |
 | 0.1g targets | not started (needs 0.1b and owner confirmation); scaffold only in `tools/bzl/baseline/targets.yaml` |
 | 0.1h seeded failure fixtures | DONE (make path) |
 | 0.1i PR sampling and billed-minutes join | DONE |
-| 0.1j hermeticity on the make path | PENDING-QUIET-HOST |
+| 0.1j hermeticity on the make path | DONE (2026-11-03, `7cfd08a69`) |
 
 ## Measured pain
 
-Run 2026-11-02T04:41Z (UTC). Full object: `tools/bzl/baseline/measured.json` (produced by `pain-numbers.sh`; the three pending fields read `UNMEASURED: PENDING-QUIET-HOST`).
+Run 2026-11-02T04:41Z (UTC). Full object: `tools/bzl/baseline/measured.json` (produced by `pain-numbers.sh`; cold worktree, disk, warm latency and hermeticity filled 2026-11-03 from the collector outputs, see the quiet-window section).
 
 | Quantity | Value | n | Source |
 |---|---|---|---|
 | PR time-to-green p50 / p90 / p95 | 2339 s (39.0 min) / 4298 s (71.6 min) / 5001 s (83.4 min) | 30 head SHAs | `ci-time-to-green.sh` |
-| Cold worktree `make build` wall time | `UNMEASURED: PENDING-QUIET-HOST` | 0 of 5 | `worktree-cost.sh` |
-| Disk per worktree (`disk_kb_worktree`) | `UNMEASURED: PENDING-QUIET-HOST` | 0 of 5 | `worktree-cost.sh` |
+| Cold worktree `make build` wall time (otelc-woven, cold `GOCACHE`) | 56.04 s median (min 55.17, max 57.28) | 5 of 5 | `worktree-cost.sh` |
+| Disk per worktree (`disk_kb_worktree`) | 516316 KB median (identical in all 5 runs); `node_modules` 525388 KB is a symlink into the shared store, not per worktree; cold `GOCACHE` 1969496 KB | 5 of 5 | `worktree-cost.sh` |
 | Manual regen steps per agent session, median / p90 | 0 / 0 (literal plan cohort); 0 / 2 (build-active cohort, n=16) | 30 / 16 | `regen-steps.sh` |
-| Warm one-package `go test` latency (`./config`) | `UNMEASURED: PENDING-QUIET-HOST` | 0 of 5 | `pain-numbers.sh` |
+| Warm one-package `go test -short -count=1` latency (`./config`) | 2.687 s median (2.623 to 3.062) | 5 of 5 | `pain-numbers.sh` definition |
 | RA1 median reverse-dependency fan-out | 0.259 (all 30 sampled PRs); 0.266 (the 17 Go-touching PRs); 29 of 30 PRs at or below 0.30 | 30 | `risky-assumptions.sh` |
 | RA2 non-Go share of the critical path | 0.987 median (e2e median 1974 s, runner queue/setup 398 s, lint 0 s, other 34 s of a 2601 s median span) | 28 | `risky-assumptions.sh` |
 | Legacy first-error legibility, 9 fixtures | 1 of 4 make-applicable fixtures names a correct remedy; 5 are `N/A-make` | 9 | `fixtures/run-make-path.sh` |
-| Hermeticity (H1, H2) | `UNMEASURED: PENDING-QUIET-HOST` | | `hermeticity.sh --system make` |
+| Hermeticity (H1, H2) | H1: 38 distinct host executables, 1 non-loopback network destination (34.95.71.106:443); H2: `env -i PATH=/usr/bin:/bin make build` fails (exit 2, "go/buf/bun not found") | 1 | `hermeticity.sh --system make` |
 
 ### CI time-to-green (Task 0.1a)
 
@@ -162,3 +162,12 @@ Then fill the PENDING rows above and run Task 0.1g.
 - Story 0.1 says the cold-build worktree has "no shared caches" while Task 0.1b says `GOCACHE` is "left as default". `worktree-cost.sh` supports both (`--gocache cold|default`, default `cold`) and records the mode.
 - The regen-step baseline median is 0, so T6 ("at most 10% of baseline median") is degenerate (0 x 0.1 = 0) on the literal definition.
 - The seed `GlobalInputs` classifies only 2 of 100 PRs as `global` (the Bazel files do not exist yet), so the global-class statistics have n=2.
+
+## Quiet-window measurements (2026-11-03)
+
+Host: the 1-minute load was at or below 2.0 immediately before every timed run (gate in the scripts / driver); the load average rises during and after a build because the build itself is the load, so a post-run value above 2.0 is self-inflicted and not a NOT QUIET flag. Free memory (`free -g` available column) was 35 to 36 GB throughout. Commit measured: `7cfd08a69` (`sdd/bazel-measure`, Epic 0 tip `883d92d6b` plus a TMPDIR fix to the two scripts). `make build` here always runs the otelc weave (`scripts/otel-auto-build.sh`; a build that exits 0 has woven, the script exits non-zero without `otelc`), and this is the plan's `baseline` definition.
+
+- 0.1b `worktree-cost.sh --runs 1` five times (`--ref 7cfd08a69 --gocache cold`), pre-run loadavg1 0.99, 1.73, 1.75, 1.98, 1.87; wall_s 57.28, 56.95, 56.04, 55.72, 55.17 (median 56.04); `baseline-worktree.json`. The temp worktrees lived under `~/.cache/tmp/ssq-measure` (script edited to honour `TMPDIR`, not `/tmp`). `make build` also touches the shared `node_modules` store under `~/.stapler-squad/shared-node-modules/` (existing mechanism, read-only reuse).
+- 0.1e (warm latency) `go test -short -count=1 ./config`, one warm-up then 5 timed runs: 2.687, 3.004, 3.062, 2.657, 2.623 s; load_pre/load_post 1.97/1.97, 1.97/1.97, 1.97/1.89, 1.89/1.89, 1.89/1.82; median 2.687 s.
+- 0.1j `hermeticity.sh --system make`: pre-run load 1.77. A first invocation (start load 1.88) produced a failed strace build (`h1_make_exit` 1, 31 executables) and is discarded; a retry produced `h1_make_exit` 0 with 38 executables. The cause of the first failure was not captured (the script deletes its log); an unscripted strace repro build at load 1.98 exited 0, so it is treated as a transient flake, INFERRED.
+- 0.1e `test-set.sh` (Go test pass set) was not run.
