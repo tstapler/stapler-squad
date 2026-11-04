@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"time"
+
+	"github.com/tstapler/stapler-squad/github"
 )
 
 // newerPR orders by AttachedAt, then PR number, then ref text, so ActivePR is
@@ -199,4 +201,30 @@ func AssignRole(existing []PRView, baseBranch string) PRRole {
 		}
 	}
 	return PRRoleFollowup
+}
+
+// LegacyPRMirror is the value the legacy scalar PR columns carry for a session
+// that has links: its ActivePR, and whether every linked PR is terminal.
+type LegacyPRMirror struct {
+	Number   int
+	URL      string
+	Terminal bool
+}
+
+// ProjectLegacyPRMirror derives the legacy scalars from a non-empty link set.
+// It reads no configuration, so the result is identical under every flag scope.
+func ProjectLegacyPRMirror(prs []PRView, currentBranch string) (LegacyPRMirror, bool) {
+	active := ActivePR(prs, currentBranch)
+	if active == nil {
+		return LegacyPRMirror{}, false
+	}
+	url := active.URL
+	if url == "" {
+		ref := github.ParsedGitHubRef{
+			Type: github.RefTypePR, Host: active.Ref.Host(),
+			Owner: active.Ref.Owner(), Repo: active.Ref.Repo(), PRNumber: active.Ref.Number(),
+		}
+		url = ref.HTMLURL()
+	}
+	return LegacyPRMirror{Number: active.Ref.Number(), URL: url, Terminal: PRsAllTerminal(prs, 0)}, true
 }

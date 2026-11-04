@@ -83,6 +83,11 @@ type InstanceData struct {
 	GitHubCheckConclusion  string    `json:"github_check_conclusion,omitempty"`
 	GitHubPRStatusTerminal bool      `json:"github_pr_status_terminal,omitempty"`
 	LastPRStatusCheck      time.Time `json:"last_pr_status_check,omitempty"`
+	// Multi-PR link set carried through full saves (never JSON-serialized: the
+	// links table is the store). See Instance.PRs.
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
 	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
 	AutonomousMode bool `json:"autonomous_mode,omitempty"`
 

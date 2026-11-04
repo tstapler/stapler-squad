@@ -163,6 +163,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubCheckConclusion:  snap.GitHub.GitHubCheckConclusion,
 		GitHubPRStatusTerminal: snap.GitHub.GitHubPRStatusTerminal,
 		LastPRStatusCheck:      snap.GitHub.LastPRStatusCheck,
+		PRs:                    snap.GitHub.PRs,
+		LegacyPRUnrepresented:  snap.GitHub.LegacyPRUnrepresented,
+		HasPRLinks:             snap.GitHub.HasPRLinks,
 		// Crew autonomy mode
 		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
@@ -358,6 +361,9 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubCheckConclusion:  data.GitHubCheckConclusion,
 		GitHubPRStatusTerminal: data.GitHubPRStatusTerminal,
 		LastPRStatusCheck:      data.LastPRStatusCheck,
+		PRs:                    append([]PRView(nil), data.PRs...),
+		LegacyPRUnrepresented:  data.LegacyPRUnrepresented,
+		HasPRLinks:             data.HasPRLinks,
 		// Worktree detection fields
 		MainRepoPath: data.MainRepoPath,
 		IsWorktree:   data.IsWorktree,

@@ -387,6 +387,12 @@ type Instance struct {
 	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
+	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
+	// siblings. Written only by the PR setters (instance_pr_set.go) and load
+	// hydration; never serialized from here (links live in their own table).
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
