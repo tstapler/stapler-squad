@@ -17,6 +17,9 @@ jobs:
   # setting. No continue-on-error here; a required-check candidate for Task 7.6.
   bazel-guards:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # sticky dependency-change comment; skipped for fork PRs
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -48,6 +51,60 @@ jobs:
           bash tools/bzl/check-make-help.sh
           bash tools/bzl/check-test-tags_test.sh
           bash tools/bzl/check-test-tags.sh
+
+      # Agent-enablement and reviewability guards (Stories 11.1-11.8). Pure shell, no Bazel build.
+      - name: Skill, docs and reviewability guards
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/bazel-contrib/buildtools/v10/buildifier@v10.1.0
+          bash tools/bzl/check-skill-proposals_test.sh
+          bash tools/bzl/check-skill-proposals.sh --docs \
+            docs/how-to/build-with-bazel.md docs/how-to/set-up-bazel-worktree-caches.md \
+            docs/how-to/first-build-in-a-fresh-worktree.md docs/how-to/troubleshoot-bazel.md docs/how-to/upgrade-bazel.md
+          bash tools/bzl/check-starlark-size.sh
+          buildifier -mode=check -lint=warn -r . 2>&1 | tee buildifier.txt
+          test ! -s buildifier.txt
+          bash tools/bzl/check-go-toolchain_test.sh
+          bash tools/bzl/check-go-toolchain.sh
+          bash tools/bzl/check-fork-age_test.sh
+          bash tools/bzl/check-fork-age.sh
+          bash tools/bzl/gen-gitattributes.sh --check
+          bash tools/bzl/check-gazelle-directives_test.sh
+          bash tools/bzl/annotate-deps_test.sh
+          bash tools/bzl/bazel-disk-alarm_test.sh
+          bash tools/ci/bazel-trend_test.sh
+          bash scripts/git-merge-bazel-lock_test.sh
+          bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases_test.sh
+
+      - name: Gazelle directive changes need owner review
+        if: github.event_name == 'pull_request'
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_REVIEWERS: ${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash tools/bzl/check-gazelle-directives.sh "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Dependency changes (annotation and sticky comment)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- go.mod MODULE.bazel MODULE.bazel.lock && exit 0
+          summary=$(bash tools/bzl/annotate-deps.sh "$BASE_SHA" "$HEAD_SHA")
+          echo "::notice title=Dependency change::$(printf '%s' "$summary" | tr '\n' ';')"
+          [ "$IS_FORK" = false ] || exit 0
+          { echo "<!-- bazel-deps-annotation -->"; echo "**Dependency changes** (go.mod, MODULE.bazel, MODULE.bazel.lock)"; echo; echo '```'; echo "$summary"; echo '```'; } > "$RUNNER_TEMP/deps.md"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- bazel-deps-annotation -->")) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$RUNNER_TEMP/deps.md" >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$RUNNER_TEMP/deps.md" >/dev/null
+          fi
 
       # T5 collector for P10 (Task 7.5g): every seeded failure shows a Remedy: line within 20 lines.
       - name: First-error legibility
