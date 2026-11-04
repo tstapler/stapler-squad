@@ -1,4 +1,4 @@
-package session_test
+package inttest
 
 import (
 	"net/http"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/auth"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/internal/peeraddr"
 )
 
 // claimNode is one simulated host serving the real claim endpoint. Like
@@ -25,8 +26,8 @@ type claimNode struct {
 
 func newClaimNode(t *testing.T) *claimNode {
 	t.Helper()
-	session.SetAllowImplausibleAddressesForTest(true)
-	t.Cleanup(func() { session.SetAllowImplausibleAddressesForTest(false) })
+	peeraddr.AllowImplausible = true
+	t.Cleanup(func() { peeraddr.AllowImplausible = false })
 
 	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {

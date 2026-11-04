@@ -1,4 +1,4 @@
-package session_test
+package inttest
 
 import (
 	"net/http"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/auth"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/internal/peeraddr"
 )
 
 // convergenceNode bundles one simulated instance's identity, registry, HTTP
@@ -32,9 +33,9 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 	// A real end-to-end gossip test can only bind httptest servers to
 	// loopback, which session.HostRegistry.Advertise otherwise rejects as
 	// an implausible (SSRF-prone) peer address -- see
-	// SetAllowImplausibleAddressesForTest's doc comment.
-	session.SetAllowImplausibleAddressesForTest(true)
-	t.Cleanup(func() { session.SetAllowImplausibleAddressesForTest(false) })
+	// peeraddr.AllowImplausible's doc comment.
+	peeraddr.AllowImplausible = true
+	t.Cleanup(func() { peeraddr.AllowImplausible = false })
 
 	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
