@@ -60,7 +60,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"SpawnSessionFromItem", "SubmitManualReview", "SuggestNextItem", "TransitionBacklogItemStatus",
 		"TriggerRemediationNow", "TriggerReReview", "TriggerShipPR", "TriggerSync", "TriggerTriage",
 		"UnarchiveBacklogItem", "UpdateBacklogItem", "UpdateItemSource", "UpdateLivenessDefinition",
-		"UpdatePipelineMode", "UpdateStage", "UpdateStageTransition", "UpdateTransitionGate", "WatchBacklogItems",
+		"UpdatePipelineMode", "UpdateStage", "UpdateStageTransition", "UpdateTransitionGate", "WaiveAcceptanceCriterion", "WatchBacklogItems",
 	},
 	"DiagnosticService": {
 		"AssembleDiagnosticBundle", "DispatchDiagnose",
