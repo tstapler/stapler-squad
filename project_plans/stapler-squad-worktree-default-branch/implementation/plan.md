@@ -263,3 +263,10 @@ Weights per `ESTIMATION.md`: CU = in + 1.25·cache_write + 0.1·cache_read + 5·
 3. One `make test` run under the contaminated `TMPDIR` (the harness default here) instead of two full runs; the clean-`/tmp` comparison is done at package level (Task 1.2b) to avoid doubling a long, tmux-heavy run.
 4. No redeploy: the service already runs an `ssq.3` binary started after the fix.
 5. No code change planned. The tymux assertion is already non-vacuous (`EqualValues(1, updates.Load())`); the vc re-check hardening is conditional.
+
+## Pre-mortem P1 amendments (phase 4)
+
+Binding on Task 1.1a, Story 1.2.3 and Task 3.1b; they override anything above that conflicts.
+
+- **P1 #1 (AC11 zero count proves nothing).** Required positive controls before reporting AC11: (a) `go test ./session -run TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension -count=1 -v` exits 0 and the test is not skipped (`session/repo_path_test.go:598`); (b) `go test ./session/git -run 'Succeeds_When_RepoHasWorktreeConfigExtension' -count=1 -v` exits 0; (c) a real new-worktree session start on a worktreeConfig repo, only if under the 2-session WIP cap, else (a)+(b) suffice. The `15:25:17` "set base commit SHA" record is WEAK (it comes from `initBaseCommitSHA`/`MergeBase`, not the default-branch resolve path). Task 3.1b calls `report_progress` for AC11 only after (a)+(b) pass and the err-field jq filter returns 0 real hits since `ActiveEnterTimestamp`.
+- **P1 #2 (`make test` on the live-service host).** Task 1.1a pre-checks: `list_backlog_items` in_progress count within the WIP cap, `uptime`, `free -g`; scratch on disk (not tmpfs `/tmp`); export a unique `STAPLER_SQUAD_TMUX_SOCKET` for the run; capture `systemctl --user show stapler-squad -p ActiveEnterTimestamp` before and after and abort and re-baseline AC11's window if it changed. Already observed once: `make test` ran at EXIT=0 and `ActiveEnterTimestamp` stayed `2026-11-04 12:27:48 PST`.
