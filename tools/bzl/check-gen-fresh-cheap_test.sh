@@ -24,4 +24,14 @@ bash "$c" >/dev/null && fail "changed schema must be stale"
 bash "$c" --write
 echo '# y' >> buf.yaml
 bash "$c" >/dev/null && fail "changed buf.yaml must be stale"
+bash "$c" --write
+[ -z "$(bash "$c" --note)" ] || fail "--note must be silent when fresh"
+bash "$c" --strict >/dev/null || fail "--strict must pass when fresh"
+echo '// z' >> buf.yaml
+case "$(bash "$c" --note)" in "note: gen/ is stale for plain go and gopls; Bazel is unaffected. Run 'make sync'.") ;; *) fail "--note text" ;; esac
+bash "$c" --note >/dev/null || fail "--note must exit 0"
+out=$(bash "$c" --strict) && fail "--strict must fail on a stale stamp"
+[ "$out" = "gen: STALE - run 'make sync'" ] || fail "--strict text: $out"
+rm gen/.sync-inputs.sha256
+bash "$c" --strict >/dev/null || fail "--strict must pass with no stamp"
 echo PASS

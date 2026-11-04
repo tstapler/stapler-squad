@@ -1,0 +1,17 @@
+# kind<TAB>make args<TAB>expected. cmd: `BUILD_SYSTEM=bazel make -n <args>` prints this Bazel command. rc: same, must exit 2 with the text.
+# run: executed for real (no Bazel needed), must exit 0 and print the text. Task 8.2e; checked by tools/bzl/check-pkg-mapping.sh.
+cmd	test PKG=./session	bazel test --test_arg=-test.short //session:all
+cmd	test PKG=./session/tmux	bazel test --test_arg=-test.short //session/tmux:all
+cmd	test PKG=./session/...	bazel test --test_arg=-test.short //session/...
+cmd	test PKG="./config ./cmd/ssq-hooks"	bazel test --test_arg=-test.short //config:all //cmd/ssq-hooks:all
+cmd	test PKG=./tools/lint/...	bazel test --test_arg=-test.short //tools/lint/...
+cmd	test PKG=./config RUN=TestFoo	bazel test --test_filter=TestFoo --test_arg=-test.short //config:all
+cmd	test PKG=./config TAGS=sinkguard	bazel test --config=sinkguard --test_arg=-test.short //config:all
+cmd	test PKG=./config TAGS="embed_tmux sinkguard"	bazel test --config=embed_tmux --config=sinkguard --test_arg=-test.short //config:all
+cmd	test PKG=./config TAGS=integration	bazel test --config=integration --test_arg=-test.short //config:all
+cmd	test-race PKG=./config	bazel test --config=race --test_arg=-test.short //config:all
+cmd	test PKG=./config RACE=1	bazel test --config=race --test_arg=-test.short //config:all
+cmd	test PKG=./config TEST_TAGS=-integration	bazel test --test_tag_filters=-integration --test_arg=-test.short //config:all
+cmd	test PKG=./config FORCE=1	bazel test --nocache_test_results --test_arg=-test.short //config:all
+rc	test PKG=./config TAGS=x	unknown TAGS value 'x'; valid: embed_tmux embed_tymux sinkguard gitoracle integration race release
+run	test PKG=./docs	no tests in ./docs (go test would say: no test files)

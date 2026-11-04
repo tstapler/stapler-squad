@@ -201,13 +201,18 @@ e2e-lighthouse: ## Run Lighthouse CI performance audit
 	@cd tests/e2e && npx lhci autorun --config=lighthouse.config.js
 
 # Build targets
-build: stapler-squad ## Build the Go application
+ifneq ($(BUILD_SYSTEM),bazel)
+build: gen-gate stapler-squad ## Build the Go application (Bazel: bazel build //:stapler-squad, copied to ./stapler-squad; otel-instrumented under both)
+	@echo "[build-system=make] make stapler-squad"
+endif
 
 # Also invoked directly by tests/e2e/helpers/test-server.ts (`make stapler-squad`)
 # to build the binary Playwright's global-setup spawns — relying on this
 # target's own dependency chain (server/web/dist) is what keeps e2e runs from
 # serving a stale frontend after only web-app/src changes.
-stapler-squad: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary (always the otelc auto-instrumented build)
+ifneq ($(BUILD_SYSTEM),bazel)
+stapler-squad: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist $(GO_FILES) | gen-gate ## Build the Go binary, always otelc auto-instrumented (Bazel: bazel build //:stapler-squad, copied to ./stapler-squad)
+	@echo "[build-system=make] ./scripts/otel-auto-build.sh go build -ldflags \"$$LDFLAGS\" -o stapler-squad ."
 	@echo "Building Go application (otelc auto-instrumented)..."
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
@@ -219,6 +224,7 @@ else
 	$(OTEL_BUILD) go build -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built successfully (otelc auto-instrumented)"
+endif
 
 # Install web-app Bun dependencies when bun.lock changes. Delegates to
 # tools/shared-node-modules, which symlinks node_modules into a dir shared
@@ -297,7 +303,10 @@ server/web/dist: web-app/out
 	@touch server/web/dist # Update timestamp
 	@echo "✅ Web UI built and copied successfully"
 
-web-build: server/web/dist ## Build the web UI (Bun by default; WEB_BUILD=next for the Next pipeline)
+ifneq ($(BUILD_SYSTEM),bazel)
+web-build: server/web/dist ## Build the web UI, Bun by default, WEB_BUILD=next for Next (Bazel: bazel build //server/web:dist_staged, copied to server/web/dist)
+	@echo "[build-system=make] make server/web/dist"
+endif
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
@@ -387,8 +396,11 @@ $(TMUX_BUILD_STAMP):
 init-submodules: ## Initialize git submodules (required once after clone)
 	git submodule update --init --recursive
 
-build-tmux: ## Build pinned tmux 3.8 binary from third_party/tmux submodule
+ifneq ($(BUILD_SYSTEM),bazel)
+build-tmux: ## Build pinned tmux 3.8 binary from third_party/tmux submodule (Bazel: bazel build //tools/bzl/tmux:tmux_bin, copied to bin/tmux)
+	@echo "[build-system=make] ./scripts/build-tmux.sh"
 	@./scripts/build-tmux.sh
+endif
 
 build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build -tags embed_tmux
 	@mkdir -p session/tmux/embed
@@ -436,7 +448,9 @@ fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rust
 build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
 	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
 
-build-embedded: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
+ifneq ($(BUILD_SYSTEM),bazel)
+build-embedded: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed | gen-gate ## Build stapler-squad with tmux bundled inside the binary (Bazel: bazel build --config=embed_tmux //:stapler-squad)
+	@echo "[build-system=make] ./scripts/otel-auto-build.sh go build -tags embed_tmux -o stapler-squad ."
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		$(OTEL_BUILD) go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -446,13 +460,16 @@ else
 	$(OTEL_BUILD) go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux"
+endif
 
 # build-embedded-tymux: kept separate from build-embedded (tags "embed_tmux
 # embed_tymux" instead of changing build-embedded's tag set) so existing
 # CI/release artifacts depending on -tags embed_tmux alone are unaffected.
 # Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
 # tymuxd embedding doesn't touch TCC entitlement plumbing.
-build-embedded-tymux: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+ifneq ($(BUILD_SYSTEM),bazel)
+build-embedded-tymux: ensure-tools ensure-otelc proto-gen ent-gen server/web/dist build-tmux-embed build-tymuxd-embed | gen-gate ## Build stapler-squad with tmux AND tymuxd bundled inside the binary (Bazel: bazel build --config=embed_tymux //:stapler-squad)
+	@echo "[build-system=make] ./scripts/otel-auto-build.sh go build -tags \"embed_tmux embed_tymux\" -o stapler-squad ."
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		$(OTEL_BUILD) go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
@@ -462,6 +479,7 @@ else
 	$(OTEL_BUILD) go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux + tymuxd"
+endif
 
 # The one stapler-squad binary is always built with otelc compile-time auto-instrumentation
 # (owner decision, ADR-005 amendment; project_plans/go-auto-instrumentation). Every
@@ -636,7 +654,9 @@ dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack 
 	$(DEV_STACK_TS_NODE) --compiler-options '$(DEV_STACK_TSC_OPTS)' scripts/dev-stack/launch.ts $(NAME)
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools web-app/node_modules/.ssq-install-stamp ## Generate Go and TypeScript code from proto files
+ifneq ($(BUILD_SYSTEM),bazel)
+proto-gen: ensure-tools web-app/node_modules/.ssq-install-stamp ## Generate Go and TypeScript code from proto files (Bazel: alias of make sync, bazel run //:sync-gen)
+	@echo "[build-system=make] buf generate proto"
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
@@ -652,8 +672,11 @@ proto-gen: ensure-tools web-app/node_modules/.ssq-install-stamp ## Generate Go a
 	else \
 		echo "✅ Proto files unchanged, skipping generation"; \
 	fi
+endif
 
-ent-gen: ensure-tools ## Generate ent ORM code from session/ent/schema
+ifneq ($(BUILD_SYSTEM),bazel)
+ent-gen: ensure-tools ## Generate ent ORM code from session/ent/schema (Bazel: alias of make sync, bazel run //:sync-gen)
+	@echo "[build-system=make] go run entgo.io/ent/cmd/ent generate ./session/ent/schema"
 	@if [ ! -f $(ENT_STAMP) ] \
 	   || [ "$$(find session/ent/schema -name '*.go' -newer $(ENT_STAMP) -print -quit)" ]; then \
 		echo "Generating ent ORM code..."; \
@@ -663,6 +686,7 @@ ent-gen: ensure-tools ## Generate ent ORM code from session/ent/schema
 	else \
 		echo "✅ ent schema unchanged, skipping generation"; \
 	fi
+endif
 
 proto-lint: ensure-tools ## Lint protocol buffer files
 	buf lint proto
@@ -678,7 +702,9 @@ proto-clean: ## Clean generated protocol buffer code
 	rm -rf web/src/gen
 
 # Testing targets
-test: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run all tests (skips slow integration tests; use test-integration for full suite)
+ifneq ($(BUILD_SYSTEM),bazel)
+test: gen-gate-strict ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run all tests, skipping slow integration tests; PKG=./x RUN=TestFoo (Bazel --test_filter, not go test -run) TAGS= TEST_TAGS= RACE=1 FORCE=1 (Bazel: bazel test //... or //pkg:all with the mapped flags)
+	@echo "[build-system=make] gotestsum -- -short -timeout=20m (see Makefile test)"
 	# session, session/mux, and session/tmux fork real tmux subprocesses at high
 	# t.Parallel() fan-out. Running them under the suite's default per-package
 	# parallelism let those tmux-heavy tests compete for scheduler time against
@@ -695,11 +721,14 @@ test: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run all tests (skip
 	# hit the same contention under full-suite load -- included in the -p 1 group.
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+endif
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
-test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for packages transitively affected by changes vs BASE (default origin/main); usage: make test-affected [BASE=some-ref]
+ifneq ($(BUILD_SYSTEM),bazel)
+test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for packages transitively affected by changes vs BASE (default origin/main) (Bazel: bazel test on the labels scripts/test-affected.py selects); usage: make test-affected [BASE=some-ref]
+	@echo "[build-system=make] scripts/test-affected.py then gotestsum"
 	@pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
@@ -710,6 +739,7 @@ test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for pac
 		echo "Affected packages:"; echo "$$pkgs"; \
 		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$pkgs; \
 	fi
+endif
 
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
 	cd web-app && BASE=$(or $(BASE),origin/main) bun run test:affected
@@ -779,12 +809,17 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@echo ""
 	@go tool cover -func=coverage.out | grep "^total"
 
-test-race: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with race detector enabled (skips slow integration tests)
+ifneq ($(BUILD_SYSTEM),bazel)
+test-race: gen-gate-strict ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with race detector enabled, skipping slow integration tests (Bazel: bazel test --config=race)
+	@echo "[build-system=make] gotestsum -- -race -short -timeout=20m (see Makefile test-race)"
 	# Same tmux-contention root cause as the test target above -- see its comment.
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+endif
 
-test-integration: ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
+ifneq ($(BUILD_SYSTEM),bazel)
+test-integration: gen-gate-strict ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run integration tests, requires real tmux (Bazel: bazel test --config=integration --config=race)
+	@echo "[build-system=make] gotestsum -- -race -tags integration (see Makefile test-integration)"
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
@@ -798,20 +833,27 @@ test-integration: ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run
 	# parallel via the second invocation.
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+endif
 
 # Differential oracle tests (go-git fork plan Story 1.3.3): files tagged `//go:build gitoracle`
 # run a candidate git backend against the real git CLI over temp repositories. Needs git only,
 # no generated code, so CI calls it directly.
 .PHONY: test-oracle
-test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git
+ifneq ($(BUILD_SYSTEM),bazel)
+test-oracle: $(GOTESTSUM_BIN) ## Run the gitoracle-tagged differential tests against real git (Bazel: bazel test --config=gitoracle --config=race on the oracle packages)
+	@echo "[build-system=make] gotestsum -- -race -tags gitoracle (see Makefile test-oracle)"
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags gitoracle -timeout 10m ./testutil/gitoracle/... ./session/git/backend/gogit/... ./session/gitwiring/... ./session/git/native/gitconfig/... ./session/git/native/capability/...
+endif
 
 # Type-based delivery-gate and terminal-write guards (Story 2.6 / Story 5.1d).
 # Runs only the Test* funcs declared in files tagged `//go:build sinkguard`
 # (selected per package with -run), so it does not re-run the untagged suite.
 .PHONY: test-delivery-guards test-delivery-guards-run
-test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged type-based guard tests
+ifneq ($(BUILD_SYSTEM),bazel)
+test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged type-based guard tests (Bazel: bazel test --config=sinkguard per directory with --test_filter)
+	@echo "[build-system=make] make test-delivery-guards-run"
 	@$(MAKE) --no-print-directory test-delivery-guards-run
+endif
 
 # The run half has no tool/codegen prerequisites so CI can call it directly
 # after downloading the generated-code artifact (build.yml, go-guards).
@@ -923,7 +965,7 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
-lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## Run golangci-lint with comprehensive checks
+lint: gen-gate-strict ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -1007,7 +1049,7 @@ fmt-check: ## Verify all Go files are gofmt-formatted (non-destructive; exits 1 
 	fi
 	@echo "✅ All Go files are properly formatted"
 
-vet: ensure-tools proto-gen ## Run go vet with all analyzers
+vet: gen-gate-strict ensure-tools proto-gen ## Run go vet with all analyzers
 	go vet ./...
 
 # Nil safety analysis
@@ -1096,7 +1138,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-bazel-guards $(if $(filter bazel,$(BUILD_SYSTEM)),gen-freshness,) proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: $(if $(filter bazel,$(BUILD_SYSTEM)),sync,) ci ready-bazel-guards proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows gazelle-check buildifier-check gen-freshness ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites; BUILD_SYSTEM=bazel adds make sync first and the gazelle-check, buildifier-check and gen-freshness Bazel gates at the end)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
