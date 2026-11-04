@@ -54,7 +54,13 @@ type EntRepository struct {
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	dbPath          string
 	pendingGuidance pendingGuidanceCache
-	migrationMode   bool // When true, enables dual-write mode for migration
+
+	// prVerifyCountersTrusted flips true once this process's PR startup
+	// maintenance has succeeded; until then stored verification counters on
+	// unverified-terminal rows read as zero (see linkStateToView).
+	prVerifyCountersTrusted atomic.Bool
+	prDrops                 prDropTracker
+	migrationMode           bool // When true, enables dual-write mode for migration
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
