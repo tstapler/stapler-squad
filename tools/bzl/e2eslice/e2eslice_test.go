@@ -364,3 +364,24 @@ func TestCheckQuarantine(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSlowSuites(t *testing.T) {
+	good := "| Suite | p50 s | Classification | Status |\n|---|---|---|---|\n| a | 900 | rdeps | x |\n| b | 400 | full: benchmarks | x |\n| c | 100 | | x |\n| d | - | | x |\n"
+	if bad := checkSlowSuites(good); len(bad) != 0 {
+		t.Fatalf("%v", bad)
+	}
+	for _, row := range []string{"| e | 301 | | x |", "| e | 301 | full: | x |", "| e | 301 | maybe | x |"} {
+		if len(checkSlowSuites(good+row+"\n")) != 1 {
+			t.Errorf("%q not flagged", row)
+		}
+	}
+}
+
+func TestGrowthOfGaps(t *testing.T) {
+	if g := growthOfGaps([]string{"a", "b"}, []string{"a", "b", "c"}); len(g) != 0 {
+		t.Fatalf("shrinking list flagged: %v", g)
+	}
+	if g := growthOfGaps([]string{"a", "new"}, []string{"a"}); !reflect.DeepEqual(g, []string{"new"}) {
+		t.Fatalf("%v", g)
+	}
+}

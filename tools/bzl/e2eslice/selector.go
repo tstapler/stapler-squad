@@ -207,7 +207,8 @@ func pkgOf(file string) string {
 // isProdGoSurface reports whether a change to file can alter the server binary's behaviour.
 func isProdGoSurface(file string) bool {
 	switch {
-	case strings.HasSuffix(file, "_test.go"), strings.HasPrefix(file, "tests/"), strings.HasPrefix(file, "docs/"), strings.HasPrefix(file, "project_plans/"):
+	case strings.HasSuffix(file, "_test.go"), strings.HasPrefix(file, "tests/"), strings.HasPrefix(file, "docs/"), strings.HasPrefix(file, "project_plans/"),
+		strings.HasPrefix(file, "tools/"), strings.HasPrefix(file, "scripts/"), strings.HasPrefix(file, ".claude/"), strings.HasPrefix(file, ".github/"):
 		return false
 	case strings.HasSuffix(file, ".md"):
 		return false

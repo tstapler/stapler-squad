@@ -22,7 +22,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
 func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errw, "usage: e2eslice <check-manifest|check-quarantine|merge|list-groups|specs-of|registry-coverage|select|replay|universal-share|gen-build|plan-shards|check-global-inputs|check-no-binary-dep> [flags]")
+		fmt.Fprintln(errw, "usage: e2eslice <check-manifest|check-completeness|check-slow-suites|check-quarantine|merge|list-groups|specs-of|registry-coverage|select|replay|universal-share|gen-build|plan-shards|check-global-inputs|check-no-binary-dep> [flags]")
 		return 2
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -175,6 +175,42 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 			fmt.Fprintln(errw, "quarantine:", b)
 		}
 		if len(bad) > 0 {
+			return 1
+		}
+	case "check-slow-suites":
+		b, err := os.ReadFile(R("docs/reference/bazel-slow-suites.md"))
+		if err != nil {
+			return fail(err)
+		}
+		bad := checkSlowSuites(string(b))
+		for _, m := range bad {
+			fmt.Fprintln(errw, "slow suite:", m)
+		}
+		if len(bad) > 0 {
+			return 1
+		}
+	case "check-completeness":
+		idx, err := loadRegistry(*root)
+		if err != nil {
+			return fail(err)
+		}
+		specs, err := listSpecs(*root, e2eDir)
+		if err != nil {
+			return fail(err)
+		}
+		cov, err := registryCoverage(*root, specs, idx)
+		if err != nil {
+			return fail(err)
+		}
+		var recorded Coverage
+		if b, err := os.ReadFile(R(e2eDir + "/feature-gaps.json")); err != nil || json.Unmarshal(b, &recorded) != nil {
+			return fail(fmt.Errorf("tests/e2e/feature-gaps.json missing or invalid (run registry-coverage -out)"))
+		}
+		grown := growthOfGaps(cov.UnresolvedIDs, recorded.UnresolvedIDs)
+		for _, id := range grown {
+			fmt.Fprintln(errw, "feature id resolves nowhere and is not in feature-gaps.json:", id)
+		}
+		if len(grown) > 0 {
 			return 1
 		}
 	case "universal-share":

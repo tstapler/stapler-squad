@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "e2eslice_lib",
     srcs = [
+        "completeness.go",
         "gen.go",
         "graph.go",
         "main.go",
@@ -12,6 +13,7 @@ go_library(
         "registry.go",
         "replay.go",
         "selector.go",
+        "slowsuites.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/e2eslice",
     visibility = ["//visibility:private"],
