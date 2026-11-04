@@ -92,5 +92,8 @@ build:race --@rules_go//go/config:race
 build:release --@rules_go//go/config:tags=embed_tmux,embed_tymux
 build:release --//tools/bzl/flags:embed_tmux=true
 build:release --//tools/bzl/flags:embed_tymux=true
+build:release --stamp
+build:release --compilation_mode=opt
+build:release --workspace_status_command=tools/bzl/workspace_status.sh
 
 try-import %workspace%/user.bazelrc
