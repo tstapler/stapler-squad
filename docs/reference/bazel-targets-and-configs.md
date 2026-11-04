@@ -94,6 +94,10 @@ Reference for the Bazel labels that replace each `make` binary target, the `--co
 
 `bazel build //cmd/... //tools/scanner/...` builds every row that has a label.
 
+## Architecture guards: `forbidden_deps_test`
+
+`//tools/bzl:forbidden_deps.bzl` replaces the four `go list -deps` guards that skip under Bazel (`SkipGoListUnderBazel`). An aspect walks `deps` and `embed` of `target` (point it at a `go_library`; a `go_test` would also count its test deps) and the rule calls `fail()` at analysis time, naming the shortest dep chain, when a `forbidden` label pattern appears or a `required` one is missing. Patterns: `//pkg`, `//pkg:name`, `//pkg/...`, `@repo//...`. `direct_only = True` checks direct deps only. Instances: `//:forbidden_deps_test`, `//jules:forbidden_deps_test`, `//server/prwatch:forbidden_deps_test` (direct only), `//server/wakes:forbidden_deps_test`. The Go tests still run under `go test`. `bazel test //tools/bzl/forbidden_deps_test_data/...` proves each form (transitive, direct only, package prefix, missing required) fails when seeded.
+
 ## Release stamping
 
 `--config=release` sets `--stamp`, `--compilation_mode=opt`, `--workspace_status_command=tools/bzl/workspace_status.sh` and the embed flags. The script emits `STABLE_GIT_VERSION`, `STABLE_GIT_BRANCH`, `STABLE_GIT_COMMIT` and `STABLE_GIT_WORKTREE` with the same sanitisers as the Makefile. `//:stapler-squad` maps them to `main.version` and `pkg/buildinfo.{Version,Branch,Commit,Worktree}` through `x_defs`, so a commit that touches no Go file re-runs only the status action and `GoLink`.
