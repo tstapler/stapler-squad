@@ -46,20 +46,8 @@ bun_dist(
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
     gen = "//tools/bzl/proto:gen_ts",
-    bun = "@bun_linux_x64//:bun-linux-x64/bun",
-    node = "@node_linux_x64//:bin/node",
-    node_modules = "@web_node_modules//:node_modules",
-)
-
-# S4 comparison target: same action, tagged no-sandbox (plan: recorded cost if the sandboxed action exceeds 1.5x).
-bun_dist(
-    name = "dist_nosandbox",
-    srcs = [":dist_srcs"],
-    allowlist = ":public_allowlist",
-    gen = "//tools/bzl/proto:gen_ts",
-    bun = "@bun_linux_x64//:bun-linux-x64/bun",
-    exec_tags = ["no-sandbox"],
-    node = "@node_linux_x64//:bin/node",
+    bun = "@bun_host//:bun",
+    node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
 )
 
@@ -69,8 +57,8 @@ bun_dist(
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
     gen = "//tools/bzl/proto:gen_ts",
-    bun = "@bun_linux_x64//:bun-linux-x64/bun",
-    node = "@node_linux_x64//:bin/node",
+    bun = "@bun_host//:bun",
+    node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
     trace = True,
 )
@@ -86,8 +74,8 @@ bun_jest_test(
     name = "jest_subset",
     gen = "//tools/bzl/proto:gen_ts",
     srcs = [":jest_srcs"],
-    bun = "@bun_linux_x64//:bun-linux-x64/bun",
-    node = "@node_linux_x64//:bin/node",
+    bun = "@bun_host//:bun",
+    node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
     tests = [
         "src/lib/backlog/bulkActions.test.ts",

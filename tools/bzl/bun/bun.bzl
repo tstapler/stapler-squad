@@ -1,7 +1,30 @@
-"""Spike S4: hermetic Bun web build (ADR-003 default path, a repository rule)."""
+"""Hermetic Bun web build (ADR-003: Bun-owned build, pinned toolchain, `bun install` as a repository rule)."""
 
-def _local_path(rctx, label):
-    return rctx.path(label)
+def _host_platform(rctx):
+    os = rctx.os.name.lower()
+    arch = rctx.os.arch
+    os = "darwin" if os.startswith("mac") else ("linux" if os.startswith("linux") else fail("unsupported OS " + os))
+    arch = "arm64" if arch in ("aarch64", "arm64") else ("x64" if arch in ("amd64", "x86_64") else fail("unsupported arch " + arch))
+    return os + "_" + arch
+
+def _host_tool_impl(rctx):
+    # Only the matching archive is resolved, so the other platforms' archives are never downloaded.
+    want = _host_platform(rctx)
+    for label, platform in rctx.attr.tools.items():
+        if platform == want:
+            rctx.symlink(rctx.path(label), rctx.attr.tool)
+            rctx.file("BUILD.bazel", 'exports_files(["%s"])\n' % rctx.attr.tool)
+            return
+    fail("no pinned %s for platform %s" % (rctx.attr.tool, want))
+
+host_tool = repository_rule(
+    implementation = _host_tool_impl,
+    attrs = {
+        "tool": attr.string(mandatory = True),
+        "tools": attr.label_keyed_string_dict(mandatory = True, allow_files = True),
+    },
+    doc = "Exposes the pinned binary of the host OS/arch as @<name>//:<tool>.",
+)
 
 def _bun_install_impl(rctx):
     bun = rctx.path(rctx.attr.bun)
@@ -116,7 +139,7 @@ bun_dist = rule(
         "minify": attr.string(default = "0"),
         "cmd_prefix": attr.string(default = ""),
         "trace": attr.bool(default = False),
-        "exec_tags": attr.string_list(default = []),
+        "exec_tags": attr.string_list(default = ["no-sandbox", "no-remote-cache"], doc = "S4: no-sandbox because the sandboxed action cost 2.6x make; no-remote-cache because the repository rule's node_modules is not proven byte-reproducible (Story 7.7)."),
     },
 )
 
