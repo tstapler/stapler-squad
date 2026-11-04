@@ -1163,6 +1163,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
 	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
+	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built

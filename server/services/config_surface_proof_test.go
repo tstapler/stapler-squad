@@ -187,6 +187,14 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
 		entrypoint: "BacklogService.UpdateTransitionGate",
 	},
+	"flag:session_multi_pr": {
+		testName:   "TestConfigSurfaceProof_SessionMultiPR_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:artifact_scan_v2": {
+		testName:   "TestConfigSurfaceProof_ArtifactScanV2_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:agent_wake_triggers": {
 		testName:   "TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

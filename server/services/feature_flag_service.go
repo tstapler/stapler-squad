@@ -430,6 +430,15 @@ var knownFeatureFlags = []struct {
 		scopes:      agentWakeTriggerScopes(),
 	},
 	{
+		name:        config.SessionMultiPRFlag,
+		description: "Session multi-PR tracking: per-PR state, the active PR and the item PR set. Scopes reader:poller, reader:backlog, reader:actions, reader:ui switch the readers on; enable them in that order (a later reader stays off until the earlier ones are on, applied at read time). The scope refresher_off is the kill switch of the always-on state refresher (default: refresher runs). Applies at once. Default: off.",
+		scopes:      config.SessionMultiPRScopes(),
+	},
+	{
+		name:        config.ArtifactScanV2Flag,
+		description: "Artifact scan v2: the rescan that rebuilds every session's artifact blob with typed records. Off until the owner flips it after a dry run on a database copy; turning it off stops further rescans. Applies at once; global only. Default: off.",
+	},
+	{
 		name:         hiddenSessionReadonlyGuardsFlagName,
 		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		defaultValue: true,
