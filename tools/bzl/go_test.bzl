@@ -31,7 +31,7 @@ def go_test_defaults(package, kwargs):
       A copy of kwargs with size, shard_count and tags filled in.
     """
     if kwargs.get("flaky"):
-        fail("flaky = True is banned (Task 0.2g): fix the test instead of retrying it")
+        fail("the flaky attribute is banned (Task 0.2g): fix the test instead of retrying it")
     out = dict(kwargs)
     size, shards = _SIZES.get(package, (None, None))
     if size and "size" not in out:
