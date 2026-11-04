@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "scoping_lib",
     srcs = [
+        "deps.go",
         "golist.go",
         "main.go",
         "model.go",
@@ -30,6 +31,7 @@ go_binary(
 go_test(
     name = "scoping_test",
     srcs = [
+        "deps_test.go",
         "move_test.go",
         "relocate_test.go",
         "scoping_test.go",

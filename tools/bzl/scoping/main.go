@@ -4,6 +4,7 @@
 //	scoping replay    [--commits N] [--write]   T9 components as JSON; --write stores tools/bzl/scoping/baseline.json
 //	scoping move      --from D --to D --files a.go,..  git mv a cluster into a new package and re-point references
 //	scoping relocate  --dir D --to f.go --decls a,T.m  move declarations between files of one package (no package change)
+//	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
 package main
@@ -329,6 +330,8 @@ func main() {
 		os.Exit(runMove(os.Args[2:], os.Stdout))
 	case "relocate":
 		os.Exit(runRelocate(os.Args[2:], os.Stdout))
+	case "deps":
+		os.Exit(runDeps(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
 	default:
