@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -473,4 +474,37 @@ func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *te
 
 	require.True(t, inst.HasClaudeSession())
 	assert.Equal(t, sessionUUID, inst.claudeSession.ConversationUUID)
+}
+
+func TestHistoryLinker_ShouldEnqueueFileAndScan_WhenSetHistoryInfoAfterFileExisted(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/late")
+	const prURL = "https://github.com/acme/app/pull/7"
+	toolResult := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"created ` + prURL + `"}]}}` + "\n"
+	path := f.write(t, claimOwnStart, toolResult, time.Second)
+
+	fresh := &Instance{Title: "late-link", Path: "/repo/late", Status: Running}
+	f.linker.SetInstances([]*Instance{fresh})
+
+	stored := make(chan string, 4)
+	ae := artifacts.NewArtifactExtractor(
+		func(_, blob string) error { stored <- blob; return nil },
+		func(string) (string, error) { return "", nil },
+		func(p string) (string, bool) { return FindInstanceByHistoryPath(f.linker.Instances(), p) },
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ae.Start(ctx, "")
+	f.linker.RegisterFileCallback(ae.OnHistoryFileChanged)
+
+	// The file already exists and receives no further writes: only the link event can trigger the scan.
+	f.linker.correlateSession(fresh, false)
+	require.Equal(t, path, fresh.Snapshot().HistoryFilePath)
+
+	select {
+	case blob := <-stored:
+		assert.Contains(t, blob, prURL)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no scan completed after the late link")
+	}
 }
