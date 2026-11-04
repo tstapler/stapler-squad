@@ -183,11 +183,14 @@ func handleForwardSyncCloseWith(ctx context.Context, registry *session.PluginReg
 		return
 	}
 
+	// Only items with no ItemSource at all take the sourceless path: a
+	// source-linked item must honor its source's ForwardSyncEnabled opt-in.
 	var action *forwardSyncAction
-	if current.SourceID != "" && current.ExternalID != "" {
-		action = resolveSourceCloseAction(ctx, registry, syncLoop, storage, current)
-	} else {
+	switch {
+	case current.SourceID == "":
 		action = resolveSourcelessCloseAction(current, sourceless)
+	case current.ExternalID != "":
+		action = resolveSourceCloseAction(ctx, registry, syncLoop, storage, current)
 	}
 	if action == nil {
 		return

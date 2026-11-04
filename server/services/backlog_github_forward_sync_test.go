@@ -514,3 +514,19 @@ func TestForwardSyncCloseCommentWithPR(t *testing.T) {
 	require.Contains(t, got, "`host-abc`")
 	require.True(t, strings.HasSuffix(got, "Implemented in: https://github.com/acme/widget/pull/99."))
 }
+
+func TestForwardSyncClose_SourceLinkedItemWithoutExternalID_NeverTakesSourcelessPath(t *testing.T) {
+	t.Parallel()
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", false, "")
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalURL: sourcelessIssueURL,
+	})
+	require.NoError(t, err)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}
+	registry := session.NewPluginRegistry()
+
+	handleForwardSyncCloseWith(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item, newSourcelessDeps(fake, "tok"))
+
+	require.Zero(t, fake.closeCallCount())
+}
