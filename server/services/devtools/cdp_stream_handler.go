@@ -1,4 +1,4 @@
-package services
+package devtools
 
 // cdp_stream_handler.go implements the /api/sessions/{id}/cdp-stream WebSocket endpoint.
 // It upgrades the HTTP connection to WebSocket and delivers a live JPEG frame stream

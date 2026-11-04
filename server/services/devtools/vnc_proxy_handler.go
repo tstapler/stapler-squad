@@ -1,4 +1,4 @@
-package services
+package devtools
 
 // vnc_proxy_handler.go implements the /api/sessions/{id}/vnc WebSocket endpoint.
 // It upgrades the HTTP connection to WebSocket and tunnels raw bytes bidirectionally

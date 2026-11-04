@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sessionbundle",
+    srcs = [
+        "disk_space_unix.go",
+        "disk_space_windows.go",
+        "session_bundle_profiles.go",
+        "session_bundle_service.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/sessionbundle",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/artifacts",
+        "//session/contexthistory",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_klauspost_compress//zip",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sessionbundle",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sessionbundle_test",
+    srcs = ["session_bundle_service_test.go"],
+    deps = [
+        ":sessionbundle",
+        "//session",
+        "//session/artifacts",
+        "//session/contexthistory",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

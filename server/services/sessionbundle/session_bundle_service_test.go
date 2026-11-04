@@ -1,4 +1,4 @@
-package services_test
+package sessionbundle_test
 
 import (
 	"archive/zip"
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
@@ -118,7 +118,7 @@ func readZIP(t *testing.T, data []byte) map[string][]byte {
 // ─── TC-001: Valid ZIP with manifest ─────────────────────────────────────────
 
 func TestAssembleBundle_ValidZIPWithManifest(t *testing.T) {
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{
 			analytics: []session.AnalyticsData{{ToolName: "bash", SessionID: "uuid-001"}},
 		},
@@ -136,7 +136,7 @@ func TestAssembleBundle_ValidZIPWithManifest(t *testing.T) {
 	// manifest.json must be present and parseable.
 	manifestRaw, ok := entries["manifest.json"]
 	require.True(t, ok, "manifest.json must be in ZIP")
-	var m services.BundleManifest
+	var m sessionbundle.BundleManifest
 	require.NoError(t, json.Unmarshal(manifestRaw, &m))
 	assert.Equal(t, 1, m.BundleFormatVersion)
 	assert.Equal(t, "uuid-001", m.SessionUUID)
@@ -161,7 +161,7 @@ func TestAssembleBundle_SizeCapDropsAnalytics(t *testing.T) {
 		bigAnalytics[i] = session.AnalyticsData{ToolName: "resize", SessionID: "abc"}
 	}
 
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{analytics: bigAnalytics},
 		nil, // ctxHistory disabled
 		&fakeScrollback{lines: bytes.Repeat([]byte("x"), 512)},
@@ -201,7 +201,7 @@ func TestAssembleBundle_ScrollbackTailNotOldest(t *testing.T) {
 	sentinel := []byte("RECENT-TAIL-SENTINEL")
 	sc := &fakeScrollback{lines: sentinel}
 
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{},
 		nil,
 		sc,
@@ -220,7 +220,7 @@ func TestAssembleBundle_ScrollbackTailNotOldest(t *testing.T) {
 // ─── TC-004: Nil ctxHistory store omits context_history section ───────────────
 
 func TestAssembleBundle_NilCtxHistoryStore(t *testing.T) {
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{},
 		nil, // explicitly nil — analytics disabled / not wired
 		&fakeScrollback{},
@@ -267,7 +267,7 @@ func TestRunDiagnosticsRetention_PrunesOldFiles(t *testing.T) {
 	notAZip := filepath.Join(dir, "notes.txt")
 	require.NoError(t, os.WriteFile(notAZip, []byte("keep"), 0o600))
 
-	err := services.RunDiagnosticsRetention(dir, 30*24*time.Hour)
+	err := sessionbundle.RunDiagnosticsRetention(dir, 30*24*time.Hour)
 	require.NoError(t, err)
 
 	_, err1 := os.Stat(filepath.Join(dir, "old1.zip"))
@@ -288,7 +288,7 @@ func TestAssembleBundle_FiveSecondDeadline(t *testing.T) {
 	// A storage that blocks until the context is cancelled.
 	blocking := &blockingStorage{}
 
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		blocking,
 		nil,
 		&fakeScrollback{},
@@ -325,7 +325,7 @@ func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string)
 func TestAssembleBundle_FlushCalledBeforeRead(t *testing.T) {
 	sc := &fakeScrollback{lines: []byte("ok")}
 
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{},
 		nil,
 		sc,
@@ -348,7 +348,7 @@ func TestAssembleBundle_FlushCalledBeforeRead(t *testing.T) {
 // ─── TC-022: SaveSessionBundle writes file and returns hash ──────────────────
 
 func TestSaveSessionBundle_WritesFileAndHash(t *testing.T) {
-	svc := services.NewSessionBundleService(
+	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{
 			analytics: []session.AnalyticsData{{ToolName: "click", SessionID: "uuid-022"}},
 		},
@@ -389,12 +389,12 @@ func TestSaveSessionBundle_WritesFileAndHash(t *testing.T) {
 
 // exportForTest calls the package-internal assembleBundle via the exported
 // ExportBundleForTest shim.
-func exportForTest(t *testing.T, svc *services.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, services.BundleManifest, error) {
+func exportForTest(t *testing.T, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return exportForTestCtx(t, context.Background(), svc, inst, maxScrollbackLines)
 }
 
-func exportForTestCtx(t *testing.T, ctx context.Context, svc *services.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, services.BundleManifest, error) {
+func exportForTestCtx(t *testing.T, ctx context.Context, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return svc.ExportBundleForTest(ctx, inst, maxScrollbackLines, []byte(`[{"name":"t"}]`))
 }
@@ -402,7 +402,7 @@ func exportForTestCtx(t *testing.T, ctx context.Context, svc *services.SessionBu
 // ─── AC2: traces and profiles are in the archive and readable ────────────────
 
 func TestAssembleBundle_IncludesTracesAndProfiles(t *testing.T) {
-	svc := services.NewSessionBundleService(&fakeBundleStorage{}, nil, &fakeScrollback{lines: []byte("x")})
+	svc := sessionbundle.NewSessionBundleService(&fakeBundleStorage{}, nil, &fakeScrollback{lines: []byte("x")})
 	zipBytes, manifest, err := exportForTest(t, svc, newTestInstance("uuid-traces"), 10)
 	require.NoError(t, err)
 

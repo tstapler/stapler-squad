@@ -6,8 +6,8 @@
   "httpMethod": "GET",
   "httpPath": "/api/sessions/{id}/cdp-stream",
   "markerFound": true,
-  "handlerFile": "server/services/cdp_stream_handler.go",
+  "handlerFile": "server/services/devtools/cdp_stream_handler.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-17T16:40:58.38295977-07:00"
+  "lastModified": "2026-11-03T20:59:56.779369664-08:00"
 }

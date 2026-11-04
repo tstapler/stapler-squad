@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "devtools",
+    srcs = [
+        "cdp_stream_handler.go",
+        "inspect_element_handler.go",
+        "vnc_proxy_handler.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/devtools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session",
+        "//session/cdp",
+        "@com_github_gorilla_websocket//:websocket",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":devtools",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "devtools_test",
+    srcs = [
+        "cdp_stream_handler_test.go",
+        "inspect_element_handler_test.go",
+        "vnc_proxy_handler_test.go",
+    ],
+    embed = [":devtools"],
+    deps = [
+        "//session",
+        "//session/cdp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

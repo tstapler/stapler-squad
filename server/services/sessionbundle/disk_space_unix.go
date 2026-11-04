@@ -1,6 +1,6 @@
 //go:build !windows
 
-package services
+package sessionbundle
 
 import "syscall"
 

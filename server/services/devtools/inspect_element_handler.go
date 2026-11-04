@@ -1,4 +1,4 @@
-package services
+package devtools
 
 // inspect_element_handler.go implements POST /api/sessions/{id}/inspect-element:
 // given viewport coordinates it asks the session's Chrome (over CDP) for the
