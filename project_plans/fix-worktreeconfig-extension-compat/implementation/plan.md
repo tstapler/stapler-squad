@@ -252,12 +252,16 @@ Phase 3: verification (requires Phase 1 + Phase 2 complete)
   ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
   defer cancel()
   loc := backend.Local{Root: backend.RepoRoot(repoPath)}
-  sha, err := gitprovider.Backend().ResolveRef(ctx, loc, backend.RefName("origin/"+mainBranch))
+  sha, err := gitprovider.Backend().ResolveRef(ctx, loc, backend.RefName("refs/remotes/origin/"+mainBranch))
   if err != nil {
       return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
   }
+  if sha == "" {
+      return "", fmt.Errorf("failed to resolve origin/%s: empty SHA", mainBranch)
+  }
   return string(sha), nil
   ```
+- Fully qualified `refs/remotes/origin/` (not `origin/`) so a local branch named `origin/<b>` cannot shadow the lookup (research/ops-resolve-sha-gap.md).
 - Remove unused imports `plumbing` (if `ResolveLocalBranchSHA` still uses it, defer removal to Story 2.1.2).
 - Files: `/home/tstapler/Programming/stapler-squad/session/git/ops.go`
 
@@ -299,6 +303,8 @@ Phase 3: verification (requires Phase 1 + Phase 2 complete)
 - Files: N/A
 
 ---
+
+> **Amendment 2026-11-04 (review FAIL on backlog 9c33e913):** Phase 2 was never implemented; ops.go still called `OpenRepo`. Also: the `go.mod` replace is now `v5.19.3-ssq.3` (uncommitted); commit it only after `make test` and `make lint` pass. Add a missing-branch test asserting `errors.Is(err, backend.ErrRefNotFound)` for both functions.
 
 ## Phase 3: Tests and verification
 
