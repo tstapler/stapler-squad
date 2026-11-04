@@ -26,8 +26,9 @@ run "marked unverified command" 0 '`make gazelle` <!-- proposal -->'
 run "unmarked unverified command" 1 '`make gazelle`'
 run "fenced unmarked command" 1 $'```\nbazel test //x\n```'
 run "fenced block marked on the line before" 0 $'<!-- proposal -->\n```\nbazel test //x\n```'
-run "docs command unlisted and unmarked" 1 'nothing' 'Run `bazel test //x`.'
-run "docs command marked" 0 'nothing' 'Run `bazel test //x`. <!-- proposal -->'
+run "docs fenced command unlisted and unmarked" 1 'nothing' $'```bash\nbazel test //x\n```'
+run "docs fenced command marked" 0 'nothing' $'<!-- proposal -->\n```bash\nbazel test //x\n```'
+run "docs inline mention is not checked" 0 'nothing' 'Prose may say `bazel test //x`.'
 
 hint=$(bash "$here/translate-errors.sh" --text E1)
 run "errors.yaml quotation equal" 0 $'<!-- errors.yaml:E1 -->\n'"$hint"

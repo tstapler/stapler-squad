@@ -2,7 +2,7 @@
 # Task 11.1d: keep agent-facing Bazel docs honest about which commands have actually been run.
 #   check-skill-proposals.sh [--docs FILE...]
 # Checks the skill (default .claude/skills/bazel-stapler-squad/SKILL.md) and every --docs file:
-#   1. each bazel/make command (fenced line or inline `code`) is listed in verified-commands.txt or marked
+#   1. each bazel/make command (skill: fenced line or inline `code`; docs: fenced lines only) is listed in verified-commands.txt or marked
 #      proposal (same-line `<!-- proposal -->`, a `<!-- proposal -->` line right before the fence, or a
 #      heading ending in "(proposal - not spike-verified)" for its whole section);
 #   2. the dependency-add section keeps that heading suffix exactly while unverified (spike S11 Fail/absent,
@@ -32,8 +32,8 @@ is_verified() { printf '%s\n' "$verified_cmds" | grep -Fxq -- "$1"; }
 
 # Prints "<line>\t<marked 0|1>\t<section 0|1>\t<command>" for each bazel/make command, where section is 1
 # inside the dependency-add section (heading mentioning "dependency"), and a "H\t<line>\t<has-suffix>" row for it.
-extract() {
-  awk -v suffix="$PROPOSAL_SUFFIX" '
+extract() { # <file> <inline 1|0>
+  awk -v suffix="$PROPOSAL_SUFFIX" -v inline="$2" '
     function cmdstart(s) { return s ~ /^(bazel|make|bazelisk|tools\/bazel) / }
     function clean(s) {
       sub(/^[$][ ]+/, "", s)
@@ -58,14 +58,16 @@ extract() {
       if (indep) printf "H\t%d\t%d\n", NR, secmark
       prev=line; next
     }
-    {
+    inline {
       rest=line
       while (match(rest, /`[^`]+`/)) {
         span=substr(rest, RSTART+1, RLENGTH-2); rest=substr(rest, RSTART+RLENGTH)
         c=clean(span); if (cmdstart(c)) emit(c, NR, (secmark || line ~ /<!-- proposal -->/))
       }
       prev=line
-    }' "$1"
+      next
+    }
+    { prev=line }' "$1"
 }
 
 s11_verdict() {
@@ -73,7 +75,7 @@ s11_verdict() {
 }
 
 check_file() {
-  local f="$1" n mark insec cmd unverified_in_section=0 hline="" hmark=0
+  local f="$1" inline="$2" n mark insec cmd unverified_in_section=0 hline="" hmark=0
   [ -f "$f" ] || { note "$f: file not found"; return; }
   while IFS=$'\t' read -r a b c d; do
     if [ "$a" = "H" ]; then hline="$b"; hmark="$c"; continue; fi
@@ -85,7 +87,7 @@ check_file() {
     if [ "$mark" != 1 ]; then
       note "$f:$n: command is neither in verified-commands.txt nor marked <!-- proposal -->: $cmd"
     fi
-  done < <(extract "$f")
+  done < <(extract "$f" "$inline")
 
   if [ -n "$hline" ]; then
     local verdict; verdict=$(s11_verdict)
@@ -132,8 +134,8 @@ EOF
   done < <(awk '/^- id:/ {print $3}' "$errors")
 }
 
-[ -f "$skill" ] && check_file "$skill"
-for d in ${docs[@]+"${docs[@]}"}; do check_file "$d"; done
+[ -f "$skill" ] && check_file "$skill" 1
+for d in ${docs[@]+"${docs[@]}"}; do check_file "$d" 0; done
 check_errors_table
 
 if [ "$fail" = 0 ]; then echo PASS; else echo FAIL >&2; fi

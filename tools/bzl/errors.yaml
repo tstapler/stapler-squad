@@ -10,14 +10,14 @@
   source: bazel
   priority: 1
   status: proposal
-  doc: ''
+  doc: state-9
   when: 'Another command .pid=[0-9]+. is running'
   hint: "bazel-hint: another Bazel command holds this worktree's lock; waiting is normal. Remedy: wait, or use a separate worktree."
 - id: E5
   source: bazel
   priority: 2
   status: proposal
-  doc: ''
+  doc: state-7
   when: 'No space left on device'
   hint: "bazel-hint: the disk is full. Remedy: run 'bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh' first (dry run: lists orphan output bases, the disk cache size against its GC cap, and stale /tmp test directories, with sizes; removes nothing), review the list, re-run it with --apply, then retry."
   needs_file: .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh
@@ -26,7 +26,7 @@
   source: bazel
   priority: 3
   status: proposal
-  doc: ''
+  doc: state-6
   when: 'Server terminated abruptly|java[.]lang[.]OutOfMemoryError'
   when_exit: '137 && ^Killed'
   hint: "bazel-hint: the Bazel server ran out of memory or was OOM-killed. Remedy: wait for other Bazel runs to finish, run 'bazel shutdown', then retry; do not raise --jobs."
