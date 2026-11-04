@@ -20,6 +20,7 @@ const SCROLL_TOLERANCE_PX = 2;
 
 test.describe('scroll policy (Next baseline)', () => {
   test('forward nav, Back and hash nav match the recorded Next values', async ({ page }) => {
+    test.skip(isBunBuild(), 'The recorded values are Next output (Back stays at 0); the Bun block below asserts the Bun policy');
     const observed = await measureScrollPolicy(page);
     expect(observed.scrolledTo, 'the long page really scrolled').toBeGreaterThan(0);
     expect(observed).toEqual(baseline.scrollPolicy);
@@ -30,7 +31,7 @@ test.describe('scroll policy (Next baseline)', () => {
     expect(observed.forwardNavScrollTop).toBe(0);
   });
 
-  test('switching the Up Next tab leaves scroll and the history length unchanged', async ({ page }) => {
+  test('switching the Up Next tab keeps the history length unchanged', async ({ page }) => {
     const shell = new AppShellPage(page);
     const upNext = new UpNextPage(page);
     await upNext.resetStorage();
@@ -46,27 +47,21 @@ test.describe('scroll policy (Next baseline)', () => {
         return shell.scrollTop();
       })
       .toBe(SCROLL_OFFSET);
-    const before = await shell.scrollTop();
     const historyLength = await page.evaluate(() => history.length);
 
     await upNext.selectTab('queue');
     await expect(page).toHaveURL(/[?&]tab=queue/);
     expect(await page.evaluate(() => history.length)).toBe(historyLength);
-    expect(await shell.scrollTop()).toBe(before);
+    // Not asserting scrollTop here: the scroller lives inside each tab's panel, so the PRs scroller
+    // unmounts on the switch and the queue panel is too short to scroll (the page object then falls
+    // back to an unrelated element). "A search-only change keeps position" is covered in
+    // lib/nav/__tests__/scroll-policy.test.tsx.
   });
 });
 
 test.describe('scroll policy (Bun only, UX G8)', () => {
   test.skip(!isBunBuild(), 'ScrollPolicy.tsx restores position on POP; Next remounts the page at 0 instead (baselined above)');
 
-  // KNOWN GAP, found verifying this story against a real Bun build: ScrollPolicy.tsx's POP branch
-  // (src/lib/nav/ScrollPolicy.tsx) calls restore() with the position saved under the current
-  // location.key, but observed backScrollTop is 0, not the saved offset, on every run (verified
-  // with a real mouse-wheel scroll, not just a scripted scrollTop write, so this isn't a
-  // test-harness timing artifact). Needs an issue filed and a fix outside PR 7b's file set before
-  // this can be un-marked. test.fail() keeps the gap visible (and tracked as a red flag) instead
-  // of asserting a policy that does not hold.
-  test.fail();
   test('Back restores the previous scroll position (within 2px), unlike the recorded Next baseline', async ({ page }) => {
     const observed = await measureScrollPolicy(page);
     expect(observed.scrolledTo, 'the long page really scrolled').toBeGreaterThan(0);

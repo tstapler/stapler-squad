@@ -54,6 +54,7 @@ async function loadWithStorage(page: Page, storage: Record<string, string>): Pro
 }
 
 test.describe('theme FOUC prevention (Next baseline)', () => {
+  test.skip(isBunBuild(), 'Next-baseline fixtures record Next output; the Bun-only block below asserts the Bun build');
   test('each stored theme is applied at DOMContentLoaded and dark themes resolve their own tokens on the first frame', async ({ browser }) => {
     const byTheme = new Map<string, FirstPaintFacts>();
     for (const theme of THEMES) {

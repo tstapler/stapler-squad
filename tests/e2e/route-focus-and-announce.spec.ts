@@ -2,6 +2,7 @@
 /**
  * Story 7.2a (Next baseline): what a keyboard or screen-reader user gets on navigation.
  * Premises of the plan that do not hold on Next, recorded in fixtures/next-baseline.json:
+ * (PR 4 gave the shared <main> tabIndex=-1, so Enter on the skip link now focuses it on Next too.)
  *  - The skip link is not the first Tab stop (the nav precedes it), so the spec Tabs to it.
  *  - Activating it sets the `#main-content` hash but does not focus <main> (it has no tabindex),
  *    and the computed outline-style of main#main-content is `none`.
@@ -17,6 +18,7 @@ const SETTINGS_TITLE = 'Settings - Stapler Squad';
 const LOGS_TITLE = 'Logs - Stapler Squad';
 
 test.describe('route focus and announcements (Next baseline)', () => {
+  test.skip(isBunBuild(), 'Next-baseline fixtures record Next output; the Bun-only block below asserts the Bun build');
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 900 });
     await new AppShellPage(page).skipOnboarding();
@@ -27,7 +29,9 @@ test.describe('route focus and announcements (Next baseline)', () => {
     await shell.goto('/review-queue');
     await expect(shell.drawerNav).toBeVisible();
 
-    await shell.navLink(/history/i).click({ force: true });
+    // dispatchEvent targets the element, not its screen coordinates: a forced click can land on
+    // a neighbouring item (observed: Insights) while the nav badges are still shifting the layout.
+    await shell.navLink(/history/i).dispatchEvent('click');
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
     // Next's own announcer is the only live region that carries the title.
@@ -47,7 +51,7 @@ test.describe('route focus and announcements (Next baseline)', () => {
     const outcome = await shell.activateSkipLink();
     expect(outcome.path).toBe('/history');
     expect(outcome.hash).toBe(baseline.skipLink.hash);
-    expect(outcome.mainFocused, 'Next does not move focus into <main>').toBe(baseline.skipLink.mainFocused);
+    expect(outcome.mainFocused, 'the skip link focuses <main> (tabIndex=-1, shared with the Bun build since PR 4)').toBe(baseline.skipLink.mainFocused);
     expect(outcome.outlineStyle).toBe(baseline.skipLink.outlineStyle);
   });
 
@@ -89,7 +93,7 @@ test.describe('route focus and announcements (Bun only)', () => {
     await shell.goto('/review-queue');
     await expect(shell.drawerNav).toBeVisible();
 
-    await shell.navLink(/history/i).click({ force: true });
+    await shell.navLink(/history/i).dispatchEvent('click'); // not a forced click: see the Next block
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
     const announcer = shell.liveRegions.filter({ hasText: HISTORY_TITLE }).first();

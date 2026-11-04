@@ -13,7 +13,7 @@
     "tabPresses": 19,
     "path": "/history",
     "hash": "#main-content",
-    "mainFocused": false,
+    "mainFocused": true,
     "outlineStyle": "none"
   },
   "historyNavAriaCurrent": "page",

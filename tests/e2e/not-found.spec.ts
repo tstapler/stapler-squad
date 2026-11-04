@@ -15,6 +15,7 @@ import { NOT_FOUND_META } from '../../web-app/src/app/route-meta';
 const MISSING_PATH = '/nonexistent';
 
 test.describe('not found (Next baseline)', () => {
+  test.skip(isBunBuild(), 'Next-baseline fixtures record Next output; the Bun-only block below asserts the Bun build');
   test('an unknown path answers 200 and ends on the recorded page', async ({ page }) => {
     await new AppShellPage(page).skipOnboarding();
     const observed = await measureNotFound(page);
