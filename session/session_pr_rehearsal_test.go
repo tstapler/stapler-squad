@@ -29,6 +29,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
 
 const (
@@ -285,7 +286,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 		}
 		require.NoError(t, repo.client.BacklogItem.CreateBulk(builders...).Exec(ctx))
 	}
-	items, err := repo.client.BacklogItem.Query().Limit(size.itemsWithPR).All(ctx)
+	items, err := repo.client.BacklogItem.Query().Where(backlogitem.PrNumberGT(0)).Limit(size.itemsWithPR).All(ctx)
 	require.NoError(t, err)
 	for i, it := range items {
 		_, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: it.ID.String(), SessionUUID: uuids[i], SessionRole: SessionRoleWork})
