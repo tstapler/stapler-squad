@@ -35,7 +35,9 @@ pids="$stub $by"
 echo "$stub" > "$U/orphan3/server/server.pid.txt"
 echo "$by" > "$U/orphan2/server/server.pid.txt"
 
-run() { BAZEL_USER_ROOT="$U" DISK_CACHE="$CACHE" TMP_ROOT="$TMPR" bash "$script" "$@"; }
+# Real fuser when installed; otherwise a stub that reports "no open handles" so the stale-dir cases still run.
+if command -v fuser >/dev/null 2>&1; then FUSER_BIN="fuser"; else printf '#!/bin/sh\nexit 1\n' > "$T/fuser"; chmod +x "$T/fuser"; FUSER_BIN="$T/fuser"; fi
+run() { BAZEL_USER_ROOT="$U" DISK_CACHE="$CACHE" TMP_ROOT="$TMPR" FUSER="$FUSER_BIN" bash "$script" "$@"; }
 snapshot() { (cd "$T" && find user_root disk repo-cache tmp | sort | tr '\n' ' '); }
 
 before=$(snapshot)
