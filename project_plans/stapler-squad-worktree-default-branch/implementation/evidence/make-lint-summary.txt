@@ -1,0 +1,14 @@
+# make lint, EXIT=0, 2026-11-04T15:53:42-08:00
+# source: ~/.cache/tmp/ssq-ac9/make-lint.log (last 12 lines)
+✅ Proto files unchanged, skipping generation
+✅ ent schema unchanged, skipping generation
+Building web UI with Bun (WEB_MINIFY=0)...
+web-build: ok (unminified, 2839 ms) -> out
+Copying built files to server/web/dist...
+✅ Web UI built and copied successfully
+Running custom lint...
+ok  	github.com/tstapler/stapler-squad/tools/lint/norawgitcli	0.788s
+custom lint: ok
+Running shellcheck on 67 first-party shell script(s)...
+shellcheck: ok
+0 issues.

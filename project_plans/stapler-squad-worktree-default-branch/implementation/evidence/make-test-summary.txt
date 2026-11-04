@@ -1,0 +1,26 @@
+# make test (run 2, STAPLER_SQUAD_TMUX_SOCKET unset), 2026-11-04T15:53:42-08:00
+# source: ~/.cache/tmp/ssq-ac9/make-test.log
+DONE 5433 tests, 59 skipped in 50.692s
+DONE 14638 tests, 39 skipped in 154.836s
+exit=0
+FAIL-lines-in-full-log: 0
+build: build_exit=0
+service before/after:
+ActiveEnterTimestamp=Wed 2026-11-04 12:27:48 PST
+MainPID=2175107
+ActiveEnterTimestamp=Wed 2026-11-04 12:27:48 PST
+MainPID=2175107
+
+# run 1 (env var exported, defect in plan):
+DONE 5433 tests, 59 skipped, 10 failures in 93.443s
+exit=2
+=== FAIL: session/mux TestListStaplerSquadSessions_UsesIsolatedSocket (0.00s)
+=== FAIL: session/mux TestListStaplerSquadSessionsWithInfo_UsesIsolatedSocket (0.00s)
+=== FAIL: session/mux TestScanByUserOptions_UsesIsolatedSocket (0.00s)
+=== FAIL: session TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne (0.00s)
+=== FAIL: session TestBatchPTYInfo_UsesIsolatedSocketWhenCalledWithoutOne (0.00s)
+=== FAIL: session TestReconcileOrphanedTmuxSessions_UsesIsolatedSocket (0.00s)
+=== FAIL: session/tmux TestPrependSocket (0.00s)
+=== FAIL: session/tmux TestPrependSocket/empty_socket_resolves_to_the_isolated_test_socket,_not_the_shared_default (0.00s)
+=== FAIL: session/tmux TestResolveSocket (0.00s)
+=== FAIL: session/tmux TestResolveSocket/empty_socket_resolves_to_a_non-empty_isolated_value_in_test_mode (0.00s)
