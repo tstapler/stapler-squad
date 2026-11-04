@@ -74,10 +74,13 @@ func TestReplayFollowsRenames(t *testing.T) {
 	if !(moved.LibLOCByChange["a"] < plain.LibLOCByChange["a"]) {
 		t.Fatalf("a moved leaf must invalidate less: %d vs %d", moved.LibLOCByChange["a"], plain.LibLOCByChange["a"])
 	}
+	if got := LowerShare(map[string]int{"a": 1000}, map[string]int{"a": 995}, 100000); got != 0 {
+		t.Fatalf("a 5-line drop is below the materiality threshold, got %v", got)
+	}
 	if plain.UniversalTouch != 0 {
 		t.Fatalf("svc is not a universal package")
 	}
-	if got := LowerShare(plain.LibLOCByChange, moved.LibLOCByChange); got != 1 {
+	if got := LowerShare(plain.LibLOCByChange, moved.LibLOCByChange, total(m.LOC)); got != 1 {
 		t.Fatalf("lower share = %v", got)
 	}
 }

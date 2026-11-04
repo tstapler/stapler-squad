@@ -174,8 +174,13 @@ func PRMedians(m *Model, r Resolver, prs []Change) (target, merged float64, n in
 	return median(ts), median(ms), len(ts)
 }
 
-// LowerShare is the share of changes whose affected library LOC fell below the stored baseline.
-func LowerShare(base, now map[string]int) float64 {
+// materialDelta is how far affected library LOC must fall, as a share of all library LOC, to count as lower: a
+// handful of relocated lines is noise, not an invalidation win.
+const materialDelta = 0.001
+
+// LowerShare is the share of changes whose affected library LOC fell materially below the stored baseline.
+func LowerShare(base, now map[string]int, totalLOC int) float64 {
+	minDrop := int(materialDelta * float64(totalLOC))
 	n, lower := 0, 0
 	for id, b := range base {
 		v, ok := now[id]
@@ -183,7 +188,7 @@ func LowerShare(base, now map[string]int) float64 {
 			continue
 		}
 		n++
-		if v < b {
+		if b-v > minDrop {
 			lower++
 		}
 	}

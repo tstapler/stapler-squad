@@ -140,7 +140,7 @@ func measure(root string, commits int, base *Report, ref string) (*Report, error
 		PerChangeLibLOC: w500.LibLOCByChange,
 	}
 	if base != nil {
-		r.T9cChangesWithLowerLib = LowerShare(base.PerChangeLibLOC, w500.LibLOCByChange)
+		r.T9cChangesWithLowerLib = LowerShare(base.PerChangeLibLOC, w500.LibLOCByChange, total(m.LOC))
 	}
 	return r, nil
 }
