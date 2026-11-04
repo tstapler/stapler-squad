@@ -54,7 +54,16 @@ type mover struct {
 	rename   map[string]string // unexported origin symbol -> capitalised name
 	files    map[string]*fileEdits
 	uses     []useRef
+	members  map[string]string // declaration position of an unexported method/field -> capitalised name
+	memRefs  []memberRef
 	notes    []string
+}
+
+// memberRef is one identifier occurrence of an unexported method or field of the origin package.
+type memberRef struct {
+	file       string
+	start, end int
+	key        string
 }
 
 // useRef is one identifier occurrence that refers to a package-level object of the origin package.
@@ -81,7 +90,7 @@ func capitalise(s string) string {
 
 // RunMove applies spec and returns the human-readable notes (boundary symbols capitalised, files rewritten).
 func RunMove(spec MoveSpec, out io.Writer) error {
-	m := &mover{spec: spec, declared: map[string]string{}, rename: map[string]string{}, files: map[string]*fileEdits{}, moved: map[string]bool{}}
+	m := &mover{spec: spec, declared: map[string]string{}, members: map[string]string{}, rename: map[string]string{}, files: map[string]*fileEdits{}, moved: map[string]bool{}}
 	if err := m.load(); err != nil {
 		return err
 	}
@@ -168,6 +177,9 @@ func (m *mover) scan(p *packages.Package, seen map[string]bool) {
 			switch x := n.(type) {
 			case *ast.SelectorExpr: // importer: session.Name
 				selIdents[x.Sel.Pos()] = true
+				if inOrigin && m.moved[path] {
+					m.noteMember(p, x.Sel)
+				}
 				qual, ok := x.X.(*ast.Ident)
 				if !ok {
 					return true
@@ -185,6 +197,9 @@ func (m *mover) scan(p *packages.Package, seen map[string]bool) {
 					m.noteBoundary(p, x.Sel, qual, path, fe, off)
 				}
 			case *ast.Ident:
+				if inOrigin {
+					m.recordMember(p, x, path, off)
+				}
 				if !inOrigin || selIdents[x.Pos()] {
 					return true
 				}
@@ -215,6 +230,50 @@ func (m *mover) declFile(_ *packages.Package, obj types.Object) string {
 		return ""
 	}
 	return m.declared[obj.Name()]
+}
+
+func memberKey(p *packages.Package, obj types.Object) string {
+	pos := p.Fset.Position(obj.Pos())
+	return fmt.Sprintf("%s:%d", pos.Filename, pos.Offset)
+}
+
+// unexportedMember reports whether obj is an unexported method or struct field declared in the origin package.
+func (m *mover) unexportedMember(obj types.Object) bool {
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != m.origPath || obj.Exported() {
+		return false
+	}
+	switch o := obj.(type) {
+	case *types.Func:
+		sig, ok := o.Type().(*types.Signature)
+		return ok && sig.Recv() != nil
+	case *types.Var:
+		return o.IsField()
+	}
+	return false
+}
+
+// noteMember marks an unexported method or field of a staying type, used by a moved file, for capitalisation.
+func (m *mover) noteMember(p *packages.Package, sel *ast.Ident) {
+	obj := p.TypesInfo.Uses[sel]
+	if !m.unexportedMember(obj) || m.moved[p.Fset.Position(obj.Pos()).Filename] {
+		return
+	}
+	key := memberKey(p, obj)
+	if _, done := m.members[key]; !done {
+		up := capitalise(sel.Name)
+		m.members[key] = up
+		m.notes = append(m.notes, fmt.Sprintf("capitalise member %s -> %s", sel.Name, up))
+	}
+}
+
+func (m *mover) recordMember(p *packages.Package, id *ast.Ident, path string, off func(token.Pos) int) {
+	obj := p.TypesInfo.Uses[id]
+	if obj == nil {
+		obj = p.TypesInfo.Defs[id]
+	}
+	if m.unexportedMember(obj) {
+		m.memRefs = append(m.memRefs, memberRef{file: path, start: off(id.Pos()), end: off(id.End()), key: memberKey(p, obj)})
+	}
 }
 
 // noteBoundary handles a moved file that already imported the origin package and uses a stay-behind symbol.
@@ -309,6 +368,12 @@ func gitMv(root, from, to string) error {
 
 // renameEverywhere capitalises the declaration and every use of each boundary symbol, in all loaded files.
 func (m *mover) renameEverywhere() {
+	for _, r := range m.memRefs {
+		if up, hit := m.members[r.key]; hit {
+			fe := m.files[r.file]
+			fe.edits = append(fe.edits, edit{r.start, r.end, up})
+		}
+	}
 	for _, u := range m.uses {
 		up, hit := m.rename[u.name]
 		if !hit {

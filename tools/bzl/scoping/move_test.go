@@ -44,11 +44,11 @@ func TestMoveFixture(t *testing.T) {
 	}
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/m\n\ngo 1.21\n")
-	write(t, root, "core/core.go", "package core\n\ntype Core struct{ N int }\n\nfunc helper(n int) int { return n * 2 }\n\nfunc New() *Core { return &Core{N: helper(1)} }\n")
-	write(t, root, "core/sat.go", "package core\n\n// Sat is an upper cluster: it uses the core, the core never uses it.\nfunc Sat(c *Core) int { return helper(c.N) + 1 }\n")
-	write(t, root, "core/sat_test.go", "package core_test\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/core\"\n)\n\nfunc TestSat(t *testing.T) {\n\tif got := core.Sat(core.New()); got != 5 {\n\t\tt.Fatalf(\"got %d\", got)\n\t}\n}\n")
+	write(t, root, "core/core.go", "package core\n\ntype Core struct{ N int }\n\nfunc helper(n int) int { return n * 2 }\n\nfunc New() *Core { return &Core{N: helper(1)} }\n\nfunc (c *Core) secret() int { return 3 }\n")
+	write(t, root, "core/sat.go", "package core\n\n// Sat is an upper cluster: it uses the core, the core never uses it.\nfunc Sat(c *Core) int { return helper(c.N) + 1 + c.secret() }\n")
+	write(t, root, "core/sat_test.go", "package core_test\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/core\"\n)\n\nfunc TestSat(t *testing.T) {\n\tif got := core.Sat(core.New()); got != 8 {\n\t\tt.Fatalf(\"got %d\", got)\n\t}\n}\n")
 	write(t, root, "app/app.go", "package app\n\nimport \"example.com/m/core\"\n\nfunc Run() int { c := core.New(); return core.Sat(c) + c.N }\n")
-	write(t, root, "app/app_test.go", "package app\n\nimport \"testing\"\n\nfunc TestRun(t *testing.T) {\n\tif Run() != 7 {\n\t\tt.Fatal(Run())\n\t}\n}\n")
+	write(t, root, "app/app_test.go", "package app\n\nimport \"testing\"\n\nfunc TestRun(t *testing.T) {\n\tif Run() != 10 {\n\t\tt.Fatal(Run())\n\t}\n}\n")
 	run(t, root, "git", "init", "-q")
 	run(t, root, "git", "add", ".")
 	run(t, root, "git", "commit", "-q", "-m", "init")
@@ -58,7 +58,7 @@ func TestMoveFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunMove: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "capitalise helper -> Helper") {
+	if !strings.Contains(out.String(), "capitalise helper -> Helper") || !strings.Contains(out.String(), "capitalise member secret -> Secret") {
 		t.Fatalf("boundary symbol not reported:\n%s", out.String())
 	}
 	t.Cleanup(func() {
