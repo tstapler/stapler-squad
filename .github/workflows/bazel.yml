@@ -1,0 +1,49 @@
+name: Bazel
+
+# PROVISIONAL (Story 0.14 gate not yet released): only the guard job exists. The non-blocking
+# build job arrives with Task 1.3a.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Separate from any build job so a guard failure is never masked by that job's non-blocking
+  # setting. No continue-on-error here; a required-check candidate for Task 7.6.
+  bazel-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # Bazelisk on PATH as `bazel` so check-bazelrc.sh validates flags against `bazel help`.
+      - name: Set up Bazelisk
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/bazelbuild/bazelisk@v1.28.1
+          ln -s "$RUNNER_TEMP/bin/bazelisk" "$RUNNER_TEMP/bin/bazel"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Guard scripts
+        run: |
+          bash tools/bzl/check-bazelignore.sh
+          bash tools/bzl/check-build-paths.sh
+          bash tools/bzl/check-bazelrc.sh
+          bash tools/bzl/check-configs.sh
+          bash tools/bzl/check-no-force-push.sh
+
+      - name: PR title is a Conventional Commit
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash tools/bzl/check-pr-title.sh "$PR_TITLE"
