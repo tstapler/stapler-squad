@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 // ImportService manages import of externally-created (unmanaged) agent
 // sessions -- e.g. ssq-mux-wrapped Claude processes discovered outside
 // Stapler Squad's own session tracking -- into managed Stapler Squad
