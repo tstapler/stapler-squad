@@ -106,3 +106,10 @@ Small (1–2 days): two targeted code changes — one in the go-git fork, one in
   That would require significant go-git changes beyond the scope of this fix.
 - Changing the backend's `vetExtension` behavior (it correctly falls back to CLI for
   the in-process backend).
+
+## Root cause (confirmed 2026-11-04, backlog item 9c33e913)
+
+- `.git/config:1653-1654` sets `[extensions] worktreeConfig = true` with `core.repositoryformatversion = 0`.
+- Stock `github.com/go-git/go-git/v5 v5.19.3` `PlainOpenWithOptions` rejects that: `core.repositoryformatversion does not support extension: worktreeconfig`.
+- Repro: scratch module opening this repo — stock v5.19.3 returns the error; the `tstapler/go-git` fork `v5.19.3-ssq.3` (current `replace` in go.mod) returns nil.
+- Remaining open items: AC 11 (no such log lines after deploy) and the last review's FAIL (ops.go `ResolveOriginBranchSHA`/`ResolveLocalBranchSHA` still call `OpenRepo`; works only via the fork fix).
