@@ -2,9 +2,93 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/detection"
 )
+
+func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
+	t.Parallel()
+	for _, status := range []detection.DetectedStatus{
+		detection.StatusNeedsApproval, detection.StatusInputRequired,
+		detection.StatusIdle, detection.StatusReady, detection.StatusSuccess,
+	} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			t.Parallel()
+			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+			old := now.Add(-time.Hour)
+			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, InitialPromptSentAt: old}
+			inst.SetLastMeaningfulOutput(old)
+			source := NewPiStatusSource(inst.Title, nil)
+			source.status.Store(int32(status))
+			manager := NewInstanceStatusManager()
+			manager.RegisterPiStatusSource(inst.Title, source)
+			inst.SetStatusManager(manager)
+			attempt := newDriverAttempt(inst, "task", old)
+			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+			if cont || ret || inst.Snapshot().Status != Active {
+				t.Fatalf("waiting status %v must not fail or skip approval handling", status)
+			}
+			if idle := attempt.idleDuration(now, old); idle != 0 {
+				t.Fatalf("waiting must reset the inactivity floor for resumed work, got %v", idle)
+			}
+		})
+	}
+}
+
+func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
+	t.Parallel()
+	for _, status := range []detection.DetectedStatus{detection.StatusNeedsApproval, detection.StatusInputRequired} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			t.Parallel()
+			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+			old := now.Add(-time.Hour)
+			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+			inst.SetLastMeaningfulOutput(old)
+			source := NewPiStatusSource(inst.Title, nil)
+			source.status.Store(int32(status))
+			manager := NewInstanceStatusManager()
+			manager.RegisterPiStatusSource(inst.Title, source)
+			inst.SetStatusManager(manager)
+			attempt := newDriverAttempt(inst, "task", old)
+			attempt.nudgeSentAt = old
+			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+			if cont || ret || !attempt.nudgeSentAt.IsZero() || attempt.idleDuration(now, old) != 0 {
+				t.Fatal("approval waiting must pause both retry and nudge budgets")
+			}
+			source.status.Store(int32(detection.StatusProcessing))
+			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(time.Minute))
+			if ret {
+				t.Fatal("resumed work must receive a fresh inactivity budget")
+			}
+			inst.RemoveTag(TagBacklogWork)
+			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(driverInactivityTimeout+time.Second))
+			if !ret {
+				t.Fatal("genuine inactivity after resuming must still fail")
+			}
+		})
+	}
+}
+
+func TestDriverAttempt_BacklogIdleStillEscalates(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-time.Hour)
+	inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+	inst.SetLastMeaningfulOutput(old)
+	source := NewPiStatusSource(inst.Title, nil)
+	source.status.Store(int32(detection.StatusIdle))
+	manager := NewInstanceStatusManager()
+	manager.RegisterPiStatusSource(inst.Title, source)
+	inst.SetStatusManager(manager)
+	attempt := newDriverAttempt(inst, "task", old)
+	cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+	if !cont || ret || inst.Snapshot().Status != Active || attempt.nudgeSentAt.IsZero() {
+		t.Fatal("idle backlog work must retain its inactivity nudge policy")
+	}
+}
 
 func TestDriverAttempt_StalePersistedPromptDoesNotImmediatelyEscalate(t *testing.T) {
 	t.Parallel()
