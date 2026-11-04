@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestPrepareSnapshotContent is the direct unit test for the transform at the
@@ -108,7 +107,7 @@ func (f fakeCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
 // cursor lands one row/column off, which is exactly the kind of off-by-one
 // a compile-time type can't catch.
 func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *testing.T) {
-	got := withCursorSync("content", fakeCursorPositioner{x: 4, y: 9})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{x: 4, y: 9})
 	want := "content\x1b[10;5H"
 	if got != want {
 		t.Errorf("withCursorSync() = %q, want %q", got, want)
@@ -120,7 +119,7 @@ func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *te
 // corrupt or drop the snapshot, just skip the cosmetic cursor-sync suffix.
 func TestWithCursorSync_should_LeaveContentUnchanged_When_PositionLookupFails(t *testing.T) {
 	wantErr := errors.New("cursor lookup failed")
-	got := withCursorSync("content", fakeCursorPositioner{err: wantErr})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{err: wantErr})
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged on lookup error", got)
 	}
@@ -164,17 +163,24 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 	// return via withCursorSync's timeout branch.
 	release := make(chan struct{})
 	slow := slowCursorPositioner{release: release, calledCh: calledCh}
-	maxElapsed := withCursorSyncTimeout + 50*time.Millisecond
+	clock := newRecordingClock()
 
-	start := time.Now()
-	got := withCursorSync("content", slow)
-	elapsed := time.Since(start)
+	result := make(chan string, 1)
+	go func() { result <- withCursorSync(clock, "content", slow) }()
+	armed := <-clock.armed
+	if armed.d != withCursorSyncTimeout {
+		t.Fatalf("withCursorSync armed a %s timer, want withCursorSyncTimeout (%s)", armed.d, withCursorSyncTimeout)
+	}
+	select {
+	case got := <-result:
+		t.Fatalf("withCursorSync returned %q before the timeout elapsed", got)
+	default:
+	}
+	clock.Advance(withCursorSyncTimeout)
+	got := <-result
 
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged when the lookup times out", got)
-	}
-	if elapsed >= maxElapsed {
-		t.Errorf("withCursorSync() took %s, want it bounded by withCursorSyncTimeout (%s)", elapsed, withCursorSyncTimeout)
 	}
 	close(release)
 

@@ -353,6 +353,48 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	return result, nil
 }
 
+// itemSessionBatchChunk keeps IN (...) lists well under SQLite's bound-variable limit.
+const itemSessionBatchChunk = 500
+
+// ListItemSessionsForItems is the batched form of ListItemSessions for
+// UUID-shaped item IDs: three statements total (sessions, verdicts, owning
+// item id) instead of two per item. IDs that are not UUIDs are skipped, and an
+// item with no sessions maps to no entry. Each slice is oldest-first, matching
+// ListItemSessions.
+func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
+	result := make(map[string][]ItemSessionSummary, len(itemIDs))
+	uuids := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		if u, err := uuid.Parse(id); err == nil {
+			uuids = append(uuids, u)
+		}
+	}
+	// Results are keyed by canonical lowercase UUID string; callers holding
+	// another spelling must look up with uuid.Parse(id).String().
+	for start := 0; start < len(uuids); start += itemSessionBatchChunk {
+		chunk := uuids[start:min(start+itemSessionBatchChunk, len(uuids))]
+		rows, err := r.client.ItemSession.Query().
+			Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(chunk...))).
+			WithReviewVerdict().
+			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
+			Order(ent.Asc(itemsession.FieldCreatedAt)).
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list item sessions for %d items: %w", len(chunk), err)
+		}
+		for _, is := range rows {
+			if is.Edges.BacklogItem == nil {
+				continue
+			}
+			key := is.Edges.BacklogItem.ID.String()
+			summary := itemSessionToSummary(is)
+			summary.BacklogItemID = key
+			result[key] = append(result[key], summary)
+		}
+	}
+	return result, nil
+}
+
 // GetBaseCommitSHAsForSessions returns a map of sessionUUID → base_commit_sha for
 // the given session UUIDs, including only rows with a non-empty value. Used at
 // startup to restore dirBaseSHA for directory-mode backlog sessions — the

@@ -106,19 +106,49 @@ func (s *BacklogService) GetBacklogItem(
 // component's watch subscription received always overwrote the enriched
 // worktreePath with an empty one.
 func enrichItemSessionsWorktreeData(ctx context.Context, storage *session.Storage, p *sessionv1.BacklogItem) {
-	if storage == nil || p == nil {
+	enrichItemsSessionsWorktreeData(ctx, storage, []*sessionv1.BacklogItem{p})
+}
+
+// enrichItemsSessionsWorktreeData is enrichItemSessionsWorktreeData for many
+// items, resolving every distinct session's worktree in one batched query
+// instead of one query per item session.
+func enrichItemsSessionsWorktreeData(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
+	if storage == nil {
 		return
 	}
-	for _, is := range p.ItemSessions {
-		if is.SessionUuid == "" {
+	var uuids []string
+	seen := make(map[string]struct{})
+	for _, p := range items {
+		if p == nil {
 			continue
 		}
-		wt, wtErr := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
-		if wtErr == nil && wt.BranchName != "" {
-			is.WorktreeBranch = wt.BranchName
+		for _, is := range p.ItemSessions {
+			if _, dup := seen[is.SessionUuid]; is.SessionUuid == "" || dup {
+				continue
+			}
+			seen[is.SessionUuid] = struct{}{}
+			uuids = append(uuids, is.SessionUuid)
 		}
-		if wtErr == nil && wt.WorktreePath != "" {
-			is.WorktreePath = wt.WorktreePath
+	}
+	if len(uuids) == 0 {
+		return
+	}
+	worktrees, err := storage.GetWorktreeDataBySessionUUIDs(ctx, uuids)
+	if err != nil {
+		return
+	}
+	for _, p := range items {
+		if p == nil {
+			continue
+		}
+		for _, is := range p.ItemSessions {
+			wt := worktrees[is.SessionUuid]
+			if wt.BranchName != "" {
+				is.WorktreeBranch = wt.BranchName
+			}
+			if wt.WorktreePath != "" {
+				is.WorktreePath = wt.WorktreePath
+			}
 		}
 	}
 }

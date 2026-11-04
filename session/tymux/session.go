@@ -49,6 +49,29 @@ type tymuxGRPCSession struct {
 	// before Start(). Nil means tymuxd defaults to $SHELL.
 	command launchcmd.LaunchCommand
 
+	// label disambiguates this Instance's tymuxd session name from other
+	// Instances rooted at the same directory (see sessionName).
+	label string
+	// priorLabels are earlier labels of a record that had no stored id when it was renamed; the
+	// daemon session it created is still named after one of them. Lookup only, in-process.
+	priorLabels []string
+
+	// storedID is the daemon session id persisted with the Instance record;
+	// when set, RestoreWithWorkDir adopts that session regardless of its Name.
+	storedID string
+	// storedLabel is the label storedID is registered under in storedIDHolders, so a later
+	// change or clear unregisters exactly that entry.
+	storedLabel string
+	// recordOwned marks a session adopted through storedID: the record owns it,
+	// so Close kills it even when another view of the same record holds the
+	// claim. Name-matched adoption stays claim-exclusive.
+	recordOwned bool
+	// viewOnly forbids daemon recovery when a retained pane was adopted for display.
+	viewOnly bool
+	// adoptedPreexisting marks a session adopted (not created) by the latest Start/Restore;
+	// ReleaseAdoptedSession lets go of it instead of killing it.
+	adoptedPreexisting bool
+
 	// extraEnv is launch env added via AppendEnv; merged into the create
 	// request at Start() (see launchEnv for precedence).
 	extraEnv map[string]string
@@ -70,6 +93,17 @@ type tymuxGRPCSession struct {
 	// Epic 2.3.
 	liveness v1.Liveness
 
+	// restartIsPending is IsAlive's last verdict that a DEAD pane is between tymuxd's automatic
+	// restarts, so a failed follow-up capture falls back to "alive" instead of the cached DEAD.
+	restartIsPending bool
+
+	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
+	lifecycleCap atomic.Int32
+
+	// killFailedID is the session a Close could not kill (daemon unreachable): it is still
+	// running, so PersistedSessionID keeps reporting it instead of dropping ownership.
+	killFailedID string
+
 	// closed is set once Close() has issued KillSession, short-circuiting
 	// IsAlive() without a further RPC against a session we already killed.
 	closed bool
@@ -85,6 +119,13 @@ type tymuxGRPCSession struct {
 	stream       attachStream
 	cancelAttach context.CancelFunc
 	streamDone   chan struct{}
+
+	// sendGate serializes writes to `stream` (input_send.go); replaced together with it by
+	// setStreamLocked so a Send stuck on a dead generation can't block the next one.
+	// sendLockWait/inputPayloadTimeout bound waiting for it (fields so tests can shrink them).
+	sendGate            *streamSendGate
+	sendLockWait        time.Duration
+	inputPayloadTimeout time.Duration
 
 	// teardownWait bounds teardownStandingStream's wait for the old reader
 	// goroutine to exit (Task 2.3.1a) — see maxTeardownWait's doc comment
@@ -111,6 +152,10 @@ type tymuxGRPCSession struct {
 	// handleAttachEvent) alongside the process-wide
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
+
+	// lastEventUnixNano is when the standing stream last delivered any
+	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
+	lastEventUnixNano atomic.Int64
 
 	// exitCallback is invoked at most once, by whichever of
 	// readAttachLoop's Exited handling (stream.go's deliverExit) or
@@ -211,6 +256,8 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 		reconnectBaseDelay:   defaultReconnectBaseDelay,
 		reconnectMaxDelay:    defaultReconnectMaxDelay,
 		teardownWait:         maxTeardownWait,
+		sendLockWait:         defaultSendLockWait,
+		inputPayloadTimeout:  defaultInputPayloadTimeout,
 	}
 }
 
@@ -270,10 +317,20 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 		return fmt.Errorf("tymux: session %q has no pane", sess.GetId())
 	}
 	s.mu.Lock()
+	if s.sessionID != "" && s.sessionID != sess.GetId() {
+		claimedSessions.CompareAndDelete(s.sessionID, any(s))
+	}
+	if !s.tryClaim(sess.GetId()) {
+		log.Warn("tymux: session already claimed by another owner; Close will kill it only if this record stores its id", logKeySessionID, sess.GetId())
+	}
 	s.sessionID = sess.GetId()
+	s.killFailedID = ""
+	s.setStoredIDLocked(sess.GetId())
 	s.paneID = pane.GetId()
 	s.cwd = pane.GetCwd()
+	s.viewOnly = false
 	s.liveness = v1.Liveness_LIVENESS_LIVE
+	s.restartIsPending = false
 	s.closed = false
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
@@ -307,16 +364,11 @@ func (s *tymuxGRPCSession) beginClosing() {
 	}
 }
 
-// Start creates a real tymux session rooted at dir. dir also becomes the
-// session's tymux-side Name — the only stable string Start and
-// RestoreWithWorkDir share across a stapler-squad process restart (the
-// constructor takes no separate session-name parameter), so
-// RestoreWithWorkDir's ListSessions lookup (Task 2.2.1b) can find this
-// session again by matching on it. This does mean two sessions started
-// against the identical directory aren't distinguishable by name alone —
-// acceptable for v1 (mirrors the plan's other Unresolved-Questions-style
-// scope calls); a future epic can widen this if it becomes a real
-// constraint.
+// Start creates a real tymux session rooted at dir. Its tymux-side Name is
+// sessionName(dir): the string Start and RestoreWithWorkDir share across a
+// stapler-squad process restart, so RestoreWithWorkDir's ListSessions lookup
+// (Task 2.2.1b) can find the session again. The per-Instance label keeps
+// Instances that share a directory on distinct tymuxd sessions.
 func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := validateWorkDir(dir); err != nil {
 		return err
@@ -325,7 +377,16 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	command := s.command
 	s.mu.RUnlock()
 	ctx := context.Background()
-	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: s.launchEnv()}
+	adopted, staleID, err := s.adoptStoredSessionForStart(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if adopted {
+		s.killReplacedStoredSession(ctx, staleID)
+		return nil
+	}
+	s.killStaleGeneration(ctx)
+	req := &v1.CreateSessionRequest{Name: s.sessionName(dir), Cwd: dir, Env: s.launchEnv()}
 	if err := s.applyLaunch(ctx, req, command); err != nil {
 		return err
 	}
@@ -333,25 +394,138 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
-	return s.cacheFromSession(resp.Msg)
+	s.mu.Lock()
+	s.recordOwned = false
+	s.adoptedPreexisting = false
+	s.mu.Unlock()
+	if err := s.cacheFromSession(resp.Msg); err != nil {
+		return err
+	}
+	s.killReplacedStoredSession(ctx, staleID)
+	return nil
+}
+
+// adoptStoredSessionForStart keeps a view that is not attached to its session, but whose record
+// stores a daemon session id, from spawning a second agent next to it. That is a view never
+// restored in this process, or one whose Close could not kill the session (killFailedID). The
+// record's session (by id, else by label, as restore does) is adopted when live or when tymuxd is
+// restarting it. A dead one is replaced, unless a live session under the record's label exists:
+// that is adopted instead. staleID names a dead session to remove once Start is done. An
+// unanswered ListSessions is an error, not a reason to create blind.
+func (s *tymuxGRPCSession) adoptStoredSessionForStart(ctx context.Context, dir string) (adopted bool, staleID string, err error) {
+	s.mu.RLock()
+	storedID, restored, closed, killFailed := s.storedID, s.sessionID != "", s.closed, s.killFailedID != ""
+	s.mu.RUnlock()
+	if !killFailed && (storedID == "" || restored || closed) {
+		return false, "", nil
+	}
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return false, "", classifyRPCError("Start", err)
+	}
+	sessions := resp.Msg.GetSessions()
+	found, viaStoredID := s.claimOwnSession(dir, sessions)
+	if found == nil {
+		return false, "", nil
+	}
+	if found.GetLiveness() == v1.Liveness_LIVENESS_LIVE || s.listedRestartPending(ctx, found) {
+		return true, "", s.adopt(ctx, found, viaStoredID)
+	}
+	claimedSessions.CompareAndDelete(found.GetId(), any(s))
+	if live := s.claimLiveLabelSession(dir, sessions, found.GetId()); live != nil {
+		return true, found.GetId(), s.adopt(ctx, live, false)
+	}
+	return false, found.GetId(), nil
+}
+
+// labeledNames are the daemon session names this record's label (current, then prior) gives dir;
+// empty for an unlabeled record, whose only name is the legacy dir.
+func (s *tymuxGRPCSession) labeledNames(dir string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.label == "" {
+		return nil
+	}
+	names := []string{dir + " [" + s.label + "]"}
+	for _, l := range s.priorLabels {
+		names = append(names, dir+" ["+l+"]")
+	}
+	return names
+}
+
+// claimLiveLabelSession claims a live session named for this record other than exceptID.
+func (s *tymuxGRPCSession) claimLiveLabelSession(workDir string, sessions []*v1.Session, exceptID string) *v1.Session {
+	// Labeled names only: a record with a stored id was created after labeling, and the legacy
+	// Name == workDir session may belong to another record.
+	for _, name := range s.labeledNames(workDir) {
+		for _, sess := range sessions {
+			if sess.GetName() == name && sess.GetId() != exceptID && sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE &&
+				!s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {
+				return sess
+			}
+		}
+	}
+	return nil
+}
+
+// ReleaseAdoptedSession lets go of a session this view adopted (it existed before the current
+// Start/Restore) without killing it: the stream is dropped, the claim released, and the view goes
+// back to the unrestored state keeping the record's stored id. False means nothing was adopted,
+// so the caller still owns what it created and may kill it.
+func (s *tymuxGRPCSession) ReleaseAdoptedSession() bool {
+	s.mu.RLock()
+	id, adopted := s.sessionID, s.adoptedPreexisting
+	s.mu.RUnlock()
+	if id == "" || !adopted {
+		return false
+	}
+	s.beginClosing()
+	s.teardownStandingStream()
+	claimedSessions.CompareAndDelete(id, any(s))
+	s.mu.Lock()
+	pty := s.pty
+	s.pty = nil
+	s.sessionID, s.paneID, s.cwd = "", "", ""
+	s.adoptedPreexisting, s.recordOwned = false, false
+	s.liveness = v1.Liveness_LIVENESS_UNSPECIFIED
+	s.restartIsPending = false
+	s.mu.Unlock()
+	if pty != nil {
+		pty.close()
+	}
+	return true
+}
+
+// listedRestartPending reports whether sess's first pane is dead but between tymuxd's automatic restarts.
+func (s *tymuxGRPCSession) listedRestartPending(ctx context.Context, sess *v1.Session) bool {
+	pane := firstPane(sess)
+	if pane == nil {
+		return false
+	}
+	state, ok := s.paneLifecycleState(ctx, pane.GetId())
+	return ok && isRestartPending(state)
+}
+
+// killReplacedStoredSession removes the dead stored session a fresh Start replaced.
+// Best effort: a leftover dead session is only clutter, never a second agent.
+func (s *tymuxGRPCSession) killReplacedStoredSession(ctx context.Context, id string) {
+	if id == "" || id == s.GetSessionIdentifier() {
+		return
+	}
+	if _, err := s.transport.KillSession(ctx, connect.NewRequest(&v1.KillSessionRequest{SessionId: id})); err != nil && connect.CodeOf(err) != connect.CodeNotFound {
+		log.Warn("tymux: failed to kill replaced stored session", logKeySessionID, id, logKeyErr, err)
+	}
 }
 
 // paneColorEnv returns the TERM/COLORTERM overrides CreateSessionRequest.Env
-// layers over tymuxd's own environment. stapler-squad normally runs headless
-// under systemd with no TERM set at all, which tymuxd then passes straight
-// through to the pane's shell — the shell sees no TERM, assumes a dumb
-// terminal, and never emits ANSI/SGR color codes. Mirrors
-// tmux.go's buildAttachCommand, which solves the identical problem for the
-// classic tmux backend.
+// layers over tymuxd's own environment. They are forced, not inherited:
+// stapler-squad often runs headless with no TERM (the shell then assumes a
+// dumb terminal and emits no color), and when launched from a developer's
+// terminal its TERM (xterm-kitty, ghostty) would leak into panes that the
+// browser's xterm.js renders. Matches tmux, whose panes get their own TERM
+// independent of the launcher's.
 func paneColorEnv() map[string]string {
-	env := make(map[string]string, 2)
-	if os.Getenv("TERM") == "" {
-		env["TERM"] = "xterm-256color"
-	}
-	if os.Getenv("COLORTERM") == "" {
-		env["COLORTERM"] = "truecolor"
-	}
-	return env
+	return map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
 }
 
 // launchEnv builds the create request's base env. Precedence, lowest to
@@ -393,6 +567,220 @@ func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Unlock()
 }
 
+// killStaleGeneration kills this owner's previous daemon session, if it still
+// holds one, so a recovery Start (e.g. health-check respawn after IsAlive went
+// false) replaces it instead of leaking a second live session. NotFound is fine.
+func (s *tymuxGRPCSession) killStaleGeneration(ctx context.Context) {
+	s.mu.RLock()
+	oldID, closed := s.sessionID, s.closed
+	s.mu.RUnlock()
+	if oldID == "" || closed {
+		return
+	}
+	if !claimedSessions.CompareAndDelete(oldID, any(s)) {
+		return
+	}
+	// Only kill what the daemon says is dead; a failed list, an absent session
+	// (already gone) or a live one (e.g. respawned pane) is left alone.
+	resp, listErr := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if listErr != nil {
+		return
+	}
+	var listed *v1.Session
+	for _, sess := range resp.Msg.GetSessions() {
+		if sess.GetId() == oldID {
+			listed = sess
+		}
+	}
+	if listed == nil || listed.GetLiveness() == v1.Liveness_LIVENESS_LIVE {
+		return
+	}
+	_, err := s.transport.KillSession(ctx, connect.NewRequest(&v1.KillSessionRequest{SessionId: oldID}))
+	if err != nil && connect.CodeOf(err) != connect.CodeNotFound {
+		log.Warn("tymux: failed to kill stale session before Start", logKeySessionID, oldID, logKeyErr, err)
+	}
+}
+
+// SetSessionLabel records the per-Instance label folded into the tymuxd
+// session name. Call before Start()/RestoreWithWorkDir().
+func (s *tymuxGRPCSession) SetSessionLabel(label string) {
+	s.mu.Lock()
+	if s.label != "" && s.label != label && s.storedID == "" {
+		// No stored id yet: the daemon session may still carry the old label's name.
+		s.priorLabels = append(s.priorLabels, s.label)
+	}
+	s.label = label
+	if s.storedID != "" {
+		s.setStoredIDLocked(s.storedID) // re-register under the new label
+	}
+	s.mu.Unlock()
+}
+
+// PersistedSessionID: see TymuxManager.
+func (s *tymuxGRPCSession) PersistedSessionID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return s.killFailedID
+	}
+	if s.sessionID != "" {
+		return s.sessionID
+	}
+	return s.storedID
+}
+
+func (s *tymuxGRPCSession) SetStoredSessionID(id string) {
+	s.mu.Lock()
+	s.setStoredIDLocked(id)
+	s.mu.Unlock()
+}
+
+// setStoredIDLocked replaces the stored id and keeps its storedIDHolders entry in step.
+func (s *tymuxGRPCSession) setStoredIDLocked(id string) {
+	if s.storedID != "" && (s.storedID != id || s.storedLabel != s.label) {
+		storedIDHolders.remove(s.storedID, s.storedLabel)
+	}
+	s.storedID = id
+	s.storedLabel = s.label
+	if id != "" {
+		storedIDHolders.add(id, s.label)
+	}
+}
+
+// holderRegistry maps a daemon session id to the record labels that store it, so a label
+// adoption skips a session another record owns by id. It holds labels, not views: a record's
+// throwaway copies (health-tick loads, liveness shadows) share its label and are one record, and
+// nothing depends on garbage collection. An entry lives until its record changes or clears the id.
+type holderRegistry struct {
+	mu     sync.Mutex
+	labels map[string]map[string]struct{}
+}
+
+var storedIDHolders holderRegistry
+
+func (r *holderRegistry) add(id, label string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.labels == nil {
+		r.labels = make(map[string]map[string]struct{})
+	}
+	if r.labels[id] == nil {
+		r.labels[id] = make(map[string]struct{})
+	}
+	r.labels[id][label] = struct{}{}
+}
+
+func (r *holderRegistry) remove(id, label string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.labels[id], label)
+	if len(r.labels[id]) == 0 {
+		delete(r.labels, id)
+	}
+}
+
+func (r *holderRegistry) heldByOtherThan(id, label string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for l := range r.labels[id] {
+		if l != label {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *holderRegistry) reset() {
+	r.mu.Lock()
+	r.labels = nil
+	r.mu.Unlock()
+}
+
+// storedByOtherRecord reports whether a record with a different label stores id.
+func (s *tymuxGRPCSession) storedByOtherRecord(id string) bool {
+	s.mu.RLock()
+	label := s.label
+	s.mu.RUnlock()
+	return storedIDHolders.heldByOtherThan(id, label)
+}
+
+// sessionName is dir alone for an unlabeled session (legacy records), else
+// "dir [label]".
+func (s *tymuxGRPCSession) sessionName(dir string) string {
+	s.mu.RLock()
+	label := s.label
+	s.mu.RUnlock()
+	if label == "" {
+		return dir
+	}
+	return dir + " [" + label + "]"
+}
+
+// claimedSessions maps tymuxd session id -> owning *tymuxGRPCSession so two
+// Instances never adopt (and later kill) the same daemon session. Known
+// limit: legacy Name==dir records stay ambiguous across process restarts;
+// the first restorer wins and the session is never shared.
+var claimedSessions claimRegistry
+
+type claimRegistry struct{ sync.Map }
+
+// holds reports whether owner currently holds the claim for sessionID.
+func (r *claimRegistry) holds(sessionID string, owner *tymuxGRPCSession) bool {
+	v, ok := r.Load(sessionID)
+	return ok && v == any(owner)
+}
+
+// tryClaim atomically takes sessionID for this owner; false means another owner holds it.
+func (s *tymuxGRPCSession) tryClaim(sessionID string) bool {
+	actual, loaded := claimedSessions.LoadOrStore(sessionID, any(s))
+	return !loaded || actual == any(s)
+}
+
+// claimOwnSession picks and atomically claims the session this owner may
+// adopt, in preference order: the persisted id (rename-proof), then the
+// label-named session, then a legacy Name == workDir record (old records only
+// reach here with no stored id). Same-title twins resolve deterministically by
+// daemon list order, first unclaimed wins; the stored id removes the ambiguity
+// for any record saved after this change. A stored id absent from the daemon
+// falls back to the label path; a session stored by another record is skipped.
+func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Session) (found *v1.Session, viaStoredID bool) {
+	s.mu.RLock()
+	storedID, held, ownedByRecord := s.storedID, s.sessionID, s.recordOwned
+	closed := s.closed
+	s.mu.RUnlock()
+	// A view re-entering restore already holds the claim for the session it drives;
+	// re-adopt it before any lookup that another view of the record could skew.
+	if held != "" && !closed && claimedSessions.holds(held, s) {
+		for _, sess := range sessions {
+			if sess.GetId() == held {
+				return sess, ownedByRecord
+			}
+		}
+	}
+	if storedID != "" {
+		for _, sess := range sessions {
+			if sess.GetId() == storedID {
+				// Another view of this same record may already hold the claim; the
+				// record's own id is never a twin, so attach instead of spawning; cacheFromSession
+				// takes the claim. Records sharing a label are one record (titles are unique per DB).
+				return sess, true
+			}
+		}
+		// Absent from the daemon (e.g. recovery replaced it and the new id was
+		// not saved yet): fall through to the label so the still-running agent
+		// is re-adopted instead of duplicated.
+	}
+	for _, name := range append(s.labeledNames(workDir), workDir) {
+		for _, sess := range sessions {
+			// A session some other record stores by id is never adopted by name.
+			if sess.GetName() == name && !s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {
+				return sess, false
+			}
+		}
+	}
+	return nil, false
+}
+
 // RestoreWithWorkDir reconciles this session against tymuxd after a
 // stapler-squad process restart: ListSessions to find the session by the
 // name Start() gave it (workDir, see Start's doc comment), ReviveSession if
@@ -410,28 +798,134 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
-	var found *v1.Session
-	for _, sess := range listResp.Msg.GetSessions() {
-		if sess.GetName() == workDir {
-			found = sess
-			break
-		}
-	}
+	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
 		return s.Start(workDir)
 	}
-	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
-		reviveResp, err := s.transport.ReviveSession(ctx, connect.NewRequest(&v1.ReviveSessionRequest{
-			SessionId: found.GetId(),
-		}))
-		if err != nil {
-			return classifyRPCError("RestoreWithWorkDir", err)
+	return s.adopt(ctx, found, viaStoredID)
+}
+
+// AdoptForViewing makes the persisted pane readable without creating or reviving it.
+// Name lookup is deliberately excluded: a retained screen must belong to this exact record.
+func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer cancel()
+	s.mu.RLock()
+	id, closed, ready := s.storedID, s.closed, s.paneID != ""
+	s.mu.RUnlock()
+	if closed || id == "" {
+		return errSessionNotStarted
+	}
+	if ready {
+		s.mu.Lock()
+		s.viewOnly = true
+		live, done, paneID := s.liveness == v1.Liveness_LIVENESS_LIVE, s.streamDone, s.paneID
+		s.mu.Unlock()
+		if live && !streamRunning(done) {
+			return s.openStandingStreamForView(ctx, paneID)
 		}
-		if reviveResp.Msg.GetSession() != nil {
-			found = reviveResp.Msg.GetSession()
+		return nil
+	}
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return classifyRPCError("AdoptForViewing", err)
+	}
+	for _, found := range resp.Msg.GetSessions() {
+		if found.GetId() != id {
+			continue
+		}
+		return s.cacheForViewing(ctx, id, found)
+	}
+	return connect.NewError(connect.CodeNotFound, fmt.Errorf("tymux: persisted session %q not found", id))
+}
+
+func streamRunning(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found *v1.Session) error {
+	pane := firstPane(found)
+	if pane == nil || pane.GetId() == "" {
+		return errSessionNotStarted
+	}
+	s.mu.Lock()
+	if s.closed || s.storedID != id {
+		s.mu.Unlock()
+		return errSessionNotStarted
+	}
+	s.sessionID, s.paneID, s.cwd = id, pane.GetId(), pane.GetCwd()
+	// Read-only rendering must not revoke the persisted record's cleanup ownership.
+	s.recordOwned = true
+	s.liveness = found.GetLiveness()
+	s.viewOnly = true
+	s.mu.Unlock()
+	// Dead panes retain their screen without a stream; live panes keep delivering output.
+	if found.GetLiveness() == v1.Liveness_LIVENESS_LIVE {
+		return s.openStandingStreamForView(ctx, pane.GetId())
+	}
+	return nil
+}
+
+// adopt attaches to a session this owner has claimed, reviving it when tymuxd lists it dead.
+func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStoredID bool) error {
+	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
+		revived, err := s.reviveForRestore(ctx, found)
+		if err != nil {
+			claimedSessions.CompareAndDelete(found.GetId(), any(s))
+			return err
+		}
+		found = revived
+	}
+	s.mu.Lock()
+	s.recordOwned = viaStoredID
+	s.adoptedPreexisting = true
+	s.mu.Unlock()
+	return s.cacheFromSession(found)
+}
+
+// reviveForRestore returns the session record to adopt in place of a DEAD-listed one. A pane
+// tymuxd is already restarting is adopted as is (reviving would bypass its backoff); a FAILED or
+// STOPPED pane is refused with ErrPaneNotRevivable; anything else is revived.
+func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Session) (*v1.Session, error) {
+	// Only the first pane is checked: tymux sessions here are single-pane.
+	if pane := firstPane(found); pane != nil {
+		if state, ok := s.paneLifecycleState(ctx, pane.GetId()); ok {
+			if isRestartPending(state) {
+				return found, nil
+			}
+			if isTerminalPaneState(state) {
+				return nil, notRevivableError(found.GetId(), state)
+			}
 		}
 	}
-	return s.cacheFromSession(found)
+	reviveResp, err := s.transport.ReviveSession(ctx, connect.NewRequest(&v1.ReviveSessionRequest{
+		SessionId: found.GetId(),
+	}))
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		// tymuxd v1.12.0 answers FAILED_PRECONDITION when every pane is STOPPED/FAILED (the
+		// pre-check's verdict, for daemons that cannot report pane state or on a state race) and
+		// also for EngineError::ReviveLaunch (launch.prepare failing, e.g. a deleted argument
+		// file). Both need an operator, so both map to ErrPaneNotRevivable.
+		return nil, fmt.Errorf("%w: session %q: %w", ErrPaneNotRevivable, found.GetId(), err)
+	}
+	if err != nil {
+		return nil, classifyRPCError("RestoreWithWorkDir", err)
+	}
+	// ReviveSessionRequest carries only the session id, so launchEnv's forced
+	// TERM/COLORTERM are not re-sent here; a revived pane gets whatever env
+	// tymuxd persisted in the session record at CreateSession time.
+	if revived := reviveResp.Msg.GetSession(); revived != nil {
+		return revived, nil
+	}
+	return found, nil
 }
 
 // Close kills the tymux session via KillSession. A Close before any Start
@@ -440,6 +934,8 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
+	recordOwned := s.recordOwned
+	viewOnly := s.viewOnly
 	s.mu.RUnlock()
 	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
@@ -457,16 +953,58 @@ func (s *tymuxGRPCSession) Close() error {
 	if pty != nil {
 		pty.close()
 	}
-	if sessionID == "" {
+	unrestored := sessionID == ""
+	if unrestored {
+		// Never restored/started in this process: a stored id still names the
+		// daemon session this record owns.
+		s.mu.RLock()
+		sessionID = s.storedID
+		s.mu.RUnlock()
+		if sessionID == "" {
+			return nil
+		}
+		recordOwned = true
+	}
+	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
+	// take down a session another Instance adopted.
+	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || (recordOwned && !viewOnly)
+	if !owned && recordOwned && viewOnly {
+		_, claimed := claimedSessions.LoadOrStore(sessionID, any(s))
+		if !claimed {
+			owned = claimedSessions.CompareAndDelete(sessionID, any(s))
+		}
+	}
+	var err error
+	if owned {
+		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
+			SessionId: sessionID,
+		}))
+	} else {
+		log.Info("tymux: Close skipping kill, claim not held", logKeySessionID, sessionID)
+	}
+	killFailed := err != nil && connect.CodeOf(err) != connect.CodeNotFound
+	switch {
+	case killFailed && unrestored:
+		// Not marked closed, which would hide the id from PersistedSessionID; the
+		// stored id stays so a retry can still kill the session.
+	default:
+		s.mu.Lock()
+		s.closed = true
+		s.recordOwned = false // a repeat Close must not kill again
+		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
+		if killFailed {
+			s.killFailedID = sessionID // still running: keep persisting its id
+		} else {
+			s.setStoredIDLocked("")
+		}
+		s.mu.Unlock()
+	}
+	if connect.CodeOf(err) == connect.CodeNotFound {
+		// Already gone daemon-side: the goal of Close is met.
+		log.Info("tymux: session already gone at Close", logKeySessionID, sessionID)
 		return nil
 	}
-	_, err := s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
-		SessionId: sessionID,
-	}))
-	s.mu.Lock()
-	s.closed = true
-	s.liveness = v1.Liveness_LIVENESS_DEAD
-	s.mu.Unlock()
 	if err != nil {
 		log.Warn("tymux: KillSession failed during Close", logKeySessionID, sessionID, logKeyErr, err)
 		return classifyRPCError("Close", err)
@@ -498,6 +1036,7 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	paneID := s.paneID
 	closed := s.closed
 	cachedLiveness := s.liveness
+	cachedPending := s.restartIsPending
 	sessionID := s.sessionID
 	s.mu.RUnlock()
 	if paneID == "" || closed {
@@ -505,17 +1044,62 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	}
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
+		if connect.CodeOf(err) == connect.CodeNotFound && s.daemonConfirmsPaneGone(sessionID, paneID) {
+			s.mu.Lock()
+			s.liveness = v1.Liveness_LIVENESS_DEAD
+			s.restartIsPending = false
+			s.mu.Unlock()
+			log.Warn("tymux: IsAlive: pane gone daemon-side", logKeySessionID, sessionID, logKeyErr, err)
+			return false
+		}
 		if errors.Is(err, ErrTymuxdUnreachable) {
 			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		} else {
 			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		}
-		return cachedLiveness == v1.Liveness_LIVENESS_LIVE
+		return cachedLiveness == v1.Liveness_LIVENESS_LIVE || cachedPending
 	}
+	// BACKOFF/RESTARTING: tymuxd is bringing the pane back, so reporting it dead would send
+	// health checks and reconnecting browsers to revive it underneath the daemon's backoff.
+	pending := snap.GetLiveness() == v1.Liveness_LIVENESS_DEAD && s.restartPending(context.Background(), paneID)
 	s.mu.Lock()
 	s.liveness = snap.GetLiveness()
+	s.restartIsPending = pending
 	s.mu.Unlock()
-	return snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+	return pending || snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+}
+
+// daemonConfirmsPaneGone double-checks a CapturePane NotFound with a
+// ListSessions round trip: true only when the daemon answered and no longer
+// lists paneID's session with that pane live, and the pane is not between
+// automatic restarts. A failed or interrupted list is not definitive. The call
+// is bounded by lifecycleRPCTimeout and cancelled by a deliberate Close().
+func (s *tymuxGRPCSession) daemonConfirmsPaneGone(sessionID, paneID string) bool {
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	ctx, timeoutCancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer timeoutCancel()
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return false
+	}
+	for _, sess := range resp.Msg.GetSessions() {
+		if sess.GetId() == sessionID {
+			p := firstPane(sess)
+			if p == nil || sess.GetLiveness() != v1.Liveness_LIVENESS_LIVE {
+				// Listed but dead: gone unless tymuxd is about to restart it.
+				return !s.restartPending(ctx, paneID)
+			}
+			if p.GetId() != paneID {
+				// Respawned pane inside a live session: follow it instead of replacing the session.
+				s.mu.Lock()
+				s.paneID = p.GetId()
+				s.mu.Unlock()
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // --- Identification ---
@@ -537,7 +1121,7 @@ func (s *tymuxGRPCSession) GetSessionIdentifier() string {
 func (s *tymuxGRPCSession) HasSession() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.paneID != ""
+	return s.paneID != "" && !s.closed
 }
 
 // --- Working directory ---
@@ -583,12 +1167,10 @@ func (s *tymuxGRPCSession) GetPTY() (*os.File, error) {
 // onto one AttachRequest{Input(...)} send over the standing stream — no
 // per-call RPC, per architecture.md §1's noted simplification.
 func (s *tymuxGRPCSession) SendKeys(keys string) (int, error) {
-	if err := s.sendOnStream(&v1.AttachRequest{
+	// n is the real partial count on a mid-payload failure so callers do not resend the prefix.
+	return s.sendOnStreamCtx(context.Background(), &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: []byte(keys)},
-	}); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	})
 }
 
 func (s *tymuxGRPCSession) TapEnter() error {
@@ -625,16 +1207,15 @@ func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error {
 }
 
 func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	// sendOnStream/the standing stream's Send have no context parameter of
-	// their own to cancel against, so honor the caller's cancellation/
-	// timeout here before writing — otherwise ctx is accepted but has zero
-	// effect, silently sending on an already-cancelled/expired context.
+	// ctx bounds the wait for the input/frame locks; a Send already in flight cannot be interrupted.
+	// Checked first so a cancelled ctx wins over errSessionNotStarted.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.sendOnStream(&v1.AttachRequest{
+	_, err := s.sendOnStreamCtx(ctx, &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
+	return err
 }
 
 // --- Terminal state ---
@@ -676,12 +1257,23 @@ func rowsToPlainText(rows []*v1.Row) string {
 // CapturePaneContent renders the live screen with ANSI/SGR attributes
 // preserved (Task 2.2.2d). CellsToSGR's body lands in Epic 2.6; wiring the
 // call site here just makes the package compile end-to-end in the meantime.
+//
+// Fails with *PaneExitedError when the pane's process has exited, so callers
+// polling for a dialog stop instead of reading the final grid as current;
+// CapturePaneContentRaw and CapturePaneContentWithOptions keep returning it.
 func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	if exited := exitedPaneError(snap); exited != nil {
+		s.mu.RLock()
+		paneID := s.paneID
+		s.mu.RUnlock()
+		exited.RestartPending = s.restartPending(context.Background(), paneID)
+		return "", exited
+	}
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // CapturePaneContentRaw returns the live screen with SGR preserved, as the
@@ -693,7 +1285,27 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
+}
+
+// CapturePaneRedraw is the full-state first paint: unlike CapturePaneContentRaw's text capture it
+// restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
+// mouse work in a freshly attached client before the app re-sets any of them.
+func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
+	snap, err := s.capturePane(ctx, 0)
+	if err != nil {
+		return "", false, false, err
+	}
+	// A daemon older than v1.9.0 sends no Modes; its redraw would be a bare grid paint with no
+	// state reset, which the legacy text path (prefix + cursor sync) does better.
+	if snap.GetModes() == nil {
+		return "", false, false, nil
+	}
+	data, err = RenderSnapshotRedraw(snap)
+	if err != nil {
+		return "", false, false, err
+	}
+	return data, snap.GetAltScreen(), true, nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument
@@ -926,3 +1538,31 @@ func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) 
 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.
 var _ TymuxManager = (*tymuxGRPCSession)(nil)
+
+// storedSessionProbeTimeout bounds the liveness probe so an unreachable daemon
+// cannot stall a caller that sweeps many sessions.
+const storedSessionProbeTimeout = 3 * time.Second
+
+// StoredSessionLive reports whether the daemon lists this record's stored
+// session as live, without restoring or claiming it. It lets a never-started
+// view (a liveness shadow) answer the same question a restored Instance would.
+func (s *tymuxGRPCSession) StoredSessionLive() bool {
+	s.mu.RLock()
+	storedID := s.storedID
+	s.mu.RUnlock()
+	if storedID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storedSessionProbeTimeout)
+	defer cancel()
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return false
+	}
+	for _, sess := range resp.Msg.GetSessions() {
+		if sess.GetId() == storedID {
+			return sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+		}
+	}
+	return false
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // WorktreeEntry describes one worktree found under a repo's `.git/worktrees/`
@@ -27,7 +28,8 @@ type WorktreeEntry struct {
 	Locked bool
 	// Prunable is this project's deliberately scoped-down classification (stack.md
 	// §2.2): true when WorktreePath no longer exists on disk and the entry isn't
-	// Locked. No mtime grace period, unlike real git's own should_prune_worktree.
+	// Locked. The only mtime grace is freshAdminDirGrace for an admin dir with no
+	// readable gitdir (an Add in flight), unlike real git's own should_prune_worktree.
 	Prunable bool
 }
 
@@ -82,7 +84,7 @@ func ListWorktrees(repoPath string) ([]WorktreeEntry, error) {
 func buildNativeWorktreeEntry(name, adminDir string) (WorktreeEntry, error) {
 	worktreePath, err := readWorktreePathFromGitdirFile(adminDir)
 	if err != nil {
-		return WorktreeEntry{Name: name, Prunable: true}, nil
+		return WorktreeEntry{Name: name, Prunable: !adminDirIsFresh(adminDir)}, nil
 	}
 
 	locked, err := fileExistsOnDisk(filepath.Join(adminDir, "locked"))
@@ -102,6 +104,26 @@ func buildNativeWorktreeEntry(name, adminDir string) (WorktreeEntry, error) {
 		Locked:       locked,
 		Prunable:     prunable,
 	}, nil
+}
+
+// freshAdminDirGrace is how long an admin dir with no readable gitdir is presumed to be a
+// SetupNewWorktree still in flight rather than crash debris. Real git prunes a gitdir-less
+// dir immediately and has no such grace (its gc.worktreePruneExpire applies to a gitdir that
+// points nowhere), so this is a stricter, project-specific policy; a crashed Add, including
+// a locked-only one, is reclaimed once it is older than this.
+const freshAdminDirGrace = 5 * time.Minute
+
+// adminDirIsFresh reports whether adminDir was modified within freshAdminDirGrace. AllocateAdminDirName
+// creates the dir before any file lands in it, so an unlocked prune (e.g. cleanupWorktreesPrune)
+// could otherwise delete it between Mkdir and the first admin-file rename. Creating a file in
+// the dir bumps its mtime, so a live Add stays fresh. An unreadable mtime counts as not fresh.
+func adminDirIsFresh(adminDir string) bool {
+	info, err := os.Stat(adminDir)
+	if err != nil {
+		return false
+	}
+	age := time.Since(info.ModTime())
+	return age >= 0 && age < freshAdminDirGrace // a future mtime (clock skew) is not "fresh"
 }
 
 // readWorktreePathFromGitdirFile reads adminDir's GitdirFile — an absolute path to the

@@ -26,6 +26,13 @@ export const IDEMPOTENT_METHODS = {
     "ListAliases",
     "ListSessions",
     "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /** Safe to re-send after a transport failure. */
   replayable: [
@@ -39,6 +46,14 @@ export const IDEMPOTENT_METHODS = {
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
+    "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /** May be sent over the unary WebSocket; must equal ws-unary-allowlist.json's wsUnaryAllowed. */
   wsEligible: [
@@ -51,11 +66,19 @@ export const IDEMPOTENT_METHODS = {
     "ListShells",
     "ListWorkflows",
     "ListProgramsConfig",
+    "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /**
-   * May join an HTTP request batch: cheap reads only, a subset of wsEligible and of the server's
-   * batchAllowed. GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch
-   * answers only when every item is done, so they always travel alone.
+   * May join an HTTP request batch: cheap reads only, equal to the server's batchAllowed.
+   * GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch answers only
+   * when every item is done, so they always travel alone.
    */
   batchEligible: [
     "ListFiles",
@@ -64,6 +87,10 @@ export const IDEMPOTENT_METHODS = {
     "ListShells",
     "ListWorkflows",
     "ListProgramsConfig",
+    // Polled reads (~1-3 ms server-side). GetFeatureFlags and ListSessions (~240 ms) and ListPendingApprovals
+    // (waits on the large GetReviewQueue body) stay out: a batch answers only when every item is done.
+    "GetReviewQueue",
+    "GetSession",
   ],
   /** Kept in a client cache between calls; separate so enabling one purpose never enables another. */
   cacheable: ["GetFeatureFlags", "ListProgramsConfig", "GetFileTransportCapabilities"],

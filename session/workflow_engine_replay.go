@@ -122,7 +122,7 @@ func OpenReplayCopy(path string, liveDirs []string) (*ent.Client, func(), error)
 		return nil, nil, err
 	}
 	dsn := sqlitedsn.New("file:" + resolved + "?mode=ro&immutable=1").WithQueryOnly().WithEntTimeCompat().Build()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", dsn) //nolint:norawdb read-only immutable replay file
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %s read-only: %w", resolved, err)
 	}

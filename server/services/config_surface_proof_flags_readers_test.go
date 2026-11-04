@@ -9,6 +9,7 @@ package services
 import (
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +24,22 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
+
+func TestConfigSurfaceProof_TCCEnrichmentConsent_ChangesStartupGate(t *testing.T) {
+	set := bkfFlagWriter(t)
+	require.Equal(t, runtime.GOOS == "darwin", config.LoadConfig().TCCEnrichmentConsentEnabled())
+	if runtime.GOOS == "darwin" {
+		assertConfigChangesBehavior(t, func(setting any) any {
+			set(config.TCCEnrichmentConsentFlag, setting.(bool))
+			return config.LoadConfig().TCCEnrichmentConsentEnabled()
+		}, false, true)
+	} else {
+		set(config.TCCEnrichmentConsentFlag, false)
+		require.False(t, config.LoadConfig().TCCEnrichmentConsentEnabled())
+		set(config.TCCEnrichmentConsentFlag, true)
+		require.False(t, config.LoadConfig().TCCEnrichmentConsentEnabled())
+	}
+}
 
 func TestConfigSurfaceProof_BacklogFlag_ChangesBacklogRPCAnswer(t *testing.T) {
 	set := bkfFlagWriter(t)
@@ -153,5 +170,13 @@ func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *test
 	assertConfigChangesBehavior(t, func(setting any) any {
 		set(worktreeChangeDetectionFlagName, setting.(bool))
 		return session.WorktreeChangeDetectionEnabled()
+	}, false, true)
+}
+
+func TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting(t *testing.T) {
+	set := bkfFlagWriter(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		set(session.FeatureFlagDriverPaneActivityGate, setting.(bool))
+		return session.DriverPaneActivityGateSetting()
 	}, false, true)
 }

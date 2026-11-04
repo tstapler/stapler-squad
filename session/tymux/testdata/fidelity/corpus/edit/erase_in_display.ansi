@@ -1,0 +1,5 @@
+edit/erase_in_display -- esctest2 ed.py decsed.py; libvterm 13state_edit; ECMA
+[1;1Hrow01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[2;1Hrow02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[3;1Hrow03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[4;1Hrow04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[5;1Hrow05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[6;1Hrow06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[7;1Hrow07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[8;1Hrow08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[9;1Hrow09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[10;1Hrow10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[3;10H[0J[8;10H[1J[12;5HED0-at-12;5-unused
+[15;1Hyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy[15;20H[J-default-is-ED0
+[18;1Hzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz[18;1H[?0J[20;1Hselective-erase-noop-here
+[22;1H[2Jgone-and-cursor-stays[24;1Hend

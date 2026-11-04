@@ -8,7 +8,15 @@
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
-    "ListProgramsConfig"
+    "ListProgramsConfig",
+    "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems"
   ],
   "batchAllowed": [
     "ListFiles",
@@ -16,8 +24,10 @@
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
-    "ListProgramsConfig"
+    "ListProgramsConfig",
+    "GetReviewQueue",
+    "GetSession"
   ],
   "clientHeaders": ["Connect-Protocol-Version"],
-  "maxInFlight": 6
+  "maxInFlight": 64
 }

@@ -10,8 +10,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { BackgroundSegment, NotificationTray, openNotificationTray, clickWhenScrollIdle } from './pages/NotificationPanel';
 import { ScheduledPromptsFake, ScheduledPromptsSection, type FakeTrigger } from './pages/ScheduledPromptsPage';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openBackground(page: Page): Promise<{ tray: NotificationTray; section: ScheduledPromptsSection }> {
   const tray = await openNotificationTray(page, BASE_URL);

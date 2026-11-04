@@ -84,8 +84,9 @@ import {
   interceptDispatchToJulesWithSeededSession,
 } from "./pages/JulesDispatchPage";
 import { dismissOnboardingIfPresent } from "./pages/OnboardingPage";
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 async function waitForBacklogRPCsEnabled(request: APIRequestContext) {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -233,7 +234,7 @@ test.describe("jules dispatch gating", () => {
     await updateJulesConfigDirect(request, { enabled: true, apiKey: "AIzaSyD-E2E-STUB" });
 
     const title = `e2e jules happy path ${Date.now()}`;
-    const repoPath = `/tmp/e2e-jules-repo-${Date.now()}`;
+    const repoPath = `${slotTmp("e2e-jules-repo")}-${Date.now()}`;
     const { itemId } = await seedWorkSessionWithWorktreeDirect(request, { title, status: "ready", repoPath });
     await confirmEgressConsentDirect(request, repoPath);
 
@@ -284,7 +285,7 @@ test.describe("jules dispatch gating", () => {
     await updateJulesConfigDirect(request, { enabled: true, apiKey: "AIzaSyD-E2E-STUB" });
 
     const title = `e2e jules keyboard only ${Date.now()}`;
-    const repoPath = `/tmp/e2e-jules-repo-kb-${Date.now()}`;
+    const repoPath = `${slotTmp("e2e-jules-repo-kb")}-${Date.now()}`;
     // Not acknowledged (no confirmEgressConsentDirect call) -- the egress
     // checkbox needs to actually be present for "check confirmation" to mean
     // anything. repoPath must still be non-empty: JulesDispatchDialog's own
@@ -354,7 +355,7 @@ test.describe("jules dispatch gating", () => {
     await updateJulesConfigDirect(request, { enabled: true, apiKey: "AIzaSyD-E2E-STUB" });
 
     const title = `e2e jules revoke live ${Date.now()}`;
-    const repoPath = `/tmp/e2e-jules-repo-${Date.now()}`;
+    const repoPath = `${slotTmp("e2e-jules-repo")}-${Date.now()}`;
     await seedWorkSessionWithWorktreeDirect(request, { title, status: "ready", repoPath });
     await confirmEgressConsentDirect(request, repoPath);
 

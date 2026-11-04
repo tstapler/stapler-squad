@@ -134,3 +134,23 @@ func TestCapturePaneContentContext_StillCapturesWhenSessionExists(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "pane content", content)
 }
+
+// A capture that dies on the caller's deadline must stay classifiable with
+// errors.Is: streamhub skips a resize's capture on context errors but tears the
+// hub down on any other controller error, so a flattened (%v) deadline error
+// killed live hubs whenever the exec gate was slow.
+func TestCapturePaneContentRawPriority_should_WrapContextError_When_CallerContextDone(t *testing.T) {
+	t.Parallel()
+	cmdExec := MockCmdExec{OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil }}
+	reg := NewFakeTmuxRegistry()
+	reg.SetHealthy(true)
+	reg.SetSessions([]string{TmuxPrefix + "live-session"})
+	session := newTmuxSessionWithSocket("live-session", "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix, "", WithRegistry(reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := session.CapturePaneContentRawPriority(ctx)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.Canceled), "want context.Canceled in chain, got %v", err)
+}

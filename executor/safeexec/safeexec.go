@@ -29,6 +29,7 @@ const DefaultWaitDelay = 2 * time.Second
 // to DefaultWaitDelay. Use it wherever exec.CommandContext would be used.
 func CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd {
 	recordGitSpawn(ctx, name, arg)
+	recordTmuxSpawn(ctx, name, arg)
 	// #nosec G204 -- this is the repo's sanctioned exec.CommandContext wrapper (see package doc);
 	// name/arg are forwarded verbatim to os/exec as argv, never through a shell, so callers
 	// carry the same responsibility for their inputs as a direct exec.CommandContext call would.

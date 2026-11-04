@@ -1,0 +1,6 @@
+scroll/region_decstbm -- esctest2 decstbm.py; libvterm 12state_scroll
+[1;1HL01[2;1HL02[3;1HL03[4;1HL04[5;1HL05[6;1HL06[7;1HL07[8;1HL08[9;1HL09[10;1HL10[11;1HL11[12;1HL12[13;1HL13[14;1HL14[15;1HL15[16;1HL16[17;1HL17[18;1HL18[19;1HL19[20;1HL20[21;1HL21[22;1HL22[23;1HL23[24;1HL24[5;10r[10;1H
+region-scrolled-up[5;1HMregion-scrolled-down[24;1H
+bottom-outside-region-clamps[r
+[15;15rsingle-line-region-ignored[15;1H
+x[r[20;18rreversed-ignored[0;0r[99;99r[1;1Hafter-bad-regions

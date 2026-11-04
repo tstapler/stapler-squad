@@ -155,6 +155,39 @@ type sessionDriverStopper struct {
 	once sync.Once
 }
 
+// sessionDriverStartHook lets a test binary record who started each driver; see
+// SetSessionDriverStartHookForTest.
+var sessionDriverStartHook atomic.Pointer[func(*Instance)]
+
+// SetSessionDriverStartHookForTest registers fn to run synchronously on the
+// goroutine that calls StartSessionDriver, each time it actually spawns a
+// driver. A leak detector uses it to capture the creating test's stack, which
+// the driver goroutine's own stack cannot show. Pass nil to clear.
+func SetSessionDriverStartHookForTest(fn func(*Instance)) {
+	if fn == nil {
+		sessionDriverStartHook.Store(nil)
+		return
+	}
+	sessionDriverStartHook.Store(&fn)
+}
+
+// SessionDriverRunningForTest reports whether inst still has a live driver goroutine.
+func SessionDriverRunningForTest(inst *Instance) bool {
+	return inst.driverRunning.Load()
+}
+
+// StartSessionDriverForTest starts inst's driver and registers its stop+join on
+// t's cleanup in the same call, so a test cannot forget to stop it. Tests outside
+// package session must use this instead of StartSessionDriver (enforced by the
+// nosessiondrivertest analyzer). t is satisfied by testing.TB.
+func StartSessionDriverForTest(t interface{ Cleanup(func()) }, inst *Instance, allowedPath string) {
+	t.Cleanup(func() {
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	StartSessionDriver(inst, allowedPath)
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.
@@ -184,6 +217,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	inst.driverGoroutines++
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
 	// Add(1) must happen before driverStopper is published (and before driverMu is
 	// released): StopSessionDriver reads driverStopper under driverMu and, if
@@ -196,11 +230,54 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
+	if hook := sessionDriverStartHook.Load(); hook != nil {
+		(*hook)(inst)
+	}
 	go func() {
 		defer inst.driverWG.Done()
-		defer inst.driverRunning.Store(false)
+		defer inst.driverGoroutineExited()
 		runSessionDriver(inst, allowedPath, stopper.stop)
 	}()
+}
+
+// registerContinuation registers a continuation driver goroutine spawned by
+// restartForRetry and returns the stop channel it must run with; it pairs with
+// driverGoroutineExited. It refuses (ok=false) once StopSessionDriver has run,
+// and does driverWG.Add(1) under driverMu so it cannot race StopSessionDriver's
+// Wait — the same ordering StartSessionDriver relies on.
+func (i *Instance) registerContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
+	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	if i.driverDestroyed {
+		return nil, false
+	}
+	driverStop = stop
+	if driverStop == nil {
+		if existing := i.driverStopper.Load(); existing != nil {
+			driverStop = existing.stop
+		} else {
+			stopper := &sessionDriverStopper{stop: make(chan struct{})}
+			i.driverStopper.Store(stopper)
+			driverStop = stopper.stop
+		}
+	}
+	i.driverGoroutines++
+	i.driverRunning.Store(true)
+	i.driverWG.Add(1)
+	return driverStop, true
+}
+
+// driverGoroutineExited clears driverRunning only when the last driver
+// goroutine exits: a driver that handed off to a continuation must not mark the
+// instance driverless while the continuation still runs.
+func (i *Instance) driverGoroutineExited() {
+	i.driverMu.Lock()
+	i.driverGoroutines--
+	if i.driverGoroutines <= 0 {
+		i.driverGoroutines = 0
+		i.driverRunning.Store(false)
+	}
+	i.driverMu.Unlock()
 }
 
 // StopSessionDriver signals a running SessionDriver goroutine (started by
@@ -307,6 +384,12 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
+	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
+	// Local tmux only: the snapshot is the local server's list-panes.
+	paneGate := newPaneActivityGate(func() map[string]time.Time {
+		return driverPaneSnapshot(inst.IsRemote())
+	}, time.Now, driverPaneActivityGateEnabled)
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -393,7 +476,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := inst.PreviewContext(ctx)
+		output, previewErr := driverPreview(ctx, paneGate, inst)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),

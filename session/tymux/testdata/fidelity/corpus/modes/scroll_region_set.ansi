@@ -1,0 +1,3 @@
+modes/scroll_region_set -- xterm ctlseqs DECSTBM
+[5;10r[5;1Hregion rows 5-10 set
+line in region

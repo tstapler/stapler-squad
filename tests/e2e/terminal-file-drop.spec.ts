@@ -1,8 +1,9 @@
 // @feature terminal:file-drop
 import { test, expect, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openSessionTerminal(page: Page, sessionId: string) {
   await page.goto(`${BASE_URL}/?session=${sessionId}`, { waitUntil: 'domcontentloaded', timeout: 10000 });

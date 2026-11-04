@@ -796,6 +796,13 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             break;
           }
           case "restart_session":
+            if (
+              item.status === "pr_pending" &&
+              item.linkedSessions.some((s) => !s.endedAt) &&
+              !confirm("A session is still running for this item. Stop it and start a new work session?")
+            ) {
+              break;
+            }
             await spawnSessionFromItem(item.id, { force: true });
             break;
           case "approve_plan":
@@ -1907,6 +1914,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             steeringSessionId={steeringSessionId}
             authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
             getSession={getSession}
+            onRestartWork={item.status === "pr_pending" ? () => handleAction("restart_session") : undefined}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -110,4 +111,9 @@ func TestSteerSession_PTYFallback_SendsMessageThenBareEnter(t *testing.T) {
 	assert.Equal(t, true, m["success"])
 	assert.Equal(t, "send_keys", m["method"])
 	assert.Equal(t, []string{longInput, session.EnterKeySequence}, pm.writes())
+}
+
+// CapturePaneContent reports no capture so submit confirmation falls back to HasUpdated.
+func (r *recordingPM) CapturePaneContent() (string, error) {
+	return "", errors.New("capture unsupported by fake")
 }

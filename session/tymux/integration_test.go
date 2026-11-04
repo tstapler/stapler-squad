@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -74,6 +75,12 @@ func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
 // directive's own convention: `../tymux`), else whatever's on PATH. Skips
 // the test (not a failure) if none is found, since a from-scratch
 // checkout of stapler-squad alone has no reason to have built tymuxd yet.
+// plainShell pins a test pane to /bin/sh so it doesn't wait on the developer's interactive
+// shell rc files (zsh takes ~9s to start on some machines).
+func plainShell(sess interface{ SetCommand(launchcmd.LaunchCommand) }) {
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("sh")}})
+}
+
 func findTymuxdBinary(t *testing.T) string {
 	t.Helper()
 	if v := os.Getenv("TYMUXD_BIN"); v != "" {
@@ -198,6 +205,7 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	defer daemon1.stop(t) // no-op if already stopped below
 
 	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon1.addr))
+	plainShell(sess)
 	dir := t.TempDir()
 	require.NoError(t, sess.Start(dir))
 	defer sess.Close()
@@ -264,7 +272,9 @@ func TestTymuxGRPCSession_LiveTymuxd_StartRunsCommandWithArgs(t *testing.T) {
 
 	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon.addr))
 	// Repeats because output printed before the standing Attach stream opens isn't captured.
-	sess.SetCommand("while :; do echo launched-with args; sleep 0.2; done")
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+		launchcmd.Word("sh"), launchcmd.Literal("-c"), launchcmd.Literal("while :; do echo launched-with args; sleep 0.2; done"),
+	}})
 	require.NoError(t, sess.Start(t.TempDir()))
 	defer sess.Close()
 

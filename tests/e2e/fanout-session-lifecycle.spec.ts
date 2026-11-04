@@ -9,8 +9,9 @@
  * (server/services/session_service_fanout_test.go); the cap and unknown-group errors hit the real server here.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const GROUP = 'e2e-group';
 const RPC = '**/api/session.v1.SessionService';
 

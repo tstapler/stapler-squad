@@ -7,7 +7,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fixtures = () => require("./sessionDetailViewTestFixtures");
 
-jest.doMock("next/dynamic", () => fixtures().mockNextDynamic());
+jest.doMock("@/lib/lazy", () => ({ lazyComponent: fixtures().mockLazyComponent() }));
 jest.doMock("../DiffViewer", () => fixtures().mockDiffViewer());
 jest.doMock("../VcsPanel", () => fixtures().mockVcsPanel());
 jest.doMock("../SessionLogsTab", () => fixtures().mockSessionLogsTab());

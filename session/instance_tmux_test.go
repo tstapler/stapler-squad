@@ -1375,3 +1375,11 @@ func TestInstance_ResizePTY_should_RejectNonPositiveDimensions_WithoutReachingSe
 		assert.False(t, pm.resized, "SetWindowSize must not be reached for %dx%d", dims[0], dims[1])
 	}
 }
+
+func TestInstance_CanFallBackToTmuxSendKeys_OnlyForATmuxBackend(t *testing.T) {
+	tmuxInst := &Instance{Title: "t", processManager: NewTmuxBackend(&TmuxProcessManager{})}
+	tymuxInst := &Instance{Title: "t", processManager: NewTymuxBackend(nil)}
+
+	assert.True(t, tmuxInst.CanFallBackToTmuxSendKeys())
+	assert.False(t, tymuxInst.CanFallBackToTmuxSendKeys())
+}

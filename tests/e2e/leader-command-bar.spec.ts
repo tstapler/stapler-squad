@@ -12,8 +12,9 @@ import {
   waitForIdleFrames,
   webSocketSends,
 } from './pages/NotificationPanel';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 const LEADER = 'Alt+Semicolon';
 

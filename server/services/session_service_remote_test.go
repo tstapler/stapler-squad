@@ -44,7 +44,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -266,12 +268,23 @@ func remoteHasSessionViaIndependentDial(t *testing.T, srv *remoteSessionTestSSHS
 	require.NoError(t, err)
 	defer sess.Close()
 
-	cmd := "tmux has-session -t " + sessionName
-	if serverSocket != "" {
-		cmd = "tmux -L " + serverSocket + " has-session -t " + sessionName
-	}
-	err = sess.Run(cmd)
+	err = sess.Run(remoteTmuxCommand(serverSocket, "has-session", "-t", sessionName))
 	return err == nil
+}
+
+// remoteTmuxCommand builds a tmux invocation with the same binary production
+// uses (tmux.Binary(), honoring TMUX_BIN). A bare "tmux" resolves to the host's
+// distro tmux wherever TMUX_BIN pins a different build (CI), and a client of a
+// different version than the server fails with a protocol-version mismatch.
+func remoteTmuxCommand(serverSocket string, args ...string) string {
+	cmd := []string{launchcmd.Quote(tmux.Binary())}
+	if serverSocket != "" {
+		cmd = append(cmd, "-L", launchcmd.Quote(serverSocket))
+	}
+	for _, a := range args {
+		cmd = append(cmd, launchcmd.Quote(a))
+	}
+	return strings.Join(cmd, " ")
 }
 
 // TestCreateSession_RemoteTarget_UnknownRemoteName_ReturnsInvalidArgument is

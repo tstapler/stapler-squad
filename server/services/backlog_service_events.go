@@ -153,12 +153,14 @@ func (s *BacklogService) watchBacklogItems(
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog items: %w", err))
 		}
+		visible := make([]*session.BacklogItemData, 0, len(items))
 		for i := range items {
-			item := &items[i]
-			if !backlogItemMatchesFilters(item, msg) {
-				continue
+			if backlogItemMatchesFilters(&items[i], msg) {
+				visible = append(visible, &items[i])
 			}
-			if err := sender.Send(snapshotEventForItem(ctx, s.storage, s.engine, item, costFor, s.checkWorkStageBudget)); err != nil {
+		}
+		for _, ev := range snapshotEventsForItems(ctx, s.storage, s.engine, visible, costFor, s.checkWorkStageBudget) {
+			if err := sender.Send(ev); err != nil {
 				return fmt.Errorf("failed to send initial backlog snapshot: %w", err)
 			}
 			initialPhaseSent++
@@ -234,35 +236,45 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 	return true
 }
 
-// snapshotEventForItem builds the initial-snapshot BacklogItemEvent for a
-// single currently-visible item (fresh-connection branch, after_seq == 0).
-// Calls enrichItemSessionsWorktreeData so this path matches GetBacklogItem's
-// per-session worktree_branch/worktree_path population — without it, every
-// fresh WatchBacklogItems connection (e.g. opening the backlog detail pane)
-// immediately overwrote an already-loaded item's enriched worktree data with
-// this un-enriched snapshot, hiding BacklogFileBrowserModal's trigger.
-func snapshotEventForItem(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, item *session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
-	protoItem := backlogItemToProto(item, engine, costFor)
-	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
-	attachUnresolvedBlockersTo(ctx, storage, []*sessionv1.BacklogItem{protoItem})
-	if checkBudget != nil {
-		checkBudget(item.ID, item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+// snapshotEventsForItems builds the initial-snapshot BacklogItemEvents for
+// the currently-visible items (fresh-connection branch, after_seq == 0).
+// Worktree enrichment and unresolved-blocker lookup each run once for the whole
+// batch rather than once per item, which made one fresh WatchBacklogItems
+// connection issue about a thousand queries. The enrichment keeps this path
+// matching GetBacklogItem's per-session worktree_branch/worktree_path
+// population — without it, every fresh connection immediately overwrote an
+// already-loaded item's enriched worktree data, hiding BacklogFileBrowserModal's
+// trigger.
+func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, items []*session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
+	protoItems := make([]*sessionv1.BacklogItem, len(items))
+	for i, item := range items {
+		protoItems[i] = backlogItemToProto(item, engine, costFor)
 	}
-	return &sessionv1.BacklogItemEvent{
-		Timestamp: timestamppb.Now(),
-		// Seq intentionally left at its zero value: this synthetic per-item
-		// snapshot isn't derived from a single published bus event, so it has
-		// no real sequence number. The frontend treats seq == 0 as "no seq
-		// info" and excludes these events from afterSeq/gap-detection
-		// bookkeeping — see BacklogItemEvent.seq's proto doc comment.
-		Event: &sessionv1.BacklogItemEvent_ItemUpdated{
-			ItemUpdated: &sessionv1.BacklogItemUpdatedEvent{
-				ItemId:     item.ID,
-				Item:       protoItem,
-				IsSnapshot: true,
+	enrichItemsSessionsWorktreeData(ctx, storage, protoItems)
+	attachUnresolvedBlockersTo(ctx, storage, protoItems)
+	out := make([]*sessionv1.BacklogItemEvent, len(items))
+	for i, item := range items {
+		protoItem := protoItems[i]
+		if checkBudget != nil {
+			checkBudget(item.ID, item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+		}
+		out[i] = &sessionv1.BacklogItemEvent{
+			Timestamp: timestamppb.Now(),
+			// Seq intentionally left at its zero value: this synthetic per-item
+			// snapshot isn't derived from a single published bus event, so it has
+			// no real sequence number. The frontend treats seq == 0 as "no seq
+			// info" and excludes these events from afterSeq/gap-detection
+			// bookkeeping — see BacklogItemEvent.seq's proto doc comment.
+			Event: &sessionv1.BacklogItemEvent_ItemUpdated{
+				ItemUpdated: &sessionv1.BacklogItemUpdatedEvent{
+					ItemId:     item.ID,
+					Item:       protoItem,
+					IsSnapshot: true,
+				},
 			},
-		},
+		}
 	}
+	return out
 }
 
 // convertEventToBacklogItemEvent converts an internal events.Event carrying a

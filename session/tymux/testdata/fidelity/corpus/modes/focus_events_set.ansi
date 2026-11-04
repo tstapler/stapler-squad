@@ -1,0 +1,2 @@
+modes/focus_events_set -- xterm ctlseqs ?1004h
+[?1004hfocus event reporting on

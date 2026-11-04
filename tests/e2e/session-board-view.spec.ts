@@ -16,8 +16,9 @@
 // (SessionBoard.dragdrop.test.tsx).
 import { test, expect } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 // The board's grouping-strategy select persists to the same localStorage key SessionList
 // uses (Phase 6's cross-view persistence). A shared test server can carry a prior run's
@@ -63,7 +64,10 @@ test.describe("session-board-view", () => {
     await boardToggle.click();
     await expect(boardToggle).toHaveAttribute("aria-pressed", "true");
 
-    await page.locator("body").press("b");
+    // useKeyboard ignores a focused button, and the click above left the toggle focused; locator.press on body
+    // cannot move focus off it, so blur explicitly.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("b");
     await expect(listToggle).toHaveAttribute("aria-pressed", "true");
     await expect(boardToggle).toHaveAttribute("aria-pressed", "false");
   });

@@ -88,7 +88,8 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 	"mcp__stapler-squad__post_backlog_update," +
 	"mcp__stapler-squad__get_backlog_item," +
 	"mcp__stapler-squad__submit_diagnosis_result," +
-	"mcp__stapler-squad__diagnose_nudge_session"
+	"mcp__stapler-squad__diagnose_nudge_session," +
+	"mcp__stapler-squad__diagnose_reset_remediation"
 
 // SpawnDiagnosticSession creates a hidden, one-shot Diagnose & Nudge session
 // for item, carrying prompt (the assembled context bundle plus dispatch

@@ -34,6 +34,7 @@ var (
 	execGateExecHist    metric.Int64Histogram
 	execGateTimeoutCtr  metric.Int64Counter
 	execGateAcquiredCtr metric.Int64Counter
+	execGateInFlight    metric.Int64UpDownCounter
 )
 
 func init() {
@@ -74,7 +75,18 @@ func registerExecGateMetricsOnce() error {
 		metric.WithDescription("Count of exec-gate acquires that got a free slot, by pool")); err != nil {
 		return err
 	}
+	if execGateInFlight, err = meter.Int64UpDownCounter("tmux_exec_gate_in_flight",
+		metric.WithDescription("Guarded tmux subprocess calls currently running (slot held), by pool")); err != nil {
+		return err
+	}
 	return nil
+}
+
+// addExecGateInFlight adjusts the in-flight gauge for pool by delta (+1 on slot acquire, -1 on release).
+func addExecGateInFlight(pool string, delta int64) {
+	if execGateInFlight != nil {
+		execGateInFlight.Add(context.Background(), delta, metric.WithAttributes(attribute.String("pool", pool)))
+	}
 }
 
 // recordExecGateWait records how long a call waited to acquire a slot from

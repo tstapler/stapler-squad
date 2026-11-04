@@ -560,7 +560,7 @@ func TestCleanupPartialCreation_should_ReturnNil_When_NoWorktreeOrTmuxExists(t *
 
 	inst := &session.Instance{Title: "cleanup-noop-test"}
 
-	err := cleanupPartialCreation(inst)
+	err := cleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 }
@@ -580,7 +580,7 @@ func TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStar
 	inst := &session.Instance{Title: "cleanup-worktree-test"}
 	inst.SetGitWorktree(wt) // also sets started=true — see SetGitWorktree's doc comment
 
-	err = cleanupPartialCreation(inst)
+	err = cleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -603,8 +603,8 @@ func TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice(t *testing.
 	inst := &session.Instance{Title: "cleanup-idempotent-test"}
 	inst.SetGitWorktree(wt)
 
-	require.NoError(t, cleanupPartialCreation(inst))
-	err = cleanupPartialCreation(inst)
+	require.NoError(t, cleanupPartialCreation(inst, false))
+	err = cleanupPartialCreation(inst, false)
 
 	require.NoError(t, err, "second call must be a no-op, not an error, once resources are already gone")
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -639,7 +639,7 @@ func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespit
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live worktree still attached")
 	require.Equal(t, session.Creating, inst.Status, "RecoverFromStopped resets Stopped to Creating")
 
-	err = cleanupPartialCreation(inst)
+	err = cleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	_, statErr := os.Stat(wt.GetWorktreePath())
@@ -668,7 +668,7 @@ func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespi
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
 	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
 
-	err := cleanupPartialCreation(inst)
+	err := cleanupPartialCreation(inst, false)
 
 	require.NoError(t, err)
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must NOT be killed: it looks alive, so the guard must skip the destructive KillSession call")
@@ -697,9 +697,9 @@ func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *test
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
 	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
 
-	session.StartSessionDriver(inst, t.TempDir())
+	session.StartSessionDriverForTest(t, inst, t.TempDir())
 
-	err := cleanupPartialCreation(inst)
+	err := cleanupPartialCreation(inst, false)
 	require.NoError(t, err)
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must survive: this test isolates the driver, not the defense-in-depth kill guard")
 
@@ -2464,6 +2464,27 @@ func TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions(t *testing.T)
 		require.True(t, ok, "claude.go's Idle group no longer has a pattern named %q", unsafeName)
 		require.False(t, safeIdleStatusContexts[desc], "%q's description %q must not be on the safe allowlist", unsafeName, desc)
 	}
+}
+
+// TestIsSafeSteerStatus_TurnCompleteOnly pins the one Success context the gate accepts
+// (auto-mode panes end on the turn-complete marker) against claude.go and checks that
+// no other Success description, and no other status, rides along.
+func TestIsSafeSteerStatus_TurnCompleteOnly(t *testing.T) {
+	t.Parallel()
+
+	var turnComplete string
+	for _, p := range binaries.NewClaudeDetector().Patterns().Success {
+		if p.Name == "verb_duration_completion" {
+			turnComplete = p.Description
+		}
+	}
+	require.Equal(t, session.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
+
+	require.True(t, isSafeSteerStatus(detection.StatusSuccess, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusSuccess, "All tests passed"))
+	require.False(t, isSafeSteerStatus(detection.StatusExecuting, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusProcessing, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusWaitingForAgent, turnComplete))
 }
 
 // TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt

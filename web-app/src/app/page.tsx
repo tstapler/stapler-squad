@@ -169,6 +169,9 @@ function HomeContent() {
   // touch/swipe never focus a terminal, everything else lands in the target's last-focused pane.
   const handleWindowSwitchCommitted = (id: WindowId, trigger: WindowSwitchTrigger) => {
     if (focusKindForTrigger(trigger) !== "pane") return;
+    // Double-clicking an inactive tab switches to it first; stealing focus now would blur and commit the inline rename.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && active.closest('[role="tablist"]')) return;
     const target = windows.find((w) => w.id === id);
     if (!target) return;
     const remembered = windowFocusMemory.recall(id)?.paneId;

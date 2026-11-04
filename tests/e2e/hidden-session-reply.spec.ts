@@ -12,8 +12,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const HIDDEN_ID = 'e2e-hidden-reply-session';
 const QUESTION_NOTIFICATION = 'e2e-question-1';
 

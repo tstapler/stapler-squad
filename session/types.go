@@ -255,6 +255,9 @@ var (
 	// ErrDirtyStateUnknown means the worktree's uncommitted-changes check failed, so
 	// pause/stop kept the worktree rather than risk deleting uncommitted work.
 	ErrDirtyStateUnknown = errors.New("cannot determine whether the worktree has uncommitted changes; keeping it to avoid data loss")
+	// ErrWorktreeDirty means Destroy kept the worktree because it holds uncommitted
+	// changes. Only ForceDestroy discards them.
+	ErrWorktreeDirty = errors.New("worktree has uncommitted changes; keeping it (force to discard)")
 )
 
 // ErrInvalidTransition is returned when a status transition is not allowed

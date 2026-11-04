@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { SessionClient } from "../helpers/session-client";
+import { baseUrl } from '../helpers/base-url';
 
 /**
  * Page object for the Files viewer spike pages (web-app/src/app/spike-files, THROWAWAY) and,
@@ -50,7 +51,7 @@ export class FilesTabPage {
   }
 }
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 /** A directory with a few small files and one 300-line file; returns its path. */
 export function seedFilesFixture(): string {

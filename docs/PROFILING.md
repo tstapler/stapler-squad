@@ -189,7 +189,7 @@ The `debug=2` dump includes goroutine creation call sites (`created by ...`), wh
 
 ## Block Profiling
 
-Block profiling records events where goroutines blocked on synchronization primitives (channels, mutexes, select). Requires `--profile` to be active (the server calls `runtime.SetBlockProfileRate(1)` when enabled).
+Block profiling records events where goroutines blocked on synchronization primitives (channels, mutexes, select). Requires `--profile` to be active (the server calls `runtime.SetBlockProfileRate(rate)` when enabled; `--profile-block-rate`, default 1000 ns, 1 = every event).
 
 ### Capture
 
@@ -229,7 +229,7 @@ Common block patterns:
 
 ## Mutex Profiling
 
-Mutex profiling records contention on `sync.Mutex` and `sync.RWMutex`. Also enabled automatically when `--profile` is active (`runtime.SetMutexProfileFraction(1)`).
+Mutex profiling records contention on `sync.Mutex` and `sync.RWMutex`. Also enabled automatically when `--profile` is active (`runtime.SetMutexProfileFraction(n)`; `--profile-mutex-fraction`, default 10, 1 = every event).
 
 ### Capture
 
@@ -481,7 +481,7 @@ grep "trace" ~/.stapler-squad/logs/stapler-squad.log | tail -5
 
 **Block or mutex profiles empty**
 
-Both require `--profile` to be active at startup (the flag calls `SetBlockProfileRate(1)` and `SetMutexProfileFraction(1)`). These cannot be enabled at runtime after the fact.
+Both require `--profile` to be active at startup (the flag calls `SetBlockProfileRate` and `SetMutexProfileFraction` with the `--profile-block-rate` and `--profile-mutex-fraction` values). These cannot be enabled at runtime after the fact.
 
 **go tool pprof web UI port conflict**
 

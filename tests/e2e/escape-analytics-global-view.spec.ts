@@ -24,8 +24,9 @@
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
 import { EscapeAnalyticsGlobalViewPage } from "./pages/EscapeAnalyticsGlobalViewPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 interface SessionEscapeSummaryFixture {
   sessionId: string;

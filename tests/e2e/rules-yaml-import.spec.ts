@@ -8,8 +8,9 @@ const _features = [
 // All locators use data-testid or ARIA roles — no CSS class selectors.
 
 import { test, expect } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 const VALID_YAML_3_RULES = `rules:
 - name: E2E Allow git log
@@ -51,6 +52,11 @@ const MIXED_YAML = `rules:
   decision: allow
 `;
 
+// Rules persist on the worker's shared server, so every test gets its own names; fixed names would
+// turn the second run (another project, or a retry) into duplicates and "Apply 0 rules".
+const uniqueTag = () => `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+const tagged = (yaml: string, tag: string) => yaml.replace(/^(- name: E2E .+)$/gm, `$1 ${tag}`);
+
 test.describe("rules-yaml-import", () => {
   // ── E2E-01 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > import modal opens and closes", async ({ page }) => {
@@ -76,13 +82,14 @@ test.describe("rules-yaml-import", () => {
 
   // ── E2E-02 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > validates rules and shows preview cards", async ({ page }) => {
+    const tag = uniqueTag();
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     await page.getByTestId("import-yaml-button").click();
     await expect(page.getByTestId("yaml-input")).toBeVisible({ timeout: 5000 });
 
     // Paste 3-rule valid YAML.
-    await page.getByTestId("yaml-input").fill(VALID_YAML_3_RULES);
+    await page.getByTestId("yaml-input").fill(tagged(VALID_YAML_3_RULES, tag));
 
     // Wait for preview cards to appear.
     await expect(page.getByTestId("preview-list")).toBeVisible({ timeout: 10000 });
@@ -92,13 +99,14 @@ test.describe("rules-yaml-import", () => {
 
   // ── E2E-03 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > shows inline validation errors", async ({ page }) => {
+    const tag = uniqueTag();
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     await page.getByTestId("import-yaml-button").click();
     await expect(page.getByTestId("yaml-input")).toBeVisible({ timeout: 5000 });
 
     // Paste mixed YAML: 2 valid + 1 with invalid regex.
-    await page.getByTestId("yaml-input").fill(MIXED_YAML);
+    await page.getByTestId("yaml-input").fill(tagged(MIXED_YAML, tag));
 
     // Wait for preview list.
     await expect(page.getByTestId("preview-list")).toBeVisible({ timeout: 10000 });
@@ -115,12 +123,13 @@ test.describe("rules-yaml-import", () => {
 
   // ── E2E-04 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > applies valid rules and refreshes table", async ({ page }) => {
+    const tag = uniqueTag();
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     await page.getByTestId("import-yaml-button").click();
     await expect(page.getByTestId("yaml-input")).toBeVisible({ timeout: 5000 });
 
-    await page.getByTestId("yaml-input").fill(VALID_YAML_3_RULES);
+    await page.getByTestId("yaml-input").fill(tagged(VALID_YAML_3_RULES, tag));
 
     // Wait for apply button to become enabled.
     const applyBtn = page.getByTestId("apply-button");
@@ -133,9 +142,9 @@ test.describe("rules-yaml-import", () => {
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10000 });
 
     // Rules table should now contain the imported rule names.
-    await expect(page.getByText("E2E Allow git log")).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText("E2E Allow git status")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("E2E Allow ls")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(`E2E Allow git log ${tag}`, { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(`E2E Allow git status ${tag}`, { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(`E2E Allow ls ${tag}`, { exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   // ── E2E-05 ──────────────────────────────────────────────────────────────────
@@ -156,11 +165,12 @@ test.describe("rules-yaml-import", () => {
 
   // ── E2E-06 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > duplicate skip mode", async ({ page }) => {
+    const tag = uniqueTag();
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     // First import: create one rule.
     const singleRuleYaml = `rules:
-- name: E2E Dup Skip Rule
+- name: E2E Dup Skip Rule ${tag}
   tool: Bash
   programs:
     - git
@@ -187,16 +197,17 @@ test.describe("rules-yaml-import", () => {
     // Apply button may show 0 applicable rules (all skipped), making it disabled.
     // The result: the rule in the table remains unchanged.
     await page.keyboard.press("Escape");
-    await expect(page.getByText("E2E Dup Skip Rule")).toBeVisible();
+    await expect(page.getByText(`E2E Dup Skip Rule ${tag}`, { exact: true })).toBeVisible();
   });
 
   // ── E2E-07 ──────────────────────────────────────────────────────────────────
   test("rules-yaml-import > duplicate overwrite mode", async ({ page }) => {
+    const tag = uniqueTag();
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     // First import: create rule with "allow" decision.
     const originalYaml = `rules:
-- name: E2E Dup Overwrite Rule
+- name: E2E Dup Overwrite Rule ${tag}
   tool: Bash
   programs:
     - git
@@ -212,7 +223,7 @@ test.describe("rules-yaml-import", () => {
 
     // Second import: same rule name but "deny" decision, overwrite mode.
     const updatedYaml = `rules:
-- name: E2E Dup Overwrite Rule
+- name: E2E Dup Overwrite Rule ${tag}
   tool: Bash
   programs:
     - git
@@ -236,7 +247,7 @@ test.describe("rules-yaml-import", () => {
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10000 });
 
     // The rule should still be present in the table (overwritten with deny decision).
-    await expect(page.getByText("E2E Dup Overwrite Rule")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(`E2E Dup Overwrite Rule ${tag}`, { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   // ── E2E-08 ──────────────────────────────────────────────────────────────────
@@ -244,7 +255,7 @@ test.describe("rules-yaml-import", () => {
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     // Switch to "Custom" (user) filter to get an isolated empty state.
-    const customTab = page.getByRole("button", { name: /Custom/ });
+    const customTab = page.getByRole("button", { name: /^Custom \(/ });
     await expect(customTab).toBeVisible({ timeout: 10000 });
     await customTab.click();
 

@@ -1465,6 +1465,28 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 	return nil
 }
 
+// conflictRowState reports whether itemID has an open rework_cap row and the attempt
+// counter of its open pr_needs_fix row (0 when there is none or the read fails).
+func (l *BacklogLifecycleListener) conflictRowState(ctx context.Context, er *EntRepository, itemID string) (reworkCapOpen bool, prAttempts int32) {
+	rows, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false, 0
+	}
+	_, reworkCapOpen = findOpenStuckStateFor(rows, itemID, domain.StuckReasonReworkCap)
+	if row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix); ok {
+		prAttempts = row.RemediationAttempts
+	}
+	return reworkCapOpen, prAttempts
+}
+
+// conflictRetryClock is overridable so tests can step the hourly throttle.
+func (l *BacklogLifecycleListener) conflictRetryNow() time.Time {
+	if l.conflictRetryClock != nil {
+		return l.conflictRetryClock()
+	}
+	return time.Now()
+}
+
 // remediatePRFixWithBackoffGate wraps fixSpawner.AutoReopenForPRFix with the
 // shared remediation backoff gate (Storage.RemediationDue,
 // session/backlog_remediation.go) — the fix for the MAJOR bug flagged in
@@ -1497,7 +1519,10 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // an active session skips the backoff gate entirely for that tick (it always
 // steers, never spawns). Only the no-active-session (spawn) path is gated by
 // RemediationDue.
-func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
+//
+// conflictOnly (a merge conflict with nothing else wrong) is a cheap mechanical fix, so it
+// also gets an hourly retry that outlives the parked state; see conflictRetryMaxAttempts.
+func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string, conflictOnly bool) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuck item=%s: %v", itemID, markErr)
@@ -1542,7 +1567,33 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
 	}
-	if justParked {
+	// A conflict-only PR is a cheap, mechanical fix that must not park behind the
+	// 5-attempt/7-day budget meant for failing CI: it gets an hourly retry instead, for
+	// at most conflictRetryMaxAttempts consecutive grants. The override stands down once
+	// a rework_cap row is open or the attempts are spent; the normal parked behaviour and
+	// its "needs manual attention" notice then apply.
+	overrideActive, grantedHere := false, false
+	if capOpen, prAttempts := l.conflictRowState(ctx, er, itemID); conflictOnly && !capOpen {
+		switch l.conflictRetries.take(itemID, l.conflictRetryNow(), conflictRetryInterval, prAttempts) {
+		case conflictRetryGranted:
+			overrideActive, grantedHere, due = true, true, true
+		case conflictRetryThrottled:
+			overrideActive = true
+		case conflictRetryExhausted:
+			if l.conflictRetries.markExhaustedNotified(itemID) {
+				l.notify(itemID,
+					"Auto-rework paused",
+					fmt.Sprintf("%s — the merge conflict survived %d automated fix sessions. It now needs manual attention; use Reset to try again automatically.", itemTitle, conflictRetryMaxAttempts),
+					8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+					true, true, // urgent, important — automated retry gave up; a genuine dead end
+				)
+			}
+		}
+	} else if !conflictOnly {
+		l.conflictRetries.clear(itemID)
+	}
+	// While the override is retrying, the row being parked is not a dead end.
+	if justParked && !overrideActive {
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated PR-fix retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
@@ -1562,7 +1613,11 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// webhook side (the poller never writes to that table, by design — AC3).
 	log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: attempting fix (trigger_source=%s)", itemID, prFixTriggerSourceFrom(ctx))
 
-	return true, fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	fixErr := fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	if fixErr != nil && grantedHere {
+		l.conflictRetries.refund(itemID) // no session started: don't spend the attempt budget
+	}
+	return true, fixErr
 }
 
 // reconcilePRPendingItem runs ReconcilePRPending's per-item reconciliation logic for
@@ -1601,6 +1656,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		return
 	}
 	if merged {
+		l.conflictRetries.clear(item.ID.String())
 		// Capture the durable ship snapshot (GitHub PR/CI/review state +
 		// per-file diff stats) synchronously, before the done transition —
 		// never as a background goroutine — so the data is written before
@@ -1751,6 +1807,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		closedPrURL, closedPrNum := item.PrURL, item.PrNumber
+		l.conflictRetries.clear(item.ID.String())
 		// A closed-without-merging PR can never be pr_ready_unmerged again
 		// under this pr_number; resolve immediately regardless of whether
 		// the reopen below succeeds (self-heal would also catch this
@@ -1766,7 +1823,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
 			// call that never happened: nothing was attempted, so nothing
@@ -1858,6 +1915,12 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// PRReadyUnmerged handling immediately above).
 		l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending/healthy")
 		l.ciReruns.clear(item.ID.String())
+		// Only a known-clean PR resets the conflict throttle: GitHub reports UNKNOWN while
+		// it recomputes mergeability, and a conflicting PR flapping DIRTY/UNKNOWN must not
+		// earn a fresh attempt on every flip.
+		if prStatus.Mergeable == "MERGEABLE" {
+			l.conflictRetries.clear(item.ID.String())
+		}
 		return
 	}
 
@@ -1906,7 +1969,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		logFeedbackBatchCoverage(item.ID.String(), prStatus)
 	}
 
-	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+	conflictOnly := prStatus.HasConflicts && !prStatus.CIFailing && !prStatus.HasBlockingReviews && !hasNewFeedback
+	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, conflictOnly)
 	if fixErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
 	} else if attempted && hasNewFeedback {

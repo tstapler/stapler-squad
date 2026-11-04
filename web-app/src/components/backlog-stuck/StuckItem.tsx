@@ -34,6 +34,8 @@ interface StuckItemActionProps {
    * needing to know the specific failure shape.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /** The item's other open reasons, listed with per-reason Retry buttons when this row is MULTIPLE_REASONS. */
+  constituentReasons?: StuckReason[];
   /**
    * Approves the item's plan (ApprovePlan RPC) — omitted disables the
    * approve control entirely. Rejects (throws) on failure, mirroring
@@ -158,6 +160,7 @@ export function StuckItem({
   currentReworkCapOverride,
   reworkCapOverrideLoaded = false,
   onTriggerRemediationNow,
+  constituentReasons,
   onApprovePlan,
   onOverrideClaimBlock,
   onDiagnose,
@@ -436,6 +439,8 @@ export function StuckItem({
           onApprovePlan={onApprovePlan}
           onDiagnose={onDiagnose}
           onRefreshAutoMerge={onRefreshAutoMerge}
+          constituentReasons={constituentReasons}
+          onTriggerRemediationNow={onTriggerRemediationNow}
         />
       )}
     </div>

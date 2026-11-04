@@ -122,10 +122,11 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLea
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("submit cancelled before sending Enter: %w", err)
 	}
+	baseline, haveBaseline := capturePaneBaseline(inst)
 	if err := inst.SendKeys(EnterKeySequence); err != nil {
 		return fmt.Errorf("send submit keystroke: %w", err)
 	}
-	if waitForPaneUpdate(ctx, inst, pollInterval, maxWait) {
+	if waitForSubmitEffect(ctx, inst, baseline, haveBaseline, pollInterval, maxWait) {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -136,7 +137,7 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLea
 	if err := inst.SendKeys(EnterKeySequence); err != nil {
 		return fmt.Errorf("send submit keystroke (retry): %w", err)
 	}
-	if waitForPaneUpdate(ctx, inst, pollInterval, maxWait) {
+	if waitForSubmitEffect(ctx, inst, baseline, haveBaseline, pollInterval, maxWait) {
 		return nil
 	}
 	return ErrSubmitNotConfirmed
@@ -230,6 +231,48 @@ func SendKeysWithTimeout(ctx context.Context, inst keySender, lease *HeldLease, 
 	case <-timeoutCtx.Done():
 		return context.DeadlineExceeded
 	}
+}
+
+// paneCapturer is optionally implemented by paneSubmitters that can snapshot
+// their pane; *Instance does.
+type paneCapturer interface {
+	CapturePaneContent() (string, error)
+}
+
+func capturePaneBaseline(inst paneSettleChecker) (string, bool) {
+	c, ok := inst.(paneCapturer)
+	if !ok {
+		return "", false
+	}
+	content, err := c.CapturePaneContent()
+	return content, err == nil
+}
+
+// waitForSubmitEffect is waitForPaneUpdate plus a private check: HasUpdated is
+// a shared consume-on-read hash diff, so a concurrent poller can swallow the
+// change this submit caused and make a delivered message look unconfirmed
+// (ErrSubmitNotConfirmed, inviting duplicate sends). Comparing the pane
+// against our own pre-Enter snapshot cannot be stolen.
+func waitForSubmitEffect(ctx context.Context, inst paneSettleChecker, baseline string, haveBaseline bool, pollInterval, maxWait time.Duration) bool {
+	if !haveBaseline {
+		return waitForPaneUpdate(ctx, inst, pollInterval, maxWait)
+	}
+	c := inst.(paneCapturer)
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(pollInterval):
+		}
+		if now, err := c.CapturePaneContent(); err == nil && now != baseline {
+			return true
+		}
+		if updated, _ := inst.HasUpdated(); updated {
+			return true
+		}
+	}
+	return false
 }
 
 // waitForPaneUpdate polls inst until it reports a pane change or maxWait

@@ -1,16 +1,14 @@
 ---
-// A single feature-grid tile. `screenshot`/`demoClip` are omitted for
-// sections with no existing capture (text-only until a real asset exists);
-// `alt` is required whenever `screenshot` is set.
-import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
-
+// A single feature-grid tile. A `demoClip` plays in place of the screenshot
+// (which becomes its poster); with neither, the tile is text-only. `alt` is
+// required whenever `screenshot` is set.
 export interface Props {
 	heading: string;
 	description: string;
 	category: string;
 	screenshot?: string;
 	alt?: string;
-	demoClip?: ReleaseAssetRef;
+	demoClip?: { name: string; ext: string };
 }
 
 const { heading, description, screenshot, alt, demoClip } = Astro.props;
@@ -25,28 +23,41 @@ const { heading, description, screenshot, alt, demoClip } = Astro.props;
 // would otherwise double up with screenshot's own leading slash.
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
+// Recorded during the deploy into public/clips/ (see scripts/build-features.mjs).
+const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` : undefined;
 ---
 
 <article class="feature-card" data-testid="feature-card">
 	{
-		screenshot ? (
-			<img
-				src={screenshotSrc}
-				alt={alt}
-				loading="lazy"
-				width="320"
-				height="200"
-				data-testid="feature-card-image"
+		demoClip ? (
+			<>
+			<video
+				src={clipSrc}
+				data-poster={screenshotSrc}
+				aria-label={alt ? `${heading} demo: ${alt}` : `${heading} demo`}
+				controls
+				muted
+				loop
+				playsinline
+				preload="none"
+				data-testid="feature-card-video"
 			/>
+			{/* data-poster is set by script, so without JS the video would be an empty box. */}
+			{screenshotSrc && (
+				<noscript>
+					<img src={screenshotSrc} alt={alt ?? `${heading} screenshot`} width="320" height="200" />
+				</noscript>
+			)}
+			</>
 		) : (
-			demoClip && (
-				<video
-					src={releaseAssetUrl(demoClip)}
-					controls
-					muted
-					loop
-					playsinline
-					data-testid="feature-card-video"
+			screenshot && (
+				<img
+					src={screenshotSrc}
+					alt={alt}
+					loading="lazy"
+					width="320"
+					height="200"
+					data-testid="feature-card-image"
 				/>
 			)
 		)
@@ -69,9 +80,15 @@ const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
 	.feature-card video {
 		width: 100%;
 		height: auto;
-		aspect-ratio: 16 / 10;
+		aspect-ratio: 16 / 10; /* reserved up front: no layout shift when the clip loads */
 		object-fit: cover;
 		border-radius: 0.5rem;
+	}
+
+	/* Matches the recorded clip (1280x760 with its browser frame) so `cover` crops nothing,
+	   including the left-aligned burned-in captions. */
+	.feature-card video {
+		aspect-ratio: 1280 / 760;
 	}
 
 	.feature-card h4 {
@@ -85,3 +102,27 @@ const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
 		font-size: var(--sl-text-sm, 0.875rem);
 	}
 </style>
+
+<script>
+	// A <video poster> is fetched eagerly (it has no loading="lazy"), and a grid of them starved the
+	// landing page's LCP on the Lighthouse mobile run, so each poster is set only near the viewport.
+	const videos = document.querySelectorAll<HTMLVideoElement>('video[data-poster]');
+	const setPoster = (v: HTMLVideoElement) => {
+		v.poster = v.dataset.poster ?? '';
+	};
+	if ('IntersectionObserver' in window) {
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) {
+					if (!e.isIntersecting) continue;
+					setPoster(e.target as HTMLVideoElement);
+					io.unobserve(e.target);
+				}
+			},
+			{ rootMargin: '300px' },
+		);
+		videos.forEach((v) => io.observe(v));
+	} else {
+		videos.forEach(setPoster);
+	}
+</script>

@@ -1,0 +1,7 @@
+cursor/clamp_at_edges -- esctest2 cuf.py/cub.py/cuu.py/cud.py (don't move past
+[1;1H[5Dleft-edge-clamped[9Aup-clamp
+[3;70H[99Cright-edge-clamped:[[1D]
+[24;1H[99Bbottom-clamp[5Aup-5[24;1Hx
+[10;1H[200;200Hpast-both-edges
+[10;5H[0;0Hzero-params-home[12;3H[;5Hnoparam-row[13;3H[5;Hnoparam-col
+[15;1H[999Gcha-clamp[16;1H[999dvpa-clamp[18;1H[999`hpa-clamp

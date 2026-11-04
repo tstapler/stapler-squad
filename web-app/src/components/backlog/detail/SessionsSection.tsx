@@ -101,6 +101,8 @@ export interface SessionsSectionProps {
    * always supplies useSessionService's getSession.
    */
   getSession?: (id: string) => Promise<Session | null>;
+  /** Passed through to JumpToSessionPanel's "Session not found." state (pr_pending items). */
+  onRestartWork?: () => void;
 }
 
 const SHOW_MORE_CAP = 5;
@@ -126,6 +128,7 @@ export function SessionsSection({
   steeringSessionId,
   authReconnectRequired = false,
   getSession = async () => null,
+  onRestartWork,
 }: SessionsSectionProps) {
   const { track } = useAnalytics();
   const { visible, hasMore, remaining, showAll } = useShowMore(
@@ -262,6 +265,7 @@ export function SessionsSection({
           linkedSessions={item.linkedSessions}
           backlogItemId={item.id}
           getSession={getSession}
+          onRestartWork={onRestartWork}
         />
         {/* Story 4.1.4: synthetic-session rows (Collapsible + SessionDiagnosticPanel)
             get their own local CollapsibleGroup, deliberately NOT the page-level

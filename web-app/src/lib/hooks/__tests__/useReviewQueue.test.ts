@@ -472,6 +472,8 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
       await new Promise(() => {}); // keep the stream open
     }
     mockWatchReviewQueue.mockReturnValue(fakeStream());
+    // The mount fetch and the reconcile on connect both see s1, which the rule has not removed server-side yet.
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([makeItem("s1")]) });
 
     const store = makeTestStore();
     const { result } = renderHook(
@@ -574,6 +576,7 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
     // the backend has already removed it (simulating the real reconciliation race).
     mockGetReviewQueue
       .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) })
+      .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) }) // reconcile on connect
       .mockResolvedValue({ reviewQueue: makeQueue([]) });
 
     const store = makeTestStore();
@@ -605,3 +608,140 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
     expect(result.current.autoResolvedRules).toEqual({});
   });
 });
+
+describe("useReviewQueue fallback poll", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockGetReviewQueue.mockReset();
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([]) });
+  });
+  afterEach(() => jest.useRealTimers());
+
+  const settle = () =>
+    act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+  const heartbeat = { event: { case: "heartbeat", value: {} }, heartbeat: true };
+  const liveForever = () =>
+    (async function* () {
+      yield heartbeat;
+      await new Promise(() => {});
+    })();
+  const advance = async (ms: number) => {
+    await act(async () => {
+      jest.advanceTimersByTime(ms);
+    });
+    await settle();
+  };
+  const withFilter = (priorityFilter: number) => ({ useWebSocketPush: true, priorityFilter }) as never;
+
+  it("does not repeat the mount fetch when the stream connects right after it", async () => {
+    mockWatchReviewQueue.mockReturnValue(liveForever());
+    renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
+    await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(1);
+    await advance(40_000);
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(1); // no 30s poll while live (was 2)
+  });
+
+  it("reconciles once over REST when a stream that connects later than the mount fetch goes live", async () => {
+    mockWatchReviewQueue.mockReturnValue(liveForever());
+    const { rerender } = renderHook((p: { on: boolean }) => useReviewQueue({ useWebSocketPush: p.on }), {
+      initialProps: { on: false },
+      wrapper: makeWrapper(makeTestStore()),
+    });
+    await settle();
+    await advance(11_000);
+    const before = mockGetReviewQueue.mock.calls.length;
+    rerender({ on: true });
+    await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(before + 1);
+  });
+
+  it("falls back to the 30s poll when the stream restarts for a filter change and the resubscribe fails", async () => {
+    mockWatchReviewQueue.mockReturnValueOnce(liveForever()).mockImplementation(async function* () {
+      throw new Error("resubscribe failed");
+    });
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { rerender } = renderHook((p: { prio: number }) => useReviewQueue(withFilter(p.prio)), {
+      initialProps: { prio: 1 },
+      wrapper: makeWrapper(makeTestStore()),
+    });
+    await settle();
+    await advance(11_000);
+    rerender({ prio: 2 });
+    await settle();
+    const before = mockGetReviewQueue.mock.calls.length;
+    await advance(31_000);
+    expect(mockGetReviewQueue.mock.calls.length).toBeGreaterThan(before); // stale "live" would wait for the 120s poll
+    errorSpy.mockRestore();
+  });
+
+  it("reconciles over REST when a filter change reconnects the stream and it goes live again", async () => {
+    mockWatchReviewQueue.mockImplementation(() => liveForever());
+    const { rerender } = renderHook((p: { prio: number }) => useReviewQueue(withFilter(p.prio)), {
+      initialProps: { prio: 1 },
+      wrapper: makeWrapper(makeTestStore()),
+    });
+    await settle();
+    await advance(11_000);
+    const before = mockGetReviewQueue.mock.calls.length;
+    rerender({ prio: 2 });
+    await settle();
+    expect(mockGetReviewQueue.mock.calls.length).toBe(before + 1);
+  });
+
+  it("costs at most one REST call when the stream flaps live and closed ten times in 5s", async () => {
+    mockWatchReviewQueue.mockImplementation(async function* () {
+      yield heartbeat; // connects, then closes cleanly
+    });
+    renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
+    await settle();
+    for (let i = 0; i < 10; i++) await advance(500);
+    expect(mockGetReviewQueue.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it("drops a background reconcile response that a stream event overtook", async () => {
+    let gate: () => void = () => {};
+    const gated = new Promise<void>((r) => (gate = r));
+    mockWatchReviewQueue.mockReturnValue(
+      (async function* () {
+        yield heartbeat;
+        await gated;
+        yield { event: { case: "itemAdded", value: { item: makeItem("s9") } } };
+        await new Promise(() => {});
+      })()
+    );
+    const store = makeTestStore();
+    const { rerender } = renderHook((p: { on: boolean }) => useReviewQueue({ useWebSocketPush: p.on }), {
+      initialProps: { on: false },
+      wrapper: makeWrapper(store),
+    });
+    await settle();
+    await advance(11_000);
+    let release: (v: unknown) => void = () => {};
+    mockGetReviewQueue.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    rerender({ on: true }); // goes live: the reconcile starts and stays pending
+    await settle();
+    gate(); // the stream delivers s9 while it is in flight
+    await settle();
+    await act(async () => release({ reviewQueue: makeQueue([]) })); // stale: predates s9
+    await settle();
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s9"]);
+  });
+
+  it("polls every fallback interval while the stream never connects", async () => {
+    mockWatchReviewQueue.mockImplementation(async function* () {
+      await new Promise(() => {});
+    });
+    renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
+    await settle();
+    await act(async () => {
+      jest.advanceTimersByTime(90_000);
+    });
+    await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(4);
+  });
+});
+

@@ -1,4 +1,5 @@
 import { Page, Locator } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
 // The 3 stage roles PipelineModeForm.tsx's StageExecutorTable renders as rows
 // (session.StageRole's consts) — mirrored here rather than imported since
@@ -22,7 +23,7 @@ export class PipelineModesSettingsPage {
 
   async goto() {
     await this.page.goto(
-      (process.env.TEST_SERVER_URL ?? "http://localhost:8544") + "/settings/pipeline-modes",
+      baseUrl() + "/settings/pipeline-modes",
       { waitUntil: "domcontentloaded", timeout: 15000 }
     );
     await this.page.waitForSelector('[data-testid="pipeline-mode-new"]', { timeout: 10000 });

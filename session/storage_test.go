@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -1353,4 +1354,43 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 	assert.Equal(t, Stopped, persisted.Status,
 		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
 	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
+}
+
+func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	a := newTestInstance("batch-a")
+	a.UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	a.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
+	b := newTestInstance("batch-b")
+	b.UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	b.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
+	noWT := newTestInstance("batch-dir")
+	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))
+
+	var queries atomic.Int64
+	storage.GetEntClient().Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {
+			queries.Add(1)
+			return next.Query(ctx, q)
+		})
+	}))
+
+	uuids := []string{a.UUID, b.UUID, noWT.UUID, "dddddddd-dddd-dddd-dddd-dddddddddddd"}
+	got, err := storage.GetWorktreeDataBySessionUUIDs(context.Background(), uuids)
+	require.NoError(t, err)
+	assert.Len(t, got, 2, "no-worktree and unknown sessions are absent")
+	for _, id := range []string{a.UUID, b.UUID} {
+		want, err := storage.GetWorktreeDataBySessionUUID(context.Background(), id)
+		require.NoError(t, err)
+		assert.Equal(t, want, got[id])
+	}
+
+	queries.Store(0)
+	_, err = storage.GetWorktreeDataBySessionUUIDs(context.Background(), uuids)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), queries.Load(), "one session query plus its worktree eager-load, not one per uuid")
 }

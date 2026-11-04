@@ -1,17 +1,17 @@
 import { FullConfig } from '@playwright/test';
-import { stopGlobalTestServer } from './helpers/test-server';
+import { stopServerPool } from './helpers/server-pool';
 
 /**
  * Global teardown runs once after all tests
- * Stops the test server and cleans up test data
+ * Stops the test servers and cleans up test data
  */
 async function globalTeardown(config: FullConfig) {
-  console.log('\n🧹 Cleaning up test server...\n');
+  console.log('\n🧹 Cleaning up test servers...\n');
 
   try {
-    await stopGlobalTestServer();
+    await stopServerPool();
   } catch (error) {
-    console.error('Failed to stop test server:', error);
+    console.error('Failed to stop test servers:', error);
   }
 }
 

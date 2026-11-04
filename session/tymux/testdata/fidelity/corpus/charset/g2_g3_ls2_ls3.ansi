@@ -1,0 +1,2 @@
+charset/g2_g3_ls2_ls3 -- xterm ctlseqs SCS ESC * / ESC +, LS2 ESC n, LS3 ESC o
+*0+0n xo x  (G2/G3 DEC graphics via LS2/LS3)

@@ -24,6 +24,7 @@ const noopDisposable = () => ({ dispose: jest.fn() });
 
 export function xtermModule() {
   class Terminal {
+    unicode = { activeVersion: "6" };
     cols = 80;
     rows = 24;
     options: any;

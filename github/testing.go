@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// ResetRateLimiterForTest swaps in a fresh DefaultRateLimiter for the
-// duration of t, restoring the original via t.Cleanup. Any test — in this
+// ResetRateLimiterForTest clears DefaultRateLimiter before t and again via t.Cleanup. Any test — in this
 // package or a consumer package (e.g. session's GitHub backlog plugins) —
 // that drives a request through HTTPClient() and can trigger a rate-limit
 // -setting response (403 with Retry-After, 403 with X-RateLimit-Remaining:
@@ -17,9 +16,15 @@ import (
 // after it in that process.
 func ResetRateLimiterForTest(t testing.TB) {
 	t.Helper()
-	orig := DefaultRateLimiter
-	DefaultRateLimiter = &RateLimiter{}
-	t.Cleanup(func() { DefaultRateLimiter = orig })
+	// Clear the shared limiter in place rather than swapping the pointer: detached
+	// background goroutines (e.g. repo-settings lookups) read DefaultRateLimiter
+	// after the test returns, and a pointer write in Cleanup raced with them.
+	clear := func() {
+		DefaultRateLimiter.Reset()
+		DefaultRateLimiter.snapshot.Store(nil)
+	}
+	clear()
+	t.Cleanup(clear)
 }
 
 // ResetPriorityAdmissionFlagCacheForTest clears priorityAdmissionEnabled's

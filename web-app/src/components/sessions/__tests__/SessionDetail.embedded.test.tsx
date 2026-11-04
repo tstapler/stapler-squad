@@ -29,14 +29,16 @@ import type { Session } from "@/gen/session/v1/types_pb";
 // want the real SessionDetailView (with its correct ARIA markup) to render. Resolve the
 // SessionDetailView loader synchronously via require so assertions can stay synchronous;
 // stub everything else (i.e. TerminalOutput) as before.
-jest.mock("next/dynamic", () => (loader: () => Promise<{ default: React.ComponentType }>) => {
-  if (loader.toString().includes("SessionDetailView")) {
-    return require("../SessionDetailView").SessionDetailView;
-  }
-  return function DynamicStub() {
-    return <div data-testid="terminal-output" />;
-  };
-});
+jest.mock("@/lib/lazy", () => ({
+  lazyComponent: (loader: () => Promise<{ default: React.ComponentType }>) => {
+    if (loader.toString().includes("SessionDetailView")) {
+      return require("../SessionDetailView").SessionDetailView;
+    }
+    return function DynamicStub() {
+      return <div data-testid="terminal-output" />;
+    };
+  },
+}));
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
 // HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which

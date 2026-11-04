@@ -17,6 +17,7 @@ import {
 } from "@/gen/session/v1/session_pb";
 import { InsightsService, GetInsightsSummaryRequestSchema } from "@/gen/session/v1/insights_pb";
 import { createCoalescingInterceptor, resetCoalescingForTest } from "./coalescingInterceptor";
+import { setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 
 type Deferred = { resolve: (r: UnaryResponse) => void; reject: (e: unknown) => void; req: UnaryRequest };
 
@@ -61,6 +62,27 @@ const withPriority = (r: UnaryRequest, priority: "critical" | "deferred"): Unary
 const flagsOf = (r: UnaryResponse) => r.message as unknown as { flags: { name: string }[] };
 
 beforeEach(() => resetCoalescingForTest());
+
+describe("coalescingInterceptor client metrics events", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("coalesce_should_EmitOnlyJoinedEvents_And_SurviveAThrowingSink", async () => {
+    const track = jest.fn((_event: { name: string; labels?: Record<string, string> }) => {
+      throw new Error("sink exploded");
+    });
+    setRpcTimingSink({ track });
+    const { calls, run } = setup();
+    const results = Array.from({ length: 3 }, () => run(flagsReq()));
+    expect(calls).toHaveLength(1);
+    calls[0].resolve(flagsRes(calls[0].req));
+    await Promise.all(results);
+    const outcomes = track.mock.calls.filter(([e]) => e.name === "cm.coalesce").map(([e]) => e.labels);
+    expect(outcomes).toEqual([
+      { method: "GetFeatureFlags", outcome: "joined" },
+      { method: "GetFeatureFlags", outcome: "joined" },
+    ]);
+  });
+});
 
 describe("coalescingInterceptor", () => {
   it("coalesce_should_NotMergeCriticalCallerIntoDeferredFlight_When_PrioritiesDiffer", () => {

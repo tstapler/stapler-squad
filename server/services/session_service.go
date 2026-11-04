@@ -84,6 +84,7 @@ type FeatureController interface {
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
+	tccEnrichment     tccEnrichmentState
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
@@ -321,9 +322,9 @@ type SessionService struct {
 	// inside NewSessionService.
 	quotaGate *QuotaGate
 
-	// analyticsClient is the ent client for the analytics database (escape events, etc.).
+	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
-	analyticsClient *ent.Client
+	escapeEventsClient *ent.Client
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
@@ -587,7 +588,7 @@ type ScrollbackSequencer interface {
 //
 //   Phase 2 (from server/dependencies.go after NewSessionService returns):
 //     SetErrorRegistry      — built from storage.GetEntClient() after storage is opened
-//     SetAnalyticsClient    — same ent client, pre-existing connection path
+//     SetEscapeEventsClient  — escape-events database client
 //     SetNotificationStore  — built from config dir (lazy path resolution)
 //     SetConfigService      — thin wrapper, wired for test-overridability
 //     SetMCPServerURL       — env-var / config value, not available inside package
@@ -1150,8 +1151,8 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		}
 		return ""
 	})
-	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
-	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)

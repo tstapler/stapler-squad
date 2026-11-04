@@ -130,6 +130,9 @@ func fixture(t *testing.T, commit bool) string {
 	require.NoError(t, err)
 	dir = realPath(t, dir)
 	mustGit(t, dir, "init", "-q", "-b", "main", "--template=")
+	// A post-commit `maintenance --auto` can create and delete objects/maintenance.lock while copyTree walks the fixture.
+	mustGit(t, dir, "config", "maintenance.auto", "false")
+	mustGit(t, dir, "config", "gc.auto", "0")
 	if commit {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600))
 		mustGit(t, dir, "add", "-A")
@@ -151,6 +154,9 @@ func copyTree(t *testing.T, src, dst string) {
 			return os.MkdirAll(target, 0o700)
 		}
 		data, err := os.ReadFile(p)
+		if os.IsNotExist(err) { // a transient git lock file vanished between listing and read
+			return nil
+		}
 		if err != nil {
 			return err
 		}

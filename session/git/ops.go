@@ -587,14 +587,19 @@ func ListShippedCommits(ctx context.Context, repoPath, baseSHA, headSHA string) 
 // listShippedCommitsCap constant, so a test can exercise the truncated==true
 // path against a small fixture (e.g. cap=3) instead of needing a 100+-commit
 // repo.
+//
+// The walk is bounded by the size of the base..head range, not by the depth of
+// base's history; see walkShippedRange. Commits come back newest-first by
+// committer time.
 func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA string, maxCommits int) ([]ShippedCommit, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	repo, err := OpenRepo(repoPath)
+	repo, closeRepo, err := native.OpenRepoKeepDescriptors(repoPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
+	defer closeRepo()
 
 	head, err := repo.CommitObject(plumbing.NewHash(headSHA))
 	if err != nil {
@@ -605,28 +610,9 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
 	}
 
-	// baseAncestors is base's reachable-commit set, computed once up front.
-	// The naive alternative — calling c.IsAncestor(base) inside the walk below
-	// for every node c — makes IsAncestor's own O(history-depth) BFS run once
-	// per visited node, i.e. O(N×M) overall; this single bounded walk plus an
-	// O(1) map lookup per node is O(M) total.
-	baseAncestors, err := reachableAncestors(repo, base.Hash)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to compute ancestor set for %s: %w", baseSHA, err)
-	}
-
-	var commits []ShippedCommit
-	seen := map[plumbing.Hash]bool{head.Hash: true}
-	queue := []*object.Commit{head}
-	for len(queue) > 0 && len(commits) < maxCommits {
-		if err := ctx.Err(); err != nil {
-			return commits, len(commits) >= maxCommits, err
-		}
-		c := queue[0]
-		queue = queue[1:]
-		if baseAncestors[c.Hash] {
-			continue
-		}
+	walked, truncated, err := walkShippedRange(ctx, repo.Storer, head, base, maxCommits)
+	commits := make([]ShippedCommit, 0, len(walked))
+	for _, c := range walked {
 		summary, _, _ := strings.Cut(c.Message, "\n")
 		commits = append(commits, ShippedCommit{
 			SHA:        c.Hash.String(),
@@ -634,45 +620,11 @@ func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA s
 			AuthorAt:   c.Author.When,
 			AuthorName: c.Author.Name,
 		})
-		if err := c.Parents().ForEach(func(p *object.Commit) error {
-			if !seen[p.Hash] {
-				seen[p.Hash] = true
-				queue = append(queue, p)
-			}
-			return nil
-		}); err != nil {
-			return commits, len(commits) >= maxCommits, err
-		}
 	}
-	return commits, len(commits) >= maxCommits, nil
-}
-
-// maxReachableAncestorsCommits caps reachableAncestors' walk, mirroring
-// session/unfinished's maxReachableSetCommits — a bound on an otherwise
-// unbounded history walk. Declared as a var so a test can lower it without
-// needing thousands of fixture commits.
-var maxReachableAncestorsCommits = 50_000
-
-// reachableAncestors returns the set of commits reachable from start by
-// walking parent links (i.e. start's ancestors, including start itself), up
-// to maxReachableAncestorsCommits commits.
-func reachableAncestors(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
-	seen := make(map[plumbing.Hash]bool, 64)
-	iter, err := repo.Log(&git.LogOptions{From: start})
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
+		return commits, truncated, err
 	}
-	defer iter.Close()
-	if err := iter.ForEach(func(c *object.Commit) error {
-		if len(seen) >= maxReachableAncestorsCommits {
-			return storer.ErrStop
-		}
-		seen[c.Hash] = true
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("failed to walk history from %s: %w", start, err)
-	}
-	return seen, nil
+	return commits, truncated, nil
 }
 
 // AggregateDiffStat is the files-changed/additions/deletions summary
@@ -696,7 +648,15 @@ func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (Ag
 	if err := ctx.Err(); err != nil {
 		return AggregateDiffStat{}, err
 	}
-	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if baseSHA == headSHA {
+		return AggregateDiffStat{}, nil
+	}
+	repo, closeRepo, err := native.OpenRepoKeepDescriptors(repoPath)
+	if err != nil {
+		return AggregateDiffStat{}, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	defer closeRepo()
+	stats, err := fileStatsBetweenCtx(ctx, repo, repoPath, baseSHA, headSHA)
 	if err != nil {
 		return AggregateDiffStat{}, err
 	}
@@ -779,52 +739,88 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	if baseSHA == headSHA {
 		return nil, nil
 	}
-
-	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	return fileStatsBetweenCtx(context.Background(), repo, repoPath, baseSHA, headSHA)
+}
+
+// fileStatsBetweenCtx is FileStatsBetween over an already-open repo, diffing
+// one changed file at a time so ctx can stop it between files (go-git's
+// whole-tree Patch takes no ctx per file and cannot be interrupted).
+func fileStatsBetweenCtx(ctx context.Context, repo *git.Repository, repoPath, baseSHA, headSHA string) ([]FileStat, error) {
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
+	}
+	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
+	}
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+	changes, err := baseTree.DiffContext(ctx, headTree)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 	}
 
 	var stats []FileStat
-	for _, fp := range patch.FilePatches() {
-		chunks := fp.Chunks()
-		if len(chunks) == 0 {
-			// Binary file (or submodule ref update) — no line-level diff to
-			// report; see the doc comment above.
-			continue
+	for _, change := range changes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-
-		from, to := fp.Files()
-		stat := FileStat{}
-		switch {
-		case from == nil:
-			stat.Status = "added"
-			stat.Path = to.Path()
-		case to == nil:
-			stat.Status = "deleted"
-			stat.Path = from.Path()
-		case from.Path() != to.Path():
-			stat.Status = "renamed"
-			stat.Path = to.Path()
-		default:
-			stat.Status = "modified"
-			stat.Path = to.Path()
+		patch, err := change.PatchContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 		}
-
-		for _, chunk := range chunks {
-			lines := countChunkLines(chunk.Content())
-			switch chunk.Type() {
-			case fdiff.Add:
-				stat.Additions += lines
-			case fdiff.Delete:
-				stat.Deletions += lines
+		for _, fp := range patch.FilePatches() {
+			if stat, ok := fileStatFromFilePatch(fp); ok {
+				stats = append(stats, stat)
 			}
 		}
-
-		stats = append(stats, stat)
 	}
-
 	return stats, nil
+}
+
+// fileStatFromFilePatch summarizes one file's patch; ok is false for binary
+// files and submodule-ref changes, which have no line-level chunks.
+func fileStatFromFilePatch(fp fdiff.FilePatch) (stat FileStat, ok bool) {
+	chunks := fp.Chunks()
+	if len(chunks) == 0 {
+		return FileStat{}, false
+	}
+	from, to := fp.Files()
+	switch {
+	case from == nil:
+		stat.Status = "added"
+		stat.Path = to.Path()
+	case to == nil:
+		stat.Status = "deleted"
+		stat.Path = from.Path()
+	case from.Path() != to.Path():
+		stat.Status = "renamed"
+		stat.Path = to.Path()
+	default:
+		stat.Status = "modified"
+		stat.Path = to.Path()
+	}
+	for _, chunk := range chunks {
+		lines := countChunkLines(chunk.Content())
+		switch chunk.Type() {
+		case fdiff.Add:
+			stat.Additions += lines
+		case fdiff.Delete:
+			stat.Deletions += lines
+		}
+	}
+	return stat, true
 }
 
 // diffPatchBetween opens repoPath, resolves baseSHA/headSHA, and returns the

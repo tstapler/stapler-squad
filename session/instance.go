@@ -689,7 +689,21 @@ type Instance struct {
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	// -1 reserves automatic hibernation; nonnegative values count attached streams.
+	terminalViewers      atomic.Int64
+	terminalViewClosedAt atomic.Int64
+
 	snapshot atomic.Pointer[InstanceSnapshot]
+
+	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
+	LastMeaningfulChangeAt time.Time
+	// TurnEnded is the latest agent turn-end fact (zero until one is recorded).
+	TurnEnded TurnEnded
+
+	// collabMu guards the registration-time collaborators below; nil means no-op.
+	collabMu      sync.RWMutex
+	turnEndSink   TurnEndSink
+	eventRecorder SessionEventRecorder
 
 	// liveInstance is the actor handle for this instance; set by NewLiveInstance.
 	// Accessed atomically so actor helpers (sendSyncErr/send/sendCtx) can route
@@ -747,6 +761,10 @@ type Instance struct {
 	// StartSessionDriver call may spawn a new driver goroutine for it, no
 	// matter how late that call arrives relative to Destroy().
 	driverDestroyed bool
+	// driverGoroutines counts live driver goroutines (the initial one plus any
+	// restartForRetry continuation) so driverRunning clears only when the last
+	// one exits. Guarded by driverMu, like driverRunning's transitions.
+	driverGoroutines int
 	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
 	// handleDriverFailure-spawned restart) so tests can join it before
 	// t.TempDir() cleanup runs via JoinSessionDriver. StopSessionDriver
@@ -757,7 +775,8 @@ type Instance struct {
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
-	hibernateWG sync.WaitGroup
+	hibernateWG         sync.WaitGroup
+	hibernateTeardownWG sync.WaitGroup
 
 	// scrollLease serializes this instance's own concurrent
 	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
@@ -1240,11 +1259,12 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	instance.pinResolvedBackend()
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()
@@ -1643,7 +1663,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	var setupErr error
 	defer func() {
 		if setupErr != nil {
-			if cleanupErr := i.Kill(); cleanupErr != nil {
+			if cleanupErr := i.cleanupAfterFailedStart(firstTimeSetup); cleanupErr != nil {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
 		}
@@ -1909,7 +1929,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	var setupErr error
 	defer func() {
 		if setupErr != nil {
-			if cleanupErr := i.Kill(); cleanupErr != nil {
+			if cleanupErr := i.cleanupAfterFailedStart(firstTimeSetup); cleanupErr != nil {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
 			if setupCleanup && cleanup != nil {
@@ -2099,10 +2119,46 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	return nil
 }
 
-// Kill terminates the instance and cleans up all resources
-// Kill destroys both tmux session and worktree (legacy method)
+// cleanupAfterFailedStart releases what a failed start acquired. A first-time setup created
+// its worktree, so Kill (which still keeps a dirty one) is right. A restore did not: the
+// worktree predates the attempt, and a transient failure (tmux killed, restart-storm guard)
+// must never delete it. This once removed 14 worktrees after a restart.
+func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
+	if firstTimeSetup {
+		return i.Kill()
+	}
+	i.stopVNC()
+	i.stopCDP()
+	// A session that ran before this attempt is released, not killed.
+	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	return i.killSessionAttachedByThisAttempt()
+}
+
+// Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a
+// worktree that holds uncommitted changes (legacy name).
 func (i *Instance) Kill() error {
 	return i.Destroy()
+}
+
+// CheckWorktreeRemovable returns nil when removing this session's worktree cannot lose
+// uncommitted work: there is no worktree, it is gone from disk, or it is clean. It returns
+// ErrWorktreeDirty (or ErrDirtyStateUnknown when the check itself fails) otherwise.
+func (i *Instance) CheckWorktreeRemovable() error {
+	if !i.gitManager.HasWorktree() {
+		return nil // CleanupWorktree is a no-op without one
+	}
+	// Not worktreeNeedsCommit: its IsWorktree gate would let an attached worktree through
+	// unchecked, and this is the guard in front of a delete.
+	dirty, err := i.worktreeDirtyOnDisk()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.gitManager.GetWorktreePath())
+	}
+	return nil
 }
 
 // destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
@@ -2117,11 +2173,24 @@ func (i *Instance) Kill() error {
 // fires — this bounds the wait, not the work.
 const destroyChainTimeout = 5 * time.Second
 
-// Destroy completely destroys the instance - both tmux session and worktree.
+// Destroy tears down the tmux session and removes the worktree, unless the worktree holds
+// uncommitted changes (or its state can't be determined): then the worktree is kept and
+// ErrWorktreeDirty / ErrDirtyStateUnknown is returned. Use ForceDestroy to discard
+// uncommitted work.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	return i.destroy(false)
+}
+
+// ForceDestroy is Destroy that removes the worktree even if it holds uncommitted changes.
+// Only an explicit user request to discard the session's work should reach it.
+func (i *Instance) ForceDestroy() error {
+	return i.destroy(true)
+}
+
+func (i *Instance) destroy(force bool) error {
 	// Set first, before anything else: a leftover SessionDriver goroutine
 	// (session_driver.go) polls this every driverPollInterval and exits on
 	// seeing it, rather than continuing until its own 25-minute deadline.
@@ -2165,7 +2234,7 @@ func (i *Instance) Destroy() error {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- i.destroyChain()
+		done <- i.destroyChain(force)
 	}()
 	select {
 	case err := <-done:
@@ -2178,7 +2247,7 @@ func (i *Instance) Destroy() error {
 // destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
 // teardown sequence. Split out of Destroy() so it can be bounded by
 // destroyChainTimeout without losing track of the goroutine it runs in.
-func (i *Instance) destroyChain() error {
+func (i *Instance) destroyChain(force bool) error {
 	// Stop the remote approval relay (if any) -- see SetRemoteApprovalRelay's
 	// doc comment. No-op for local sessions (always nil there).
 	i.stopRemoteApprovalRelay()
@@ -2206,7 +2275,14 @@ func (i *Instance) destroyChain() error {
 		_ = i.UpdateDiffStats()
 	}
 
-	// Then clean up git worktree
+	// Then clean up git worktree, unless it holds work that exists nowhere else.
+	if !force {
+		if err := i.CheckWorktreeRemovable(); err != nil {
+			log.Warn("destroy: keeping worktree", "session", i.Title, "err", err)
+			// errors.Join, not combineErrors: callers match ErrWorktreeDirty with errors.Is.
+			return errors.Join(i.combineErrors(errs), err)
+		}
+	}
 	if err := i.CleanupWorktree(); err != nil {
 		errs = append(errs, err)
 	}
@@ -2231,6 +2307,12 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 	if !i.gitManager.HasWorktree() {
 		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
 	}
+	return i.worktreeDirtyOnDisk()
+}
+
+// worktreeDirtyOnDisk reports whether the attached worktree directory holds uncommitted
+// changes, bypassing IsDirty's TTL cache. Requires gitManager.HasWorktree().
+func (i *Instance) worktreeDirtyOnDisk() (bool, error) {
 	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
 		return false, nil // nothing on disk to lose
 	} else if err != nil {
@@ -2412,6 +2494,7 @@ func (i *Instance) Resume() error {
 				}
 				return fmt.Errorf("failed to start new session: %w", err)
 			}
+			i.attachPTYAfterStart(worktreePath)
 		}
 	} else {
 		// Tmux session is dead (killed on pause to free memory).
@@ -2438,6 +2521,7 @@ func (i *Instance) Resume() error {
 			}
 			return fmt.Errorf("failed to start new session: %w", err)
 		}
+		i.attachPTYAfterStart(worktreePath)
 	}
 
 	i.mu.Lock()
@@ -2458,6 +2542,17 @@ func (i *Instance) Resume() error {
 	}
 
 	return nil
+}
+
+// attachPTYAfterStart attaches the write PTY that pm().Start() leaves unattached
+// (it only creates the detached session). Without it, SendKeys on a resumed
+// session fails with "PTY not initialized". RestoreWithWorkDir returns nil even
+// when the attach fails, so GetPTY() is the real check.
+func (i *Instance) attachPTYAfterStart(workDir string) {
+	_ = i.pm().RestoreWithWorkDir(workDir)
+	if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+		logPTYUnavailableIfUnexpected("resume: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
+	}
 }
 
 // StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
@@ -2588,13 +2683,31 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 // that backend instead of respawning in place: there's no live hand-off
 // between daemons, so this kills, rebuilds under the new backend, and
 // resumes -- same mechanism as an in-place restart.
-func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) error {
-	if !i.started.Load() {
-		return ErrCannotRestart
-	}
-
+func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) (retErr error) {
 	if err := validateBackendOverride(backendOverride); err != nil {
 		return err
+	}
+
+	// A PermanentlyFailed/Failed session that never started this process (boot Start
+	// rejected the transition) is still an explicit-user restart target; reset it the
+	// way RetryNow does. Stopped (deliberate) and Active/Paused with started=false
+	// stay rejected.
+	recovered := false
+	if !i.started.Load() {
+		prev := i.GetLifecycleStatus()
+		if prev != PermanentlyFailed && prev != Failed {
+			return ErrCannotRestart
+		}
+		i.RecoverFromStopped()
+		recovered = true
+		defer func() {
+			if retErr != nil {
+				i.restoreTerminalStatus(prev)
+			}
+		}()
+		if err := i.recreateWorktreeIfMissing(); err != nil {
+			return err
+		}
 	}
 
 	migrating := backendOverride != "" && backendOverride != i.Backend
@@ -2690,9 +2803,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	// For paused sessions, transition to Active now that the new tmux session is live.
 	// For already-active sessions, preserve the existing status.
 	i.mu.Lock()
-	if waspaused {
+	if waspaused || recovered {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
-			log.Warn("restart: failed to transition from paused to active", "session", i.Title, "err", err)
+			log.Warn("restart: failed to transition to active", "session", i.Title, "err", err)
 			i.setStatus(Active)
 		}
 		i.started.Store(true)
@@ -2702,5 +2815,38 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	i.mu.Unlock()
 
 	log.Info("successfully restarted session", "session", i.Title)
+	return nil
+}
+
+// restoreTerminalStatus undoes RecoverFromStopped after a failed restart so the
+// session stays a restart/retry candidate instead of stranding in Creating.
+func (i *Instance) restoreTerminalStatus(prev Status) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.Status != Creating || i.started.Load() {
+		return // a concurrent restart/retry already moved it on; don't clobber
+	}
+	i.loadStatus(prev)
+	i.snapshot.Store(buildSnapshot(i))
+}
+
+// recreateWorktreeIfMissing re-creates the session's worktree when its directory
+// vanished from disk (see tmux.ErrWorkDirMissing); Start/Restart never do this on
+// their own, so a retry would otherwise fail identically forever.
+func (i *Instance) recreateWorktreeIfMissing() error {
+	if !i.gitManager.HasWorktree() {
+		return nil
+	}
+	workDir := i.GetEffectiveRootDir()
+	if workDir == "" {
+		return nil
+	}
+	if _, statErr := os.Stat(workDir); !errors.Is(statErr, os.ErrNotExist) {
+		return nil
+	}
+	if err := i.gitManager.Setup(); err != nil {
+		return err
+	}
+	log.Info("recreated missing worktree", "session", i.Title, "path", workDir)
 	return nil
 }

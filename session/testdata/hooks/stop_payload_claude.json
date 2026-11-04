@@ -1,0 +1,16 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/USER/.claude/projects/-home-USER-repo/00000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/home/USER/repo",
+  "scratchpad_dir": "/tmp/claude-1000/-home-USER-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-0000000000a1",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Which approach do you want, A or B?",
+  "background_tasks": [],
+  "session_crons": []
+}

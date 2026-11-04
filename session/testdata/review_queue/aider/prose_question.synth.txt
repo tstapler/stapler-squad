@@ -1,0 +1,5 @@
+I've updated the token issuer. Would you like me to also update the
+tests in tests/test_auth.py to cover expiry handling?
+
+────────────────────────────────────────────────────────
+> 

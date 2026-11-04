@@ -1,0 +1,2 @@
+modes/insert_mode_on -- xterm ctlseqs IRM 4h
+[1;1HABCDEFGH[1;4H[4hXY[4l insert mode shifted the tail

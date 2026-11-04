@@ -119,9 +119,11 @@ export function SessionDetail({
 
   // Prefetch VCS data as soon as a session is selected so tabs load instantly.
   useEffect(() => {
+    // A hidden-window pane fetches nothing; an unfocused one prefetches as background so the cap applies.
+    if (pollMode === "off") return;
     const baseUrl = getApiBaseUrl();
-    prefetchVcsStatus(session.id, baseUrl);
-  }, [session.id]);
+    prefetchVcsStatus(session.id, baseUrl, pollMode === "fast");
+  }, [session.id, pollMode]);
 
   const detailView = (
     <SessionDetailView

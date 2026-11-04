@@ -34,8 +34,9 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { VcsWidgetPage } from "./pages/VcsWidgetPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 async function waitForBacklogRPCsEnabled(request: APIRequestContext) {
   for (let attempt = 0; attempt < 20; attempt++) {

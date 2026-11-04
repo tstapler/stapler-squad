@@ -1,7 +1,7 @@
 {
   "id": "backlog:jump-to-session",
   "type": "frontend",
-  "description": "Single button + role picker on a backlog item's Sessions section that opens a real, interactive terminal for its most recent linked session, expanded inline in the detail pane with no page navigation",
+  "description": "Single button + role picker on a backlog item's Sessions section that opens a real, interactive terminal for its most recent linked session, expanded inline in the detail pane on desktop, or in a full-screen SessionPeekModal on mobile (<600px), with no page navigation",
   "component": "JumpToSessionPanel",
   "path": "web-app/src/components/backlog/detail/JumpToSessionPanel.tsx",
   "markerLine": 2,
@@ -13,6 +13,10 @@
     "JumpToSessionPanel_should_ShowError_When_GetSessionReturnsNull",
     "JumpToSessionPanel_should_CollapsePanel_When_ClickedAgain",
     "JumpToSessionPanel_should_SwitchTargetSession_When_DifferentRoleChosenFromMenu",
+    "JumpToSessionPanel_should_OpenModal_When_MobileAndButtonClicked",
+    "JumpToSessionPanel_should_CloseModal_When_MobileAndModalClosed",
+    "JumpToSessionPanel_should_OpenModalForChosenRole_When_MobileAndRoleChosenFromMenu",
+    "JumpToSessionPanel_should_KeepInlineExpandAndNoModal_When_Desktop",
     "tests/e2e/jump-to-session.spec.ts (opens a real terminal for the most recent session in place, with no page navigation)",
     "tests/e2e/jump-to-session.spec.ts (switches the open terminal to a different role via the role picker)",
     "tests/e2e/jump-to-session.spec.ts (renders a touch-sized jump button at mobile width)"

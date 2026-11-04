@@ -23,6 +23,7 @@ import React from "react";
 
 jest.mock("@xterm/xterm", () => {
   class MockTerminal {
+    unicode = { activeVersion: "6" };
     static instances: MockTerminal[] = [];
     cols = 80;
     rows = 24;
@@ -115,6 +116,11 @@ jest.mock("@xterm/addon-web-links", () => {
   return { WebLinksAddon: MockWebLinksAddon };
 });
 
+jest.mock("@xterm/addon-unicode11", () => {
+  class MockUnicode11Addon {}
+  return { Unicode11Addon: MockUnicode11Addon };
+});
+
 jest.mock("@xterm/addon-search", () => {
   class MockSearchAddon {
     findNext = jest.fn(() => true);
@@ -127,6 +133,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { CanvasAddon } from "@xterm/addon-canvas";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import {
   XtermTerminal,
   shouldScheduleFit,
@@ -798,5 +805,14 @@ describe('XtermTerminal', () => {
   test('renders with default props', () => {
     const { container } = render(<XtermTerminal />);
     expect(container.firstChild).toBeInTheDocument();
+  });
+});
+
+describe("XtermTerminal unicode widths", () => {
+  it("loads the Unicode 11 addon and activates it so wide emoji match the daemon's cell layout", async () => {
+    const { terminal } = await mountAndSettle();
+
+    expect(terminal.loadedAddons.some((a: any) => a instanceof Unicode11Addon)).toBe(true);
+    expect((terminal as any).unicode.activeVersion).toBe("11");
   });
 });

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
@@ -333,7 +334,7 @@ func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
 			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
@@ -920,12 +921,26 @@ func (i *Instance) initTmuxSession() {
 
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
-	if i.pm().HasSession() {
+	// An unrestored tymux record has no pane yet but still owns a daemon session.
+	return i.killSession(i.tymuxSessionID() != "")
+}
+
+// killSession closes the process session when a pane is attached, and also when
+// includeUnrestored is set and the record only stores a daemon session id.
+func (i *Instance) killSession(includeUnrestored bool) error {
+	if i.pm().HasSession() || includeUnrestored {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
 	}
 	return nil
+}
+
+// killSessionAttachedByThisAttempt is KillSession for a failed Start's cleanup: it never
+// closes a stored daemon session the failed attempt did not attach or create, which a
+// transient create/list error must not turn into killing a running agent.
+func (i *Instance) killSessionAttachedByThisAttempt() error {
+	return i.killSession(false)
 }
 
 // KillSessionKeepWorktree terminates tmux session but preserves worktree for recovery scenarios.
@@ -1119,6 +1134,24 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	return false
 }
 
+// IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
+// pane (a liveness shadow or a not-yet-restored record), the record's persisted
+// daemon session. Only for "is some session still running" lookups: stream
+// paths must keep using IsBackendProcessAlive, since a true answer there means
+// a pane is attached and skips RestoreProcess.
+func (i *Instance) IsLiveOrStoredSessionLive() bool {
+	if i.IsBackendProcessAlive() {
+		return true
+	}
+	if i.pm().HasSession() {
+		return false
+	}
+	if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+		return p.StoredSessionLive()
+	}
+	return false
+}
+
 // GetCurrentWorkingDirectory returns the actual runtime working directory of
 // the instance's live pane/process (via pane or process introspection) — as
 // opposed to GetPath()/GetEffectiveRootDir(), which report the persisted
@@ -1127,6 +1160,35 @@ func (i *Instance) IsBackendProcessAlive() bool {
 // some OTHER session's real cwd sits inside a worktree about to be removed.
 func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
 	return i.pm().GetCurrentWorkingDirectory()
+}
+
+// PrepareRetainedTerminalView adopts an existing pane for inactive-session viewing.
+// handled distinguishes this read-only path from normal active-session restoration.
+func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled bool, err error) {
+	snap := i.Snapshot()
+	if snap.ArchivedAt == nil && (snap.Status == Active || snap.Status == Creating || snap.Status == Restoring) {
+		return false, nil
+	}
+	p, ok := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		if snap.ArchivedAt != nil {
+			return true, nil // An archived view must never enter the mutating restore path.
+		}
+		return false, nil
+	}
+	return true, p.AdoptForViewing(ctx)
+}
+
+// terminalScreenReady separates retained-screen reads from process/input readiness.
+func (i *Instance) terminalScreenReady() bool {
+	if i.Snapshot().Status == Paused {
+		return false
+	}
+	if i.started.Load() {
+		return true
+	}
+	_, retained := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	return retained && i.pm().HasSession()
 }
 
 // RestoreProcess is the backend-agnostic replacement for reaching into a
@@ -1349,7 +1411,8 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 		return p.CapturePaneContentPriority()
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentPriority")
-	return i.pm().CapturePaneContent()
+	// Scroll-forward and resync read an exited pane's final grid, so don't surface the exit.
+	return tymux.FinalScreen(i.pm().CapturePaneContent())
 }
 
 // CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
@@ -1364,7 +1427,7 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 // GetPaneDimensionsPriority in sequence, and all of them must share the same
 // overall deadline rather than each getting an independent fresh one.
 func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
@@ -1450,7 +1513,7 @@ func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 
@@ -1466,6 +1529,32 @@ func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 // StreamHub.applyNegotiatedSize.
 func (i *Instance) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
 	return i.CapturePaneContentRawPriority(ctx)
+}
+
+// CapturePaneRedraw captures a first paint that restores terminal state (modes, title, alt
+// screen, scroll region, cursor) when the backend can produce one, so an attaching client's keys,
+// paste and mouse work immediately. ok is false for backends that only have a text capture (tmux)
+// and for a daemon too old to report terminal state, leaving callers on CapturePaneContentRaw's
+// legacy paint; the no-capability case never touches the pane.
+// Satisfies streamhub.FullStateSnapshotter.
+func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSnapshot, bool, error) {
+	c, ok := capabilityOf[RedrawCapturer](i.pm())
+	if !ok {
+		return streamhub.FullStateSnapshot{}, false, nil
+	}
+	if !i.terminalScreenReady() {
+		return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted
+	}
+	data, altScreen, ok, err := c.CapturePaneRedraw(ctx)
+	if err != nil || !ok {
+		return streamhub.FullStateSnapshot{}, false, err
+	}
+	// The daemon's emulator is the authority on alt screen; keep the live-tracked flag that
+	// AppScrollGate reads in step, as IsAlternateScreenActiveBootstrap does for tmux.
+	if !i.GetAltScreenBootstrapped() || i.GetAltScreenActive() != altScreen {
+		i.SetAltScreenActiveBootstrap(altScreen)
+	}
+	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.
@@ -1685,6 +1774,13 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)
+}
+
+// CanFallBackToTmuxSendKeys reports whether the pane is a real tmux session, so `tmux send-keys`
+// against a title-derived session name can reach it. False for tymux and native backends.
+func (i *Instance) CanFallBackToTmuxSendKeys() bool {
+	_, ok := capabilityOf[TmuxSessionAccessor](i.pm())
+	return ok
 }
 
 // GetPanePID returns the PID of the foreground process in the tmux pane.

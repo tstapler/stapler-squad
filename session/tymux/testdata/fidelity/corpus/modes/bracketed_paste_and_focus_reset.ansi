@@ -1,0 +1,2 @@
+modes/bracketed_paste_and_focus_reset -- xterm ctlseqs ?2004 / ?1004
+[?2004h[?1004h[?2004l[?1004lboth set then both reset

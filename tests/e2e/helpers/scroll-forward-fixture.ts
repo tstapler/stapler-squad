@@ -26,9 +26,10 @@ import * as path from 'path';
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { SessionClient, type Session } from './session-client';
 import { SessionDetailPage } from '../pages/SessionDetailPage';
+import { baseUrl, testDir } from './base-url';
 
-export const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
-export const TEST_DIR = process.env.TEST_SERVER_TESTDIR;
+export const BASE_URL = baseUrl();
+export const TEST_DIR = testDir();
 
 /** config.FeatureAppScrollForwardingClaude (config/config.go). */
 export const APP_SCROLL_FORWARD_FLAG = 'terminal:app-scrollback-forwarding:claude';

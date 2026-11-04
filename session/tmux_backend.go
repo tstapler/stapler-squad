@@ -163,25 +163,31 @@ func (b *TmuxBackend) HasSession() bool            { return b.mgr.HasSession() }
 
 // --- Terminal I/O ---
 
-func (b *TmuxBackend) GetPTY() (*os.File, error)          { return b.mgr.GetPTY() }
-func (b *TmuxBackend) SendKeys(keys string) (int, error)  { return b.mgr.SendKeys(keys) }
+func (b *TmuxBackend) GetPTY() (*os.File, error) { return b.mgr.GetPTY() }
+func (b *TmuxBackend) SendKeys(keys string) (int, error) {
+	return timeBackendOp(tmuxIOOps.sendKeys, func() (int, error) { return b.mgr.SendKeys(keys) })
+}
 func (b *TmuxBackend) TapEnter() error                    { return b.mgr.TapEnter() }
 func (b *TmuxBackend) SendPromptWithEnter(p string) error { return b.mgr.SendPromptWithEnter(p) }
 func (b *TmuxBackend) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	return b.mgr.SendInputViaControlMode(ctx, data)
+	return timeBackendOpErr(tmuxIOOps.writeStdin, func() error { return b.mgr.SendInputViaControlMode(ctx, data) })
 }
 
 // --- Terminal state ---
 
-func (b *TmuxBackend) CapturePaneContent() (string, error) { return b.mgr.CapturePaneContent() }
+func (b *TmuxBackend) CapturePaneContent() (string, error) {
+	return timeBackendOp(tmuxIOOps.capturePane, b.mgr.CapturePaneContent)
+}
 func (b *TmuxBackend) CapturePaneContentRaw() (string, error) {
-	return b.mgr.CapturePaneContentRaw()
+	return timeBackendOp(tmuxIOOps.capturePane, b.mgr.CapturePaneContentRaw)
 }
 func (b *TmuxBackend) CapturePaneContentWithOptions(start, end string) (string, error) {
-	return b.mgr.CapturePaneContentWithOptions(start, end)
+	return timeBackendOp(tmuxIOOps.capturePane, func() (string, error) {
+		return b.mgr.CapturePaneContentWithOptions(start, end)
+	})
 }
 func (b *TmuxBackend) CaptureViewport(lines int) (string, error) {
-	return b.mgr.CaptureViewport(lines)
+	return timeBackendOp(tmuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })
 }
 func (b *TmuxBackend) GetCursorPosition() (x, y int, err error) {
 	return b.mgr.GetCursorPosition()
@@ -189,9 +195,11 @@ func (b *TmuxBackend) GetCursorPosition() (x, y int, err error) {
 func (b *TmuxBackend) GetPaneDimensions() (width, height int, err error) {
 	return b.mgr.GetPaneDimensions()
 }
-func (b *TmuxBackend) SetWindowSize(cols, rows int) error { return b.mgr.SetWindowSize(cols, rows) }
+func (b *TmuxBackend) SetWindowSize(cols, rows int) error {
+	return timeBackendOpErr(tmuxIOOps.resize, func() error { return b.mgr.SetWindowSize(cols, rows) })
+}
 func (b *TmuxBackend) SetDetachedSize(w, h int, title string) error {
-	return b.mgr.SetDetachedSize(w, h, title)
+	return timeBackendOpErr(tmuxIOOps.resize, func() error { return b.mgr.SetDetachedSize(w, h, title) })
 }
 func (b *TmuxBackend) RefreshClient() error { return b.mgr.RefreshClient() }
 

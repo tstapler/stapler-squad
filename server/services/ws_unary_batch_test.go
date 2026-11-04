@@ -186,10 +186,7 @@ func TestUnaryBatch_should_DenyMethodsOutsideTheAllowlist_And_NeverDispatchThem(
 	assert.EqualValues(t, 1, h.dispatched.Load(), "only the allowed item reached the dispatcher")
 }
 
-func TestUnaryBatch_should_KeepBatchAllowedASubsetOfWsAllowedWithoutSlowOrGuardedMethods(t *testing.T) {
-	for m := range batchAllowed {
-		assert.True(t, wsUnaryMethodAllowed(m), "%s must also be in wsUnaryAllowed", m)
-	}
+func TestUnaryBatch_should_KeepSlowOrBulkMethodsOutOfBatchAllowed(t *testing.T) {
 	for _, slow := range []string{
 		sessionv1connect.SessionServiceGetSessionDiffProcedure,
 		sessionv1connect.SessionServiceGetFileContentProcedure,

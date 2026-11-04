@@ -32,7 +32,6 @@ func lockForWorktree(worktreePath string) *sync.Mutex {
 var ScaffoldingExcludePatterns = []string{
 	".backlog-context.md",
 	".claude/commands/backlog/",
-	"web-app/.next/",
 	"web-app/.out-tmp-*",
 	"web-app/.build/",
 }

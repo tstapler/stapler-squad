@@ -1,0 +1,4 @@
+modes/alt_screen_1049_ends_in_alt -- xterm ctlseqs ?1049h; snapshot is the alt screen
+primary text before alt
+[?1049h[2J[Halt screen content (1049)
+second alt line

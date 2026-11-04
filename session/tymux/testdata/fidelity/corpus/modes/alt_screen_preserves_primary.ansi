@@ -1,0 +1,2 @@
+modes/alt_screen_preserves_primary -- xterm ctlseqs ?1049; double enter
+[1;1HL01-primary[2;1HL02-primary[3;1HL03-primary[4;1HL04-primary[?1049h[2;2Hx[?1049h[3;3Hy[?1049l[6;1Hafter-double-enter-single-leave[?1049l[7;1Hextra-leave

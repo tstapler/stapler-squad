@@ -8,11 +8,12 @@ import { SessionDetail } from "../SessionDetail";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { AnnouncerContext } from "@/lib/hooks/useAnnounce";
 
-jest.mock("next/dynamic", () => () =>
-  function DetailViewStub() {
-    return <div data-testid="session-detail-view-stub" />;
-  },
-);
+jest.mock("@/lib/lazy", () => ({
+  lazyComponent: () =>
+    function DetailViewStub() {
+      return <div data-testid="session-detail-view-stub" />;
+    },
+}));
 jest.mock("@/lib/hooks/useSessionActions", () => ({ useSessionActions: () => ({}) }));
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   SessionVcsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,

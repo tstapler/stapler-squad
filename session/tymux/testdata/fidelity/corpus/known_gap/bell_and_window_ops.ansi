@@ -1,0 +1,2 @@
+known_gap/bell_and_window_ops -- BEL / CSI t window ops / DECSCUSR cursor shap
+bell[] winops[8;30;100t[14t[22;0t[23;0t[18t cursor-shape[3 q[0 q[?25l[?25h end

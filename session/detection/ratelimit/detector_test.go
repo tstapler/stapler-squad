@@ -555,9 +555,11 @@ func TestParseTimeWithTZ_Abbreviation_PDT(t *testing.T) {
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm PDT'")
 	}
-	la, _ := time.LoadLocation("America/Los_Angeles")
-	if result.In(la).Hour() != 23 {
-		t.Errorf("expected hour 23 in LA, got %d", result.In(la).Hour())
+	// PDT is a fixed UTC-7 offset; America/Los_Angeles would read PST (UTC-8)
+	// outside daylight saving time and shift the hour.
+	pdt := time.FixedZone("PDT", -7*3600)
+	if result.In(pdt).Hour() != 23 {
+		t.Errorf("expected hour 23 in PDT (UTC-7), got %d", result.In(pdt).Hour())
 	}
 }
 

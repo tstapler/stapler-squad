@@ -14,8 +14,9 @@ import AxeBuilder from '@axe-core/playwright';
 import { BackgroundSegment, NotificationTray, ToastDeck, clickWhenScrollIdle, openNotificationTray } from './pages/NotificationPanel';
 import { fakeHiddenSessions, hidden, seedFailureAt, type HiddenFixture } from './pages/HiddenSessionsFake';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 
 /** Eleven stopped hidden sessions with no notification history; `outcome(i)` is what the server reports. */
@@ -90,8 +91,11 @@ for (const key of ['V1', 'V2'] as const) {
       // app may rewrite the URL to its own window id afterwards, so the banner is the proof.
       const view = row.getByTestId('notification-view-output');
       await expect(view).toHaveAttribute('href', /tab=terminal&notification=/);
+      const markedRead = page.waitForResponse((r) => r.url().includes('MarkNotificationRead'));
       await clickWhenScrollIdle(page, view);
       await expect(page.getByTestId('readonly-banner')).toBeVisible();
+      // The reload below would abort a still-in-flight mark-read and leave the row unread for good.
+      await markedRead;
 
       // BA-9: the record is read, so the row is gone and the badge dropped.
       await expect.poll(async () => {

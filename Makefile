@@ -61,7 +61,7 @@ $(GOTESTSUM_BIN):
 	@echo "Installing gotestsum..."
 	@go install gotest.tools/gotestsum@v1.13.0
 
-.PHONY: ensure-tools
+.PHONY: ready-vt-conformance-gate ensure-tools
 # ensure-tools runs asdf install only when .tool-versions changes
 ensure-tools: $(ASDF_STAMP) ## Automatically install missing system tools (go, buf, node) via asdf or Homebrew
 
@@ -237,49 +237,20 @@ web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
-# WEB_BUILD selects the bundler: bun (default, web-app/build/, ADR-006) or next (explicit opt-in until PR 9 deletes it). Both write web-app/out.
-WEB_BUILD ?= bun
-ifneq ($(filter $(WEB_BUILD),next bun),$(WEB_BUILD))
-$(error WEB_BUILD must be "next" or "bun", got "$(WEB_BUILD)")
-endif
 # Bun builds are minified unless this is 0. Unminified until PR 8b turns minification on (plan Story 8.6, which deletes this line).
 WEB_MINIFY ?= 0
 
-# The stamp changes only when WEB_BUILD does, so flipping modes rebuilds web-app/out (and recopies dist) once, never twice.
-WEB_BUILD_STAMP := web-app/.web-build-mode
-.PHONY: FORCE-web-build-mode
-FORCE-web-build-mode: ;
-$(WEB_BUILD_STAMP): FORCE-web-build-mode
-	@[ "$$(cat $@ 2>/dev/null)" = "$(WEB_BUILD)" ] || echo "$(WEB_BUILD)" > $@
+BUN_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
 
-ifeq ($(WEB_BUILD),bun)
-WEB_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
-else
-WEB_BUILD_INPUTS := web-app/next.config.ts
-endif
-
-# end of the WEB_BUILD seam block (scripts/__tests__/makefile-web-build.test.mjs extracts everything above)
-
-# Build the web UI to web-app/out (Bun by default, Next with WEB_BUILD=next)
-web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(WEB_BUILD_INPUTS) $(WEB_BUILD_STAMP)
-ifeq ($(WEB_BUILD),bun)
+# Build the web UI to web-app/out with Bun (web-app/build/, ADR-006)
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/@vanilla-extract/integration || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
 		go run ./tools/shared-node-modules web-app; \
 	}
-	@echo "Building web UI with Bun (WEB_BUILD=bun, WEB_MINIFY=$(WEB_MINIFY))..."
+	@echo "Building web UI with Bun (WEB_MINIFY=$(WEB_MINIFY))..."
 	@cd web-app && WEB_MINIFY=$(WEB_MINIFY) bun build/build.ts
-else
-	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
-	@test -d web-app/node_modules/next || { \
-		echo "⚠️  node_modules incomplete, re-installing..."; \
-		go run ./tools/shared-node-modules web-app; \
-	}
-	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
-	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
-endif
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -291,7 +262,7 @@ server/web/dist: web-app/out
 	@touch server/web/dist # Update timestamp
 	@echo "✅ Web UI built and copied successfully"
 
-web-build: server/web/dist ## Build the web UI (Bun by default; WEB_BUILD=next for the Next pipeline)
+web-build: server/web/dist ## Build the web UI with Bun
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
@@ -356,12 +327,16 @@ install-mux: ensure-tools ## Build and install claude-mux to ~/.local/bin
 	@./scripts/install-mux.sh
 
 # ── Pinned tmux binary (for test isolation) ────────────────────────────────
-# Builds tmux 3.4 from the third_party/tmux git submodule.
+# Builds tmux 3.8 from the third_party/tmux git submodule.
 # Tests use TMUX_BIN=bin/tmux to run against the pinned binary instead of the
 # system tmux, ensuring reproducible results across developer machines and CI.
 
 BIN_TMUX        := bin/tmux
-TMUX_BUILD_STAMP := .tmux-build.stamp
+# Keep TMUX_PIN in step with the third_party/tmux submodule and scripts/build-tmux.sh;
+# it is in the stamp name so bumping the pin forces a rebuild (and rebuilds bin/tmux
+# before build-tmux-embed copies it into a release).
+TMUX_PIN := 3.8
+TMUX_BUILD_STAMP := .tmux-build-$(TMUX_PIN).stamp
 
 # Stamp-file approach: only rebuild when submodule source changes
 $(BIN_TMUX): $(TMUX_BUILD_STAMP)
@@ -377,7 +352,7 @@ $(TMUX_BUILD_STAMP):
 init-submodules: ## Initialize git submodules (required once after clone)
 	git submodule update --init --recursive
 
-build-tmux: ## Build pinned tmux 3.4 binary from third_party/tmux submodule
+build-tmux: ## Build pinned tmux 3.8 binary from third_party/tmux submodule
 	@./scripts/build-tmux.sh
 
 build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build -tags embed_tmux
@@ -401,7 +376,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.8.0
+TYMUX_VERSION ?= v1.12.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -618,10 +593,10 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	STAPLER_SQUAD_USE_CONTROL_MODE=false \
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
-# Isolated backend + next-dev DevStack (Next mode (removed in PR 9)) for manual testing (Epic 3.2,
+# Isolated backend + Bun dev server DevStack for manual testing (Epic 3.2,
 # scripts/dev-stack/launch.ts). Distinct from `make preview` (which runs the
 # built Go binary alone against the static-exported web UI) — this spins up
-# BOTH a backend and a real `next dev` on separately allocated ports, wired
+# BOTH a backend and the Bun dev server (web-app/build/dev.ts) on separately allocated ports, wired
 # together via STAPLER_SQUAD_EXTRA_ORIGINS/NEXT_PUBLIC_API_URL, and tears
 # both down (plus any orphaned grandchildren) on Ctrl-C.
 #
@@ -630,7 +605,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 DEV_STACK_TS_NODE := web-app/node_modules/.bin/ts-node
 DEV_STACK_TSC_OPTS := {"module":"commonjs","moduleResolution":"node","esModuleInterop":true}
 
-dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack NAME=my-feature-test
+dev-stack: build ## Start an isolated backend+Bun-dev-server DevStack: make dev-stack NAME=my-feature-test
 	@if [ -z "$(NAME)" ]; then \
 		echo "Usage: make dev-stack NAME=<instance-name>"; \
 		exit 1; \
@@ -816,7 +791,7 @@ test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged
 	@$(MAKE) --no-print-directory test-delivery-guards-run
 
 # The run half has no tool/codegen prerequisites so CI can call it directly
-# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+# after downloading the generated-code artifact (build.yml, go-guards).
 test-delivery-guards-run: $(GOTESTSUM_BIN)
 	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
 		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
@@ -941,7 +916,7 @@ LINTER_BIN := $(CURDIR)/bin/linter
 # running a stale binary that predates the change forever.
 LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitcli, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawdb, norawexec, norawghrequest, norawgitcli, norawgitopen, nosessiondrivertest, nowrongdbentity, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) ./...
 	@go -C tools/lint test -count=1 ./norawgitcli/...
@@ -1098,7 +1073,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
@@ -1139,6 +1114,9 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
+
+ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty-web vs tests/terminal-conformance/ (docs/how-to/vt-conformance-runbook.md)
+	cd web-app && bunx jest --no-coverage src/lib/terminal/__tests__/conformance src/lib/terminal/__tests__/ghosttyAdapter.test.ts
 
 # --- files-viewer-revamp gates (project_plans/files-viewer-revamp, Story 0.2.4) ---
 # Package elapsed (go test -json, compile excluded) of `go test -race -short ./server/services` on origin/main at the

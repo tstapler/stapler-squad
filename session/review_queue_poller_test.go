@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -1604,5 +1606,55 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 
 	if mock.paneExitStatusCalls != 2 {
 		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
+	}
+}
+
+func TestFakesForStatusDeterminer_Should_CompileAndRunPollerTests_When_SignatureUpdated(t *testing.T) {
+	t.Parallel()
+	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rec := &optsRecordingDeterminer{}
+	rqp.statusDeterminer = rec
+	rqp.checkSession(makeStaleInstance(rqp, "fake-sig"), nil)
+	if len(rec.seen) != 1 || rec.seen[0] != (DeterminerOptions{}) {
+		t.Errorf("seen = %+v, want one call with zero options", rec.seen)
+	}
+}
+
+func TestShouldSkipSession_Should_LogOncePerSessionAndIncrementSkipCounter_When_HiddenAndPausedSkipped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	var mu sync.Mutex
+	counts := map[SkipReason]int{}
+	var lines []string
+	poller.explain.countSkip = func(r SkipReason) { mu.Lock(); counts[r]++; mu.Unlock() }
+	poller.explain.info = func(msg string, args ...any) {
+		mu.Lock()
+		lines = append(lines, logLine(msg, args))
+		mu.Unlock()
+	}
+
+	hidden := makeSocketTestInstance("sys-1", "uuid-sys-1", "", Running)
+	hidden.started.Store(true)
+	hidden.Hidden = true
+	hidden.SyncAtomicTimestamps()
+	paused := makeSocketTestInstance("p-1", "uuid-p-1", "", Paused)
+	paused.started.Store(true)
+
+	for _, inst := range []*Instance{hidden, paused} {
+		if !poller.shouldSkipSession(inst) {
+			t.Fatalf("%s not skipped", inst.Title)
+		}
+	}
+	poller.shouldSkipSession(hidden)
+
+	if counts[SkipHidden] != 1 || counts[SkipSuspended] != 1 {
+		t.Errorf("counts = %v, want hidden=1 suspended=1 (one increment per skipped session, not per evaluation)", counts)
+	}
+	want := []string{
+		"skipping session session=sys-1 skip_reason=hidden",
+		"skipping session session=p-1 skip_reason=suspended",
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Errorf("log lines = %q, want %q", lines, want)
 	}
 }
