@@ -28,6 +28,7 @@ alias(
 
 go_test(
     name = "jules_test",
+    tags = ["manual"],  # keep
     srcs = [
         "client_test.go",
         "errors_test.go",

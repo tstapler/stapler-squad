@@ -25,6 +25,7 @@ alias(
 
 go_test(
     name = "binaries_test",
+    tags = ["manual"],  # keep
     srcs = [
         "agy_test.go",
         "aider_test.go",

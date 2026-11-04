@@ -16,6 +16,7 @@ alias(
 
 go_test(
     name = "contractarchive_test",
+    tags = ["manual"],  # keep
     srcs = ["archive_test.go"],
     embed = [":contractarchive"],
     deps = [

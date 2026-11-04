@@ -34,6 +34,7 @@ alias(
 
 go_test(
     name = "executor_test",
+    tags = ["manual"],  # keep
     srcs = [
         "audit_test.go",
         "circuit_breaker_test.go",

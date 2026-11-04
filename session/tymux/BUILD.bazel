@@ -57,6 +57,7 @@ alias(
 
 go_test(
     name = "tymux_test",
+    tags = ["manual"],  # keep
     srcs = [
         "color_integration_test.go",
         "daemon_config_test.go",

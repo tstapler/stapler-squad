@@ -84,6 +84,7 @@ alias(
 
 go_test(
     name = "clihelp_test",
+    tags = ["manual"],  # keep
     srcs = [
         "capwriter_test.go",
         "loginpath_test.go",

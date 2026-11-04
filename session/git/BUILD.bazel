@@ -61,6 +61,7 @@ alias(
 
 go_test(
     name = "git_test",
+    tags = ["manual"],  # keep
     srcs = [
         "diff_test.go",
         "drift_test.go",

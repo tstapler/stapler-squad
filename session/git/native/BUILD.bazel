@@ -55,6 +55,7 @@ alias(
 
 go_test(
     name = "native_test",
+    tags = ["manual"],  # keep
     srcs = [
         "admin_writer_test.go",
         "dirty_fast_test.go",

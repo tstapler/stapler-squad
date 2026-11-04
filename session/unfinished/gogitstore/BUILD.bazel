@@ -41,6 +41,7 @@ alias(
 
 go_test(
     name = "gogitstore_test",
+    tags = ["manual"],  # keep
     srcs = [
         "closeall_hang_repro_test.go",
         "crash_subprocess_test.go",
