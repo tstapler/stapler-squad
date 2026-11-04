@@ -27,6 +27,33 @@ def run(measured, inputs, *args):
         return code, out.getvalue()
 
 
+class Factors(unittest.TestCase):
+    def test_repo_targets_yaml_has_proposal_factors(self):
+        f = eg.load_factors(eg.TARGETS)
+        self.assertEqual(f["EG1"]["target_value"], 1.10)
+        self.assertEqual(f["EG2"]["target_value"], 1.5)
+        self.assertEqual((f["EG3"]["target_value"], f["EG3"]["second_value"]), (3.0, 2.0))
+        self.assertEqual(f["EG4"]["target_value"], 1.25)
+        self.assertEqual(f["EG5"]["target_value"], 0.60)
+
+    def test_targets_override_factor(self):
+        with tempfile.TemporaryDirectory() as d:
+            tp = os.path.join(d, "t.yaml")
+            open(tp, "w").write("economic_gate_factors:\n  - id: EG2\n    target_value: 1.0\n")
+            old = eg.EG2_X
+            try:
+                eg.apply_factors(tp)
+                self.assertEqual(eg.EG2_X, 1.0)
+            finally:
+                eg.EG2_X = old
+
+    def test_never_writes_attestations(self):
+        path = os.path.join(eg.IMPL, "owner-attestations.yaml")
+        before = open(path).read()
+        run(MEASURED, CLEAR)
+        self.assertEqual(open(path).read(), before)
+
+
 class EconomicGate(unittest.TestCase):
     def test_all_clear(self):
         code, out = run(MEASURED, CLEAR)

@@ -1,51 +1,124 @@
-# SCAFFOLD for Task 0.1g. NOT confirmed and NOT computed: every baseline_value
-# and target_value depends on measurements still pending (see baselines.md,
-# "Not yet measured") or on owner confirmation (targets_confirmed in
-# owner-attestations.yaml, which does not exist yet). Formulas are the plan's
-# proposals ("Improvement targets" table); the final value is set from baseline
-# and owner-confirmed. The verify command of Task 0.1g (all rows have non-null
-# baseline_value and target_value) therefore fails on purpose until then.
-status: unconfirmed
+# Task 0.1g: improvement targets and economic-gate factors.
+# Values are computed ONLY from tools/bzl/baseline/measured.json / baselines.md using the proposal
+# formulas the owner accepted (owner-attestations.yaml, key `targets`). Never estimated: a baseline
+# that is not measured yet is null with status UNMEASURED and the missing measurement named.
+# targets_confirmed is NOT set: the owner reviews these values first.
+# Keep one `key: value` per line; tools/bzl/economic-gate.py reads EG rows with a line scanner.
+status: computed-unconfirmed
 targets:
   - id: T1
-    formula: "at most 0.30, or 1.5 x measured median reverse-dependency fan-out of the 30 partial-change PR diffs, whichever is smaller"
-    baseline_value: null  # input available: baselines.md RA1 0.259; target not computed
+    status: COMPUTED
+    formula: "at most min(0.30, 1.5 x measured median reverse-dependency fan-out of the 30 partial-change PRs)"
+    baseline_value: 0.2587  # ra1_median_fanout
+    target_value: 0.30  # min(0.30, 1.5 x 0.2587 = 0.388)
+    source: "measured.json ra1_median_fanout (baselines.md RA1)"
+    note: "ADR-010 amends T1 to the Bazel target model (library and test edges separate); not applied here"
+  - id: T2-partial-runner-min
+    status: COMPUTED
+    formula: "partial class runner-minutes p50 <= 0.70 x baseline"
+    baseline_value: 183.63  # partial_class.runner_min_p50
+    target_value: 128.54
+    source: "measured.json partial_class.runner_min_p50 (ci-billed-minutes.sh, n=30)"
+  - id: T2-partial-ttg
+    status: COMPUTED
+    formula: "partial class time-to-green p50 <= 0.90 x baseline"
+    baseline_value: 2704  # seconds, partial_class.ttg_p50_s (n_ttg=27)
+    target_value: 2433.6
+    source: "measured.json partial_class.ttg_p50_s"
+  - id: T2-all-ttg
+    status: COMPUTED
+    formula: "whole population time-to-green p50 <= 1.00 x baseline"
+    baseline_value: 3629  # seconds, all_class.ttg_p50_s (n_ttg=84)
+    target_value: 3629
+    source: "measured.json all_class.ttg_p50_s"
+  - id: T2-all-runner-min
+    status: COMPUTED
+    formula: "whole population runner-minutes p50 <= 0.90 x baseline"
+    baseline_value: 279.3  # all_class.runner_min_p50
+    target_value: 251.37
+    source: "measured.json all_class.runner_min_p50 (n=99 with runs)"
+    note: "global class has n=2, so the whole-population row is the meaningful check (baselines.md)"
+  - id: T2b
+    status: ABSOLUTE
+    formula: "median warm-main hit_spawns / total_spawns >= 0.60 (absolute; make has no remote cache, so no baseline ratio exists)"
+    baseline_value: null  # not applicable by definition
+    target_value: 0.60
+    source: "plan.md T2b (P10 floor); measured later by bazel-trend.sh"
+  - id: T3-second-cold
+    status: UNMEASURED
+    formula: "second-worktree cold build median <= 0.25 x first Bazel cold build (and <= 30% of make median)"
+    baseline_value: null
     target_value: null
-    source: "baselines.md RA1 / Task 0.1f partial-change PR set"
-  - id: T2
-    formula: "partial class: runner-minutes p50 <= 0.70 x baseline, ttg p50 <= 0.90 x baseline; whole population: ttg p50 <= 1.00 x, runner-minutes p50 <= 0.90 x"
-    baseline_value: null  # inputs available in baselines.md (ci-billed-minutes.sh); target not computed
+    source: "baseline-worktree.json cold_worktree_wall_s"
+    missing: "Task 0.1b worktree-cost.sh (cold_worktree_wall_s, PENDING-QUIET-HOST); the first Bazel cold build is S6"
+  - id: T3-disk
+    status: UNMEASURED
+    formula: "output_base_disk_kb <= 1.0 x disk_kb_worktree; 5-worktree aggregate <= 0.80 x 5 x disk_kb_worktree"
+    baseline_value: null
     target_value: null
-    source: "ci-time-to-green.sh joined with ci-billed-minutes.sh (Task 0.1i)"
-  - id: T3
-    formula: "second cold build <= 0.25 x first Bazel cold build; output_base_disk_kb <= 1.0 x disk_kb_worktree; 5-worktree aggregate <= 0.80 x 5 x disk_kb_worktree"
-    baseline_value: null  # PENDING-QUIET-HOST (worktree-cost.sh)
-    target_value: null
-    source: "baseline-worktree.json (not yet produced)"
+    source: "baseline-worktree.json disk_kb_worktree"
+    missing: "Task 0.1b worktree-cost.sh (disk_kb_worktree, PENDING-QUIET-HOST)"
   - id: T4
+    status: UNMEASURED
     formula: "at most max(1.25 x baseline warm one-package go test, baseline + 5 s)"
-    baseline_value: null  # PENDING-QUIET-HOST (pain-numbers.sh warm_one_pkg_test_s)
+    baseline_value: null
     target_value: null
-    source: "Task 0.1f warm one-package latency (go test -short -count=1 ./config; make test has no PKG variable)"
+    source: "measured.json warm_one_pkg_test_s"
+    missing: "Task 0.1f pain-numbers.sh warm_one_pkg_test_s (PENDING-QUIET-HOST)"
   - id: T5
-    formula: "100% of the 9 fixtures print a Remedy: line within 20 lines and at most 60 lines total"
-    baseline_value: null  # input available: 1 of 4 make-applicable fixtures names a correct remedy
-    target_value: null
-    source: "tools/bzl/baseline/fixtures/make-path-results.json"
+    status: COMPUTED
+    formula: "100% of the 9 fixtures print a Remedy: line within 20 lines, at most 60 lines total"
+    baseline_value: 0.25  # 1 of 4 make-applicable fixtures names a correct remedy; 5 are N/A-make
+    target_value: 1.0
+    source: "measured.json fixtures (fixtures/make-path-results.json)"
   - id: T6
+    status: DEGENERATE
     formula: "at most 10% of baseline median regen steps per session after the flip"
-    baseline_value: null  # input available: median 0 (degenerate, see baselines.md)
-    target_value: null
-    source: "regen-steps.sh"
+    baseline_value: 0  # median over the literal 30-session cohort; build-active cohort (n=16) median 0, p90 2
+    target_value: 0  # 0.10 x 0
+    source: "measured.json regen_steps_per_session_median"
+    note: "baseline median is 0, so the formula yields 0 and cannot detect improvement; owner may want the build-active p90 (2) as the basis"
   - id: T7
+    status: UNMEASURED
     formula: "H1 host executables <= 0.50 x make baseline, 0 network destinations in build actions; H2 true; H3 = 0; H4 = owner-accepted downgrades"
-    baseline_value: null  # PENDING-QUIET-HOST (hermeticity.sh --system make)
+    baseline_value: null
     target_value: null
-    source: "hermeticity-make.json (not yet produced)"
+    source: "hermeticity-make.json"
+    missing: "Task 0.1j hermeticity.sh --system make (hermeticity_make, PENDING-QUIET-HOST); absolute parts (H2 true, H3 0, 0 destinations) need no baseline"
+  - id: T8
+    status: UNMEASURED
+    formula: "at most 0.50 x baseline median e2e runner-minutes of the 30 sampled partial-change PRs; e2e_escapes = 0"
+    baseline_value: null
+    target_value: null
+    source: "Task 0.1i partial sample restricted to the 'e2e (Bun build) shard' jobs"
+    missing: "ci-billed-minutes.sh does not yet emit the e2e-shard-only median (measured.json has total runner minutes only); plan cites about 113 runner-minutes from two PRs, not a median"
+  - id: T9
+    status: UNMEASURED
+    formula: "T9a-T9f per plan.md; baselines come from tools/bzl/scoping/baseline.json"
+    baseline_value: null
+    target_value: null
+    source: "Task 13.1b / 13.1f"
+    missing: "tools/bzl/scoping/baseline.json does not exist yet (Task 13.1b); not part of the Story 7.6 flip gate"
 economic_gate_factors:
-  # Proposals from plan.md Task 0.14e; not confirmed.
-  EG1: "projected PR time-to-green p50 > 1.10 x baseline p50"
-  EG2: "cold CI > 1.5 x baseline p50"
-  EG3: "first-worktree Bazel cold > 3 x make median, or second > 2 x the S6 bound"
-  EG4: "re-costed CU total > 1.25 x verified total"
-  EG5: "RA1 median fan-out > 0.60 or RA2 non-Go share > 0.60"
+  # Proposal values from plan.md Task 0.14e, accepted by the owner. Read by tools/bzl/economic-gate.py.
+  - id: EG1
+    formula: "projected PR time-to-green p50 > factor x baseline p50"
+    target_value: 1.10
+    source: "plan.md Task 0.14e"
+  - id: EG2
+    formula: "cold CI (S10, empty cache) > factor x baseline p50"
+    target_value: 1.5
+    source: "plan.md Task 0.14e"
+  - id: EG3
+    formula: "first-worktree Bazel cold (S6) > target_value x make median, or second-worktree cold > second_value x the S6 bound (60% of make)"
+    target_value: 3.0
+    second_value: 2.0
+    source: "plan.md Task 0.14e"
+  - id: EG4
+    formula: "re-costed CU total > factor x verified total (30.50M)"
+    target_value: 1.25
+    source: "plan.md Task 0.14e"
+  - id: EG5
+    formula: "RA1 median fan-out > limit, or RA2 (post-selection projection) > limit"
+    target_value: 0.60
+    source: "plan.md Task 0.14e"

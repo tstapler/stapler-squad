@@ -15,15 +15,50 @@ mid_edit_test_s, baseline_edit_test_s.
 import argparse
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IMPL = os.path.join(HERE, "..", "..", "project_plans", "bazel-conversion", "implementation")
 MEASURED = os.path.join(HERE, "baseline", "measured.json")
 VERIFIED_CU_M = 30.50  # plan.md header: verified total
+TARGETS = os.path.join(HERE, "baseline", "targets.yaml")
+# Defaults are the plan's proposal values; targets.yaml `economic_gate_factors` overrides them.
 EG1_X, EG2_X, EG3_FIRST_X, EG3_SECOND_X, EG4_X, EG5_LIMIT = 1.10, 1.5, 3.0, 2.0, 1.25, 0.60
 
 UNMEASURED = "UNMEASURED"
+
+
+def load_factors(path):
+    """Read EG rows from targets.yaml's economic_gate_factors with a line scanner (no PyYAML needed)."""
+    out, section, cur = {}, None, None
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].rstrip()
+            if re.match(r"^\S", line):
+                section, cur = line.rstrip(":"), None
+            elif section == "economic_gate_factors":
+                m = re.match(r"^\s*-\s*id:\s*(EG\d)\s*$", line)
+                if m:
+                    cur = out.setdefault(m.group(1), {})
+                    continue
+                m = re.match(r"^\s+(target_value|second_value):\s*([0-9.]+)\s*$", line)
+                if m and cur is not None:
+                    cur[m.group(1)] = float(m.group(2))
+    return out
+
+
+def apply_factors(path):
+    global EG1_X, EG2_X, EG3_FIRST_X, EG3_SECOND_X, EG4_X, EG5_LIMIT
+    if not os.path.exists(path):
+        return
+    f = load_factors(path)
+    EG1_X = f.get("EG1", {}).get("target_value", EG1_X)
+    EG2_X = f.get("EG2", {}).get("target_value", EG2_X)
+    EG3_FIRST_X = f.get("EG3", {}).get("target_value", EG3_FIRST_X)
+    EG3_SECOND_X = f.get("EG3", {}).get("second_value", EG3_SECOND_X)
+    EG4_X = f.get("EG4", {}).get("target_value", EG4_X)
+    EG5_LIMIT = f.get("EG5", {}).get("target_value", EG5_LIMIT)
 
 
 def num(d, k):
@@ -145,8 +180,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--midpoint", action="store_true", help="evaluate T1, T3, T4 (Story 2.7)")
     ap.add_argument("--measured", default=MEASURED)
+    ap.add_argument("--targets", default=TARGETS)
     ap.add_argument("--inputs", default=os.path.join(IMPL, "spike-measurements.json"))
     a = ap.parse_args(argv)
+    apply_factors(a.targets)
     m = load_json(a.measured, True)
     i = load_json(a.inputs, False)
     results = evaluate(m, i, a.midpoint)
