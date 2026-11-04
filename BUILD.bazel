@@ -60,6 +60,8 @@ exports_files([
     "buf.gen.bazel.yaml",
     "buf.gen.bazel-ts.yaml",
     "go.mod",
+    "CHANGELOG.md",
+    ".gitignore",
 ])
 
 go_library(

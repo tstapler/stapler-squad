@@ -19,3 +19,10 @@ go_test(
     srcs = ["redact_test.go"],
     embed = [":redact"],
 )
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

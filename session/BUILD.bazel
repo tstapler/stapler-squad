@@ -952,3 +952,15 @@ go_test(
         "//conditions:default": [],
     }),
 )
+
+exports_files(
+    ["transition_callers.go"],
+    visibility = ["//tools/lint/silenttransition:__pkg__"],
+)
+
+# Read by session/tymux's metrics guard test, which scans these sources.
+filegroup(
+    name = "backend_sources",
+    srcs = glob(["backend_*.go"]),
+    visibility = ["//session/tymux:__pkg__"],
+)

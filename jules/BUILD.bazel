@@ -39,6 +39,10 @@ go_test(
     ],
     embed = [":jules"],
     tags = ["manual"],  # keep
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]),
     deps = [
         "//executor/safeexec",
         "//log",

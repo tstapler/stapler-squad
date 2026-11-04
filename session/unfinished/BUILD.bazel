@@ -250,3 +250,8 @@ go_test(
         "@org_golang_x_sync//singleflight",
     ],
 )
+
+exports_files(
+    ["gogit_vcs_reader.go"],
+    visibility = ["//session/unfinished/gogitstore:__pkg__"],
+)

@@ -102,7 +102,7 @@ go_test(
         "user_pr_token_test.go",
     ],
     embed = [":github"],
-    tags = ["manual"],  # keep
+    data = glob(["testdata/**"]),
     deps = [
         "//config",
         "//envtest",

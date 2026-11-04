@@ -1,0 +1,6 @@
+# Hand-written: exposes pane fixtures read by tests (Gazelle excludes **/testdata).
+filegroup(
+    name = "panes",
+    srcs = glob(["panes/**"]),
+    visibility = ["//session/detection/binaries:__pkg__"],
+)

@@ -18,7 +18,7 @@ go_test(
     name = "contractarchive_test",
     srcs = ["archive_test.go"],
     embed = [":contractarchive"],
-    tags = ["manual"],  # keep
+    data = ["//contracts:webhook_management_v1"],
     deps = [
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

@@ -93,7 +93,7 @@ go_test(
         "version_test.go",
     ],
     embed = [":tymux"],
-    tags = ["manual"],  # keep
+    data = glob(["*.go"]) + ["//session:backend_sources"],
     deps = [
         "//config",
         "//envtest",

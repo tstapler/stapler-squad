@@ -31,7 +31,15 @@ alias(
 go_test(
     name = "testrepo_test",
     srcs = ["testrepo_test.go"],
-    tags = ["manual"],  # keep
+    data = [
+        "//:go.mod",
+        "//config/workspacepath:go_sources",
+        "//log:go_sources",
+        "//session/git/native:go_sources",
+        "//session/git/redact:go_sources",
+        "//telemetry:go_sources",
+        ":go_sources",
+    ],
     deps = [
         ":testrepo",
         "//session/git/native",
@@ -40,4 +48,11 @@ go_test(
         "@com_github_go_git_go_git_v5//plumbing/filemode",
         "@com_github_go_git_go_git_v5//plumbing/object",
     ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
 )

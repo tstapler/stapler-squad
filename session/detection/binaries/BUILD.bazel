@@ -35,7 +35,7 @@ go_test(
         "pi_test.go",
     ],
     embed = [":binaries"],
-    tags = ["manual"],  # keep
+    data = ["//session/testdata:panes"],
     deps = [
         "//session/detection/dtypes",
         "@com_github_stretchr_testify//assert",

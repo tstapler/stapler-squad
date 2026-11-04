@@ -97,7 +97,7 @@ go_test(
         "runner_test.go",
     ],
     embed = [":clihelp"],
-    tags = ["manual"],  # keep
+    data = glob(["testdata/**"]),
     deps = [
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
