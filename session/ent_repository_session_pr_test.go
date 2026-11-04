@@ -651,3 +651,162 @@ func TestEnsureState_ShouldNeverModifyAnExistingRow(t *testing.T) {
 	_, err = repo.EnsureState(context.Background(), PRRef{}, PRInitial{})
 	assert.True(t, errors.Is(err, ErrZeroPRRef))
 }
+
+// ---- instance <-> storage dual write (Story 2.3) ---------------------------------
+
+// persistedPRSession adds a started session with a uuid to a fresh storage and
+// returns both plus the instance.
+func persistedPRSession(t *testing.T) (*Storage, *Instance) {
+	t.Helper()
+	storage, cleanup := createTestStorage(t)
+	t.Cleanup(cleanup)
+	inst := newTestInstance("pr-session")
+	inst.UUID = "uuid-pr-session"
+	inst.GitHubOwner, inst.GitHubRepo, inst.Branch = "acme", "app", "feat/x"
+	finishInstanceConstruction(inst)
+	require.NoError(t, storage.AddInstance(inst))
+	return storage, inst
+}
+
+func sessionMirror(t *testing.T, storage *Storage, title string) InstanceData {
+	t.Helper()
+	data, err := storage.repo.Get(context.Background(), title)
+	require.NoError(t, err)
+	return *data
+}
+
+func TestAttachSessionPR_ShouldReturnSentinels_WhenNoUUIDOrNoRow(t *testing.T) {
+	t.Parallel()
+	repo := newPRRepo(t)
+	ref := mustPRRef(t, "", "acme", "app", 12)
+	_, err := repo.AttachSessionPR(context.Background(), "", ref, PRLink{Source: AttachSourceManual}, PRMirror{})
+	assert.ErrorIs(t, err, ErrNoSessionUUID)
+	_, err = repo.AttachSessionPR(context.Background(), "no-such-uuid", ref, PRLink{Source: AttachSourceManual}, PRMirror{})
+	assert.ErrorIs(t, err, ErrSessionNotPersisted)
+	assert.Equal(t, 0, countLinks(t, repo), "a rejected attach must leave no link behind")
+	assert.Equal(t, 0, countStates(t, repo))
+}
+
+func TestAttachSessionPR_ShouldKeepOneStateAndLink_WhenRefCasingDiffers(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	upper, err := NewPRRef("GitHub.com", "Acme", "App", 12)
+	require.NoError(t, err)
+	lower := mustPRRef(t, "", "acme", "app", 12)
+	ctx := context.Background()
+	for _, ref := range []PRRef{upper, lower} {
+		_, err := storage.AttachSessionPR(ctx, inst.UUID, ref, PRLink{Source: AttachSourceManual}, PRMirror{Number: 12})
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, countStates(t, storage.repo))
+	assert.Equal(t, 1, countLinks(t, storage.repo))
+}
+
+func TestAttachSessionPR_ShouldBeAllOrNothing_WhenFailureBeforeMirrorUpdate(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	storage.repo.afterPRLinkHook = func() error { return errors.New("injected failure before mirror update") }
+
+	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, mustPRRef(t, "", "acme", "app", 12),
+		PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}}, PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12"})
+	require.Error(t, err)
+
+	assert.Equal(t, 0, countLinks(t, storage.repo), "link must roll back")
+	assert.Equal(t, 0, countStates(t, storage.repo), "state row must roll back")
+	got := sessionMirror(t, storage, "pr-session")
+	assert.Zero(t, got.GitHubPRNumber)
+	assert.Empty(t, got.GitHubPRURL)
+}
+
+func TestPersistPRMirror_ShouldClearLegacyNumber_WhenLastLinkDetached(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	ref := mustPRRef(t, "", "acme", "app", 12)
+	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, ref,
+		PRLink{Source: AttachSourceManual}, PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12", Terminal: true})
+	require.NoError(t, err)
+	require.Equal(t, 12, sessionMirror(t, storage, "pr-session").GitHubPRNumber)
+
+	_, err = storage.repo.DeleteSessionPR(context.Background(), SessionPROwner(inst.UUID), ref)
+	require.NoError(t, err)
+	require.NoError(t, storage.PersistPRMirror(inst.UUID, "", 0, false))
+
+	got := sessionMirror(t, storage, "pr-session")
+	assert.Zero(t, got.GitHubPRNumber, "the old >0 guard could not clear this")
+	assert.Empty(t, got.GitHubPRURL)
+	assert.False(t, got.GitHubPRStatusTerminal)
+	assert.ErrorIs(t, storage.PersistPRMirror("no-such-uuid", "", 0, false), ErrSessionNotPersisted)
+}
+
+func TestLegacyReader_ShouldSeeActivePR_WhenOldSchemaLoadsFlagOnData(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	inst.SetPRPersister(storage)
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+
+	// An old binary reads only the InstanceData JSON tags, i.e. the session columns.
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 12, rows[0].GitHubPRNumber)
+	assert.Equal(t, "https://github.com/acme/app/pull/12", rows[0].GitHubPRURL)
+}
+
+func TestAttachPR_ShouldDeferPersist_WhenSessionRowNotYetCreated(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	t.Cleanup(cleanup)
+	inst := newTestInstance("deferred-pr")
+	inst.UUID = "uuid-deferred"
+	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
+	finishInstanceConstruction(inst)
+	inst.SetPRPersister(storage)
+
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceCreatedFromURL, PRInitial{State: PRStateOpen}))
+	assert.True(t, inst.PRPersistPending(), "no session row yet: the write is deferred")
+	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber, "the in-memory snapshot already holds the PR")
+	assert.Equal(t, 0, countLinks(t, storage.repo))
+
+	require.NoError(t, storage.AddInstance(inst)) // first full save: state + link + mirror together
+	assert.Equal(t, 1, countLinks(t, storage.repo))
+	assert.Equal(t, 1, countStates(t, storage.repo))
+	assert.Equal(t, 12, sessionMirror(t, storage, "deferred-pr").GitHubPRNumber)
+}
+
+func TestAttachPR_ShouldRetryOnNextSave_WhenPersistFails(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	inst.SetPRPersister(storage)
+	failOnce := true
+	storage.repo.afterPRLinkHook = func() error {
+		if failOnce {
+			failOnce = false
+			return errors.New("transient")
+		}
+		return nil
+	}
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.True(t, inst.PRPersistPending())
+	require.Equal(t, 0, countLinks(t, storage.repo))
+
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	assert.Equal(t, 1, countLinks(t, storage.repo), "the next save retried the link")
+	assert.False(t, inst.PRPersistPending())
+}
+
+func TestAttachPR_ShouldAllowLinkOnlyChange_WhenMirrorUnchanged(t *testing.T) {
+	t.Parallel()
+	storage, inst := persistedPRSession(t)
+	inst.SetPRPersister(storage)
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	// A second link that does not change the mirror still defeats the unchanged-row skip.
+	storage.repo.afterPRLinkHook = func() error { return errors.New("down") }
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), AttachSourceBranchDiscovery, PRInitial{State: PRStateMerged, Terminal: true, HeadBranch: "x"}))
+	storage.repo.afterPRLinkHook = nil
+	require.Equal(t, 1, countLinks(t, storage.repo))
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	assert.Equal(t, 2, countLinks(t, storage.repo))
+}

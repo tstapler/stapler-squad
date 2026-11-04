@@ -392,23 +392,33 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		if !inst.Started() {
 			continue
 		}
-		data := inst.ToInstanceData()
-		log.Debug("SaveInstances: converting instance",
-			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
-			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-		s.saved.persist(data, func(skip updateSkip) bool {
-			if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
-				// Not found → create it
-				if createErr := s.repo.Create(ctx, data); createErr != nil {
-					log.Error("SaveInstances: failed to upsert instance",
-						"session", data.Title, "update_err", err, "create_err", createErr)
-					return false
-				}
-			}
-			return true
-		})
+		s.saveInstanceToRepo(ctx, inst)
 	}
 	return nil
+}
+
+// saveInstanceToRepo upserts one started instance. It holds the instance's PR
+// persist lock across snapshotting and writing so a concurrent AttachPR persist
+// (which snapshots under the same lock) cannot land an older mirror after this save.
+func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
+	inst.prPersistMu.Lock()
+	defer inst.prPersistMu.Unlock()
+	data := inst.ToInstanceData()
+	log.Debug("SaveInstances: converting instance",
+		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
+		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
+	s.saved.persist(data, func(skip updateSkip) bool {
+		if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
+			// Not found → create it
+			if createErr := s.repo.Create(ctx, data); createErr != nil {
+				log.Error("SaveInstances: failed to upsert instance",
+					"session", data.Title, "update_err", err, "create_err", createErr)
+				return false
+			}
+		}
+		inst.clearPRPersistPending()
+		return true
+	})
 }
 
 // SaveInstancesSync saves instances synchronously (same as SaveInstances for the repo backend).
@@ -436,6 +446,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		// Inject shell repository so shell operations can persist to the DB.
 		inst.SetShellRepository(s.repo)
 		inst.SetInitialPromptRepository(s.repo)
+		inst.SetPRPersister(s)
 		instances = append(instances, inst)
 	}
 
@@ -688,6 +699,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	// Inject shell repository so shell operations can persist to the DB.
 	instance.SetShellRepository(s.repo)
 	instance.SetInitialPromptRepository(s.repo)
+	instance.SetPRPersister(s)
 	return nil
 }
 
@@ -807,6 +819,32 @@ func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 	return s.writeRow(title, func() error {
 		return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
 	})
+}
+
+// AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
+// session's legacy mirror columns in a single transaction, keyed by session uuid.
+// See EntRepository.AttachSessionPR for the error contract.
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+	res, err := s.repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
+	if err == nil {
+		s.saved.reset() // the row changed behind the save fingerprints
+	}
+	return res, err
+}
+
+// PersistPRMirror writes (or clears) the legacy scalar PR columns of one session.
+func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal bool) error {
+	err := s.repo.PersistPRMirror(context.Background(), sessionUUID, PRMirror{URL: url, Number: number, Terminal: terminal})
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
+// the PR status poller is its only production caller.
+func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {
+	return s.repo.UpdatePullRequestState(ctx, ref, obs)
 }
 
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in

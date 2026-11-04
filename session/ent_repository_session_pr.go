@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
 	"github.com/tstapler/stapler-squad/session/ent/sessionprtombstone"
 )
@@ -266,6 +267,83 @@ func (r *EntRepository) withPRTx(ctx context.Context, op string, fn func(*ent.Tx
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%s: commit: %w", op, err)
+	}
+	return nil
+}
+
+// AttachSessionPR ensures the state row, the session's link and the legacy mirror
+// columns in ONE transaction, keyed by session uuid. It returns ErrNoSessionUUID
+// for an empty uuid and ErrSessionNotPersisted when the session row does not exist
+// yet (the first full save then writes the set). A tombstoned PR writes nothing
+// and reports Tombstoned. Failure at any step rolls everything back.
+func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+	if sessionUUID == "" {
+		return PRLinkResult{}, ErrNoSessionUUID
+	}
+	if ref.IsZero() {
+		return PRLinkResult{}, ErrZeroPRRef
+	}
+	var res PRLinkResult
+	err := r.withPRTx(ctx, "attach session pr", func(tx *ent.Tx) error {
+		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
+		if ent.IsNotFound(err) {
+			return ErrSessionNotPersisted
+		} else if err != nil {
+			return fmt.Errorf("look up session: %w", err)
+		}
+		if res, err = upsertSessionPRTx(ctx, tx, SessionPROwner(sessionUUID), ref, link); err != nil || res.Tombstoned {
+			return err
+		}
+		if r.afterPRLinkHook != nil {
+			if err := r.afterPRLinkHook(); err != nil {
+				return err
+			}
+		}
+		return setMirrorTx(ctx, tx, rowID, mirror)
+	})
+	return res, err
+}
+
+// PersistPRMirror writes the legacy scalar PR columns of the session with this
+// uuid, including clearing them (number 0, empty URL, terminal false), which the
+// full-save set-only path cannot. It returns ErrSessionNotPersisted when no row matches.
+func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string, mirror PRMirror) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	return r.withPRTx(ctx, "persist pr mirror", func(tx *ent.Tx) error {
+		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
+		if ent.IsNotFound(err) {
+			return ErrSessionNotPersisted
+		} else if err != nil {
+			return fmt.Errorf("look up session: %w", err)
+		}
+		return setMirrorTx(ctx, tx, rowID, mirror)
+	})
+}
+
+func setMirrorTx(ctx context.Context, tx *ent.Tx, rowID int, m PRMirror) error {
+	err := tx.Session.UpdateOneID(rowID).
+		SetGithubPrURL(m.URL).SetGithubPrNumber(m.Number).SetGithubPrStatusTerminal(m.Terminal).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("update pr mirror columns: %w", err)
+	}
+	return nil
+}
+
+// upsertSessionPRSetTx idempotently writes the links (and, insert-if-absent, their
+// state rows) carried by a full save. It never updates a state column (invariant I1),
+// so a stale snapshot cannot overwrite a fresher poll, and a tombstoned PR is skipped.
+func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data InstanceData) error {
+	if data.UUID == "" {
+		return nil
+	}
+	owner := SessionPROwner(data.UUID)
+	for _, v := range data.PRs {
+		link := PRLink{Role: v.Role, Source: v.AttachSource, Initial: prInitialOf(v), AttachedAt: v.AttachedAt}
+		if _, err := upsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
+			return fmt.Errorf("save pr link %s: %w", v.Ref, err)
+		}
 	}
 	return nil
 }

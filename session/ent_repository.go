@@ -60,7 +60,10 @@ type EntRepository struct {
 	// unverified-terminal rows read as zero (see linkStateToView).
 	prVerifyCountersTrusted atomic.Bool
 	prDrops                 prDropTracker
-	migrationMode           bool // When true, enables dual-write mode for migration
+	// afterPRLinkHook (tests only) runs inside AttachSessionPR's transaction after
+	// the link upsert, to inject a failure before the mirror update.
+	afterPRLinkHook func() error
+	migrationMode   bool // When true, enables dual-write mode for migration
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -538,6 +541,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		}
 	}
 
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
+	}
+
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -618,6 +625,10 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 		if err := r.upsertClaudeSessionRow(ctx, tx, sess, data); err != nil {
 			return err
 		}
+	}
+
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
 	}
 
 	// Commit transaction
