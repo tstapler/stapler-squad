@@ -124,8 +124,7 @@ config_setting(
     values = {"stamp": "1"},
 )
 
-# Uninstrumented go_binary: kept only for the Windows cross-build targets (a woven binary cannot be
-# cross-compiled by the otel_weave action) and the P5 parity harness. It is not shipped. The
+# Uninstrumented go_binary: kept only for the P5 parity harness. It is not shipped. The
 # shipped binary is //:stapler-squad below. main.version and the buildinfo fields mirror Makefile's LDFLAGS. Only set when stamping (the
 # {KEY} placeholders are workspace-status values); unstamped builds keep the "dev" defaults.
 # runtime.godebugDefault carries go.mod's `godebug netdns=go`, which rules_go does not read (Task 3.4d).

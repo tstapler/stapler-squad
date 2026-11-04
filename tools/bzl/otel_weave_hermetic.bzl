@@ -101,3 +101,23 @@ otel_weave_hermetic = rule(
     executable = True,
     toolchains = ["@rules_go//go:toolchain"],
 )
+
+def _platform_tx_impl(_settings, attr):
+    return {"//command_line_option:platforms": str(attr.platform)}
+
+_platform_tx = transition(implementation = _platform_tx_impl, inputs = [], outputs = ["//command_line_option:platforms"])
+
+def _cross_impl(ctx):
+    src = ctx.attr.target[0][DefaultInfo].files.to_list()[0]
+    out = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(output = out, target_file = src)
+    return DefaultInfo(files = depset([out]))
+
+# Builds `target` for `platform` (the weave reads the target GOOS/GOARCH from rules_go, so this is the woven cross build).
+otel_cross_binary = rule(
+    implementation = _cross_impl,
+    attrs = {
+        "platform": attr.label(mandatory = True),
+        "target": attr.label(cfg = _platform_tx, mandatory = True),
+    },
+)
