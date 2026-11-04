@@ -43,3 +43,26 @@ func TestCreatePullRequest_should_KeepExistingPRColumns_When_ShortCircuiting(t *
 	assert.Equal(t, 999, gh.GitHubPRNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/999", gh.GitHubPRURL)
 }
+
+// Checklist row 6: a PR created through the service joins the session's PR set as
+// pr_creation_service rather than overwriting the legacy scalars.
+func TestCreatePullRequest_ShouldAttachAsPRCreationService_WhenSessionHasResolvedRepo(t *testing.T) {
+	t.Parallel()
+	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
+	wt := newFakePRWorktree(t, "sess-attach", "feature/attach", mock)
+	inst := &session.Instance{Title: "Attach via service", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst.SetGitWorktree(wt)
+	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-attach", inst))
+
+	_, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
+		SessionId: "sess-attach",
+		Title:     "Attach",
+	}))
+	require.NoError(t, err)
+
+	prs := inst.Snapshot().GitHub.PRs
+	require.Len(t, prs, 1)
+	assert.Equal(t, 1000, prs[0].Ref.Number())
+	assert.Equal(t, session.AttachSourcePRCreationService, prs[0].AttachSource)
+	assert.Equal(t, 1000, inst.Snapshot().GitHub.GitHubPRNumber)
+}

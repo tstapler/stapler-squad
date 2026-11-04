@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakePRPersister records AttachSessionPR calls; err and res are returned as set.
@@ -311,4 +314,34 @@ func intAttr(r capturedRecord, key string) int64 {
 		return v
 	}
 	return -1
+}
+
+func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR(t *testing.T) {
+	inst := newPRTestInstance(t)
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+
+	inst.SetGitHubResolution(GitHubResolution{
+		Path: inst.Snapshot().Path, Owner: "acme", Repo: "app",
+		PRNumber: 12, PRURL: "https://github.com/acme/app/pull/12",
+	})
+
+	prs := inst.Snapshot().GitHub.PRs
+	require.Len(t, prs, 2, "the resolved PR joins the held one")
+	assert.Equal(t, AttachSourceCreatedFromURL, prs[1].AttachSource)
+	assert.Equal(t, PRRoleFollowup, prs[1].Role)
+}
+
+func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{
+		Title: "from-pr", Path: t.TempDir(), Program: "echo",
+		GitHubOwner: "acme", GitHubRepo: "app",
+		GitHubPRNumber: 12, GitHubPRURL: "https://github.com/acme/app/pull/12",
+	})
+	require.NoError(t, err)
+
+	prs := inst.Snapshot().GitHub.PRs
+	require.Len(t, prs, 1)
+	assert.Equal(t, AttachSourceCreatedFromURL, prs[0].AttachSource)
+	assert.True(t, inst.PRPersistPending(), "no row yet: the first full save writes the link")
+	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
 }

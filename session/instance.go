@@ -1236,8 +1236,6 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},
 		// GitHub integration fields
-		GitHubPRNumber:  opts.GitHubPRNumber,
-		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubHost:      opts.GitHubHost,
@@ -1316,6 +1314,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance.initCDPManager(cfg)
 
 	finishInstanceConstruction(instance)
+	if opts.GitHubPRNumber > 0 {
+		// Created from a PR URL: the PR joins the set (its write is deferred to the
+		// first full save, see persistPRAttach).
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+	}
 	return instance, nil
 }
 

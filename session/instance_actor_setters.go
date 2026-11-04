@@ -288,7 +288,13 @@ func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {
 // With a resolved owner/repo and a uuid the PR joins the session's PR set through
 // AttachPR; otherwise only the legacy scalars are written and no link is created.
 func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
-	if i.attachLegacyPR(prNumber, AttachSourcePRCreationService, PRInitial{URL: prURL}) {
+	i.setLegacyPR(prURL, prNumber, AttachSourcePRCreationService)
+}
+
+// setLegacyPR attaches the PR with source, or writes the legacy scalars alone when
+// the session cannot hold a link.
+func (i *Instance) setLegacyPR(prURL string, prNumber int, source AttachSource) {
+	if i.attachLegacyPR(prNumber, source, PRInitial{URL: prURL}) {
 		return
 	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
@@ -956,10 +962,6 @@ func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
 	s.inst.GitHubRepo = r.Repo
 	s.inst.GitHubSourceRef = r.SourceRef
 	s.inst.ClonedRepoPath = r.ClonedRepoPath
-	if r.PRNumber > 0 {
-		s.inst.GitHubPRNumber = r.PRNumber
-		s.inst.GitHubPRURL = r.PRURL
-	}
 	s.inst.touchUpdatedAt()
 	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
@@ -976,6 +978,10 @@ func (i *Instance) SetGitHubResolution(r GitHubResolution) {
 		setGitHubResolutionLocked(s, r)
 		return nil
 	})
+	// After the owner/repo above are published: the PR the URL named joins the set.
+	if r.PRNumber > 0 {
+		i.setLegacyPR(r.PRURL, r.PRNumber, AttachSourceCreatedFromURL)
+	}
 }
 
 // applyWorktreeDetectionLocked writes DetectAndPopulateWorktreeInfo's
