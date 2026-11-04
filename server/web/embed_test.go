@@ -10,7 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/web"
 )
 
-// Spike S3: the embedded FS must contain the staged dist tree.
+// The embedded FS must contain the staged dist tree (ADR-007).
 func TestEmbeddedIndexHTML(t *testing.T) {
 	fsys, err := web.GetDistFS()
 	if err != nil {
@@ -31,5 +31,5 @@ func TestEmbeddedIndexHTML(t *testing.T) {
 		return nil
 	})
 	sum := sha256.Sum256(b)
-	t.Logf("S3: index.html %d bytes sha256=%s, %d files embedded", len(b), hex.EncodeToString(sum[:]), files)
+	t.Logf("index.html %d bytes sha256=%s, %d files embedded", len(b), hex.EncodeToString(sum[:]), files)
 }

@@ -1,9 +1,10 @@
 # gazelle:ignore
 load("@bazel_lib//lib:copy_directory.bzl", "copy_directory")
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
-# Spike S3 (Story 0.5): dist/ comes from another package's tree artifact and is staged at the
-# exact relative path embed.go names (ADR-007). No Go source change.
+# ADR-007: //web-app:dist is staged at the exact relative path embed.go names (`all:dist`),
+# so embed.go is unchanged and `go build` / make keep working side by side.
 copy_directory(
     name = "dist_staged",
     src = "//web-app:dist",
@@ -20,8 +21,6 @@ go_library(
 
 go_test(
     name = "web_test",
-    srcs = ["embed_spike_test.go"],
+    srcs = ["embed_test.go"],
     deps = [":web"],
 )
-
-exports_files(["embed.go", "embed_spike_test.go"], visibility = ["//server/web/fixture:__pkg__"])
