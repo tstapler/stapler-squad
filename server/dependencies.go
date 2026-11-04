@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -61,7 +62,7 @@ type ServerDependencies struct {
 	StatusManager           *session.InstanceStatusManager
 	ReviewQueue             *session.ReviewQueue
 	ReviewQueuePoller       *session.ReviewQueuePoller
-	PRStatusPoller          *session.PRStatusPoller
+	PRStatusPoller          *prpoller.PRStatusPoller
 	ReactiveQueueMgr        *ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
@@ -85,7 +86,7 @@ type ServerDependencies struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
-	WorktreePRPoller      *session.WorktreePRPoller
+	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher discovers repos under the user-configured
 	// watch directories (Settings → Unfinished Work Sources) and registers
@@ -456,7 +457,7 @@ type ServiceDeps struct {
 	*CoreDeps
 	StatusManager     *session.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
-	PRStatusPoller    *session.PRStatusPoller
+	PRStatusPoller    *prpoller.PRStatusPoller
 	Registry          *session.Registry
 }
 
@@ -476,7 +477,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		core.ReviewQueue, statusManager, core.Storage,
 	)
 	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
-	prStatusPoller := session.NewPRStatusPoller(core.Storage)
+	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
 	core.SessionService.SetRegistry(registry)
@@ -512,7 +513,7 @@ type RuntimeDeps struct {
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
-	PRStatusPoller          *session.PRStatusPoller
+	PRStatusPoller          *prpoller.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
@@ -528,7 +529,7 @@ type RuntimeDeps struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
-	WorktreePRPoller      *session.WorktreePRPoller
+	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher (see the identically-named field on
 	// ServerDependencies for its full doc comment).
@@ -1321,7 +1322,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		unfinishedStateStore      *unfinished.StateStore
 		unfinishedWorkSvc         *services.UnfinishedWorkService
 		unfinishedWatchDirWatcher *unfinished.WatchDirWatcher
-		worktreePRPoller          *session.WorktreePRPoller
+		worktreePRPoller          *prpoller.WorktreePRPoller
 		userPRCache               *githubpkg.UserPRCache
 	)
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
@@ -1349,7 +1350,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
 			// Shares svc.PRStatusPoller's ETagCache instead of constructing its own — per
 			// ADR-022, a separate cache would double API call volume for repos both pollers hit.
-			worktreePRPoller = session.NewWorktreePRPoller(
+			worktreePRPoller = prpoller.NewWorktreePRPoller(
 				svc.PRStatusPoller.ETagCache(),
 				svc.PRStatusPoller,
 			)
@@ -2143,11 +2144,11 @@ func (a *scannerSource) ScanDone() <-chan time.Time {
 	return a.s.ScanDone()
 }
 
-func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
+func (a *scannerSource) GetWorktrees() []prpoller.WorktreeScanItem {
 	results := a.s.GetAllResults()
-	items := make([]session.WorktreeScanItem, 0, len(results))
+	items := make([]prpoller.WorktreeScanItem, 0, len(results))
 	for _, r := range results {
-		items = append(items, session.WorktreeScanItem{
+		items = append(items, prpoller.WorktreeScanItem{
 			RepoPath:     r.RepoPath,
 			Branch:       r.Branch,
 			WorktreePath: r.WorktreePath,

@@ -1,4 +1,4 @@
-package session
+package prpoller
 
 // pr_status_poller_discovery_test.go covers the discovery-path ordering bug: a real
 // GetPRForBranchConditional error must not be misread as a 304 "still no
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // withGhBaseURL points github.GhBaseURL at ts for the duration of the test.
@@ -29,9 +30,9 @@ func newTestPRStatusPoller() *PRStatusPoller {
 	return p
 }
 
-func newDiscoveryTestInstance(t *testing.T) *Instance {
+func newDiscoveryTestInstance(t *testing.T) *session.Instance {
 	t.Helper()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := session.NewInstance(session.InstanceOptions{
 		Title:       "discovery-test",
 		Path:        t.TempDir(),
 		Branch:      "feature-branch",

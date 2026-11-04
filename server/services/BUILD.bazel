@@ -363,6 +363,7 @@ go_library(
         "//session/namegen",
         "//session/procinfo",
         "//session/prompts",
+        "//session/prpoller",
         "//session/resize",
         "//session/scrollback",
         "//session/search",

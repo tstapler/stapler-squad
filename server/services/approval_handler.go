@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
@@ -108,7 +109,7 @@ func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
 
 // NewApprovalHandler creates a new ApprovalHandler.
 func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
-	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: session.DefaultPRStatusPollerConfig().PollInterval}
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: prpoller.DefaultPRStatusPollerConfig().PollInterval}
 }
 
 // SetPollInterval overrides the interval used to bound CI-status staleness (Task 1.1.2b).

@@ -22,7 +22,7 @@ type ciRerunClient interface {
 type ghCIRerunClient struct{}
 
 func (ghCIRerunClient) ref(repoPath string) (github.RepoRef, error) {
-	return github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	return github.GetOwnerRepoFromRemote(repoPath, EnterpriseHostsForRemoteParsing())
 }
 
 func (c ghCIRerunClient) ChangedFiles(ctx context.Context, repoPath string, prNumber int) ([]string, error) {

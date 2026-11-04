@@ -591,7 +591,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 // enterpriseHostsForRemoteParsing returns the statically-configured GitHub
 // Enterprise hostnames so parseGitHubRemoteURL can recognize a GHE remote
 // (e.g. git@github.netflix.net:owner/repo.git), not just github.com.
-func enterpriseHostsForRemoteParsing() []string {
+func EnterpriseHostsForRemoteParsing() []string {
 	configured := config.LoadConfig().GetGitHubEnterpriseHosts()
 	hosts := make([]string, 0, len(configured))
 	for _, h := range configured {
@@ -608,7 +608,7 @@ func enterpriseHostsForRemoteParsing() []string {
 //   - https://github.netflix.net/owner/repo
 //   - git@github.netflix.net:owner/repo.git
 func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
-	ref, err := github.ParseGitHubRefWithHosts(remoteURL, enterpriseHostsForRemoteParsing())
+	ref, err := github.ParseGitHubRefWithHosts(remoteURL, EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return "", "", ""
 	}
