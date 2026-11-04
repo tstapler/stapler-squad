@@ -17,8 +17,9 @@ endef
 bazel-doctor: ## Nine host/worktree Bazel health checks (version, cache, disk, slots, memory, BUILD freshness); exit 0 unless one fails
 	bash tools/bzl/doctor.sh
 
-gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel)
+gazelle: ## Regenerate BUILD files with Gazelle (needs Bazel), then refresh the .gitattributes collapse rules
 	$(call wrap,run //:gazelle)
+	@bash tools/bzl/gen-gitattributes.sh
 
 gazelle-check: ## Fail if BUILD files are out of date with the Go sources (Gazelle -mode=diff; needs Bazel)
 	$(call wrap,run //:gazelle -- -mode=diff)
@@ -69,6 +70,7 @@ ready-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, .bazelr
 	$(BZL_NO_BAZEL_ENV) bash tools/bzl/check-bazelrc.sh
 	bash tools/bzl/check-bazelrc_test.sh
 	bash tools/bzl/check-configs.sh
+	bash tools/bzl/gen-gitattributes.sh --check
 	bash tools/bzl/check-gen-fresh-cheap_test.sh
 	bash tools/bzl/check-no-force-push.sh
 	bash tools/bzl/translate-errors_test.sh
