@@ -156,6 +156,10 @@ type BacklogLifecycleListener struct {
 	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
 	backlogReaderOverride func() bool
 
+	// liveWork holds the shared live-work probe, its test clock and the per-item
+	// hold bookkeeping (backlog_lifecycle_live_work.go).
+	liveWork liveWorkState
+
 	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
 	// ciRerunner disables the free-rerun shortcut.
 	ciRerunner ciRerunClient
@@ -2022,6 +2026,19 @@ func (l *BacklogLifecycleListener) otherPRsHoldItem(ctx context.Context, er *Ent
 	return false, ""
 }
 
+// liveHoldFromRows is reconcileBouncingItems' pre-network guard: true when the item
+// PR rows already give verdict Done and a live work session holds it.
+func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *EntRepository, itemID, title string) bool {
+	if l.LiveWorkProbe() == nil || !l.backlogReaderEnabled() {
+		return false
+	}
+	prs, err := er.ItemPRsByID(ctx, itemID)
+	if err != nil || ItemPRVerdict(prs) != ItemVerdictDone {
+		return false
+	}
+	return l.holdMergedItemForLiveWork(ctx, er, itemID, title)
+}
+
 // reconcileBouncingItems flags items that have crossed in_progress->review
 // >= bounceThreshold times within bounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
@@ -2075,6 +2092,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// ReconcilePRPending already uses for its own merge->done transition,
 		// rather than inventing a new one.
 		if item.PrNumber > 0 && item.RepoPath != "" {
+			// Cheap local check first: rows already say the set is Done and a session
+			// is live, so skip the GitHub call and the refresh for the whole hold.
+			if l.liveHoldFromRows(ctx, er, item.ID, item.Title) {
+				continue
+			}
 			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
 			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
@@ -2094,6 +2116,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				// verifyPRAssociationForFixSpawn's own contract.
 				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems: PR head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", "item", item.ID, "pr", item.PrNumber)
+					continue
+				}
+				if l.holdMergedItemForLiveWork(ctx, er, item.ID, item.Title) {
 					continue
 				}
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: PR #%d for this item is confirmed merged on GitHub, so the item's rework cycle is treated as converged rather than bouncing.", item.PrNumber)

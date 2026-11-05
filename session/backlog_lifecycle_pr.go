@@ -1751,6 +1751,10 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			return
 		}
 
+		if l.holdMergedPRPendingItem(ctx, er, item) {
+			return
+		}
+
 		if capErr := CaptureShipSnapshot(ctx, l.storage, &itemData, snapshotPRStatus, lastWork, wt); capErr != nil {
 			// CaptureShipSnapshot always returns nil today; this branch
 			// exists defensively in case that contract ever changes, and
@@ -2009,6 +2013,27 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s PrFeedbackAddressedAt advanced to %s (PR #%d)", item.ID, watermark.Format(time.RFC3339), item.PrNumber)
 		}
 	}
+}
+
+// holdMergedPRPendingItem is the reader:backlog verdict-and-hold consumer for a
+// pr_pending item whose tracked PR IsPRMerged says is merged: the verdict must be
+// Done from the state rows (another open or unknown PR keeps the item pending), and a
+// live current-round work session holds it until idle, ended or LiveWorkMaxHold.
+// True means leave the item as it is this pass. Flag off: false (today's path).
+func (l *BacklogLifecycleListener) holdMergedPRPendingItem(ctx context.Context, er *EntRepository, item *ent.BacklogItem) bool {
+	if !l.backlogReaderEnabled() {
+		return false
+	}
+	verdict, err := l.itemVerdictAfterMerge(ctx, er, item.ID.String(), item.PrURL, item.PrNumber)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s verdict unreadable, holding: %v", item.ID, err)
+		return true
+	}
+	if verdict != ItemVerdictDone {
+		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: tracked PR #%d merged but the item PR set verdict is %v — staying pr_pending", item.ID, item.PrNumber, verdict)
+		return true
+	}
+	return l.holdMergedItemForLiveWork(ctx, er, item.ID.String(), item.Title)
 }
 
 // ReconcilePRPending polls items in pr_pending status. It transitions to done

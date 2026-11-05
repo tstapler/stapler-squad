@@ -726,9 +726,12 @@ type fakePRPendingChecker struct {
 	// TransitionBacklogItemStatus call (the precondition race these calls
 	// guard against), deterministically rather than via a real goroutine race.
 	onIsPRMerged func()
+
+	isMergedCalls int
 }
 
 func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
+	f.isMergedCalls++
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
