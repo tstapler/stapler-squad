@@ -3319,8 +3319,16 @@ func handleCurrentPaneRequestFrame(
 	// doc comment for the incident this closes.
 	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
-		span.RecordError(err)
-		return logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err)
+		if !errors.Is(err, tymux.ErrPaneNotRunning) {
+			span.RecordError(err)
+		}
+		if endErr := logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err); endErr != nil {
+			return endErr
+		}
+		if out := paneNotLiveReply(paneReq, err); out != nil {
+			writeCurrentPaneResponse(stream, sessionID, "", out)
+		}
+		return nil
 	}
 	span.SetAttributes(attribute.Int("output.bytes", len(output.GetData())))
 	log.Debug("[runInputReadLoop] answered mid-stream currentPaneRequest", "session", sessionID, "resync_id", paneReq.GetResyncId(), "output_bytes", len(output.GetData()))
@@ -3336,6 +3344,17 @@ func answerCurrentPane(ctx context.Context, sessionID string, instance *session.
 		return nil, wrapSessionGone(err)
 	}
 	return out, err
+}
+
+// paneNotLiveReply is the empty answer to a resync aimed at a pane with no live process
+// (tymux.ErrPaneNotRunning). Staying silent leaves the client's stall watchdog to fire after 4s,
+// reset the stream, and re-ask; an empty output completes the resync instead. Nil for any
+// other error.
+func paneNotLiveReply(req *sessionv1.CurrentPaneRequest, err error) *sessionv1.TerminalOutput {
+	if !errors.Is(err, tymux.ErrPaneNotRunning) {
+		return nil
+	}
+	return &sessionv1.TerminalOutput{ResyncId: req.GetResyncId()}
 }
 
 // logCurrentPaneFailure logs a failed current-pane request and returns the error only when it
@@ -3457,9 +3476,13 @@ func handleBatchedCurrentPaneRequest(
 	for _, paneReq := range requests {
 		output, err := onCurrentPaneRequest(ctx, paneReq)
 		if err != nil {
-			span.RecordError(err)
+			if !errors.Is(err, tymux.ErrPaneNotRunning) {
+				span.RecordError(err)
+			}
 			if gone := logCurrentPaneFailure("coalesced current pane request", sessionID, paneReq.GetResyncId(), err); gone != nil {
 				endErr = gone
+			} else if out := paneNotLiveReply(paneReq, err); out != nil {
+				outputs = append(outputs, out)
 			}
 			continue
 		}
