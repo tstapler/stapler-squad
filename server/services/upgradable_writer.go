@@ -29,8 +29,9 @@ type upgradableWriter struct {
 	upgradable bool
 	upgrading  bool
 	flipped    bool
-	onUpgrade  func()
-	lateResize func(cols, rows int)
+	onUpgrade  func(TerminalWriter)
+	granted    TerminalWriter // the writer being granted, valid once flipped
+	lateResize func(writer TerminalWriter, cols, rows int)
 	lastCols   int
 	lastRows   int
 	done       chan struct{} // closed after the upgrade callback has run
@@ -51,11 +52,10 @@ func (u *upgradableWriter) Upgraded() <-chan struct{} { return u.done }
 func (u *upgradableWriter) NoteDroppedResize(cols, rows int) {
 	u.mu.Lock()
 	u.lastCols, u.lastRows = cols, rows
-	late := u.lateResize
-	flipped := u.flipped
+	late, granted := u.lateResize, u.granted
 	u.mu.Unlock()
-	if flipped && late != nil {
-		late(cols, rows)
+	if granted != nil && late != nil {
+		late(granted, cols, rows)
 	}
 }
 
@@ -68,13 +68,14 @@ func (u *upgradableWriter) LastDroppedResize() (cols, rows int, ok bool) {
 
 // SetOnUpgrade registers fn, run once (outside the lock) when the attach becomes
 // read-write; it runs immediately if that already happened.
-func (u *upgradableWriter) SetOnUpgrade(fn func()) {
+func (u *upgradableWriter) SetOnUpgrade(fn func(TerminalWriter)) {
 	u.mu.Lock()
 	u.onUpgrade = fn
+	granted := u.granted
 	already := u.flipped && !u.upgrading
 	u.mu.Unlock()
 	if already {
-		u.finishUpgrade(fn)
+		u.finishUpgrade(fn, granted)
 	}
 }
 
@@ -93,6 +94,7 @@ func (u *upgradableWriter) Writer() TerminalWriter {
 		return nil
 	}
 	u.flipped = true
+	u.granted = writer
 	fn := u.onUpgrade
 	if fn == nil {
 		u.writer = writer // SetOnUpgrade runs the callback later
@@ -102,7 +104,7 @@ func (u *upgradableWriter) Writer() TerminalWriter {
 	u.upgrading = true
 	u.mu.Unlock()
 	log.Info("[WebSocket] read-only attach upgrading to read-write", "session", u.instance.GetTitle())
-	fn()
+	fn(writer)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.writer = writer
@@ -111,8 +113,8 @@ func (u *upgradableWriter) Writer() TerminalWriter {
 	return writer
 }
 
-func (u *upgradableWriter) finishUpgrade(fn func()) {
-	fn()
+func (u *upgradableWriter) finishUpgrade(fn func(TerminalWriter), granted TerminalWriter) {
+	fn(granted)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.closeDone()
@@ -165,24 +167,24 @@ func (h *ConnectRPCWebSocketHandler) attachUpgradableSubscriber(connCtx context.
 // channel closes when the bus watcher (if any) has unsubscribed.
 func (h *ConnectRPCWebSocketHandler) wireWriterUpgrade(connCtx context.Context, w writerUpgrade) <-chan struct{} {
 	var voteMu sync.Mutex // serializes votes so the last recorded size wins
-	voteLatest := func() {
+	voteLatest := func(writer TerminalWriter) {
 		voteMu.Lock()
 		defer voteMu.Unlock()
 		if cols, rows, ok := w.writer.LastDroppedResize(); ok {
-			voteSize(connCtx, w.hub, w.id, cols, rows)
+			voteSize(connCtx, w.hub, w.id, writer, cols, rows)
 			return
 		}
-		voteHandshakeSize(connCtx, w.hub, w.id, w.handshake)
+		voteHandshakeSize(connCtx, w.hub, w.id, writer, w.handshake)
 	}
 	w.writer.mu.Lock()
-	w.writer.lateResize = func(int, int) { voteLatest() }
+	w.writer.lateResize = func(writer TerminalWriter, _, _ int) { voteLatest(writer) }
 	w.writer.mu.Unlock()
-	w.writer.SetOnUpgrade(func() {
+	w.writer.SetOnUpgrade(func(writer TerminalWriter) {
 		w.hub.UpgradeSubscriber(w.id, streamhub.SubscriberCapability{
 			CanResize: true,
 			CanWrite:  w.instance.Snapshot().Permissions.CanSendCommand,
 		})
-		voteLatest()
+		voteLatest(writer)
 	})
 	watchDone := make(chan struct{})
 	if w.bus == nil || !w.writer.stillUpgradable() {

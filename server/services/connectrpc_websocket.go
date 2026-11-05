@@ -2267,20 +2267,24 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 		// Read-only attach: never vote on the pane size.
 		return subscriberID
 	}
-	voteHandshakeSize(connCtx, hub, subscriberID, a.currentPaneReq)
+	voteHandshakeSize(connCtx, hub, subscriberID, a.writer, a.currentPaneReq)
 	return subscriberID
 }
 
 // voteHandshakeSize casts the subscriber's resize vote from the handshake's target size.
-func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, req *sessionv1.CurrentPaneRequest) {
+func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer TerminalWriter, req *sessionv1.CurrentPaneRequest) {
 	if req.TargetCols == nil || req.TargetRows == nil {
 		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
 		return
 	}
-	voteSize(connCtx, hub, id, int(*req.TargetCols), int(*req.TargetRows))
+	voteSize(connCtx, hub, id, writer, int(*req.TargetCols), int(*req.TargetRows))
 }
 
-func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, cols, rows int) {
+// voteSize needs the pane writer as proof the subscriber may resize; a nil writer (read-only) casts no vote.
+func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer TerminalWriter, cols, rows int) {
+	if writer == nil {
+		return
+	}
 	size, sizeErr := streamhub.NewTerminalSize(cols, rows)
 	if sizeErr != nil {
 		log.Warn("[streamViaHub] invalid resize dimensions", "err", sizeErr)
@@ -2490,7 +2494,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			sendCancel()
 		},
 		onResize: func(cols, rows int) {
-			if upWriter.Writer() == nil {
+			writer := upWriter.Writer()
+			if writer == nil {
 				return
 			}
 			size, sizeErr := streamhub.NewTerminalSize(cols, rows)

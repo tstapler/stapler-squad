@@ -28,7 +28,7 @@ func TestUpgradableWriter_should_UpgradeOnce_When_TymuxInstanceBecomesActive(t *
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	w := h.newUpgradableWriter(inst)
 	upgrades := 0
-	w.SetOnUpgrade(func() { upgrades++ })
+	w.SetOnUpgrade(func(TerminalWriter) { upgrades++ })
 
 	require.Nil(t, w.Writer(), "read-only while the session is PermanentlyFailed")
 	require.Zero(t, upgrades)
@@ -98,7 +98,7 @@ func TestUpgradableWriter_should_UpgradeExactlyOnce_When_WriterIsCalledConcurren
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	var mu sync.Mutex
 	upgrades := 0
-	w.SetOnUpgrade(func() { mu.Lock(); upgrades++; mu.Unlock() })
+	w.SetOnUpgrade(func(TerminalWriter) { mu.Lock(); upgrades++; mu.Unlock() })
 	session.SetStatusForTest(t, inst, session.Active, nil)
 
 	var wg sync.WaitGroup
@@ -235,7 +235,7 @@ func TestUpgradableWriter_should_NotExposeWriterToOtherCallers_UntilUpgradeCallb
 	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	entered, release := make(chan struct{}), make(chan struct{})
-	w.SetOnUpgrade(func() { close(entered); <-release })
+	w.SetOnUpgrade(func(TerminalWriter) { close(entered); <-release })
 	session.SetStatusForTest(t, inst, session.Active, nil)
 
 	first := make(chan TerminalWriter, 1)
