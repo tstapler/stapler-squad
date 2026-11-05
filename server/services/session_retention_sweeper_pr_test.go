@@ -306,3 +306,24 @@ func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelea
 	assert.Equal(t, "item-h", sweeper.OverMaxItemPRHolds()[0].ItemID)
 	assert.True(t, hasStoredTitle(t, fix, "held"), "fail-closed forever: surfacing never releases the session")
 }
+
+func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "raced", "u-race")
+	sweeper, fake := newPRSweeper(fix)
+	calls := 0
+	fake.views = func(m map[string][]session.PRView) (map[string][]session.PRView, error) {
+		calls++
+		if calls > 1 { // a report_pr_created lands after the cycle prefilter
+			m["u-race"] = []session.PRView{{State: session.PRStateOpen}}
+		}
+		return m, nil
+	}
+
+	sweeper.sweep(context.Background())
+
+	assert.True(t, hasStoredTitle(t, fix, "raced"), "evidence re-read right before delete: the new open PR holds the session")
+	assert.GreaterOrEqual(t, calls, 2, "the per-session re-check ran")
+}

@@ -119,6 +119,12 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 			continue
 		}
 
+		if safe, reason := s.stillPREligible(ctx, d); !safe {
+			log.Info("session retention sweeper: PR evidence changed since cycle load, skipping delete",
+				"session", d.Title, "reason", reason)
+			continue
+		}
+
 		log.Info("session retention sweeper: deleting expired archived session",
 			"session", d.Title, "archived_at", d.ArchivedAt, "retention_days", s.cfg.SessionRetention.RetentionDaysOrDefault())
 
@@ -127,6 +133,20 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 			log.Warn("session retention sweeper: failed to delete session", "session", d.Title, "err", err)
 		}
 	}
+}
+
+// stillPREligible re-reads one session's PR evidence immediately before its
+// delete, since the cycle load can be minutes old (a PR attached mid-cycle must
+// win). The cycle load stays as the prefilter.
+func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session.InstanceData) (bool, string) {
+	if d.UUID == "" {
+		return true, ""
+	}
+	fresh, err := loadSweepPRData(ctx, s.prSource, []string{d.UUID})
+	if err != nil {
+		return false, "PR evidence re-read failed: " + err.Error()
+	}
+	return fresh.prEligible(d)
 }
 
 // surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
