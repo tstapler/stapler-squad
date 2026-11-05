@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func startDaemonMonitorTest(ctx context.Context, m daemonMonitor) <-chan struct{} {
@@ -335,4 +336,85 @@ func TestDaemonMonitor_DegradedDaemonIsNeverRecovered(t *testing.T) {
 		<-done
 		require.Zero(t, ensures.Load(), "a degraded daemon is reused, never recovered, so no recovery-failed noise each tick")
 	})
+}
+
+func degradedGauge(t *testing.T) int64 {
+	t.Helper()
+	m := collectMetric(t, "tymux_daemon_degraded")
+	require.NotNil(t, m)
+	g := m.Data.(metricdata.Gauge[int64])
+	require.Len(t, g.DataPoints, 1)
+	return g.DataPoints[0].Value
+}
+
+// The degraded instruments are process-global, so these tests are not parallel.
+func TestDegradedTracker_WarnsOncePerWindow_AndResetsOnRecovery(t *testing.T) {
+	var d degradedTracker
+	ctx := context.Background()
+	t0 := time.Unix(2_000_000, 0)
+
+	require.True(t, d.observe(ctx, DaemonConfig{}, true, t0), "first degraded tick warns")
+	require.False(t, d.observe(ctx, DaemonConfig{}, true, t0.Add(daemonDegradedWarnEvery-time.Second)), "rate-limited inside the window")
+	require.True(t, d.observe(ctx, DaemonConfig{}, true, t0.Add(daemonDegradedWarnEvery)), "warns again after the window")
+
+	require.False(t, d.observe(ctx, DaemonConfig{}, false, t0.Add(time.Hour)))
+	require.True(t, d.observe(ctx, DaemonConfig{}, true, t0.Add(time.Hour+time.Second)), "a new degraded episode warns immediately")
+}
+
+func TestDegradedTracker_GaugeAndDurationFollowTheState(t *testing.T) {
+	var d degradedTracker
+	ctx := context.Background()
+	t0 := time.Unix(2_000_000, 0)
+
+	d.observe(ctx, DaemonConfig{}, true, t0)
+	require.EqualValues(t, 1, degradedGauge(t))
+	d.observe(ctx, DaemonConfig{}, true, t0.Add(90*time.Second))
+	secs, _ := float64GaugeValue(t, "tymux_daemon_degraded_seconds")
+	require.InDelta(t, 90, secs, 0.001)
+
+	d.observe(ctx, DaemonConfig{}, false, t0.Add(2*time.Minute))
+	require.EqualValues(t, 0, degradedGauge(t), "1 -> 0 on recovery")
+	secs, _ = float64GaugeValue(t, "tymux_daemon_degraded_seconds")
+	require.Zero(t, secs)
+}
+
+func TestDaemonMonitor_DegradedGaugeResetsWhenNotNeededAndOnExit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var needed atomic.Bool
+		needed.Store(true)
+		m := daemonMonitor{interval: time.Second, maxBackoff: time.Second, threshold: 1,
+			needed: needed.Load,
+			probe:  func(context.Context, DaemonConfig) daemonProbeResult { return daemonProbeDegraded },
+			ensure: func(context.Context, DaemonConfig) (TymuxdReady, error) { return TymuxdReady{}, nil },
+		}
+		done := startDaemonMonitorTest(ctx, m)
+		time.Sleep(3 * time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+		synctest.Wait()
+		require.EqualValues(t, 1, degradedGauge(t))
+
+		needed.Store(false)
+		time.Sleep(2 * time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+		synctest.Wait()
+		require.EqualValues(t, 0, degradedGauge(t), "no stale 1 once the backend is not in use")
+
+		needed.Store(true)
+		time.Sleep(2 * time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+		synctest.Wait()
+		require.EqualValues(t, 1, degradedGauge(t))
+		cancel()
+		<-done
+		require.EqualValues(t, 0, degradedGauge(t), "monitor exit clears the gauge")
+	})
+}
+
+func TestWedgeTracker_DegradedProbeResetsTheBusyStreak(t *testing.T) {
+	var w wedgeTracker
+	ctx := context.Background()
+	t0 := time.Unix(2_000_000, 0)
+	require.False(t, w.observe(ctx, DaemonConfig{}, daemonProbeBusy, t0))
+	require.False(t, w.observe(ctx, DaemonConfig{}, daemonProbeDegraded, t0.Add(daemonWedgedAfter-time.Minute)))
+	require.False(t, w.observe(ctx, DaemonConfig{}, daemonProbeBusy, t0.Add(daemonWedgedAfter+time.Minute)),
+		"a degraded (answering) socket interrupts the busy streak, so the daemon is not reported wedged")
 }

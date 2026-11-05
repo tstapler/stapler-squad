@@ -103,6 +103,9 @@ var (
 		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
 	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
 		metric.WithDescription("1 while tymuxd's TCP listener is down but its Unix control socket answers (sessions use the fallback), otherwise 0"))
+	daemonDegradedSecondsGauge = mustFloat64Gauge("tymux_daemon_degraded_seconds",
+		metric.WithDescription("Seconds the current degraded episode (TCP listener down, Unix socket answering) has lasted, 0 when not degraded"),
+		metric.WithUnit("s"))
 	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
 		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))
 )
@@ -121,12 +124,13 @@ func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
 	daemonFailureGauge.Record(ctx, int64(failures))
 }
 
-func recordDaemonDegraded(ctx context.Context, degraded bool) {
+func recordDaemonDegraded(ctx context.Context, degraded bool, lasted time.Duration) {
 	value := int64(0)
 	if degraded {
 		value = 1
 	}
 	daemonDegradedGauge.Record(ctx, value)
+	daemonDegradedSecondsGauge.Record(ctx, lasted.Seconds())
 }
 
 func recordDaemonRestart(reason string) {
@@ -157,6 +161,14 @@ func mustFloat64Histogram(name string, opts ...metric.Float64HistogramOption) me
 		panic(err)
 	}
 	return h
+}
+
+func mustFloat64Gauge(name string, opts ...metric.Float64GaugeOption) metric.Float64Gauge {
+	g, err := telemetry.GetMeter().Float64Gauge(name, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return g
 }
 
 func mustInt64Gauge(name string, opts ...metric.Int64GaugeOption) metric.Int64Gauge {
