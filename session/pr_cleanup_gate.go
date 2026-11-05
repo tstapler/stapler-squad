@@ -222,6 +222,18 @@ func ItemGuardBlockReason(itemID string, g ItemGuardView, ok bool) string {
 	return ""
 }
 
+// OpenPRRefs returns the refs of the views that are not terminal (open, unknown or
+// unverified), for the warnings on intentionally ungated removals.
+func OpenPRRefs(views []PRView) []PRRef {
+	var open []PRRef
+	for _, v := range views {
+		if !v.Terminal() {
+			open = append(open, v.Ref)
+		}
+	}
+	return open
+}
+
 // OpenPRsOfSession lists the open or unknown PR refs a session links, read-only,
 // for the warnings on intentionally ungated removals (T5.4.5). Never blocks.
 func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string) ([]PRRef, error) {
@@ -229,13 +241,7 @@ func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string
 	if err != nil {
 		return nil, err
 	}
-	var open []PRRef
-	for _, v := range views[sessionUUID] {
-		if !v.Terminal() {
-			open = append(open, v.Ref)
-		}
-	}
-	return open, nil
+	return OpenPRRefs(views[sessionUUID]), nil
 }
 
 // BlockedSet tracks which (path, item) pairs are blocked now, so the counter and the

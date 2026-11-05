@@ -225,3 +225,24 @@ type stubProbe struct{ live map[string]bool }
 func (s *stubProbe) IsLive(_ context.Context, id string, _ time.Time) (bool, error) {
 	return s.live[id], nil
 }
+
+// Row 14 of the path inventory: force-reset stops a live session even with an open PR,
+// but the stop is not silent.
+func TestStopLiveWorkAndReviewSessions_ShouldStopSession_AndNameItsOpenPR(t *testing.T) {
+	h := newBlockerHarness(t, session.BacklogStatusInProgress)
+	h.link(session.SessionPROwner(h.uuid), 12, session.PRStateOpen)
+
+	warnings := h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID)
+
+	assert.Equal(t, []string{h.uuid}, h.stopper.stoppedUUIDs, "the operator action still stops the session")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "acme/app#12")
+	assert.Contains(t, warnings[0], h.uuid)
+}
+
+func TestStopLiveWorkAndReviewSessions_ShouldWarnNothing_WhenEveryPRTerminal(t *testing.T) {
+	h := newBlockerHarness(t, session.BacklogStatusInProgress)
+	h.link(session.SessionPROwner(h.uuid), 12, session.PRStateMerged)
+
+	assert.Empty(t, h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID))
+}
