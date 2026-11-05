@@ -918,3 +918,24 @@ func TestHookProcess_ShouldNotChangeLegacyColumns_WhenLinklessSessionSavedViaSsq
 	assert.Equal(t, want.GitHubPRURL, got.GitHubPRURL)
 	assert.Equal(t, want.GitHubPRStatusTerminal, got.GitHubPRStatusTerminal)
 }
+
+func TestSessionUUIDsByPR_ShouldReturnSessionLinksOnly_WhenItemAndOtherPRLinked(t *testing.T) {
+	t.Parallel()
+	repo := newPRRepo(t)
+	ref := mustPRRef(t, "", "acme", "app", 12)
+	upsertLink(t, repo, SessionPROwner("u2"), ref, AttachSourceManual)
+	upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
+	upsertLink(t, repo, ItemPROwner("item-1"), ref, AttachSourceManual)
+	upsertLink(t, repo, SessionPROwner("u3"), mustPRRef(t, "", "acme", "app", 13), AttachSourceManual)
+
+	got, err := repo.SessionUUIDsByPR(context.Background(), mustPRRef(t, "", "Acme", "App", 12))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"u1", "u2"}, got)
+
+	none, err := repo.SessionUUIDsByPR(context.Background(), mustPRRef(t, "", "acme", "app", 99))
+	require.NoError(t, err)
+	assert.Empty(t, none)
+
+	_, err = repo.SessionUUIDsByPR(context.Background(), PRRef{})
+	assert.ErrorIs(t, err, ErrZeroPRRef)
+}
