@@ -352,7 +352,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
 		TransitionRequest{Caller: CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: TriggeredBySystem},
-		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary})
+		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: AttachSourcePRCreationService})
 }
 
 // mostRecentWorkCommitShippedToMain finds itemID's most recent work session
@@ -614,11 +614,7 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
 		return
 	}
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
 			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
 		return
@@ -686,7 +682,12 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// Create (or locate existing) PR.
 	var prURL string
 	var prNumber int
-	if item.PrNumber > 0 && item.PrURL != "" {
+	reuse, reuseErr := l.canReuseTrackedPR(ctx, item, wt)
+	if reuseErr != nil {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "could not verify the tracked PR", reuseErr)
+		return
+	}
+	if reuse {
 		// PR already exists from a previous attempt — just use it.
 		prURL = item.PrURL
 		prNumber = item.PrNumber
@@ -753,12 +754,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		// a push/PR-creation failure: stay in review so a human (or the next
 		// TriggerReReview) can retry, rather than silently entering that dead
 		// end.
-		prURLCopy := prURL
-		prNumCopy := prNumber
-		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-			PrURL:    &prURLCopy,
-			PrNumber: &prNumCopy,
-		}, nil); updateErr != nil {
+		// The item-direct link and state row go in the same transaction as the fields
+		// (BUG-058 narrowed), so the refresher polls the PR and the gate sees it.
+		if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
@@ -809,6 +807,24 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// canReuseTrackedPR reports whether pushAndCreatePR may reuse the item's recorded PR.
+// With reader:backlog on it must still be open on this item's branch (a closed or
+// foreign PR is replaced by a fresh one); a lookup failure is returned so the caller
+// retries instead of opening a duplicate. Scope off: any recorded PR is reused, as before.
+func (l *BacklogLifecycleListener) canReuseTrackedPR(ctx context.Context, item *BacklogItemData, wt GitWorktreeData) (bool, error) {
+	if item.PrNumber <= 0 || item.PrURL == "" {
+		return false, nil
+	}
+	if !l.backlogReaderEnabled() {
+		return true, nil
+	}
+	info, err := l.getPRByNumberFinder()(ctx, wt.RepoPath, item.PrNumber)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(info.State, "open") && info.HeadRef == wt.BranchName, nil
 }
 
 const (
@@ -1376,11 +1392,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 		return
 	}
 
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand store PR fields item=%s: %v", item.ID, updateErr)
 	}
 

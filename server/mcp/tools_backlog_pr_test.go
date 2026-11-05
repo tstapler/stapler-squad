@@ -110,3 +110,71 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 	require.False(t, m["success"].(bool))
 	assert.Contains(t, m["error"].(map[string]interface{})["message"], "requires override_reason")
 }
+
+func pendingItemWithPR21(t *testing.T, storage *session.Storage, itemID string) {
+	t.Helper()
+	n, url := 21, "https://github.com/tstapler/stapler-squad/pull/21"
+	_, err := storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+}
+
+func additiveHandler(storage *session.Storage, scopeOn bool) *backlogHandlers {
+	return &backlogHandlers{
+		storage:              storage,
+		multiPRBacklog:       func() bool { return scopeOn },
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
+			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
+		},
+	}
+}
+
+func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	pendingItemWithPR21(t, storage, item.ID)
+	h := additiveHandler(storage, true)
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := h.reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, nil)))
+	require.NoError(t, err)
+
+	require.False(t, result.IsError, "no override_reason is required: %v", result.Content)
+	fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 42, fetched.PrNumber, "the open follow-up outranks the stale scalar")
+	views, lerr := storage.ItemPRs(context.Background(), item.ID)
+	require.NoError(t, lerr)
+	var followup *session.PRView
+	for i := range views {
+		if views[i].Ref.Number() == 42 {
+			followup = &views[i]
+		}
+	}
+	require.NotNil(t, followup, "#42 is in the derived set")
+	assert.Equal(t, session.PRRoleFollowup, followup.Role)
+}
+
+func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumberGiven(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	pendingItemWithPR21(t, storage, item.ID)
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	for name, tc := range map[string]struct {
+		scope bool
+		extra map[string]interface{}
+	}{
+		"scope off":                     {false, nil},
+		"scope on, explicit correction": {true, map[string]interface{}{"replaces_pr_number": float64(21)}},
+	} {
+		result, err := additiveHandler(storage, tc.scope).reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, tc.extra)))
+		require.NoError(t, err, name)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool), name)
+		assert.Contains(t, m["error"].(map[string]interface{})["message"], "requires override_reason", name)
+	}
+}

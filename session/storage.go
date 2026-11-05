@@ -1442,6 +1442,9 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
+	if pr.Additive && observed.Status == string(BacklogStatusPRPending) {
+		return s.attachAdditivePR(ctx, observed, pr)
+	}
 	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
 		return fmt.Errorf("%w: expected status %q or %q, got %q", ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
 	}
@@ -1492,7 +1495,15 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+	var replaced *PRRef
+	if isReassignment {
+		if old, perr := ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
+			replaced = &old
+		}
+	}
+	// The item-direct link is written for every item PR writer, flag on or off, in the
+	// same transaction as the pr_number write.
+	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -1522,6 +1533,43 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		}
 	}
 
+	return nil
+}
+
+// SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
+func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source AttachSource) error {
+	return s.repo.SetItemPRFieldsWithLink(ctx, itemID, prURL, prNumber, source)
+}
+
+// attachAdditivePR records pr as a follow-up PR of an item already in pr_pending: it
+// adds the item-direct link (tombstone-checked), then lets the item's pr_number/pr_url
+// mirror follow the derived active PR. The status never changes and no override_reason
+// or reassignment guard applies. If the mirror recompute fails, the next
+// ReconcilePRPending pass repairs it.
+func (s *Storage) attachAdditivePR(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+	ref, err := ParseItemPRRef(pr.URL, pr.Number)
+	if err != nil {
+		return fmt.Errorf("additive PR: %w", err)
+	}
+	src := pr.Source
+	if src == "" {
+		src = AttachSourceReportPRCreated
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, PRLink{
+		Role: PRRoleFollowup, Source: src, Initial: PRInitial{State: PRStateOpen, URL: pr.URL},
+	})
+	if err != nil {
+		return fmt.Errorf("additive PR: record link: %w", err)
+	}
+	if res.Tombstoned {
+		return fmt.Errorf("%w: %s was detached from this item earlier; re-attach it from the UI first", ErrPRDetached, ref)
+	}
+	if _, mirrorErr := s.repo.RecomputeItemPRMirror(ctx, observed.ID); mirrorErr != nil {
+		log.WarningLog().Printf("[Storage] additive PR: mirror recompute item=%s: %v", observed.ID, mirrorErr)
+	}
+	if noteErr := s.AppendProgressNote(ctx, observed.ID, -1, pr.Summary, "pr_added"); noteErr != nil {
+		log.WarningLog().Printf("[Storage] additive PR: progress note item=%s: %v", observed.ID, noteErr)
+	}
 	return nil
 }
 

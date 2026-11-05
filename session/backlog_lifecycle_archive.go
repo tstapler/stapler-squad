@@ -219,7 +219,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		// A live-only block is the one outcome retried on the next tick; everything
 		// else waits for the TTL (a PR-held block is released promptly by the
 		// terminal listener, T5.4.3).
-		if countsOK && !(outcome.Status == CleanupBlocked && outcome.LiveOnly) {
+		if countsOK && (outcome.Status != CleanupBlocked || !outcome.LiveOnly) {
 			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 		}
 	}
