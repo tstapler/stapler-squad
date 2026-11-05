@@ -383,6 +383,9 @@ func (m *mover) apply() error {
 }
 
 func gitMv(root, from, to string) error {
+	if _, err := git(root, "ls-files", "--error-unmatch", from); err != nil {
+		return os.Rename(from, to) // an untracked staging file (a fresh relocate target) has nothing to `git mv`
+	}
 	//nolint:norawexec dev-time codemod, short-lived and waited on
 	cmd := exec.Command("git", "mv", from, to) //nolint:norawgitcli // dev-time codemod, not product code
 	cmd.Dir = root

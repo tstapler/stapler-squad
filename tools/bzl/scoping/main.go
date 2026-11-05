@@ -335,6 +335,8 @@ func main() {
 		os.Exit(runMove(os.Args[2:], os.Stdout))
 	case "relocate":
 		os.Exit(runRelocate(os.Args[2:], os.Stdout))
+	case "closure":
+		os.Exit(runClosure(os.Args[2:], os.Stdout))
 	case "deps":
 		os.Exit(runDeps(os.Args[2:], os.Stdout))
 	case "budget":
