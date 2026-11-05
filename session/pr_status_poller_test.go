@@ -229,7 +229,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchAndReturnMatchedTrue_When_OneI
 	p := newTestPRStatusPoller()
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-match-test", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), "acme", "widgets", 42)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
@@ -267,7 +267,7 @@ func TestInvalidateAndRefresh_should_ReturnMatchedFalse_When_NoTrackedInstanceMa
 	// Tracks a different PR number, so it must not match.
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-no-match-test", 99))
 
-	matched := p.InvalidateAndRefresh(context.Background(), "acme", "widgets", 42)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), PRSourceWebhook)
 	if matched {
 		t.Fatal("InvalidateAndRefresh() = true, want false when no tracked instance matches")
 	}
@@ -298,7 +298,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchForEachInstance_When_TwoInstan
 	p.AddInstance(newInvalidateTestInstance(t, "session-a", 42))
 	p.AddInstance(newInvalidateTestInstance(t, "session-b", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), "acme", "widgets", 42)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true when two instances track the PR")
 	}
@@ -470,7 +470,7 @@ func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin
 
 	// Webhook path: InvalidateAndRefresh tags OriginWebhookReconcile itself and
 	// dispatches fetchAndUpdatePRStatus out of band (see its doc comment).
-	matched := p.InvalidateAndRefresh(context.Background(), "acme", "widgets", 43)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 43), PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
@@ -506,5 +506,73 @@ func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin
 	}
 	if origins[0] == origins[1] {
 		t.Fatal("ticker-path and webhook-path origins must be distinguishable, but both requests carried the same origin")
+	}
+}
+
+// blockingGHClient parks every GetPRInfoConditional until release is closed.
+type blockingGHClient struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingGHClient) CheckGHAuth(context.Context) error { return nil }
+
+func (b *blockingGHClient) GetPRForBranchConditional(_ context.Context, _ github.RepoRef, _, etag string) (*github.PRInfo, string, bool, error) {
+	return nil, etag, false, github.ErrNoPR
+}
+
+func (b *blockingGHClient) GetPRInfoConditional(context.Context, github.RepoRef, int, *github.ETagCache) (*github.PRInfo, bool, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return &github.PRInfo{State: "open"}, true, nil
+}
+
+// BUG-023 interplay (T3.1.1): no GitHub request is made while holding p.mu.
+func TestPollerMutex_ShouldBeFreeDuringInFlightPoll(t *testing.T) {
+	t.Parallel()
+	client := &blockingGHClient{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	inst := &Instance{Title: "mutex-free", Status: Active, GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 11}
+	poller := newLegacyTestPoller(client, inst)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		poller.checkAllSessions()
+	}()
+	<-client.entered // the poll is in flight
+
+	locked := make(chan struct{})
+	go func() {
+		poller.mu.Lock()
+		poller.mu.Unlock() //nolint:staticcheck // acquiring is the assertion
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Error("p.mu was held across an in-flight GitHub request")
+	}
+	close(client.release)
+	<-done
+}
+
+func TestRepoMetadataProbe_ShouldUseConditionalRequestWithHostToken_WhenCountedCandidate404(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	var gotPath, gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	withGhBaseURL(t, ts)
+	ref, err := github.NewRepoRefWithHost("acme", "app", "")
+
+	probe, err2 := realGHClient{}.ProbeRepo(context.Background(), ref)
+
+	if err != nil || err2 != nil {
+		t.Fatalf("setup/probe error: %v / %v", err, err2)
+	}
+	if gotPath != "/repos/acme/app" || gotAuth != "Bearer fake-token" || probe.Status != http.StatusOK {
+		t.Errorf("probe hit %q with auth %q status %d, want /repos/acme/app with the host token", gotPath, gotAuth, probe.Status)
 	}
 }

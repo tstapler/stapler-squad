@@ -931,6 +931,16 @@ func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRO
 	return s.repo.UpdatePullRequestState(ctx, ref, obs)
 }
 
+// ListPollableStates is the PR poller's work list (see EntRepository.ListPollableStates).
+func (s *Storage) ListPollableStates(ctx context.Context) ([]PRView, error) {
+	return s.repo.ListPollableStates(ctx)
+}
+
+// GetPullRequestState returns the state columns of one PR.
+func (s *Storage) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+	return s.repo.GetPullRequestState(ctx, ref)
+}
+
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
 // the ent schema. Callers (e.g. PRStatusPoller) call this as a persistence hook,
 // but no DB write occurs.

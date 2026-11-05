@@ -230,3 +230,46 @@ func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 	require.Eventually(t, func() bool { return repos()["fast"] == "acme/widget" }, 5*time.Second, time.Millisecond)
 	assert.Empty(t, repos()["slow"], "blocked path stays unresolved without stalling List")
 }
+
+func twoPRSnap(t *testing.T, id string, merged, open int) *session.InstanceSnapshot {
+	t.Helper()
+	ref := func(n int) session.PRRef {
+		r, err := session.NewPRRef("", "acme", "widget", n)
+		require.NoError(t, err)
+		return r
+	}
+	snap := prSnap(id, session.Active)
+	snap.GitHub.GitHubPRNumber, snap.GitHub.GitHubPRStatusTerminal = open, false
+	snap.GitHub.PRs = []session.PRView{
+		{Ref: ref(merged), State: session.PRStateMerged, StoredTerminal: true},
+		{Ref: ref(open), State: session.PRStateOpen},
+		{Ref: ref(open + 1), State: session.PRStateOpen},
+	}
+	return snap
+}
+
+func TestPRWatchSessions_should_EmitOneEntryPerOpenPR_When_PollerScopeOn(t *testing.T) {
+	s := newTestPRWatchSessions([]*session.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
+	s.perPR = func() bool { return true }
+
+	refs, err := s.List(context.Background())
+	require.NoError(t, err)
+
+	prs := make([]int, 0, len(refs))
+	for _, r := range refs {
+		assert.Equal(t, "u1", r.UUID)
+		assert.Equal(t, prwatch.SkipReason(""), r.SkipReason)
+		prs = append(prs, r.PR)
+	}
+	assert.Equal(t, []int{12, 13}, prs, "merged #11 produces no entry and does not hide the open PRs")
+}
+
+func TestPRWatchSessions_should_KeepSingleLegacyEntry_When_PollerScopeOff(t *testing.T) {
+	s := newTestPRWatchSessions([]*session.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
+	s.perPR = func() bool { return false }
+
+	refs, err := s.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	assert.Equal(t, 12, refs[0].PR)
+}

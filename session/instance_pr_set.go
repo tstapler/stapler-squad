@@ -97,6 +97,7 @@ func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRIn
 	}
 	inst.PRs = append(inst.PRs, view)
 	inst.HasPRLinks = true
+	prMetrics.observeSessionPRCount(len(inst.PRs))
 	if inst.LegacyPRUnrepresented && inst.GitHubPRNumber == ref.Number() {
 		inst.LegacyPRUnrepresented = false
 	}
@@ -108,14 +109,28 @@ func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRIn
 // existing PRStatusUpdate; an unparseable State leaves the state unchanged) and
 // reports whether ref is in the set.
 func (i *Instance) ApplyPRUpdate(ref PRRef, u PRStatusUpdate) bool {
-	return i.mutatePR(ref, func(v *PRView) {
-		if st, err := ParsePRState(u.State); err == nil {
-			v.State = st
+	return i.mutatePR(ref, func(v *PRView) { applyUpdateToView(v, u) })
+}
+
+func applyUpdateToView(v *PRView, u PRStatusUpdate) {
+	if st, err := ParsePRState(u.State); err == nil {
+		v.State = st
+	}
+	v.StoredTerminal, v.IsDraft = u.Terminal, u.IsDraft
+	v.CheckConclusion, v.ApprovedCount, v.ChangesRequestedCount = u.CheckConclusion, u.ApprovedCount, u.ChangesReqCount
+	v.LastCheckedAt = time.Now()
+}
+
+// applyLegacyUpdateToActivePR carries a legacy per-session observation onto the
+// active PR's view, so the snapshot's active-PR projection keeps it (with every
+// scope off the legacy loop is the only thing that updates a session's PRs).
+// The caller holds inst.mu.
+func applyLegacyUpdateToActivePR(inst *Instance, u PRStatusUpdate) {
+	if active := ActivePR(inst.PRs, inst.Branch); active != nil {
+		if idx := indexOfPR(inst.PRs, active.Ref); idx >= 0 {
+			applyUpdateToView(&inst.PRs[idx], u)
 		}
-		v.StoredTerminal, v.IsDraft = u.Terminal, u.IsDraft
-		v.CheckConclusion, v.ApprovedCount, v.ChangesRequestedCount = u.CheckConclusion, u.ApprovedCount, u.ChangesReqCount
-		v.LastCheckedAt = time.Now()
-	})
+	}
 }
 
 // MarkPRTerminal records that ref reached a closed or merged state.

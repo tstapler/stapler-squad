@@ -550,6 +550,21 @@ func (r *EntRepository) ListPollableStates(ctx context.Context) ([]PRView, error
 	return out, nil
 }
 
+// GetPullRequestState returns one PR's state columns (no owner fields).
+func (r *EntRepository) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+	if ref.IsZero() {
+		return PRView{}, ErrZeroPRRef
+	}
+	st, err := r.client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return PRView{}, fmt.Errorf("%w: pull request state %s", ErrNotFound, ref)
+		}
+		return PRView{}, fmt.Errorf("load pull request state %s: %w", ref, err)
+	}
+	return r.linkStateToView(st, nil)
+}
+
 // linkStateToView converts a state row (and optionally one of its links) to a PRView.
 func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.SessionPR) (PRView, error) {
 	ref, err := NewPRRef(st.Host, st.Owner, st.Repo, st.Number)
