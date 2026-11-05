@@ -10,6 +10,8 @@ import { SessionServiceContext, type SessionServiceContextValue } from "@/lib/co
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { failingPR, fakeNudgeClient, makePR, session } from "./prTestFixtures";
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
 jest.mock("./PRCard.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 
@@ -292,5 +294,21 @@ describe("PRCard nudge", () => {
       expect(nudge()).toBeNull();
       unmount();
     }
+  });
+});
+
+describe("PRCard analytics", () => {
+  it("prCard_should_trackTheFailingChecksToggleWithItsNewOpenState", () => {
+    mockTrack.mockClear();
+    render(inStore(<PRCard pr={failingPR()} />));
+    fireEvent.click(screen.getByTestId("failing-checks-toggle"));
+    expect(mockTrack).toHaveBeenCalledWith({
+      name: "unfinished_pr_failing_checks_toggled",
+      category: "user_action",
+      component: "PRCard",
+      labels: { open: "true" },
+    });
+    fireEvent.click(screen.getByTestId("failing-checks-toggle"));
+    expect(mockTrack).toHaveBeenLastCalledWith(expect.objectContaining({ labels: { open: "false" } }));
   });
 });

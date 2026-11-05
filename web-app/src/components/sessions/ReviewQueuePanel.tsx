@@ -18,6 +18,8 @@ import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/g
 import { parseGitHubRef } from "@/lib/github/urlParser";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
+import { useAnalytics } from "@/lib/analytics";
+import type { AnalyticsEvent } from "@/lib/analytics/types";
 import { reviewItemHasOpenPr, reviewItemPr } from "@/lib/pr/reviewItemPr";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
@@ -190,6 +192,10 @@ const KNOWN_RISK_LEVELS = new Set<string>(SEVERITY_FILTER_VALUES.filter((v) => v
 // value) into UNRECORDED_SEVERITY, so every item is always reachable through one of the
 // SEVERITY_FILTER_VALUES chips — a future/unrecognized risk_level can't become its own
 // unfilterable key (PR #411 review finding).
+function reviewQueueEvent(name: string, labels?: Record<string, string>): AnalyticsEvent {
+  return { name, category: "user_action", component: "ReviewQueuePanel", labels };
+}
+
 function severityFilterKey(riskLevel: string | undefined): string {
   return riskLevel && KNOWN_RISK_LEVELS.has(riskLevel) ? riskLevel : UNRECORDED_SEVERITY;
 }
@@ -401,6 +407,7 @@ export function ReviewQueuePanel({
       ? (urlFilters.group as GroupingStrategy)
       : GroupingStrategy.None
   );
+  const { track } = useAnalytics();
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   // Track whether queue ever had items so we can show "all done" vs generic empty state
   const [hadItems, setHadItems] = useState(false);
@@ -455,6 +462,10 @@ export function ReviewQueuePanel({
     setReviewingIdsSnapshot(new Set(allItems.map((item) => item.sessionId)));
     refresh();
   }, [allItems, refresh]);
+  const refreshFrom = (source: "button" | "new_items_banner") => {
+    track(reviewQueueEvent("review_queue_refreshed", { source }));
+    refreshSnapshot();
+  };
   // ─────────────────────────────────────────────────────────────────────────
 
   // ─── Focus management on item removal (design/ux.md AC34) ─────────────────
@@ -1062,7 +1073,7 @@ export function ReviewQueuePanel({
     >
       <div
         className={`${itemClickable} ${index === currentIndex ? currentItem : ""}`}
-        onClick={() => onSessionClick?.(queueItem.sessionId)}
+        onClick={() => { track(reviewQueueEvent("review_queue_item_opened")); onSessionClick?.(queueItem.sessionId); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -1079,7 +1090,6 @@ export function ReviewQueuePanel({
             : undefined
         }
       >
-        {/* analytics-exempt */}
         <div className={itemHeader}>
           <h3 className={itemTitle}>{queueItem.sessionName}</h3>
           <ReviewQueueBadge
@@ -1282,11 +1292,10 @@ export function ReviewQueuePanel({
                   href={itemPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); track(reviewQueueEvent("review_queue_pr_link_opened")); }}
                   aria-label={prNumber ? `PR #${prNumber}: ${queueItem.sessionName}` : `View PR: ${queueItem.sessionName}`}
                   data-testid="github-pr-link"
                 >
-                  {/* analytics-exempt */}
                   {prNumber ? `✅ View PR #${prNumber}` : "✅ View PR"}
                 </a>
               ) : (
@@ -1401,12 +1410,11 @@ export function ReviewQueuePanel({
             </label>
           )}
           <button
-            onClick={refreshSnapshot}
+            onClick={() => refreshFrom("button")}
             className={refreshButton}
             disabled={loading}
             aria-label="Refresh review queue"
           >
-            {/* analytics-exempt */}
             {loading ? "⟳" : "↻"}
           </button>
         </div>
@@ -1434,8 +1442,7 @@ export function ReviewQueuePanel({
         {showStalenessIndicator && (
           <div className={stalenessIndicator} role="status" data-testid="review-queue-staleness">
             Last updated {stalenessLabel} ago ·{" "}
-            <button type="button" className={stalenessRetry} onClick={refresh}>
-              {/* analytics-exempt */}
+            <button type="button" className={stalenessRetry} onClick={() => { track(reviewQueueEvent("review_queue_refresh_retried")); refresh(); }}>
               Retry
             </button>
           </div>
@@ -1452,10 +1459,9 @@ export function ReviewQueuePanel({
         {newItemsCount > 0 && (
           <button
             className={newItemsBanner}
-            onClick={refreshSnapshot}
+            onClick={() => refreshFrom("new_items_banner")}
             aria-label={`${newItemsCount} new item${newItemsCount !== 1 ? "s" : ""} added. Click to refresh the list.`}
           >
-            {/* analytics-exempt */}
             {newItemsCount} new item{newItemsCount !== 1 ? "s" : ""} added — click to refresh
           </button>
         )}
@@ -1465,20 +1471,18 @@ export function ReviewQueuePanel({
         <div className={filterToggleRow}>
           <button
             className={`${filterToggle} ${hasActiveFilter ? filterToggleActive : ""}`}
-            onClick={() => setIsFiltersOpen((o) => !o)}
+            onClick={() => { track(reviewQueueEvent("review_queue_filters_toggled", { open: String(!isFiltersOpen) })); setIsFiltersOpen((o) => !o); }}
             aria-expanded={isFiltersOpen}
             aria-controls="review-queue-filters"
           >
-            {/* analytics-exempt */}
             {activeFilterLabel} {isFiltersOpen ? "▲" : "▼"}
           </button>
           {hasActiveFilter && (
             <button
               className={filterClear}
-              onClick={clearAllFilters}
+              onClick={() => { track(reviewQueueEvent("review_queue_filters_cleared")); clearAllFilters(); }}
               aria-label="Clear active filter"
             >
-              {/* analytics-exempt */}
               ✕ Clear
             </button>
           )}
@@ -1524,12 +1528,11 @@ export function ReviewQueuePanel({
                     <button
                       key={priority}
                       className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByPriority(priority)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "priority" })); handleFilterByPriority(priority); }}
                       disabled={priorityCount === 0}
                       aria-pressed={priorityFilter.has(priority)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
-                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
@@ -1561,12 +1564,11 @@ export function ReviewQueuePanel({
                   <button
                     key={reason}
                     className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                    onClick={() => handleFilterByReason(reason)}
+                    onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "reason" })); handleFilterByReason(reason); }}
                     disabled={reasonCount === 0}
                     aria-pressed={reasonFilter.has(reason)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
-                    {/* analytics-exempt */}
                     {isExcluded ? "🚫 " : ""}
                     {getReasonLabel(reason)} ({reasonCount})
                   </button>
@@ -1586,12 +1588,11 @@ export function ReviewQueuePanel({
                   <button
                     key={severity}
                     className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                    onClick={() => handleFilterBySeverity(severity)}
+                    onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "severity" })); handleFilterBySeverity(severity); }}
                     disabled={severityCount === 0}
                     aria-pressed={severityFilter.has(severity)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
-                    {/* analytics-exempt */}
                     {isExcluded ? "🚫 " : ""}
                     {label} ({severityCount})
                   </button>
@@ -1610,11 +1611,10 @@ export function ReviewQueuePanel({
                     <button
                       key={program}
                       className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByProgram(program)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "program" })); handleFilterByProgram(program); }}
                       aria-pressed={programFilter.has(program)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
-                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {program} ({n})
                     </button>
@@ -1634,11 +1634,10 @@ export function ReviewQueuePanel({
                     <button
                       key={category}
                       className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByCategory(category)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "category" })); handleFilterByCategory(category); }}
                       aria-pressed={categoryFilter.has(category)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
-                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {category} ({n})
                     </button>
@@ -1658,11 +1657,10 @@ export function ReviewQueuePanel({
                     <button
                       key={t}
                       className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByTag(t)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "tag" })); handleFilterByTag(t); }}
                       aria-pressed={tagFilter.has(t)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
-                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {t} ({n})
                     </button>
@@ -1679,19 +1677,17 @@ export function ReviewQueuePanel({
                 <button
                   key={v}
                   className={`${filterButton} ${prFilter === v ? filterButtonActive : ""}`}
-                  onClick={() => handlePrFilterChange(v)}
+                  onClick={() => { track(reviewQueueEvent("review_queue_pr_filter_changed", { value: v })); handlePrFilterChange(v); }}
                   aria-pressed={prFilter === v}
                 >
-                  {/* analytics-exempt */}
                   {v === "all" ? "All" : v === "has-pr" ? "Has PR" : "No PR"}
                 </button>
               ))}
               <button
                 className={`${filterButton} ${divergedOnly ? filterButtonActive : ""}`}
-                onClick={() => handleDivergedOnlyChange(!divergedOnly)}
+                onClick={() => { track(reviewQueueEvent("review_queue_diverged_filter_toggled", { enabled: String(!divergedOnly) })); handleDivergedOnlyChange(!divergedOnly); }}
                 aria-pressed={divergedOnly}
               >
-                {/* analytics-exempt */}
                 Diverged from base
               </button>
             </div>
@@ -1716,10 +1712,13 @@ export function ReviewQueuePanel({
               {sortField !== "default" && (
                 <button
                   className={filterButton}
-                  onClick={() => handleSortDirectionChange(sortDirection === "asc" ? "desc" : "asc")}
+                  onClick={() => {
+                    const next = sortDirection === "asc" ? "desc" : "asc";
+                    track(reviewQueueEvent("review_queue_sort_direction_changed", { direction: next }));
+                    handleSortDirectionChange(next);
+                  }}
                   aria-label={`Sort direction: ${sortDirection === "asc" ? "ascending" : "descending"}`}
                 >
-                  {/* analytics-exempt */}
                   {sortDirection === "asc" ? "↑ Asc" : "↓ Desc"}
                 </button>
               )}
@@ -1887,13 +1886,13 @@ export function ReviewQueuePanel({
                   lineHeight: 1,
                 }}
                 onClick={() => {
+                  track(reviewQueueEvent("review_queue_create_rule_modal_closed"));
                   setActiveRuleItemId(null);
                   clearRule();
                 }}
                 aria-label="Close"
                 data-testid="create-rule-modal-close"
               >
-                {/* analytics-exempt */}
                 ✕
               </button>
             </div>
