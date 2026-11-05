@@ -6,12 +6,10 @@ package services
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -85,45 +83,6 @@ func TestInspectStaleWork_should_skip_When_StallRecoveryLive(t *testing.T) {
 	assert.Equal(t, StaleWorkSkipped, got)
 	assert.Zero(t, f.nudger.callCount())
 	assert.False(t, captured, "a live recovery owns the pane; do not even capture")
-}
-
-type fakeStaleInspector struct{ result StaleWorkDisposition }
-
-func (f fakeStaleInspector) InspectStaleWork(context.Context, string, *session.BacklogItemData) StaleWorkDisposition {
-	return f.result
-}
-
-func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesOrSkips(t *testing.T) {
-	for name, disp := range map[string]StaleWorkDisposition{"nudged": StaleWorkNudged, "skipped": StaleWorkSkipped, "respawn": StaleWorkRespawn} {
-		t.Run(name, func(t *testing.T) {
-			storage := svctest.CreateTestStorage(t)
-			creator := &mockSessionCreator{}
-			svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-uuid": true}}
-			svc.SetSessionStopper(stopper)
-			svc.SetStaleWorkInspector(fakeStaleInspector{result: disp})
-			repoPath := t.TempDir()
-			svctest.InitGitRepoWithCommit(t, repoPath)
-			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
-			_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
-			require.NoError(t, err)
-			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
-			require.NoError(t, err)
-
-			require.NoError(t, svc.RemediateStaleWorkSession(t.Context(), itemID))
-
-			sessions, err := storage.ListItemSessions(t.Context(), itemID)
-			require.NoError(t, err)
-			restarted := disp == StaleWorkRespawn
-			assert.Equal(t, restarted, slices.Contains(stopper.killedPaneUUIDs, "stale-uuid"))
-			assert.Equal(t, restarted, len(creator.calls) == 1)
-			for _, is := range sessions {
-				if is.SessionUUID == "stale-uuid" {
-					assert.Equal(t, restarted, is.EndedAt != nil)
-				}
-			}
-		})
-	}
 }
 
 func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegistered(t *testing.T) {

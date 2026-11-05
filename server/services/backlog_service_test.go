@@ -174,108 +174,6 @@ type mockSessionCreator struct {
 	err   error
 }
 
-// mockSessionStopper implements SessionStopper for tests.
-type mockSessionStopper struct {
-	liveUUIDs       map[string]bool
-	killedPaneUUIDs []string
-	// killByTitleAllowed records the allowedOwnerUUIDs of each KillTmuxSessionByTitle call.
-	killByTitleAllowed [][]string
-	archivedUUIDs      []string
-	archiveErrForUUID  map[string]error
-	// stoppedUUIDs records every UUID passed to StopSessionByUUID.
-	stoppedUUIDs []string
-	// stopperErr, if non-nil, is returned by StopSessionByUUID (default nil —
-	// every existing test that doesn't set it keeps today's always-succeeds
-	// behavior).
-	stopperErr error
-	// staleFor maps a session UUID to the "time since last meaningful output"
-	// TimeSinceLastMeaningfulOutput should report for it. A UUID present in
-	// liveUUIDs but absent here reports (0, true) — live and fresh.
-	staleFor map[string]time.Duration
-	// tslmoOverrideNotLive forces TimeSinceLastMeaningfulOutput to report
-	// live=false for a UUID even though it's present (true) in liveUUIDs, so
-	// IsSessionLive still reports it as live. Models the real SessionService
-	// implementation's rare edge case where a session is deregistered from the
-	// live poller between an earlier IsSessionLive check (e.g.
-	// tombstoneOrphanWorkSessions' orphan sweep) and a later
-	// TimeSinceLastMeaningfulOutput call in the same request — both are backed
-	// by the same FindLiveInstance lookup in production, so they normally
-	// agree, but a caller enriching an error message with the progress signal
-	// must still handle the disagreement gracefully rather than assume it. Nil
-	// (the default) preserves the old coupled behavior for every other test.
-	tslmoOverrideNotLive map[string]bool
-	// onKillTmuxPaneOnly, if set, is invoked synchronously from
-	// KillTmuxPaneOnly before it records the call — lets a test observe
-	// storage state at the exact moment the pane would be killed in
-	// production (BUG-064: RemediateStaleWorkSession must end the
-	// ItemSession row before calling KillTmuxPaneOnly, not after, so that
-	// onSessionExited's already-ended guard has something to observe once
-	// the (real) tmux kill asynchronously fires the exit event).
-	onKillTmuxPaneOnly func(uuid string)
-	// retryPendingUUIDs maps a session UUID to the IsRetryPending result it
-	// should report. Absent (or false) means no retry pending — the default
-	// for every existing test, preserving prior behavior.
-	retryPendingUUIDs map[string]bool
-	// killIneffectiveUUIDs marks a UUID whose KillTmuxPaneOnly call must NOT
-	// flip liveUUIDs to false — models a kill attempt that genuinely fails to
-	// reach the process (a stuck/zombie pane, or an EndedAt set by something
-	// other than a real kill). Every other UUID's default KillTmuxPaneOnly
-	// behavior flips it to not-live, matching the real
-	// SessionService.KillTmuxPaneOnly: Instance.KillSession's underlying tmux
-	// kill-session call is synchronous, so a genuinely successful kill is
-	// confirmed dead immediately, not eventually.
-	killIneffectiveUUIDs map[string]bool
-}
-
-func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
-	return m.liveUUIDs[uuid]
-}
-
-func (m *mockSessionStopper) IsRetryPending(uuid string) bool {
-	return m.retryPendingUUIDs[uuid]
-}
-
-func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Duration, bool) {
-	if !m.liveUUIDs[uuid] || m.tslmoOverrideNotLive[uuid] {
-		return 0, false
-	}
-	return m.staleFor[uuid], true
-}
-
-func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, uuid string) error {
-	m.stoppedUUIDs = append(m.stoppedUUIDs, uuid)
-	return m.stopperErr
-}
-
-func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string, allowedOwnerUUIDs ...string) error {
-	m.killByTitleAllowed = append(m.killByTitleAllowed, allowedOwnerUUIDs)
-	return nil
-}
-
-func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
-	if m.onKillTmuxPaneOnly != nil {
-		m.onKillTmuxPaneOnly(uuid)
-	}
-	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
-	if m.killIneffectiveUUIDs[uuid] {
-		return fmt.Errorf("mockSessionStopper: kill did not reach %s (killIneffectiveUUIDs)", uuid)
-	}
-	if m.liveUUIDs != nil {
-		m.liveUUIDs[uuid] = false
-	}
-	return nil
-}
-
-func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string) error {
-	if m.archiveErrForUUID != nil {
-		if err, ok := m.archiveErrForUUID[uuid]; ok {
-			return err
-		}
-	}
-	m.archivedUUIDs = append(m.archivedUUIDs, uuid)
-	return nil
-}
-
 // mockSessionSteerer implements SessionSteerer for tests, mirroring
 // mockSessionStopper's shape. mu guards steerCalls against concurrent
 // recordSteer calls (needed by the steerInFlight race test,
@@ -2058,7 +1956,7 @@ func TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession(t *testing.T)
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2077,24 +1975,24 @@ func TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession(t *testing.T)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
 
-	require.Empty(t, stopper.archivedUUIDs, "nothing should be archived before the reopen spawn")
+	require.Empty(t, stopper.ArchivedUUIDs, "nothing should be archived before the reopen spawn")
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
 	require.Len(t, creator.calls, 2)
 	secondUUID := creator.calls[1].inst.UUID
 
-	assert.Equal(t, []string{firstUUID}, stopper.archivedUUIDs,
+	assert.Equal(t, []string{firstUUID}, stopper.ArchivedUUIDs,
 		"reopen must archive exactly the superseded first-round work session")
-	assert.NotContains(t, stopper.archivedUUIDs, secondUUID,
+	assert.NotContains(t, stopper.ArchivedUUIDs, secondUUID,
 		"reopen must not archive the brand-new session it just created")
 	// Regression guard for the 2026-07-29 OOM: archiving alone only hides the
 	// session from the UI — its tmux pane (and the claude process/MCP subprocess
 	// fleet behind it) must also be killed, or superseded rework sessions pile up
 	// as live, resource-consuming zombies indefinitely.
-	assert.Contains(t, stopper.killedPaneUUIDs, firstUUID,
+	assert.Contains(t, stopper.KilledPaneUUIDs, firstUUID,
 		"reopen must also kill the superseded first-round session's tmux pane, not just archive it")
-	assert.NotContains(t, stopper.killedPaneUUIDs, secondUUID,
+	assert.NotContains(t, stopper.KilledPaneUUIDs, secondUUID,
 		"reopen must not kill the tmux pane of the brand-new session it just created")
 }
 
@@ -2424,7 +2322,7 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2481,7 +2379,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2501,7 +2399,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
 	require.NoError(t, remediateErr)
 
-	assert.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid", "the stale tmux pane must be killed even though it was reported live")
+	assert.Contains(t, stopper.KilledPaneUUIDs, "stale-work-session-uuid", "the stale tmux pane must be killed even though it was reported live")
 	require.Len(t, creator.calls, 1, "a fresh work session must be spawned")
 
 	sessions, err := storage.ListItemSessions(t.Context(), itemID)
@@ -2537,12 +2435,12 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{
 			"stale-work-session-uuid":      true,
 			"unrelated-wrongly-tombstoned": true,
 		},
-		killIneffectiveUUIDs: map[string]bool{"unrelated-wrongly-tombstoned": true},
+		KillIneffectiveUUIDs: map[string]bool{"unrelated-wrongly-tombstoned": true},
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -2574,7 +2472,7 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
 	require.Error(t, remediateErr, "an unrelated confirmed-live round must still block the respawn even though the intentionally-retired session is exempted")
 	assert.Contains(t, remediateErr.Error(), "unrelated-wrongly-tombstoned")
-	assert.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid", "the stale pane is still killed — only the respawn is blocked")
+	assert.Contains(t, stopper.KilledPaneUUIDs, "stale-work-session-uuid", "the stale pane is still killed — only the respawn is blocked")
 	assert.Empty(t, creator.calls, "no new work session may be spawned while a different round is confirmed live")
 }
 
@@ -2589,9 +2487,9 @@ func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPendin
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{
-		liveUUIDs:         map[string]bool{"stale-work-session-uuid": true},
-		retryPendingUUIDs: map[string]bool{"stale-work-session-uuid": true},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs:         map[string]bool{"stale-work-session-uuid": true},
+		RetryPendingUUIDs: map[string]bool{"stale-work-session-uuid": true},
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -2612,7 +2510,7 @@ func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPendin
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
 	require.NoError(t, remediateErr)
 
-	assert.Empty(t, stopper.killedPaneUUIDs, "must not kill the pane while an automated retry is already pending for it")
+	assert.Empty(t, stopper.KilledPaneUUIDs, "must not kill the pane while an automated retry is already pending for it")
 	assert.Empty(t, creator.calls, "must not respawn a second work session while the driver's own retry is already recovering it")
 
 	sessions, err := storage.ListItemSessions(t.Context(), itemID)
@@ -2660,9 +2558,9 @@ func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_Activ
 		firstKillObserved     bool
 		endedAtWhenKillCalled *time.Time
 	)
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"stale-work-session-uuid": true},
-		onKillTmuxPaneOnly: func(uuid string) {
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"stale-work-session-uuid": true},
+		OnKillTmuxPaneOnly: func(uuid string) {
 			if uuid != "stale-work-session-uuid" || firstKillObserved {
 				// Only the first kill matters here: a real Instance.KillSession
 				// no-ops (HasSession() check) on an already-dead pane and never
@@ -2685,7 +2583,7 @@ func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_Activ
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
 	require.NoError(t, remediateErr)
 
-	require.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid")
+	require.Contains(t, stopper.KilledPaneUUIDs, "stale-work-session-uuid")
 	require.NotNil(t, endedAtWhenKillCalled, "the ItemSession row must already have EndedAt set by the time KillTmuxPaneOnly is called — killing the pane fires onSessionExited asynchronously, which needs to observe EndedAt already non-nil to correctly skip its own status transition")
 }
 
@@ -2699,7 +2597,7 @@ func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *te
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2719,7 +2617,7 @@ func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *te
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
 	require.NoError(t, remediateErr)
 
-	assert.Empty(t, stopper.killedPaneUUIDs, "must not kill anything once the item is no longer in_progress")
+	assert.Empty(t, stopper.KilledPaneUUIDs, "must not kill anything once the item is no longer in_progress")
 	assert.Empty(t, creator.calls, "must not spawn a new session once the item is no longer in_progress")
 }
 
@@ -2732,7 +2630,7 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"live-work-session-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"live-work-session-uuid": true}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2833,7 +2731,7 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -2857,7 +2755,7 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
 	assert.Len(t, creator.calls, 1, "round 2 must spawn since round 1 already ended")
-	assert.Contains(t, stopper.killedPaneUUIDs, "round-1-uuid", "round 1's tmux pane must be closed once round 2 spawns")
+	assert.Contains(t, stopper.KilledPaneUUIDs, "round-1-uuid", "round 1's tmux pane must be closed once round 2 spawns")
 }
 
 // ─── AttachSessionToItem ──────────────────────────────────────────────────────
@@ -3265,12 +3163,12 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	_, repoDir := setupPRFixSyncRepo(t)
 	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
-	runGitTestCmd(t, repoDir, "add", "README.md")
-	runGitTestCmd(t, repoDir, "commit", "-m", "add README")
-	runGitTestCmd(t, repoDir, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoDir, "add", "README.md")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "-m", "add README")
+	svctest.RunGitTestCmd(t, repoDir, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(repoDir+"/feature.txt", []byte("unshipped work\n"), 0o644))
-	runGitTestCmd(t, repoDir, "add", "feature.txt")
-	runGitTestCmd(t, repoDir, "commit", "-m", "wip")
+	svctest.RunGitTestCmd(t, repoDir, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "-m", "wip")
 	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
 	svc.SetHeadlessPool(pool)
 	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
@@ -3845,7 +3743,7 @@ func TestTriggerTriage_DoubleTriggerGuard(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	const liveUUID = "00000000-0000-0000-0000-000000000001"
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{liveUUID: true}}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetSessionStopper(stopper)
 
@@ -4921,7 +4819,7 @@ func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"live-triage-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"live-triage-uuid": true}}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	svc.SetSessionStopper(stopper)

@@ -2,10 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
@@ -153,22 +148,4 @@ func TestConfigSurfaceProof_QuotaManualOverrideGraceMinutes_ChangesNotifyCooldow
 		require.Equal(t, 1, r.ctrl.DisableCalls)
 		return r.gate.state.lastPauseNotifyAt.After(now.Add(-time.Minute)) // true only if the cooldown was bypassed
 	}, 3, 10)
-}
-
-func TestConfigSurfaceProof_StuckAllowAutoMerge_ChangesListedField(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"allow_auto_merge":%t,"allow_squash_merge":true}`, strings.Contains(r.URL.Path, "/prf-allowed"))
-	}))
-	t.Cleanup(ts.Close)
-	t.Cleanup(resetGhBaseURL(ts))
-
-	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		prURL := fmt.Sprintf("https://github.com/prf-owner/%s/pull/1", setting.(string))
-		items := stuckAutoMergeSvc(t, githubpkg.RepoSettings, prURL)
-		require.Len(t, items, 1)
-		require.NotNil(t, items[0].AllowAutoMerge)
-		return items[0].GetAllowAutoMerge()
-	}, "prf-denied", "prf-allowed")
 }

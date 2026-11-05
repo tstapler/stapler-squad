@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -56,7 +57,7 @@ func attachWorkSessionWithCommit(t *testing.T, storage *session.Storage, repo *s
 func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -85,13 +86,13 @@ func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerg
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "feature work")
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
-	runGitTestCmd(t, repoPath, "checkout", "main")
-	runGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature") // simulates a merged PR
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "feature work")
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature") // simulates a merged PR
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -123,11 +124,11 @@ func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "feature work, never merged")
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "feature work, never merged")
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -180,16 +181,16 @@ func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEver
 func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommitsInRange(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "first.txt"), []byte("first\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "first.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "first commit")
+	svctest.RunGitTestCmd(t, repoPath, "add", "first.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "first commit")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "second.txt"), []byte("second\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "second.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "second commit")
-	headSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "add", "second.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "second commit")
+	headSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -232,7 +233,7 @@ func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReq
 func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -284,7 +285,7 @@ func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapsh
 // FileStats empty while every other snapshot field still populates normally.
 func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt(t *testing.T) {
 	_, repoPath := setupPRFixSyncRepo(t)
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -324,7 +325,7 @@ func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJs
 func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -380,7 +381,7 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)

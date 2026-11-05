@@ -283,20 +283,6 @@ func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t 
 	}
 }
 
-func TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers(t *testing.T) {
-	statuses := []session.BacklogStatus{
-		session.BacklogStatusIdea, session.BacklogStatusRefining, session.BacklogStatusReady, session.BacklogStatusQueued,
-		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
-		session.BacklogStatusArchived,
-	}
-	for _, to := range statuses {
-		for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, ""} {
-			_, ok := session.LookupTransitionCaller(guardedTransitionCaller(to, actor))
-			assert.True(t, ok, "to=%s actor=%q", to, actor)
-		}
-	}
-}
-
 // --- rule (c): every registered caller has a call path --------------------------
 
 // clsCallerRefs maps each Caller* constant to the "file function" keys that

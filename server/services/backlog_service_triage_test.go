@@ -656,7 +656,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Msg.Queued)
 
-	waitClockPast(t, time.Now(), 5*time.Millisecond)
+	svctest.WaitClockPast(t, time.Now(), 5*time.Millisecond)
 
 	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
 	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
@@ -1002,7 +1002,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
 	// pick the P1 one instead.
 	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
-	waitClockPast(t, time.Now(), 5*time.Millisecond)
+	svctest.WaitClockPast(t, time.Now(), 5*time.Millisecond)
 	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
 
 	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
@@ -1071,7 +1071,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"active-work-uuid": true}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -1113,7 +1113,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *tes
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"active-work-uuid": true}}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
 	svc.SetEventBus(bus)
@@ -1171,7 +1171,7 @@ func TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveR
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+	svc.SetSessionStopper(&svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}})
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -1218,7 +1218,7 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -1266,7 +1266,7 @@ func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"active-work-uuid": true}}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
 	svc.SetEventBus(bus)
@@ -1318,7 +1318,7 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+	svc.SetSessionStopper(&svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}})
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -1839,11 +1839,11 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
 		// Mirrors the live incident's observed staleness (6h 35m), well past
 		// the review queue's own 2-minute StalenessThreshold.
-		staleFor: map[string]time.Duration{"active-work-uuid": 6*time.Hour + 35*time.Minute},
+		StaleFor: map[string]time.Duration{"active-work-uuid": 6*time.Hour + 35*time.Minute},
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -1910,9 +1910,9 @@ func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *te
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 5 * time.Second},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 5 * time.Second},
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -1967,9 +1967,9 @@ func TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min(t *te
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 10 * time.Minute},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 10 * time.Minute},
 	}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
@@ -1998,9 +1998,9 @@ func TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min(t *testin
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
 	}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
@@ -2037,9 +2037,9 @@ func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPrecond
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
 	}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
@@ -2095,9 +2095,9 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
 	}
 	svc.SetSessionStopper(stopper)
 	bus := events.NewEventBus(4)
@@ -2455,7 +2455,7 @@ func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) 
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
 	// This response would (falsely) confirm a BUG-045 regression if the pool were
 	// ever actually invoked against repoPath for a dead session with no resolvable
@@ -2673,15 +2673,6 @@ func chmodRecursive(t *testing.T, root string, mode os.FileMode) {
 	require.NoError(t, err)
 }
 
-// runGitTestCmd runs a git command in dir and fails the test on error.
-func runGitTestCmd(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	return string(out)
-}
-
 // setupPRFixSyncRepo builds an "origin" repo and a clone of it (repoPath) with an
 // "origin" remote already configured — mirroring production, where item.RepoPath is a
 // checkout whose worktrees (git worktree add) share the same .git and inherit that
@@ -2691,14 +2682,14 @@ func setupPRFixSyncRepo(t *testing.T) (originDir, repoPath string) {
 	t.Helper()
 	originDir = t.TempDir()
 	svctest.InitGitRepoWithCommit(t, originDir)
-	runGitTestCmd(t, originDir, "branch", "-M", "main")
+	svctest.RunGitTestCmd(t, originDir, "branch", "-M", "main")
 
 	repoPath = filepath.Join(t.TempDir(), "clone")
 	cloneCmd := exec.Command("git", "clone", originDir, repoPath) //nolint:norawexec // test helper
 	out, err := cloneCmd.CombinedOutput()
 	require.NoError(t, err, "git clone failed: %s", out)
-	runGitTestCmd(t, repoPath, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, repoPath, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, repoPath, "config", "user.name", "Test")
 	return originDir, repoPath
 }
 
@@ -2723,7 +2714,7 @@ func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *sessio
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now().Add(-time.Hour)))
 
-	baseCommitSHA := strings.TrimSpace(runGitTestCmd(t, worktreePath, "rev-parse", "HEAD"))
+	baseCommitSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, worktreePath, "rev-parse", "HEAD"))
 	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
 		Title:      sessionUUID,
@@ -2779,7 +2770,7 @@ func TestCleanupItemWorktreesExcept_should_tellScannerToStopWatching_When_Worktr
 
 	const workBranch = "backlog/cleanup-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
@@ -2815,7 +2806,7 @@ func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_Pat
 
 	const workBranch = "backlog/cleanup-except-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
@@ -2853,7 +2844,7 @@ func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_Worktre
 
 	const workBranch = "backlog/scaffolding-cleanup-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
 
 	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
 	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
@@ -2895,7 +2886,7 @@ func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExe
 
 	const workBranch = "backlog/scaffolding-except-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
 
 	cmdDir := filepath.Join(workWT, ".claude", "commands", "backlog")
 	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
@@ -3058,20 +3049,20 @@ func TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesC
 
 	const workBranch = "backlog/pr-fix-clean-merge"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
-	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, workWT, "config", "user.name", "Test")
 
 	// The PR's own work: an unrelated new file, committed on the PR branch.
 	require.NoError(t, os.WriteFile(filepath.Join(workWT, "pr-work.txt"), []byte("pr work\n"), 0o644))
-	runGitTestCmd(t, workWT, "add", "pr-work.txt")
-	runGitTestCmd(t, workWT, "commit", "-m", "PR work")
+	svctest.RunGitTestCmd(t, workWT, "add", "pr-work.txt")
+	svctest.RunGitTestCmd(t, workWT, "commit", "-m", "PR work")
 
 	// A fix lands on main after the branch was created — the drift this sync is meant
 	// to catch preventively.
 	require.NoError(t, os.WriteFile(filepath.Join(originDir, "main-fix.txt"), []byte("fix on main\n"), 0o644))
-	runGitTestCmd(t, originDir, "add", "main-fix.txt")
-	runGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
+	svctest.RunGitTestCmd(t, originDir, "add", "main-fix.txt")
+	svctest.RunGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
 
 	storage, repo := createTestStorageWithRepo(t)
 	creator := &mockSessionCreator{}
@@ -3122,19 +3113,19 @@ func TestAutoReopenForPRFix_should_IncludeConflictsInFixContext_When_MergingMain
 
 	const workBranch = "backlog/pr-fix-conflict"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
-	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, workWT, "config", "user.name", "Test")
 
 	// The PR branch edits README.md (created by initGitRepoWithCommit).
 	require.NoError(t, os.WriteFile(filepath.Join(workWT, "README.md"), []byte("# PR Edit\n"), 0o644))
-	runGitTestCmd(t, workWT, "add", "README.md")
-	runGitTestCmd(t, workWT, "commit", "-m", "PR edits README")
+	svctest.RunGitTestCmd(t, workWT, "add", "README.md")
+	svctest.RunGitTestCmd(t, workWT, "commit", "-m", "PR edits README")
 
 	// Main edits the same line differently.
 	require.NoError(t, os.WriteFile(filepath.Join(originDir, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitTestCmd(t, originDir, "add", "README.md")
-	runGitTestCmd(t, originDir, "commit", "-m", "main edits README")
+	svctest.RunGitTestCmd(t, originDir, "add", "README.md")
+	svctest.RunGitTestCmd(t, originDir, "commit", "-m", "main edits README")
 
 	storage, repo := createTestStorageWithRepo(t)
 	creator := &mockSessionCreator{}
@@ -3174,9 +3165,9 @@ func TestAutoReopenForPRFix_should_SkipSyncNote_When_BranchAlreadyUpToDateWithMa
 
 	const workBranch = "backlog/pr-fix-up-to-date"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
-	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, workWT, "config", "user.name", "Test")
 
 	// No further commits anywhere — the branch already contains main's tip.
 
@@ -3213,14 +3204,14 @@ func TestAutoReopenForPRFix_should_ReportUnpushedMerge_When_PushFails(t *testing
 
 	const workBranch = "backlog/pr-fix-push-fails"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
-	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, workWT, "config", "user.name", "Test")
 
 	// A fix lands on main so there's something to merge (and therefore push).
 	require.NoError(t, os.WriteFile(filepath.Join(originDir, "main-fix.txt"), []byte("fix on main\n"), 0o644))
-	runGitTestCmd(t, originDir, "add", "main-fix.txt")
-	runGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
+	svctest.RunGitTestCmd(t, originDir, "add", "main-fix.txt")
+	svctest.RunGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
 
 	// Make origin's .git tree unwritable (recursively — a top-level chmod alone leaves
 	// .git/objects and .git/refs writable) so the fetch+merge (read-only) still
@@ -3263,12 +3254,12 @@ func TestAutoReopenForPRFix_should_SpawnNormally_When_SyncFetchFails(t *testing.
 
 	const workBranch = "backlog/pr-fix-fetch-fails"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
-	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
-	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	svctest.RunGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, workWT, "config", "user.name", "Test")
 
 	// Break the "origin" remote so MergeMainIntoWorktree's fetch fails outright.
-	runGitTestCmd(t, workWT, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+	svctest.RunGitTestCmd(t, workWT, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	creator := &mockSessionCreator{}
@@ -3412,7 +3403,7 @@ func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfi
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
@@ -3428,8 +3419,8 @@ func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfi
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
-	stopper.liveUUIDs[workUUID] = true
-	stopper.killIneffectiveUUIDs = map[string]bool{workUUID: true}
+	stopper.LiveUUIDs[workUUID] = true
+	stopper.KillIneffectiveUUIDs = map[string]bool{workUUID: true}
 
 	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.Error(t, err, "a confirmed-live session must block a concurrent respawn even though its EndedAt column says otherwise")
@@ -3475,7 +3466,7 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
@@ -3497,11 +3488,11 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, round5.ID, time.Now()))
-	stopper.liveUUIDs[round5UUID] = true
+	stopper.LiveUUIDs[round5UUID] = true
 	// killIneffectiveUUIDs models killEndedWorkSessionPanes (8a2) attempting —
 	// and failing — to kill this round's pane, same as the single-round test
 	// above: the point is that a kill attempt does not reach it.
-	stopper.killIneffectiveUUIDs = map[string]bool{round5UUID: true}
+	stopper.KillIneffectiveUUIDs = map[string]bool{round5UUID: true}
 
 	allSessions, err := storage.ListItemSessions(ctx, itemID)
 	require.NoError(t, err)
@@ -3528,7 +3519,7 @@ func TestSpawnSessionFromItem_should_RefuseWithReworkCapError_When_WorkSessionCo
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+	svc.SetSessionStopper(&svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}})
 	ctx := t.Context()
 
 	itemID, _ := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
@@ -3575,16 +3566,16 @@ func TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSessi
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{},
-		staleFor:  map[string]time.Duration{},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{},
+		StaleFor:  map[string]time.Duration{},
 	}
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
 	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
-	stopper.liveUUIDs[activeUUID] = true
-	stopper.staleFor[activeUUID] = 20 * time.Minute // > maxReworkBlockStaleness (15min)
+	stopper.LiveUUIDs[activeUUID] = true
+	stopper.StaleFor[activeUUID] = 20 * time.Minute // > maxReworkBlockStaleness (15min)
 
 	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.Error(t, err)
@@ -3603,16 +3594,16 @@ func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkS
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{},
-		staleFor:  map[string]time.Duration{},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{},
+		StaleFor:  map[string]time.Duration{},
 	}
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
 	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
-	stopper.liveUUIDs[activeUUID] = true
-	stopper.staleFor[activeUUID] = 30 * time.Second // well within maxReworkBlockStaleness
+	stopper.LiveUUIDs[activeUUID] = true
+	stopper.StaleFor[activeUUID] = 30 * time.Second // well within maxReworkBlockStaleness
 
 	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.Error(t, err)
@@ -3656,17 +3647,17 @@ func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWo
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{
-		liveUUIDs:            map[string]bool{},
-		staleFor:             map[string]time.Duration{},
-		tslmoOverrideNotLive: map[string]bool{},
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs:            map[string]bool{},
+		StaleFor:             map[string]time.Duration{},
+		TslmoOverrideNotLive: map[string]bool{},
 	}
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
 	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
-	stopper.liveUUIDs[activeUUID] = true            // IsSessionLive → true: not tombstoned as orphan.
-	stopper.tslmoOverrideNotLive[activeUUID] = true // TimeSinceLastMeaningfulOutput → live=false.
+	stopper.LiveUUIDs[activeUUID] = true            // IsSessionLive → true: not tombstoned as orphan.
+	stopper.TslmoOverrideNotLive[activeUUID] = true // TimeSinceLastMeaningfulOutput → live=false.
 
 	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
 	require.Error(t, err)
@@ -4676,15 +4667,15 @@ func TestSpawnSessionFromItem_should_UseDefaultInitialPrompt_When_PipelineModeIs
 func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseShaCorrupted(t *testing.T) {
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
-	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+	svctest.RunGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const workBranch = "backlog/recover-diff-merge-base"
-	runGitTestCmd(t, repoDir, "branch", workBranch)
-	runGitTestCmd(t, repoDir, "checkout", workBranch)
+	svctest.RunGitTestCmd(t, repoDir, "branch", workBranch)
+	svctest.RunGitTestCmd(t, repoDir, "checkout", workBranch)
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "feature.txt"), []byte("real work\n"), 0o644))
-	runGitTestCmd(t, repoDir, "add", "feature.txt")
-	runGitTestCmd(t, repoDir, "commit", "-m", "real fix")
-	runGitTestCmd(t, repoDir, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoDir, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "-m", "real fix")
+	svctest.RunGitTestCmd(t, repoDir, "checkout", "main")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -4744,19 +4735,19 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted(t *testing.T) {
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
-	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+	svctest.RunGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const workBranch = "backlog/recover-diff-worktree-path"
 	worktreeDir := t.TempDir()
-	runGitTestCmd(t, repoDir, "worktree", "add", "-b", workBranch, worktreeDir, "main")
+	svctest.RunGitTestCmd(t, repoDir, "worktree", "add", "-b", workBranch, worktreeDir, "main")
 	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work\n"), 0o644))
-	runGitTestCmd(t, worktreeDir, "add", "feature.txt")
-	runGitTestCmd(t, worktreeDir, "commit", "-m", "real fix")
+	svctest.RunGitTestCmd(t, worktreeDir, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, worktreeDir, "commit", "-m", "real fix")
 
 	// Leave repoPath on an unrelated orphan branch — the worst case for the old
 	// diffDir-only recovery, which would fail to find any merge-base at all.
-	runGitTestCmd(t, repoDir, "checkout", "--orphan", "unrelated")
-	runGitTestCmd(t, repoDir, "commit", "--allow-empty", "-m", "unrelated")
+	svctest.RunGitTestCmd(t, repoDir, "checkout", "--orphan", "unrelated")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "--allow-empty", "-m", "unrelated")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -4813,26 +4804,26 @@ func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsB
 func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched(t *testing.T) {
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
-	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+	svctest.RunGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const recordedBranch = "feature"
-	runGitTestCmd(t, repoDir, "branch", recordedBranch)
+	svctest.RunGitTestCmd(t, repoDir, "branch", recordedBranch)
 
 	// A later, unrelated item's branch is what's actually checked out at the worktree
 	// path — the row's recorded branch ("feature") never diverged from main at all.
 	worktreeDir := t.TempDir()
-	runGitTestCmd(t, repoDir, "worktree", "add", "-b", "other-item-branch", worktreeDir, "main")
+	svctest.RunGitTestCmd(t, repoDir, "worktree", "add", "-b", "other-item-branch", worktreeDir, "main")
 	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "other-item.txt"), []byte("later item's work\n"), 0o644))
-	runGitTestCmd(t, worktreeDir, "add", "other-item.txt")
-	runGitTestCmd(t, worktreeDir, "commit", "-m", "later item's real work")
+	svctest.RunGitTestCmd(t, worktreeDir, "add", "other-item.txt")
+	svctest.RunGitTestCmd(t, worktreeDir, "commit", "-m", "later item's real work")
 
 	// The recorded branch's own real, distinguishing work — reachable from repoDir even
 	// though the worktree at worktreeDir isn't actually checked out to it.
-	runGitTestCmd(t, repoDir, "checkout", recordedBranch)
+	svctest.RunGitTestCmd(t, repoDir, "checkout", recordedBranch)
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "feature.txt"), []byte("this item's real work\n"), 0o644))
-	runGitTestCmd(t, repoDir, "add", "feature.txt")
-	runGitTestCmd(t, repoDir, "commit", "-m", "this item's real fix")
-	runGitTestCmd(t, repoDir, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoDir, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "-m", "this item's real fix")
+	svctest.RunGitTestCmd(t, repoDir, "checkout", "main")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -5156,12 +5147,12 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 	svc.SetHeadlessPool(pool)
 	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
 
-	runGitTestCmd(t, work, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, work, "checkout", "-b", "feature")
 
 	// The feature branch made its own real, complete edit.
 	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
-	runGitTestCmd(t, work, "add", "README.md")
-	runGitTestCmd(t, work, "commit", "-m", "feature: complete the work")
+	svctest.RunGitTestCmd(t, work, "add", "README.md")
+	svctest.RunGitTestCmd(t, work, "commit", "-m", "feature: complete the work")
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
@@ -5400,9 +5391,9 @@ func TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_Sessio
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 2 * time.Minute}, // recovered — well under 15min
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 2 * time.Minute}, // recovered — well under 15min
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -5435,9 +5426,9 @@ func TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStal
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 25 * time.Minute}, // still stale
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 25 * time.Minute}, // still stale
 	}
 	svc.SetSessionStopper(stopper)
 
@@ -5474,7 +5465,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSes
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	svc.SetSessionStopper(&mockSessionStopper{}) // nothing live — must not be consulted
+	svc.SetSessionStopper(&svctest.MockSessionStopper{}) // nothing live — must not be consulted
 
 	require.NoError(t, svc.ResolveReworkBlockedStaleIfRecovered(ctx, item.ID))
 
@@ -5504,9 +5495,9 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
-	stopper := &mockSessionStopper{
-		liveUUIDs: map[string]bool{"active-work-uuid": true},
-		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute}, // stalled
+	stopper := &svctest.MockSessionStopper{
+		LiveUUIDs: map[string]bool{"active-work-uuid": true},
+		StaleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute}, // stalled
 	}
 	svc.SetSessionStopper(stopper)
 	svc.SetEventBus(events.NewEventBus(4))
@@ -5531,7 +5522,7 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
 
 	// Session recovers.
-	stopper.staleFor["active-work-uuid"] = 2 * time.Minute
+	stopper.StaleFor["active-work-uuid"] = 2 * time.Minute
 
 	// Resolve side: a real session.BacklogLifecycleListener's periodic tick,
 	// wired to the real BacklogService exactly as production does it.
@@ -6138,12 +6129,12 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	t.Parallel()
 
 	repoDir := t.TempDir()
-	runGitTestCmd(t, repoDir, "init", "-b", "main")
-	runGitTestCmd(t, repoDir, "config", "user.email", "test@example.com")
-	runGitTestCmd(t, repoDir, "config", "user.name", "Test")
+	svctest.RunGitTestCmd(t, repoDir, "init", "-b", "main")
+	svctest.RunGitTestCmd(t, repoDir, "config", "user.email", "test@example.com")
+	svctest.RunGitTestCmd(t, repoDir, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("base\n"), 0o644))
-	runGitTestCmd(t, repoDir, "add", "README.md")
-	runGitTestCmd(t, repoDir, "commit", "-m", "initial")
+	svctest.RunGitTestCmd(t, repoDir, "add", "README.md")
+	svctest.RunGitTestCmd(t, repoDir, "commit", "-m", "initial")
 
 	titleA := "Fix the login bug!"
 	titleB := "Fix the login bug?"
@@ -6323,7 +6314,7 @@ func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsAc
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	liveUUID := "cancel-triage-live"
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{liveUUID: true}}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetSessionStopper(stopper)
 
@@ -6458,7 +6449,7 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{}
+	stopper := &svctest.MockSessionStopper{}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
@@ -6481,7 +6472,7 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 	assert.NotEqual(t, priorReview.SessionUUID, resp.Msg.ItemSession.SessionUuid,
 		"the new re-review session must be a distinct row from the prior round")
 
-	assert.Contains(t, stopper.archivedUUIDs, "prior-review-uuid",
+	assert.Contains(t, stopper.ArchivedUUIDs, "prior-review-uuid",
 		"TriggerReReview must archive the prior review round before spawning its replacement")
 }
 
@@ -6494,7 +6485,7 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{}
+	stopper := &svctest.MockSessionStopper{}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -6530,7 +6521,7 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 
 	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
 
-	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.stoppedUUIDs,
+	assert.ElementsMatch(t, []string{"work-1", "review-1"}, stopper.StoppedUUIDs,
 		"only the two unended work/review sessions must be stopped; the already-ended one must be skipped")
 
 	sessions, err := storage.ListItemSessions(t.Context(), itemID)
@@ -6552,7 +6543,7 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{stopperErr: errors.New("stop failed")}
+	stopper := &svctest.MockSessionStopper{StopperErr: errors.New("stop failed")}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -6572,7 +6563,7 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 
 	svc.stopLiveWorkAndReviewSessions(t.Context(), itemID)
 
-	assert.Contains(t, stopper.stoppedUUIDs, "work-err-1")
+	assert.Contains(t, stopper.StoppedUUIDs, "work-err-1")
 
 	updated, err := storage.GetItemSession(t.Context(), workSession.ID)
 	require.NoError(t, err)

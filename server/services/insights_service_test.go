@@ -666,7 +666,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "update", sender.Sent()[len(sender.Sent())-1].EventType)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------
@@ -793,7 +793,7 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------
@@ -1064,7 +1064,7 @@ func TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWit
 	require.NotNil(t, last.Session)
 	assert.Equal(t, "conv-xyz", last.Session.ConversationId)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpdate(t *testing.T) {
@@ -1094,7 +1094,7 @@ func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpd
 	assert.True(t, last.AllParsed)
 	assert.Nil(t, last.Session)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------

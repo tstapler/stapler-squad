@@ -14,6 +14,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	gh "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func newTestGitHubUserService(t *testing.T) *GitHubUserService {
@@ -31,7 +32,7 @@ func TestAddGitHubAccountWithToken_ValidToken_StoresAndReturnsAccount(t *testing
 		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
 	}))
 	defer ts.Close()
-	defer resetGhBaseURL(ts)()
+	defer svctest.ResetGhBaseURL(ts)()
 
 	svc := newTestGitHubUserService(t)
 
@@ -51,7 +52,7 @@ func TestAddGitHubAccountWithToken_InvalidToken_ReturnsPermissionDenied(t *testi
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer ts.Close()
-	defer resetGhBaseURL(ts)()
+	defer svctest.ResetGhBaseURL(ts)()
 
 	svc := newTestGitHubUserService(t)
 

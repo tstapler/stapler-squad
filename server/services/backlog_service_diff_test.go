@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // attachWorkSessionWithRange is attachWorkSessionWithCommit but takes an explicit
@@ -57,15 +57,15 @@ func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *se
 func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLongerExists(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "shipped.txt"), []byte("shipped content\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "shipped.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "add shipped.txt")
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
-	runGitTestCmd(t, repoPath, "checkout", "main")
-	runGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "add", "shipped.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "add shipped.txt")
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -96,13 +96,13 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLo
 func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "wip.txt"), []byte("work in progress\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "wip.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "wip commit")
-	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "add", "wip.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "wip commit")
+	sha := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -134,14 +134,14 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t
 func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefreshed(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("already reviewed content\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "reviewed.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "add reviewed.txt")
-	runGitTestCmd(t, repoPath, "checkout", "main")
-	runGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "add", "reviewed.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "add reviewed.txt")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -179,16 +179,16 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessionMadeNoCommits(t *testing.T) {
 	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
-	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	// Session 1: the real implementation, committed to the branch.
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "implemented.txt"), []byte("real implementation content\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "implemented.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "implement feature")
-	branchTipSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
-	runGitTestCmd(t, repoPath, "checkout", "main")
-	runGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "add", "implemented.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "implement feature")
+	branchTipSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -205,7 +205,7 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "work-session-1", repoPath, session1Path, "feature", baseSHA, branchTipSHA)
 
 	// Ensure session 2's CreatedAt is strictly later than session 1's.
-	waitClockPast(t, time.Now(), 2*time.Millisecond)
+	svctest.WaitClockPast(t, time.Now(), 2*time.Millisecond)
 
 	// Session 2 (later, a reopen/rework session): made zero new commits. Its
 	// BaseCommitSHA was captured at spawn time, which is already the branch
@@ -218,12 +218,4 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	assert.Contains(t, resp.Msg.Diff, "real implementation content", "diff must still reflect the earlier session's real committed work, not be empty just because the latest rework session made no commits")
 	assert.Equal(t, int32(1), resp.Msg.Added)
 	assert.Equal(t, int32(0), resp.Msg.Removed)
-}
-
-// waitClockPast blocks until the wall clock is at least d past t0, so rows
-// stamped from the real clock afterwards sort strictly later than anything
-// stamped before t0 (storage exposes no clock injection point).
-func waitClockPast(t testing.TB, t0 time.Time, d time.Duration) {
-	t.Helper()
-	wait.RequireEventually(t, func() bool { return time.Since(t0) >= d }, time.Second+d, time.Millisecond, "wall clock did not advance")
 }

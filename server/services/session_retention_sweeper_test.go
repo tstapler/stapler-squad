@@ -285,7 +285,7 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	require.NoError(t, os.WriteFile(filepath.Join(mainRepoDir, "committed.txt"), []byte("a"), 0o644))
 	svctest.RunGit(t, mainRepoDir, "add", ".")
 	svctest.RunGit(t, mainRepoDir, "commit", "-q", "-m", "initial")
-	headSHA := strings.TrimSpace(runGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
+	headSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
 
 	// A single real linked worktree, shared by every round below -- mirroring
 	// nativeFindExistingWorktreeForBranch's reuse-by-branch-name behavior: reopen/rework

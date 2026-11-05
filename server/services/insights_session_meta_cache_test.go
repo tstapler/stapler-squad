@@ -61,7 +61,7 @@ func TestWatchInsights_should_ScanBacklogOncePerBurst(t *testing.T) {
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= events+1 }, 5*time.Second, 5*time.Millisecond)
 
 	assert.Equal(t, 1, reader.Calls, "backlog scans for %d events", events)
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 }
 
 func TestSessionMetaCache_should_NotFailWaiters_When_FirstCallerCancels(t *testing.T) {

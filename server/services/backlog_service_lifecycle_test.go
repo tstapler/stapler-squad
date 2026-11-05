@@ -411,10 +411,10 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 
 	// A commit that exists only on a feature branch — never merged anywhere —
 	// mirroring a PR that was opened but never actually merged.
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -457,8 +457,8 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 
 	// Now actually merge the commit to main — the item must be allowed to reach
 	// done once the code is verifiably shipped.
-	runGitTestCmd(t, repoPath, "checkout", "main")
-	runGitTestCmd(t, repoPath, "merge", "--no-edit", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "main")
+	svctest.RunGitTestCmd(t, repoPath, "merge", "--no-edit", "feature")
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
@@ -488,10 +488,10 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 
 	// A commit that exists only on a feature branch — mirroring a PR that's
 	// still open (and, in the real incident, conflicted) rather than merged.
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "work behind an open, conflicted PR")
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "work behind an open, conflicted PR")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -627,12 +627,12 @@ func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideR
 // correctly blocked from reaching done.
 func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed(t *testing.T) {
 	originDir, repoPath := setupPRFixSyncRepo(t)
-	mainSHA := strings.TrimSpace(runGitTestCmd(t, originDir, "rev-parse", "HEAD"))
+	mainSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, originDir, "rev-parse", "HEAD"))
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -698,7 +698,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -721,7 +721,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 	}))
 	require.NoError(t, err)
 
-	assert.Contains(t, stopper.archivedUUIDs, "work-session-to-archive",
+	assert.Contains(t, stopper.ArchivedUUIDs, "work-session-to-archive",
 		"reaching done must archive the item's work session so it stops accumulating in the session list")
 }
 
@@ -731,7 +731,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -753,7 +753,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 	}))
 	require.NoError(t, err)
 
-	assert.Contains(t, stopper.archivedUUIDs, "idea-work-session-to-archive",
+	assert.Contains(t, stopper.ArchivedUUIDs, "idea-work-session-to-archive",
 		"archiving an item must archive its work session(s) too")
 }
 
@@ -764,7 +764,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -787,7 +787,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	}))
 	require.NoError(t, err)
 
-	assert.Empty(t, stopper.archivedUUIDs, "a non-terminal transition must not archive any work session")
+	assert.Empty(t, stopper.ArchivedUUIDs, "a non-terminal transition must not archive any work session")
 }
 
 // ─── live-session teardown on backward-to-ready transition (Epic 1.2) ─────────
@@ -808,7 +808,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 			t.Parallel()
 			storage := svctest.CreateTestStorage(t)
 			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+			stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 			svc.SetSessionStopper(stopper)
 
 			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -831,7 +831,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 			}))
 			require.NoError(t, err)
 
-			assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+			assert.Contains(t, stopper.StoppedUUIDs, "work-live-1",
 				"a backward transition to ready must stop the item's live work session")
 
 			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
@@ -852,7 +852,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -884,7 +884,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 	}))
 	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
 
-	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1",
+	assert.Contains(t, stopper.StoppedUUIDs, "work-live-1",
 		"the guard-bypass path and the teardown path must compose correctly")
 }
 
@@ -897,7 +897,7 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -920,7 +920,7 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 	}))
 	require.NoError(t, err)
 
-	assert.NotContains(t, stopper.stoppedUUIDs, "work-forward-1",
+	assert.NotContains(t, stopper.StoppedUUIDs, "work-forward-1",
 		"a forward or unrelated transition must not trigger the live-session teardown")
 }
 
@@ -934,7 +934,7 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}, stopperErr: errors.New("tmux teardown failed")}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}, StopperErr: errors.New("tmux teardown failed")}
 	svc.SetSessionStopper(stopper)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -961,7 +961,7 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
 
-	assert.Contains(t, stopper.stoppedUUIDs, "work-live-1", "the stop must still be attempted")
+	assert.Contains(t, stopper.StoppedUUIDs, "work-live-1", "the stop must still be attempted")
 
 	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
 	require.NoError(t, err)
@@ -1037,10 +1037,10 @@ func TestSubmitManualReview_PassNoUnshippedCode_TransitionsToDone(t *testing.T) 
 func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *testing.T) {
 	_, repoPath := setupPRFixSyncRepo(t)
 
-	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	svctest.RunGitTestCmd(t, repoPath, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
-	runGitTestCmd(t, repoPath, "add", "feature.txt")
-	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
+	svctest.RunGitTestCmd(t, repoPath, "add", "feature.txt")
+	svctest.RunGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)

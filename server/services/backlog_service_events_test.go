@@ -128,20 +128,6 @@ func runWatchBacklogItems(ctx context.Context, svc *BacklogService, msg *session
 	return done
 }
 
-// requireCleanReturn cancels cancel and asserts watchBacklogItems's
-// goroutine returns nil within a bounded deadline (proving the live loop's
-// ctx.Done() branch actually fires rather than hanging forever).
-func requireCleanReturn(t *testing.T, cancel context.CancelFunc, done <-chan error) {
-	t.Helper()
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchBacklogItems did not return after context cancellation")
-	}
-}
-
 // ─── Story 3.2.1: fresh-snapshot branch (Task 3.2.1b) ─────────────────────
 
 func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZero(t *testing.T) {
@@ -159,7 +145,7 @@ func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZ
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{}, sender)
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2, "exactly one snapshot event per seeded item, no more")
@@ -219,7 +205,7 @@ func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIs
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{AfterSeq: afterSeq}, sender)
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 3 }, 2*time.Second, 10*time.Millisecond)
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 3, "exactly the 3 events published after afterSeq")
@@ -285,7 +271,7 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 	// fan-out loop (it was fanned out live at publish time) — i.e. 2 total
 	// deliveries.
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	var matching []*sessionv1.BacklogItemEvent
 	for _, ev := range sender.Sent() {
@@ -333,7 +319,7 @@ func TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLi
 	bus.Publish(liveEvent)
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2)
@@ -387,7 +373,7 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppli
 		}
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2, "only the status-matching item's snapshot, plus the sentinel, should be sent")
@@ -450,7 +436,7 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 		}
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2, "a status filter matching no items must produce exactly one snapshot-complete marker, no item events, plus the sentinel")
@@ -497,7 +483,7 @@ func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenui
 		}
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2)
@@ -541,7 +527,7 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterApp
 		}
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 2, "category_filter is matched against RepoPath — see backlogItemMatchesFilters's doc comment")
@@ -608,7 +594,7 @@ func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilte
 		}
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
 	require.Len(t, sent, 3, "1 snapshot + 1 live matching event + 1 sentinel; the non-matching live event must never be sent")
@@ -659,7 +645,7 @@ func TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled(t 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, 1, bus.SubscriberCount())
 
-	requireCleanReturn(t, cancel, done)
+	svctest.RequireCleanReturn(t, cancel, done)
 
 	// Subscribe()'s own cleanup goroutine (pkg/events/bus.go) also unsubscribes
 	// asynchronously on ctx.Done(), racing watchBacklogItems's deferred

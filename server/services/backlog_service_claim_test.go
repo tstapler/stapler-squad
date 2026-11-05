@@ -81,7 +81,7 @@ func serveClaimIssue(t *testing.T) {
 		})
 	}))
 	t.Cleanup(ts.Close)
-	t.Cleanup(resetGhBaseURL(ts))
+	t.Cleanup(svctest.ResetGhBaseURL(ts))
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 }
 

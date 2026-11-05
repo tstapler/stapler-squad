@@ -393,25 +393,6 @@ func (s *BacklogService) ResolveClaimDispute(ctx context.Context, req *connect.R
 	return connect.NewResponse(&sessionv1.ResolveClaimDisputeResponse{}), nil
 }
 
-// flagGatedForeignClaimLookup makes a session.ForeignClaimLookup honor the
-// cross_host_claim_dedup flag, so SyncOne is unchanged while the flag is off.
-type flagGatedForeignClaimLookup struct {
-	inner session.ForeignClaimLookup
-}
-
-// NewFlagGatedForeignClaimLookup wraps inner so it reports no claims while the
-// cross_host_claim_dedup feature flag is off.
-func NewFlagGatedForeignClaimLookup(inner session.ForeignClaimLookup) session.ForeignClaimLookup {
-	return flagGatedForeignClaimLookup{inner: inner}
-}
-
-func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.ClaimRecord, bool) {
-	if !config.LoadConfig().GetFeatureFlag(crossHostClaimDedupFlagName) {
-		return session.ClaimRecord{}, false
-	}
-	return f.inner.ForeignClaim(externalURL)
-}
-
 // flagGatedPRProvenance makes a session.PRProvenanceSource honor the
 // cross_host_claim_dedup flag, so a flag-off host posts no PR comments.
 type flagGatedPRProvenance struct {

@@ -273,7 +273,7 @@ func TestWatchInsights_WhenTokenStoreNotifies_ExpectSummaryCacheInvalidated(t *t
 	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 func TestSummaryCache_WhenCallerArrivesAfterInvalidation_ExpectFreshComputeNotOldFlight(t *testing.T) {
