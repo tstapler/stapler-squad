@@ -35,6 +35,8 @@ export interface NotificationData {
   actions?: NotificationActionDescriptor[];
   /** Additional metadata key-value pairs */
   metadata?: Record<string, string>;
+  /** Overrides the View button's label ("View Session" by default). */
+  viewLabel?: string;
   onView?: () => void;
   onDismiss?: () => void;
   onFocusWindow?: () => void;

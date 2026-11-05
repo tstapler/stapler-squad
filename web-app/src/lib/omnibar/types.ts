@@ -33,6 +33,7 @@ export interface InputTypeInfo {
 
 export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
   [InputType.Unknown]: {
+    // eslint-disable-next-line no-restricted-syntax -- a display label, not a DetectedStatus value
     label: "Unknown",
     icon: "❓",
     description: "Enter a local path or GitHub URL",
@@ -130,6 +131,8 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
 };
 
 export interface GitHubRef {
+  /** Set for PR URLs; only github.com is recognised. */
+  host?: string;
   owner: string;
   repo: string;
   branch?: string;

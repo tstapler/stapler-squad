@@ -85,6 +85,7 @@ func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			before := ArtifactSearchQueryCount(tt.kind, "hit")
 			resp, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq(tt.query))
 			require.NoError(t, err)
@@ -97,12 +98,13 @@ func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString
 }
 
 func TestSearchSessionArtifacts_ShouldCountAMiss_AndAcceptTwoCharsButNotOne(t *testing.T) {
+	t.Parallel()
 	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(artifacts.BranchRecord{Name: "feat-x"})))
 	before := ArtifactSearchQueryCount("text", "miss")
 	resp, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq("nonexistentzzz"))
 	require.NoError(t, err)
 	assert.Empty(t, resp.Msg.Hits)
-	assert.Equal(t, before+1, ArtifactSearchQueryCount("text", "miss"))
+	assert.Greater(t, ArtifactSearchQueryCount("text", "miss"), before)
 
 	_, err = svc.SearchSessionArtifacts(context.Background(), artifactSearchReq("ab"))
 	require.NoError(t, err, "2 characters run the search")

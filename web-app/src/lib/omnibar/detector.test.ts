@@ -10,8 +10,10 @@
  *  T-PITFALL-002: Hyphenated bare text resolves to SessionSearch
  */
 
-import { InputType, DetectionResult } from "@/lib/omnibar/types";
-import { createDefaultRegistry, DetectorRegistry, Detector } from "@/lib/omnibar/detector";
+import type { DetectionResult } from "@/lib/omnibar/types";
+import { InputType } from "@/lib/omnibar/types";
+import type { Detector } from "@/lib/omnibar/detector";
+import { createDefaultRegistry, DetectorRegistry } from "@/lib/omnibar/detector";
 
 describe("Detector", () => {
   // Use a fresh registry per test-suite to avoid singleton state leakage
@@ -127,6 +129,23 @@ describe("Detector", () => {
     it("ChatBacklogItemDetector_should_notBeShadowedByNewSessionDetector_When_inputHasBacklogPrefix", () => {
       const result = registry.detect("backlog: new session idea");
       expect(result.type).toBe(InputType.ChatBacklogItem);
+    });
+  });
+
+  describe("GitHubPRDetector", () => {
+    it("GitHubPRDetector_should_carryHostOwnerRepoAndNumber_When_inputIsAGitHubPRUrl", () => {
+      const result = registry.detect("https://github.com/acme/app/pull/12");
+      expect(result.type).toBe(InputType.GitHubPR);
+      expect(result.gitHubRef).toEqual({ host: "github.com", owner: "acme", repo: "app", prNumber: 12 });
+    });
+
+    it("GitHubPRDetector_should_matchTheFilesTab_When_inputIsAPRSubpage", () => {
+      const result = registry.detect("https://github.com/acme/app/pull/12/files");
+      expect(result.gitHubRef?.prNumber).toBe(12);
+    });
+
+    it("GitHubPRDetector_should_notMatch_When_inputIsAnIssueUrl", () => {
+      expect(registry.detect("https://github.com/acme/app/issues/12").type).not.toBe(InputType.GitHubPR);
     });
   });
 
