@@ -1,4 +1,4 @@
-import { style, keyframes } from "@vanilla-extract/css";
+import { style, keyframes, globalStyle } from "@vanilla-extract/css";
 import { vars, breakpoints, zIndex } from "../../styles/theme-contract.css";
 import { MIN_TOUCH_TARGET } from "@/lib/unfinished/prTouchTokens";
 
@@ -158,3 +158,10 @@ export const sessionLink = style({
   selectors: { "&:focus-visible": focusRing },
 });
 export const loadMore = style({ alignSelf: "flex-start" });
+
+// The shared PR chip is a compact badge; on a touch card its tap area still has to reach the minimum target.
+globalStyle(`${card} [data-testid="pr-chip"], ${card} [data-testid="pr-more-button"]`, {
+  minHeight: MIN_TOUCH_TARGET,
+  display: "inline-flex",
+  alignItems: "center",
+});
