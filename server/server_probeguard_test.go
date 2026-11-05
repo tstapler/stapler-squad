@@ -316,9 +316,10 @@ func TestLocalWriteGuard_ShouldRefuseAHostnameOnlyInDetectedSet_WhenVerifiedSetL
 // ClearNotificationHistory.
 func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredProcedures_AndNeverGuardClearNotificationHistory(t *testing.T) {
 	want := map[string]middleware.GuardProfile{
-		probeProcedurePath: middleware.ProfileProbe,
-		nudgeProcedurePath: middleware.ProfileProbe,
-		pruneProcedurePath: middleware.ProfileRebinding,
+		probeProcedurePath:  middleware.ProfileProbe,
+		nudgeProcedurePath:  middleware.ProfileProbe,
+		askFixProcedurePath: middleware.ProfileProbe,
+		pruneProcedurePath:  middleware.ProfileRebinding,
 
 		updateFlagProcedurePath:  middleware.ProfileRebinding,
 		replyProcedurePath:       middleware.ProfileRebinding,

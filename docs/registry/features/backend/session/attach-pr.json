@@ -9,7 +9,8 @@
   "tested": true,
   "testIds": [
     "TestAttachSessionPullRequest_ShouldVerifyViaConditionalRequestAndClearTombstone_WhenURLGiven",
-    "TestAttachPRManual_ShouldClearTombstoneBeforeAttaching"
+    "TestAttachPRManual_ShouldClearTombstoneBeforeAttaching",
+    "TestAttachSessionPullRequest_ShouldReportAlreadyTrackedWithoutLookup_WhenPRAlreadyAttached"
   ],
-  "lastModified": "2026-11-04T20:02:47.935985241-08:00"
+  "lastModified": "2026-11-05T09:55:00-08:00"
 }

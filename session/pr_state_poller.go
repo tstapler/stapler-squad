@@ -208,13 +208,16 @@ func (p *PRStatusPoller) pollState(ctx context.Context, v PRView, src PRObservat
 	prMetrics.poll(v.State)
 	info, changed, err := p.ghClient.GetPRInfoConditional(ctx, ref, v.Ref.Number(), p.etagCache)
 	if err != nil {
-		p.recordStateFailure(ctx, v, ref, observedAt, err)
+		p.recordStateFailure(ctx, v, ref, observedAt, err, byRef)
 		return nil
 	}
 	p.hostHealth.markSuccess(v.Ref.Host(), observedAt)
 	p.clearStateBackoff(v.StateID)
 	if !changed || info == nil {
 		p.recordUnchanged(ctx, v, src, observedAt)
+		if v.PollFailCount > 0 || v.PollError != "" {
+			p.mirrorPollFacts(ctx, v.Ref, byRef)
+		}
 		return nil
 	}
 	return p.applyPRStateUpdate(ctx, v, info, src, observedAt, byRef)
@@ -229,7 +232,7 @@ func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v PRView, src PROb
 	obs := PRObservation{
 		Source: src, Kind: PRObservationFetch, ObservedAt: at, State: v.State, IsDraft: v.IsDraft,
 		CheckConclusion: v.CheckConclusion, ApprovedCount: v.ApprovedCount, ChangesRequestedCount: v.ChangesRequestedCount,
-		URL: v.URL, HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch,
+		URL: v.URL, Title: v.Title, HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch,
 	}
 	if _, err := p.storage.UpdatePullRequestState(ctx, v.Ref, obs); err != nil {
 		log.Warn("PR status poller: clearing poll error failed", "pr", v.Ref, "err", err)
@@ -244,7 +247,7 @@ func observationFromInfo(info *github.PRInfo, src PRObservationSource, at time.T
 	obs := PRObservation{
 		Source: src, Kind: PRObservationFetch, ObservedAt: at, State: st, IsDraft: info.IsDraft,
 		CheckConclusion: info.CheckConclusion, ApprovedCount: info.ApprovedCount,
-		ChangesRequestedCount: info.ChangesRequestedCount, URL: info.HTMLURL,
+		ChangesRequestedCount: info.ChangesRequestedCount, URL: info.HTMLURL, Title: info.Title,
 		HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, OpenedAt: info.CreatedAt,
 	}
 	// PRInfo carries no merged_at/closed_at; updatedAt is the terminal moment.
@@ -299,6 +302,7 @@ func (p *PRStatusPoller) mirrorToSession(inst *Instance, ref PRRef, obs PRObserv
 		ApprovedCount: obs.ApprovedCount, ChangesReqCount: obs.ChangesRequestedCount, IsDraft: obs.IsDraft,
 		Terminal: obs.State.Terminal(), Checks: info.Checks, Reviews: info.Reviews,
 	})
+	inst.MirrorPRPollFacts(ref, PRView{Title: obs.Title, LastPolledAt: obs.ObservedAt})
 	if obs.State.Terminal() {
 		inst.MarkPRTerminal(ref, obs.State)
 	}
@@ -318,7 +322,7 @@ func (p *PRStatusPoller) mirrorToSession(inst *Instance, ref PRRef, obs PRObserv
 }
 
 // recordStateFailure classifies a failed fetch and records it on the row.
-func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v PRView, ref github.RepoRef, at time.Time, err error) {
+func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v PRView, ref github.RepoRef, at time.Time, err error, byRef map[PRRef][]*Instance) {
 	probe := func() (github.RepoProbe, error) {
 		if pr, ok := p.ghClient.(repoProber); ok {
 			return pr.ProbeRepo(ctx, ref)
@@ -342,8 +346,26 @@ func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v PRView, ref g
 		log.Warn("PR status poller: recording poll failure failed", "pr", v.Ref, "err", uerr)
 		return
 	}
+	if res.Applied {
+		p.mirrorPollFacts(ctx, v.Ref, byRef)
+	}
 	if f.Counted() && res.Applied {
 		p.notifyIfNowUnknown(ctx, v)
+	}
+}
+
+// mirrorPollFacts pushes the row's fresh failure bookkeeping onto the linked live
+// sessions so the verify-attempt counter the UI shows moves with each poll.
+func (p *PRStatusPoller) mirrorPollFacts(ctx context.Context, ref PRRef, byRef map[PRRef][]*Instance) {
+	if len(byRef[ref]) == 0 {
+		return
+	}
+	fresh, err := p.storage.GetPullRequestState(ctx, ref)
+	if err != nil {
+		return
+	}
+	for _, inst := range byRef[ref] {
+		inst.MirrorPRPollFacts(ref, fresh)
 	}
 }
 
@@ -476,7 +498,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *Instance, s
 	if _, linked := findPR(gh.PRs, prRef); linked {
 		return
 	}
-	initial := PRInitial{State: PRStateOpen, URL: info.HTMLURL, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	initial := PRInitial{State: PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
 	if err := inst.AttachPR(prRef, AttachSourceBranchDiscovery, initial); err != nil {
 		log.Warn("PR status poller: attaching the discovered PR failed", "session", snap.Title, "pr", prRef, "err", err)
 		return

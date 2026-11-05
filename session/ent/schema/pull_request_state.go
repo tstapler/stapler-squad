@@ -54,6 +54,7 @@ func (PullRequestState) Fields() []ent.Field {
 		field.String("repo").NotEmpty().Validate(canonicalLower("repo")),
 		field.Int("number").Positive(),
 		field.String("url").Default("").Comment("Display URL; keeps the original case"),
+		field.String("title").Default("").Comment("PR title as last polled; additive column, empty until the first successful poll"),
 		field.String("head_branch").Default(""),
 		field.String("base_branch").Default(""),
 		field.String("state").Default("unknown").Validate(oneOf("state", pullRequestStates)),

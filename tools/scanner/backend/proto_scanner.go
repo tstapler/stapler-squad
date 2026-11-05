@@ -258,6 +258,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"PinSessionPullRequest":      "session:pin-pr",
 	"DetachSessionPullRequest":   "session:detach-pr",
 	"AttachSessionPullRequest":   "session:attach-pr",
+	"AskSessionToFixPullRequest": "session:ask-to-fix-pr",
 	"DetachItemPullRequest":      "session:detach-item-pr",
 	"RefreshSessionPullRequests": "session:refresh-prs",
 	// Shell RPCs

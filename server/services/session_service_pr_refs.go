@@ -28,6 +28,10 @@ type prRefsSeams struct {
 	// refresh re-polls one PR and returns once the state row is updated. Nil
 	// until the awaited poller refresh (T3.3.2) is wired.
 	refresh func(ctx context.Context, inst *session.Instance, ref session.PRRef) error
+	// detail reads fresh PR state for ask-to-fix; nil means the GraphQL fetcher.
+	detail github.PRDetailFetcher
+	// tokens resolves the owning account's token; nil means the user PR cache.
+	tokens PRTokenResolver
 	// itemCleaner re-runs the (gated) terminal-item cleanup after an item-scoped
 	// detach releases a hold. Nil leaves the 60 s sweep to do it.
 	itemCleaner session.WorktreeCleaner
@@ -173,6 +177,11 @@ func (s *SessionService) AttachSessionPullRequest(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	if instanceHasPR(inst, ref) {
+		return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
+			PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED, Pr: prRefToProto(ref),
+		}), nil
+	}
 	repoRef, err := github.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -185,7 +194,9 @@ func (s *SessionService) AttachSessionPullRequest(
 		return nil, prSetError(err)
 	}
 	log.Info("session PR attached by user", "session", inst.Title, "pr", ref.String())
-	return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{PullRequests: currentPRList(inst)}), nil
+	return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
+		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: prRefToProto(ref),
+	}), nil
 }
 
 func prInitialFromInfo(info *github.PRInfo) session.PRInitial {
@@ -193,7 +204,7 @@ func prInitialFromInfo(info *github.PRInfo) session.PRInitial {
 	if err != nil {
 		state = session.PRStateUnknown
 	}
-	initial := session.PRInitial{State: state, URL: info.HTMLURL, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	initial := session.PRInitial{State: state, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
 	// An observed state is verified; `unknown` stays non-terminal, never seeded terminal.
 	initial.Terminal = state.Terminal()
 	return initial
@@ -276,4 +287,145 @@ func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*se
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return &resolved, nil
+}
+
+// SetPRAskToFix installs the fresh-PR reader and token source behind
+// AskSessionToFixPullRequest; nil arguments keep the production defaults.
+func (s *SessionService) SetPRAskToFix(f github.PRDetailFetcher, t PRTokenResolver) {
+	s.prRefs.detail, s.prRefs.tokens = f, t
+}
+
+func (s prRefsSeams) detailFetcher() github.PRDetailFetcher {
+	if s.detail != nil {
+		return s.detail
+	}
+	return github.GraphQLPRDetailFetcher{}
+}
+
+func (s *SessionService) askFixTokens() PRTokenResolver {
+	if s.prRefs.tokens != nil {
+		return s.prRefs.tokens
+	}
+	if s.userPRCache != nil {
+		return s.userPRCache
+	}
+	return nil
+}
+
+// askFixStop ends an ask-to-fix call early with a typed outcome and its copy.
+type askFixStop struct {
+	outcome sessionv1.NudgeOutcome
+	detail  string
+}
+
+// AskSessionToFixPullRequest types a fix request for one attached PR into the
+// session's pane. The prompt is built server-side from fresh GitHub state (the
+// same builder and delivery guard as Up Next's NudgeSessionForPR); the client
+// names only the session and the PR and can never supply text.
+// +api: session:ask-to-fix-pr
+func (s *SessionService) AskSessionToFixPullRequest(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AskSessionToFixPullRequestRequest],
+) (*connect.Response[sessionv1.AskSessionToFixPullRequestResponse], error) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginInteractive)
+	inst, err := s.livePRInstance(req.Msg.GetId())
+	if err != nil {
+		return nil, err
+	}
+	target, err := resolveTargetPR(inst, req.Msg.GetPr())
+	if err != nil {
+		return nil, err
+	}
+	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: prRefToProto(*target)}
+	ctx, cancel := context.WithTimeout(ctx, nudgeRPCTimeout)
+	defer cancel()
+	stop, err := s.askFixDeliver(ctx, req.Msg.GetId(), *target, out)
+	if err != nil {
+		return nil, err
+	}
+	if stop != nil {
+		out.Outcome, out.Detail = stop.outcome, stop.detail
+	}
+	return connect.NewResponse(out), nil
+}
+
+// askFixDeliver runs the guarded steps (target check, fresh read, steer). On a
+// delivered or typed-steer result it fills out and returns the outcome as a stop.
+func (s *SessionService) askFixDeliver(ctx context.Context, id string, target session.PRRef, out *sessionv1.AskSessionToFixPullRequestResponse) (*askFixStop, error) {
+	live, stop, err := s.askFixTarget(id)
+	if live == nil {
+		return stop, err
+	}
+	prompt, reasons, stop, err := s.askFixPrompt(ctx, target)
+	if prompt == "" {
+		return stop, err
+	}
+	if err := ctxDoneError(ctx); err != nil {
+		return nil, err
+	}
+	key, _ := github.NewPRKey(target.Host(), target.Owner(), target.Repo(), target.Number()) // validated by askFixPrompt
+	steer, steerErr := s.SteerInstanceGuarded(ctx, live, nudgeSignature(key, reasons), prompt)
+	no, detail, ok := nudgeFromSteer(steer)
+	if !ok {
+		log.Warn("ask_to_fix_steer_failed", "session", live.Title, "pr", target.String(), "outcome", steer.String(), "err", fmt.Sprint(steerErr))
+		if steer == SteerFailed {
+			return nil, steerFailedError(ctx, steerErr)
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", steer))
+	}
+	log.Info("ask_to_fix_outcome", "session", live.Title, "pr", target.String(), "outcome", no.String(), "reasons", nudgeReasonNames(reasons))
+	out.Reasons = reasons
+	return &askFixStop{outcome: no, detail: detail}, nil
+}
+
+// askFixTarget re-finds the live instance and refuses what cannot take a
+// request. A nil instance ends the call with stop or err.
+func (s *SessionService) askFixTarget(id string) (*session.Instance, *askFixStop, error) {
+	live := s.FindLiveInstance(id)
+	if live == nil {
+		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail}, nil
+	}
+	snap := live.Snapshot()
+	switch {
+	case snap.Hidden:
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session is a background session and is read-only, so nothing was sent"))
+	case snap.Status.IsSuspended():
+		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, nudgePausedDetail}, nil
+	case !CanSteer(snap.Program):
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("this session's program does not support requests"))
+	}
+	return live, nil, nil
+}
+
+// askFixPrompt reads fresh PR state with the owning account's token and builds
+// the prompt. An empty prompt ends the call with stop or err.
+func (s *SessionService) askFixPrompt(ctx context.Context, ref session.PRRef) (string, []sessionv1.NudgeReason, *askFixStop, error) {
+	key, err := github.NewPRKey(ref.Host(), ref.Owner(), ref.Repo(), ref.Number())
+	if err != nil {
+		return "", nil, nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	tokens := s.askFixTokens()
+	if tokens == nil {
+		return "", nil, nil, connect.NewError(connect.CodeUnavailable, errors.New("ask to fix is not configured"))
+	}
+	token, _, ok := tokens.TokenForPR(key)
+	if !ok {
+		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nudgeNoAccountDetail}, nil
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, nudgeFetchTimeout)
+	defer cancel()
+	detail, fetchErr := s.prRefs.detailFetcher().FetchPRNudgeDetail(fetchCtx, key, token)
+	if fetchErr != nil {
+		kind, cerr := classifyNudgeFetchError(fetchCtx, fetchErr, func() string { return nudgeRateLimitMessage(nil) })
+		if kind == nudgeFetchNotFound {
+			return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nudgePRNotFoundDetail}, nil
+		}
+		log.Warn("ask_to_fix_fetch_failed", "pr", ref.String(), "kind", string(kind), "err", fetchErr)
+		return "", nil, nil, cerr
+	}
+	prompt, reasons := BuildPRNudgePrompt(detail)
+	if prompt == "" || len(reasons) == 0 {
+		return "", nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOTHING_TO_FIX, nudgeNothingToFixDetail}, nil
+	}
+	return prompt, reasons, nil, nil
 }

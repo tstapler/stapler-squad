@@ -16,6 +16,11 @@ const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramP
 // NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
 const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
 
+// askFixProcedurePath is the full request path of AskSessionToFixPullRequest, the
+// session-scoped sibling of the nudge: it types a prompt into a pane, so it gets
+// the nudge's probe verdict on the unauthenticated listener.
+const askFixProcedurePath = "/api" + sessionv1connect.SessionServiceAskSessionToFixPullRequestProcedure
+
 // pruneProcedurePath is the full request path of PruneHiddenSessionNotifications,
 // guarded whole (dry run and apply) with the rebinding profile.
 const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
@@ -38,9 +43,10 @@ const writeFileProcedurePath = "/api" + sessionv1connect.SessionServiceWriteFile
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
 	"/api" + sessionv1connect.SessionServiceContinueTCCEnrichmentProcedure: middleware.ProfileRebinding,
-	probeProcedurePath: middleware.ProfileProbe,
-	nudgeProcedurePath: middleware.ProfileProbe,
-	pruneProcedurePath: middleware.ProfileRebinding,
+	probeProcedurePath:  middleware.ProfileProbe,
+	nudgeProcedurePath:  middleware.ProfileProbe,
+	askFixProcedurePath: middleware.ProfileProbe,
+	pruneProcedurePath:  middleware.ProfileRebinding,
 
 	updateFlagProcedurePath: middleware.ProfileRebinding,
 	replyProcedurePath:      middleware.ProfileRebinding,

@@ -145,6 +145,7 @@ type PRView struct {
 	State          PRState
 	StoredTerminal bool // the persisted `terminal` column (see Terminal for the effective value)
 	URL            string
+	Title          string
 	HeadBranch     string
 	BaseBranch     string
 	IsDraft        bool
@@ -170,6 +171,10 @@ type PRView struct {
 	AttachSource  AttachSource
 	AttachedAt    time.Time
 }
+
+// VerifyAttemptLimit is the counted-failure count at which an unverified-terminal
+// row stops holding (see VerifyExhausted).
+const VerifyAttemptLimit = verifyExhaustedFailures
 
 // UnverifiedTerminal reports a backfill-seeded row: state unknown with the terminal bit set.
 func (v PRView) UnverifiedTerminal() bool { return v.State == PRStateUnknown && v.StoredTerminal }

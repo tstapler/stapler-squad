@@ -4,6 +4,7 @@ package session.v1;
 
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
+import "session/v1/github_user.proto";
 import "session/v1/events.proto";
 import "session/v1/notification_action.proto";
 
@@ -107,6 +108,9 @@ service SessionService {
   rpc RefreshSessionPullRequests(RefreshSessionPullRequestsRequest) returns (RefreshSessionPullRequestsResponse) {}
   rpc DetachSessionPullRequest(DetachSessionPullRequestRequest) returns (DetachSessionPullRequestResponse) {}
   rpc AttachSessionPullRequest(AttachSessionPullRequestRequest) returns (AttachSessionPullRequestResponse) {}
+  // AskSessionToFixPullRequest types a fix request for one attached PR into the
+  // session's pane (server-built prompt; the client never supplies text).
+  rpc AskSessionToFixPullRequest(AskSessionToFixPullRequestRequest) returns (AskSessionToFixPullRequestResponse) {}
   // Item-scoped detach: the release for an item-direct PR hold. UI-only.
   rpc DetachItemPullRequest(DetachItemPullRequestRequest) returns (DetachItemPullRequestResponse) {}
 
@@ -1646,8 +1650,38 @@ message AttachSessionPullRequestRequest {
   string url = 2;
 }
 
+// AttachPullRequestResult says what AttachSessionPullRequest did.
+enum AttachPullRequestResult {
+  ATTACH_PULL_REQUEST_RESULT_UNSPECIFIED = 0;
+  // The PR was newly linked to the session.
+  ATTACH_PULL_REQUEST_RESULT_ATTACHED = 1;
+  // The session already tracked this PR; nothing was written.
+  ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED = 2;
+}
+
 message AttachSessionPullRequestResponse {
   repeated SessionPullRequest pull_requests = 1;
+  AttachPullRequestResult result = 2;
+  // The PR the URL resolved to, for the toast ("#12 acme/app").
+  PullRequestRef pr = 3;
+}
+
+// AskSessionToFixPullRequestRequest asks the session to fix what blocks pr. An
+// unset pr means the session's active PR; a set one must be attached to it.
+message AskSessionToFixPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+// AskSessionToFixPullRequestResponse reuses the Up Next nudge vocabulary
+// (NudgeOutcome, NudgeReason) so both surfaces render the same copy.
+message AskSessionToFixPullRequestResponse {
+  NudgeOutcome outcome = 1;
+  repeated NudgeReason reasons = 2;
+  // The PR the request targeted (the resolved active PR when the request left it unset).
+  PullRequestRef pr = 3;
+  // Human-readable, sanitized; never a token.
+  string detail = 4;
 }
 
 // DetachItemPullRequestRequest removes pr from this backlog item only (its

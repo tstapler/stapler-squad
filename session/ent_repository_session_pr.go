@@ -85,6 +85,7 @@ type PRInitial struct {
 	State      PRState
 	Terminal   bool
 	URL        string
+	Title      string
 	HeadBranch string
 	BaseBranch string
 	IsDraft    bool
@@ -118,7 +119,7 @@ func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref P
 	create := c.Create().
 		SetHost(ref.Host()).SetOwner(ref.Owner()).SetRepo(ref.Repo()).SetNumber(ref.Number()).
 		SetState(string(initial.state())).SetTerminal(initial.Terminal).
-		SetURL(initial.URL).SetHeadBranch(initial.HeadBranch).SetBaseBranch(initial.BaseBranch).
+		SetURL(initial.URL).SetTitle(initial.Title).SetHeadBranch(initial.HeadBranch).SetBaseBranch(initial.BaseBranch).
 		SetIsDraft(initial.IsDraft)
 	err := create.OnConflictColumns(pullrequeststate.FieldHost, pullrequeststate.FieldOwner, pullrequeststate.FieldRepo, pullrequeststate.FieldNumber).
 		DoNothing().Exec(ctx)
@@ -600,7 +601,7 @@ func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.Sess
 		return PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
 	}
 	v := PRView{
-		StateID: st.ID, Ref: ref, State: state, StoredTerminal: st.Terminal, URL: st.URL,
+		StateID: st.ID, Ref: ref, State: state, StoredTerminal: st.Terminal, URL: st.URL, Title: st.Title,
 		HeadBranch: st.HeadBranch, BaseBranch: st.BaseBranch, IsDraft: st.IsDraft,
 		CheckConclusion: st.CheckConclusion, ApprovedCount: st.ApprovedCount, ChangesRequestedCount: st.ChangesReqCount,
 		OpenedAt: derefTime(st.OpenedAt), MergedAt: derefTime(st.MergedAt), ClosedAt: derefTime(st.ClosedAt),
@@ -713,6 +714,7 @@ type PRObservation struct {
 	ApprovedCount         int
 	ChangesRequestedCount int
 	URL, HeadBranch       string
+	Title                 string
 	BaseBranch            string
 	OpenedAt              time.Time
 	MergedAt, ClosedAt    time.Time
@@ -961,6 +963,9 @@ func applyFetchColumns(upd *ent.PullRequestStateUpdate, obs PRObservation) *ent.
 		SetApprovedCount(obs.ApprovedCount).SetChangesReqCount(obs.ChangesRequestedCount)
 	if obs.URL != "" {
 		upd = upd.SetURL(obs.URL)
+	}
+	if obs.Title != "" {
+		upd = upd.SetTitle(obs.Title)
 	}
 	if obs.HeadBranch != "" {
 		upd = upd.SetHeadBranch(obs.HeadBranch)
