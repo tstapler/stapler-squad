@@ -134,7 +134,7 @@ func main() {
 			exit = ee.ExitCode()
 		}
 	}
-	c := Capture{Spec: *spec, GoPkgs: executedPackages(string(pct)), WebFiles: webFiles, Routes: paths, RPCs: rpcsOf(paths),
+	c := Capture{Spec: *spec, GoPkgs: withFileDirs(executedPackages(string(pct)), goFiles), WebFiles: webFiles, Routes: paths, RPCs: rpcsOf(paths),
 		GoFiles: goFiles, GoLines: lines, GoAll: allBlocks, PlaywrightExit: exit, WallSeconds: wall}
 	if c.WebFiles == nil {
 		c.WebFiles = []string{}

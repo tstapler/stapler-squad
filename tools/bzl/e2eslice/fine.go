@@ -101,12 +101,23 @@ func newFineSelector(caps []FineCapture, specsOnDisk, globals []string, gran Gra
 	for _, sp := range specsOnDisk {
 		c, ok := by[sp]
 		s.specs = append(s.specs, fineSpec{
-			spec: sp, pkgs: setOf(c.GoPkgs), goFiles: setOf(c.GoFiles), webs: setOf(c.WebFiles), lines: c.GoLines,
+			spec: sp, pkgs: setOf(append(append([]string{}, c.GoPkgs...), dirsOf(c.GoFiles)...)), goFiles: setOf(c.GoFiles), webs: setOf(c.WebFiles), lines: c.GoLines,
 			alwaysRuns: !ok || c.Excluded != "" || len(c.GoFiles) == 0,
 		})
 	}
 	s.groups = groupSpecs(specsOnDisk)
 	return s
+}
+
+// dirsOf lists the import paths of the directories of executed files. `covdata percent` rounds a package with
+// a handful of executed statements to 0.0%, so go_pkgs alone under-reports small packages (found by the S14
+// mutation backtest: config/background_models.go ran but package config was absent).
+func dirsOf(files []string) []string {
+	var out []string
+	for _, f := range files {
+		out = append(out, pkgOf(f))
+	}
+	return out
 }
 
 func overlaps(a, b Line) bool { return a[0] <= b[1] && b[0] <= a[1] }

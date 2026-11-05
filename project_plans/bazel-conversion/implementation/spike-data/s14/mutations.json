@@ -1,0 +1,278 @@
+[
+  {
+    "id": "m01",
+    "kind": "go",
+    "file": "server/services/backlogsvc/backlog_service_ship_status.go",
+    "line": 34,
+    "package": "server/services/backlogsvc",
+    "rpc_handler": true,
+    "before": "\tif s.storage == nil {",
+    "after": "\tif !(s.storage == nil) {"
+  },
+  {
+    "id": "m02",
+    "kind": "go",
+    "file": "server/services/file_codec.go",
+    "line": 80,
+    "package": "server/services",
+    "rpc_handler": true,
+    "before": "\tif readErr != nil \u0026\u0026 n == 0 {",
+    "after": "\tif !(readErr != nil \u0026\u0026 n == 0) {"
+  },
+  {
+    "id": "m03",
+    "kind": "go",
+    "file": "server/services/gatestats_response.go",
+    "line": 90,
+    "package": "server/services",
+    "rpc_handler": true,
+    "before": "\tif !snap.Soak.LastOffFlipAt.IsZero() {",
+    "after": "\tif !(!snap.Soak.LastOffFlipAt.IsZero()) {"
+  },
+  {
+    "id": "m04",
+    "kind": "go",
+    "file": "server/services/session_service_update.go",
+    "line": 66,
+    "package": "server/services",
+    "rpc_handler": true,
+    "before": "\tif len(msg.Tags) == 0 {",
+    "after": "\tif !(len(msg.Tags) == 0) {"
+  },
+  {
+    "id": "m05",
+    "kind": "go",
+    "file": "server/services/guidance_request_mirror_proto.go",
+    "line": 28,
+    "package": "server/services",
+    "rpc_handler": true,
+    "before": "\tif d.QuestionsJSON == \"\" {",
+    "after": "\tif !(d.QuestionsJSON == \"\") {"
+  },
+  {
+    "id": "m06",
+    "kind": "go",
+    "file": "server/services/content_search_ignore.go",
+    "line": 60,
+    "package": "server/services",
+    "rpc_handler": true,
+    "before": "\tif len(m.patterns) == 0 {",
+    "after": "\tif !(len(m.patterns) == 0) {"
+  },
+  {
+    "id": "m07",
+    "kind": "go",
+    "file": "session/unfinished/gogitstore/registry.go",
+    "line": 315,
+    "package": "session/unfinished/gogitstore",
+    "before": "\t\tif s.RefCount() != 0 {",
+    "after": "\t\tif !(s.RefCount() != 0) {"
+  },
+  {
+    "id": "m08",
+    "kind": "go",
+    "file": "session/git/native/paths.go",
+    "line": 32,
+    "package": "session/git/native",
+    "before": "\tif err == nil {",
+    "after": "\tif !(err == nil) {"
+  },
+  {
+    "id": "m09",
+    "kind": "go",
+    "file": "session/backlog_lifecycle_triage.go",
+    "line": 275,
+    "package": "session",
+    "before": "\t\tif sessErr != nil {",
+    "after": "\t\tif !(sessErr != nil) {"
+  },
+  {
+    "id": "m10",
+    "kind": "go",
+    "file": "session/unfinished/scanstate_burst.go",
+    "line": 78,
+    "package": "session/unfinished",
+    "before": "\tif rec.snap.Swap(nil) != nil {",
+    "after": "\tif !(rec.snap.Swap(nil) != nil) {"
+  },
+  {
+    "id": "m11",
+    "kind": "go",
+    "file": "session/git/backend/fallback.go",
+    "line": 58,
+    "package": "session/git/backend",
+    "before": "\t\tif p == r {",
+    "after": "\t\tif !(p == r) {"
+  },
+  {
+    "id": "m12",
+    "kind": "go",
+    "file": "session/resize/nudge.go",
+    "line": 28,
+    "package": "session/resize",
+    "before": "\tif cols \u003e 1 {",
+    "after": "\tif !(cols \u003e 1) {"
+  },
+  {
+    "id": "m13",
+    "kind": "go",
+    "file": "server/deliverygate/stats_soak.go",
+    "line": 58,
+    "package": "server/deliverygate",
+    "before": "\t\tif !b.start.Before(cutoff) {",
+    "after": "\t\tif !(!b.start.Before(cutoff)) {"
+  },
+  {
+    "id": "m14",
+    "kind": "go",
+    "file": "server/analytics/client_metrics.go",
+    "line": 252,
+    "package": "server/analytics",
+    "before": "\t\tif ev.DurationMs == nil {",
+    "after": "\t\tif !(ev.DurationMs == nil) {"
+  },
+  {
+    "id": "m15",
+    "kind": "go",
+    "file": "session/git/backend/cli/mutate.go",
+    "line": 253,
+    "package": "session/git/backend/cli",
+    "before": "\tif req.Branch != \"\" {",
+    "after": "\tif !(req.Branch != \"\") {"
+  },
+  {
+    "id": "m16",
+    "kind": "go",
+    "file": "session/git/ops.go",
+    "line": 238,
+    "package": "session/git",
+    "before": "\tif err != nil || head == \"\" || string(head) == baseSHA {",
+    "after": "\tif !(err != nil || head == \"\" || string(head) == baseSHA) {"
+  },
+  {
+    "id": "m17",
+    "kind": "go",
+    "file": "config/background_models.go",
+    "line": 76,
+    "package": "config",
+    "before": "\t\tif d.key == feature {",
+    "after": "\t\tif !(d.key == feature) {"
+  },
+  {
+    "id": "m18",
+    "kind": "go",
+    "file": "pkg/classifier/escalation.go",
+    "line": 84,
+    "package": "pkg/classifier",
+    "before": "\tif result.Reason != \"\" {",
+    "after": "\tif !(result.Reason != \"\") {"
+  },
+  {
+    "id": "m19",
+    "kind": "go",
+    "file": "session/streamhub/batch.go",
+    "line": 204,
+    "package": "session/streamhub",
+    "before": "\tif b.timer != nil {",
+    "after": "\tif !(b.timer != nil) {"
+  },
+  {
+    "id": "m20",
+    "kind": "go",
+    "file": "session/vc/jj_provider.go",
+    "line": 22,
+    "package": "session/vc",
+    "before": "\tif err != nil {",
+    "after": "\tif !(err != nil) {"
+  },
+  {
+    "id": "m21",
+    "kind": "web",
+    "file": "web-app/src/components/sessions/SessionSummaryPanel.tsx",
+    "line": 311,
+    "package": "web-app/src/components/sessions",
+    "before": "  if (phase === \"empty\") {",
+    "after": "  if (!(phase === \"empty\")) {"
+  },
+  {
+    "id": "m22",
+    "kind": "web",
+    "file": "web-app/src/components/backlog/detail/AutonomousHealthStrip.tsx",
+    "line": 19,
+    "package": "web-app/src/components/backlog/detail",
+    "before": "  if (!showCost \u0026\u0026 attempts === 0 \u0026\u0026 cap === undefined) {",
+    "after": "  if (!(!showCost \u0026\u0026 attempts === 0 \u0026\u0026 cap === undefined)) {"
+  },
+  {
+    "id": "m23",
+    "kind": "web",
+    "file": "web-app/src/components/rules/RuleBuilderForm.tsx",
+    "line": 293,
+    "package": "web-app/src/components/rules",
+    "before": "    if (!hasToolTarget \u0026\u0026 !hasCriteria \u0026\u0026 !hasPattern) {",
+    "after": "    if (!(!hasToolTarget \u0026\u0026 !hasCriteria \u0026\u0026 !hasPattern)) {"
+  },
+  {
+    "id": "m24",
+    "kind": "web",
+    "file": "web-app/src/components/backlog/BlockerChip.tsx",
+    "line": 238,
+    "package": "web-app/src/components/backlog",
+    "before": "  if (variant === \"full\" \u0026\u0026 onTriggerRemediationNow) {",
+    "after": "  if (!(variant === \"full\" \u0026\u0026 onTriggerRemediationNow)) {"
+  },
+  {
+    "id": "m25",
+    "kind": "web",
+    "file": "web-app/src/lib/hooks/useValidateRules.ts",
+    "line": 46,
+    "package": "web-app/src/lib/hooks",
+    "before": "    if (!yamlContent.trim()) {",
+    "after": "    if (!(!yamlContent.trim())) {"
+  },
+  {
+    "id": "m26",
+    "kind": "web",
+    "file": "web-app/src/lib/backlog/bulkActions.ts",
+    "line": 85,
+    "package": "web-app/src/lib/backlog",
+    "before": "  if (started.length \u003e 0 || queued.length === 0) {",
+    "after": "  if (!(started.length \u003e 0 || queued.length === 0)) {"
+  },
+  {
+    "id": "m27",
+    "kind": "web",
+    "file": "web-app/src/components/unfinished/prs/PRActionBar.tsx",
+    "line": 57,
+    "package": "web-app/src/components/unfinished/prs",
+    "before": "    if (await run(\"merge\", pr, method)) {",
+    "after": "    if (!(await run(\"merge\", pr, method))) {"
+  },
+  {
+    "id": "m28",
+    "kind": "web",
+    "file": "web-app/src/components/backlog/detail/SessionsSection.tsx",
+    "line": 39,
+    "package": "web-app/src/components/backlog/detail",
+    "before": "  if (!session.endedAt) {",
+    "after": "  if (!(!session.endedAt)) {"
+  },
+  {
+    "id": "m29",
+    "kind": "web",
+    "file": "web-app/src/components/workflows/CronScheduleInput.tsx",
+    "line": 64,
+    "package": "web-app/src/components/workflows",
+    "before": "    if (next === \"advanced\") {",
+    "after": "    if (!(next === \"advanced\")) {"
+  },
+  {
+    "id": "m30",
+    "kind": "web",
+    "file": "web-app/src/lib/unfinished/tabStats.ts",
+    "line": 58,
+    "package": "web-app/src/lib/unfinished",
+    "before": "    if (parsed \u0026\u0026 typeof parsed === \"object\") {",
+    "after": "    if (!(parsed \u0026\u0026 typeof parsed === \"object\")) {"
+  }
+]

@@ -76,3 +76,11 @@ func TestRPCsOf(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestWithFileDirsAddsRoundedAwayPackages(t *testing.T) {
+	got := withFileDirs([]string{modulePath + "/session"}, []string{"config/x.go", "main.go", "session/a.go"})
+	want := []string{modulePath, modulePath + "/config", modulePath + "/session"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}

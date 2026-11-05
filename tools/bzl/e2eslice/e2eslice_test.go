@@ -439,3 +439,11 @@ func TestLineStrictIgnoresHunksOutsideBlocks(t *testing.T) {
 		t.Fatalf("strict mode drops a hunk in no block: %d", got)
 	}
 }
+
+func TestPackageGranularityDerivesPackagesFromExecutedFiles(t *testing.T) {
+	caps := []FineCapture{{Spec: "tests/e2e/a.spec.ts", GoFiles: []string{"config/x.go"}}} // go_pkgs rounded config away
+	s := newFineSelector(caps, []string{"tests/e2e/a.spec.ts"}, nil, GranPackage, nil)
+	if got := s.Select(Commit{Files: []string{"config/other.go"}}).PerSpec; got != 1 {
+		t.Fatalf("a package whose files ran must select the spec: %d", got)
+	}
+}

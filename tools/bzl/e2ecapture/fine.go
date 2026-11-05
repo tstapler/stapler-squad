@@ -279,3 +279,25 @@ func rpcsOf(paths []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// withFileDirs adds the package of every executed file: `covdata percent` rounds a package with a few executed
+// statements to 0.0%, so executedPackages alone drops small packages that did run.
+func withFileDirs(pkgs, files []string) []string {
+	set := map[string]bool{}
+	for _, p := range pkgs {
+		set[p] = true
+	}
+	for _, f := range files {
+		if d := path.Dir(f); d == "." {
+			set[modulePath] = true
+		} else {
+			set[modulePath+"/"+d] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}

@@ -787,39 +787,62 @@ Story 8.4 (owner decision `nogo_story_8_4`): all 17 `tools/lint` analyzers run i
 - Gazelle: the nogo twins share importpaths with the real analyzers, so the root `BUILD.bazel` carries one `resolve_regexp` that prefers `//tools/lint/$1`. `nosessiondrivertest_test` needs a `# keep` on `deps` (Gazelle adds its embedded library as a dep, which rules_go rejects as a duplicate link).
 - Not done: a dual-run of `make lint-custom` and nogo on the seeds. The path-scoped analyzers key on real package paths, which the seeds only stand in for, and both paths compile the same `analyzer.go`. `make lint-custom` was not re-run (needs generated `gen/` and `session/ent`, absent in this worktree); it stays the oracle until the Story 8.6 flip, and now also runs `nogotwins` (twin list, `tools/lint` directories and `cmd/linter` agree).
 
-## S14: selective e2e through observed-dependency slices (Story 0.15) - PARTIAL, NO VERDICT RECORDED
+## S14: selective e2e through observed-dependency slices (Story 0.15) - Fail (2026-11-05)
 
-Branch `sdd/bazel-epic12-e2e` (PROVISIONAL). `spike-results.yaml` has **no S14 row** and carries no `e2e_selected_share_median`: the verdict needs all 193 specs captured and the mutation backtest, neither of which ran. What did run is below, each line with its source.
+Branch `sdd/bazel-s14`. Verdict row `S14: Fail` in `spike-results.yaml`; `e2e_selected_share_median` = **1.0** in `spike-measurements.json` (read by `tools/bzl/economic-gate.py`). Evidence is in `spike-data/s14/`; every number below was produced by the tools in `tools/bzl/e2e*` (Go, with tests). Raw per-spec captures (610 MB with line ranges) were scratch and are deleted; the file-level manifest is committed gzipped (`caps-file-level.json.gz`).
 
-### Measured locally (VERIFIED, commands re-runnable from the tools in `tools/bzl/e2e*/`)
+### PASS-iff evaluation (Story 0.15 acceptance criteria)
 
-- **Registry coverage (Task 0.15b)**: `e2eslice registry-coverage` on this tree: 193 specs, 180 with a feature id, 116 with a resolvable id, 80 with every id resolvable, 73 with an existing source file (55 Go, 28 web), 208 distinct ids of which 82 are unresolvable. ADR-009's 2026-11-02 numbers were 193 / 119 / 80 / 102 / 55 and 68 / 238 ids / 106 unresolvable. The gap is parser definition (this tool reads `docs/registry/features/**` and `web-app/src/lib/features/features/*.ts` `componentPaths`; it does not read `backend-features.json`/`frontend-features.json`, which do not exist in this tree). Written to `tests/e2e/feature-gaps.json`.
-- **Cover capture works (Task 0.15a, 3 of 193 specs)**: `go build -cover -coverpkg=./...` of the worktree (generated `gen/` Go protos regenerated with `buf generate` using only the Go plugins, `session/ent` copied from the main checkout) built in 31 s wall (`CGO_ENABLED=1 -p 4`), 210 MB. `e2ecapture` ran one single-worker Playwright invocation per spec against its own isolated server (`--test-dir` under `~/.cache/tmp/ssq-epic12`, the harness's private `ssq-e2e-<random>` tmux socket, ephemeral port from `findFreePort()`, never :8543/:8444) and read `go tool covdata percent`:
-
-| spec | executed Go packages (of 198 module packages) | wall time |
+| Criterion | Result | Evidence |
 |---|---|---|
-| `alias.spec.ts` | 103 | 136 s (includes first-time seed-tool compiles) |
-| `toast-stack.spec.ts` | 110 | 36 s |
-| `backlog-queue.spec.ts` | 102 | 14 s |
+| Observed manifest covers every spec | **Met in form, with caveats**: 193 of 193 specs captured (130 passing, 60 failing at this base after one rerun alone each, 3 excluded as `No tests found` for the chromium project: `dev-mode-hmr`, `mobile-webkit`, `website-demos`). 5 specs recorded no executed Go file (`notification-triage-walkthrough`, `notifications-responsive`, `session-auto-approve`, `triage-question-answer`, `triage-related-work`; cause not investigated) and are treated as always selected. | `spike-data/s14/progress.json`, `progress-first-pass.json`, `capture-summary.json` |
+| Median selected share <= 0.50, p90 <= 0.90, `__ALL__` fallback <= 0.15 | **NOT MET at every granularity.** Median 1.00 and p90 1.00 for package, file, line and the optimistic line-strict variant, on both windows. `__ALL__` fallback 0.111 (100 commits) and 0.169 (500 commits): the 500-commit rate also exceeds 0.15. | `replay-100.json`, `replay-500.json` (table below) |
+| Zero missed failures against a full run | **NOT ESTABLISHED.** 30 seeded mutations (16 Go packages, 6 RPC-handler files, 10 web files) were run as a *sampled* backtest (selected specs plus a seeded sample of the rest, 8 to 11 specs per mutation), not a full-suite run per mutation. 5 mutations failed at least one spec; the one apparent miss (m17, `multi-window.spec.ts`) was re-run 2x2 with both binaries and is a flake (each binary failed once and passed once). No confirmed miss, but the sample is too small to claim zero. | `mutation-summary.json`, `mutations.json` |
+| Bazel semantics S-a..S-e | S-a, S-b, S-c, S-d **PASS**; **S-e FAIL** | `semantic.log` |
 
-  The intersection of the three is **100 packages**, the union 113: the startup path dominates every slice. Data: `spike-data/s14/*.json`. Per-spec capture is therefore cheap (14-136 s), so the full 193-spec capture is roughly 2-7 runner-hours single-worker (190 x 36-136 s, INFERRED from three specs). Spec results (alias: 2 failed, toast-stack: 3 passed 2 skipped, backlog-queue: 1 passed) do not matter for capture; the worktree base is older than the web dist copied from `main`.
-- **Replay on that 3-spec sample (Task 0.15c tooling)**: `e2eslice replay -rev main -n 100 -only-managed -group-size 1` over the last 100 first-parent commits of `main` (tip `94ed580b2`): 49 relevant commits (non-test Go or web source outside `tools/`, `scripts/`, `.claude/`, `.github/`), **share median 1.00, p90 1.00**, `__ALL__` fallback rate 0.102 (global inputs). 500 commits: 326 relevant, median 1.00, p90 1.00, fallback 0.181. The median would pass the 0.50 limit only if most commits missed the 100-package core; among the 49 relevant commits, `session/` is touched by 34, `server/` by 28, `config/` by 4 (a commit can touch several). Caveats: three specs, not 193; `web_files` and `routes` are not captured, so web-only commits select nothing in the sample (they cannot lower a median that is already 1.00).
-- **Static-closure variant is degenerate by construction (INFERRED premise, VERIFIED arithmetic)**: ADR-009 slices include the static import closure of the observed packages. Every spec boots the server, so `github.com/tstapler/stapler-squad/server` is in every slice, and its in-module import closure is 152 of 198 packages (`go list`, main checkout, 2026-11-03; root package 161). `e2eslice universal-share` over the last 100 commits: 42 of 49 relevant commits (85.7%) touch that closure and so select every spec; 500 commits: 255 of 326 (78.2%). Selection by the closure therefore cannot reach median <= 0.50 whatever the per-spec data; only the executed-statement set (observed, no closure) can, and the sample above shows that set is itself about 100 packages wide. This is the ADR-009 risk 1 (core packages in every slice) with a number.
-- **Bazel semantics (Task 0.15d, partial)**: S-d on a synthetic fixture (`gen-build` from a 2-spec manifest, then removed): `bazel query 'rdeps(//tests/e2e:all, //session:instance.go)'` lists the e2e target through the `go_library` deps (`//session:session ... //tests/e2e:misc`), `//config:config.go` likewise, and `check-no-binary-dep` over `deps(//tests/e2e:all)` (11,584 labels) found no `//:stapler-squad` or `//server/web:dist`. This checks the query mechanics only, not the real manifest.
+Verdict mapping: median/p90 above the limits would give `FallbackWorkaround` only with zero misses established; that is not established (sampled backtest), S-e fails, and the FallbackWorkaround path itself (diff-line coverage selection) was measured here and does not narrow selection either (line level median 1.00). Per the PASS-iff rule an unevaluable check is `Fail`, never `Pass`, so the row is **Fail** for the sound-slice design. Owner decision (ADR-009, not taken here): keep e2e as a full run and apply the directive to the Go, Jest and integration layers only, or accept an escape-budgeted diff-line selection whose measured saving is the mean share below. ADR-009's status is untouched.
 
-### NOT RUN (what is missing for a verdict)
+### Replay (Task 0.15c), `main` tip `415f690c4`, `e2eslice replay-fine`
 
-1. Capture of the remaining 190 specs (and the `excluded` list for perf, visual-regression and secondary-browser specs); `tests/e2e/slice-manifest.json` is therefore not committed, and `e2eslice check-manifest` has nothing to check.
-2. Web capture (Task 12.1b: Chromium JS coverage resolved through source maps) and RPC capture; not written (no runnable verification here).
-3. Mutation backtest (30 seeded mutations, `mutations.yaml`, full suite plus selected set per mutation): about 30 full CI-scale runs, not attempted; the zero-miss criterion is entirely unmeasured.
-4. Semantic checks S-a, S-b, S-c, S-e (cache key sensitivity, constant `--test_env` path, failed-result rerun, per-target start-up overhead): need real `e2e_test` targets, i.e. the manifest.
-5. The ADR-009 premise "a spec's Go slice is narrow" is **contradicted** on the 3-spec sample (100 of about 103-110 packages shared); S14 will most likely end `FallbackWorkaround` or `Fail` unless slices are cut some other way (ADR-009 fallbacks: coarser slice does not help here; diff-line coverage selection is the remaining design, or package scoping, ADR-010 / Epic 13). This is INFERRED from three specs.
+Relevant = commit touches non-test Go or web source outside `tools/`, `scripts/`, `.claude/`, `.github/`. Shares are per spec (193 specs; always-run specs count as selected).
 
-Host for the runs above: load 1.5-3.5 at start of each capture (rule: <= 4), MemAvailable 34-36 GB (rule: >= 15 GB). The first attempt waited from load 13-45 (other workers) until it dropped to 3.47 (`load.log` poll, 20:26).
+| Window | Granularity | Relevant | Median | p90 | Mean | Commits with share <= 0.5 | `__ALL__` rate |
+|---|---|---|---|---|---|---|---|
+| 100 | package | 45 | 1.00 | 1.00 | 0.925 | 3 | 0.111 |
+| 100 | file | 45 | 1.00 | 1.00 | 0.910 | 4 | 0.111 |
+| 100 | line (sound: hunks outside statement blocks keep every spec that ran the file) | 45 | 1.00 | 1.00 | 0.867 | 6 | 0.111 |
+| 100 | line-strict (UNSOUND upper bound on narrowness) | 45 | 1.00 | 1.00 | 0.764 | 11 | 0.111 |
+| 500 | package | 325 | 1.00 | 1.00 | 0.924 | 21 | 0.169 |
+| 500 | file | 325 | 1.00 | 1.00 | 0.856 | 45 | 0.169 |
+| 500 | line | 325 | 1.00 | 1.00 | 0.843 | 50 | 0.169 |
+| 500 | line-strict | 325 | 1.00 | 1.00 | 0.717 | 94 | 0.169 |
+
+Why: of 1,240 executed Go files, 870 run in at least 90% of specs and 887 in at least half (server start-up, config, session actors); of 1,361 web files 524 run in at least half. A typical commit touches one such file, so even the executed-line set selects everything. Web capture (Chromium JS coverage resolved through source maps, `tests/e2e/helpers/web-coverage-preload.js`) is equally broad because module top-level code runs on load. Line-level data comes from the HEAD build and is matched to each historical commit's new-side hunk lines, so line results for old commits carry drift error (the file-level and package results do not). Group (Bazel target) shares equal the per-spec shares here (median 1.00).
+
+### Capture (Task 0.15a)
+
+`go build -cover -coverpkg=./...` (45 s, `-p 4`, `nice -n 19`) server; `tools/bzl/e2ebatch` ran one single-worker Playwright invocation per spec through `e2ecapture` (isolated server, ephemeral port, private `ssq-e2e-*` tmux socket, never :8543/:8444), gated on 1-minute load <= 24 and MemAvailable >= 12 GB. Load at spec start: min 2.86, median 10.13, max 23.9 (host 17-70 from other sessions); MemAvailable never below 28.9 GB. Wall time per attempt: median 41 s over all 278 attempts (30 s on the first pass); 3.4 h for the first pass, 6.3 h for both passes (`progress.json`). First pass: 85 of 193 reported Playwright failures; `e2ecapture` itself exits 0 whatever Playwright did, so `e2ebatch` initially misclassified them as passes and a second pass (`-redo-failed`) reran each once, alone: 22 turned green (INFERRED cause: the shared `~/.cache/ms-playwright` browser directory was replaced by another session during the first pass, `chromium_headless_shell-1194` gone at 01:20; the rerun used a private browser path), 60 failed again and are recorded `failed` with both outcomes, 3 `No tests found` (excluded). Failing specs still contribute the coverage they produced, so their slices are partial (an under-approximation, which only makes selection narrower than the truth).
+
+A root-cause note on the tooling: `go tool covdata percent` prints 0.0% for a package with a few executed statements, so `go_pkgs` alone dropped small packages that ran (found when `config` was missing for a spec that executed `config/background_models.go`). `e2ecapture` now adds the package of every executed file and `e2eslice` derives packages from executed files; the package-level replay above uses the corrected data (medians unchanged).
+
+### Mutation backtest (Task 0.15d), sampled
+
+30 mutations in `mutations.json`: negate one single-line `if` on an executed line (`if c {` to `if !(c) {`), 20 Go (16 packages, 6 of them `server/services` handler files) and 10 web (rebuilt dist, rebuilt binary). Per mutation: the line-selected specs (capped at 4), up to 3 file-selected-only specs, 4 seeded random others; a failing spec is rerun once on the mutated binary and, if it fails again, once on the unmutated binary (a spec that also fails there is ignored). Failures observed: m02, m05, m17, m23, m29. Misses at line/file level: 0 confirmed (m17/`multi-window` = flake, re-run 2x2). Limits, stated plainly: only 5 of 30 mutations bit within 8 to 11 specs; the criterion asks for a full-suite run per mutation (about 30 x 3.4 h here); a flake rate of this order (multi-window fails about half its runs on the unmutated binary) would also need a quarantine step before a 0-miss claim means anything. Specs failing at baseline (60) were excluded from the run set.
+
+### Semantic checks (Task 0.15d), throwaway targets `tools/bzl/spike/e2e_slice`
+
+Run with `tools/bzl/e2esemantic` through `tools/bazel` (Bazel 9.3.1): `S-d: PASS` (rdeps over a go_library source label finds the test), `S-a: PASS` (rerun cached; editing `inside.txt` re-ran; editing `outside.txt` stayed cached), `S-b: PASS` (swapping the file behind a constant `--test_env` path stays cached), `S-c: PASS` (a failing target re-executes, not served from cache). **`S-e: FAIL`**: 5 short passing specs, one Playwright invocation 23.6 s versus 97.0 s as five separate invocations, so per-invocation start-up (server boot, seeding, browser launch) is 18.4 s against a limit of 3.5 s (15% of 23.6 s). Measured on direct Playwright invocations at load about 9 (load-affected, but the gap is 5x); the Bazel `e2e_test` wrapper was not run (no real `//tests/e2e` BUILD without the full manifest and Go labels), so the Bazel-side overhead is additional.
+
+### NOT RUN
+
+- A full-suite run per mutation (cost above); the backtest is sampled.
+- The Bazel `e2e_test` path for S-e and `check-manifest`/`registry-coverage` on a committed `tests/e2e/slice-manifest.json` (not generated: the verdict is Fail and the manifest would cover 193 specs of which 63 are failing, excluded or empty).
+- RPC/route observation as a selector (routes and RPC paths are recorded in the captures; not used for selection).
+- Line-level replay with per-commit coverage (coverage is from HEAD only).
 
 ### Economic gate hook
 
-`tools/bzl/economic-gate.py` EG5 now evaluates the plan's post-selection RA2 projection `(setup_and_queue + lint + go_or_other + e2e_median x s) / span` against 0.90 (plus the residual against the 0.60 limit), with `s = e2e_selected_share_median` read from the inputs file or `spike-results.yaml`, and `s = 1.0` when S14 has no number. On the measured baseline components (398, 0, 34, 1974.5 of span 2601 s) the projection at `s = 1.0` is 0.925, not the 0.987 quoted in the plan text (the component medians do not sum to the span median), and it still trips; it clears at `s` of about 0.97 or below ((2340.9 - 432) / 1974.5).
+`tools/bzl/economic-gate.py` EG5 evaluates the plan's post-selection RA2 projection with `s = e2e_selected_share_median`. It is now measured: `s = 1.0` (`spike-measurements.json`); outputs of the gate and of `check-spike-results.py` are in the branch report.
 
 ## S6 worktree cost and Story 2.7 mid-point T1/T3/T4 (2026-11-03) - PARTIAL, NO VERDICT RECORDED
 
