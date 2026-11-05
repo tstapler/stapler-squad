@@ -244,3 +244,72 @@ func (c *countingConn) Close() error {
 	c.once.Do(func() { c.open.Add(-1) })
 	return c.Conn.Close()
 }
+
+func TestDaemonMonitor_ProductionThresholdIsPinned(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, 6, newDaemonMonitor(nil, nil).threshold, "restarting tymuxd kills every pane child, so the threshold is deliberate")
+}
+
+func TestDaemonMonitor_ProbeCancelledMidFlightDoesNotRepair(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := daemonMonitor{interval: time.Second, maxBackoff: time.Second, threshold: 1,
+			healthy: func(context.Context, DaemonConfig) bool { cancel(); return false },
+			ensure: func(context.Context, DaemonConfig) (TymuxdReady, error) {
+				t.Error("a probe that failed because shutdown cancelled it must not trigger repair")
+				return TymuxdReady{}, nil
+			},
+		}
+		done := startDaemonMonitorTest(ctx, m)
+		time.Sleep(time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+		synctest.Wait()
+		<-done
+	})
+}
+
+// runWedgeMonitor runs the monitor for total virtual time and returns how many wedged reports fired.
+func runWedgeMonitor(t *testing.T, total time.Duration, result func(elapsed time.Duration) daemonProbeResult) (reports int64) {
+	t.Helper()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		start := time.Now()
+		var n atomic.Int64
+		m := daemonMonitor{interval: time.Minute, maxBackoff: time.Minute, threshold: 1,
+			probe: func(context.Context, DaemonConfig) daemonProbeResult { return result(time.Since(start)) },
+			ensure: func(context.Context, DaemonConfig) (TymuxdReady, error) {
+				t.Error("a Busy daemon must never be repaired")
+				return TymuxdReady{}, nil
+			},
+			onWedged: func() { n.Add(1) },
+		}
+		done := startDaemonMonitorTest(ctx, m)
+		for elapsed := time.Duration(0); elapsed < total; elapsed += time.Minute {
+			time.Sleep(time.Minute) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+			synctest.Wait()
+		}
+		cancel()
+		<-done
+		reports = n.Load()
+	})
+	return reports
+}
+
+func TestDaemonMonitor_ReportsLongBusyStreakRateLimited(t *testing.T) {
+	t.Parallel()
+	reports := runWedgeMonitor(t, 25*time.Minute, func(time.Duration) daemonProbeResult { return daemonProbeBusy })
+	require.EqualValues(t, 2, reports, "first report after daemonWedgedAfter, then at most one per daemonWedgedAfter (t=11m, 21m)")
+}
+
+func TestDaemonMonitor_HealthyAnswerEndsBusyStreak(t *testing.T) {
+	t.Parallel()
+	reports := runWedgeMonitor(t, 15*time.Minute, func(elapsed time.Duration) daemonProbeResult {
+		if elapsed == 9*time.Minute {
+			return daemonProbeHealthy
+		}
+		return daemonProbeBusy
+	})
+	require.Zero(t, reports, "a Healthy probe at 9m restarts the 10m clock; 15m is too early to report")
+}

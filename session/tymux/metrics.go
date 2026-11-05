@@ -93,6 +93,8 @@ var (
 		metric.WithDescription("1 when the last daemon probe or recovery succeeded, otherwise 0"))
 	daemonFailureGauge = mustInt64Gauge("tymux_daemon_consecutive_failures",
 		metric.WithDescription("Consecutive unsuccessful daemon probes"))
+	daemonWedgedCounter = mustInt64Counter("tymux_daemon_wedged_reports_total",
+		metric.WithDescription("Reports that the daemon accepted connections but answered no probe for daemonWedgedAfter (likely wedged; never auto-restarted)"))
 	daemonRestartCounter = mustInt64Counter("tymux_daemon_restarts_total",
 		metric.WithDescription("tymuxd spawns/restarts observed by this process, by reason (cold_start, replace, detected_restart)"))
 	daemonStartDuration = mustFloat64Histogram("tymux_daemon_start_duration_ms",

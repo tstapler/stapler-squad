@@ -103,19 +103,92 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		grpcOKServer(t, ln)
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), DaemonConfig{Addr: "http://" + ln.Addr().String()}))
 	})
-	t.Run("unix socket answers while TCP is down", func(t *testing.T) {
-		dir, err := os.MkdirTemp("", "ssq")
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
-		sock := filepath.Join(dir, "d.sock")
-		ln, err := net.Listen("unix", sock)
-		require.NoError(t, err)
-		grpcOKServer(t, ln)
-
-		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: sock}
-		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg))
-		require.True(t, checkDaemonHealthy(context.Background(), cfg))
+	t.Run("unix socket answering must not mask a dead TCP listener", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t)}
+		require.Equal(t, daemonProbeNotListening, probeDaemon(context.Background(), cfg))
+		require.False(t, checkDaemonHealthy(context.Background(), cfg), "squad's clients are TCP-only")
 	})
+	t.Run("caller deadline mid-answer is unhealthy, not busy", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		require.Equal(t, daemonProbeUnhealthy, probeDaemon(ctx, DaemonConfig{Addr: silentListener(t)}))
+	})
+}
+
+// answeringUnixSocket serves a healthy gRPC reply on a fresh Unix socket and returns its path.
+func answeringUnixSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	grpcOKServer(t, ln)
+	return sock
+}
+
+// TCP dead, Unix socket alive: report an error and keep the daemon (it may hold live panes).
+func TestEnsureDaemonRunning_TCPDeadUnixUp_ReportsAndDoesNotKill(t *testing.T) {
+	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
+	shrinkProbeTimeouts(t)
+	stop, spawn := neverCalled(t)
+	defer stubStopTymuxd(stop)()
+	defer stubStartDaemonAttempt(spawn)()
+
+	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
+
+	require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+}
+
+func dialErr(errno syscall.Errno) error {
+	return &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", errno)}
+}
+
+func stubDial(t *testing.T, err error) {
+	t.Helper()
+	orig := dialFn
+	t.Cleanup(func() { dialFn = orig })
+	dialFn = func(context.Context, string, string, time.Duration) (net.Conn, error) { return nil, err }
+}
+
+// Only a refusal proves nothing is listening; every other dial error is inconclusive and must
+// never lead to killing the daemon.
+func TestDialErrors_OnlyRefusalMeansDown(t *testing.T) {
+	timeout := &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}
+	for _, tc := range []struct {
+		name     string
+		network  string
+		err      error
+		wantDown bool
+	}{
+		{"tcp refused", "tcp", dialErr(syscall.ECONNREFUSED), true},
+		{"unix refused", "unix", dialErr(syscall.ECONNREFUSED), true},
+		{"unix missing socket", "unix", dialErr(syscall.ENOENT), true},
+		{"tcp ENOENT is not a refusal", "tcp", dialErr(syscall.ENOENT), false},
+		{"timeout", "tcp", timeout, false},
+		{"unix timeout", "unix", timeout, false},
+		{"EMFILE", "tcp", dialErr(syscall.EMFILE), false},
+		{"ENFILE", "tcp", dialErr(syscall.ENFILE), false},
+		{"ENOBUFS", "tcp", dialErr(syscall.ENOBUFS), false},
+		{"ENOMEM", "unix", dialErr(syscall.ENOMEM), false},
+		{"EADDRNOTAVAIL", "tcp", dialErr(syscall.EADDRNOTAVAIL), false},
+		{"ENETUNREACH", "tcp", dialErr(syscall.ENETUNREACH), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubDial(t, tc.err)
+			wantProbe := daemonProbeBusy
+			if tc.wantDown {
+				wantProbe = daemonProbeNotListening
+			}
+			require.Equal(t, wantProbe, probeEndpoint(context.Background(), tc.network, "addr", nil))
+			if tc.network == "tcp" {
+				require.Equal(t, !tc.wantDown, portListening(DaemonConfig{Addr: "http://127.0.0.1:1"}))
+			} else {
+				require.Equal(t, !tc.wantDown, unixSocketListening(DaemonConfig{Addr: "http://127.0.0.1:1", SocketPath: "/tmp/x.sock"}))
+			}
+		})
+	}
 }
 
 func neverCalled(t *testing.T) (stop func() error, spawn func(DaemonConfig) (*os.Process, error)) {
@@ -280,4 +353,23 @@ func TestTerminateProcess_SigtermFirstThenKillAfterGrace(t *testing.T) {
 	stubborn := run(false)
 	require.Equal(t, os.Signal(syscall.SIGTERM), stubborn[0])
 	require.Equal(t, os.Signal(syscall.SIGKILL), stubborn[len(stubborn)-1])
+}
+
+// A daemon this process spawned must be reaped when it exits, or terminateProcess sees a zombie
+// that still answers signal 0 and waits out the whole grace period.
+func TestTerminateProcess_SpawnedDaemonIsReapedPromptly(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	origGrace := daemonStopGracePeriod
+	t.Cleanup(func() { daemonStopGracePeriod = origGrace })
+	daemonStopGracePeriod = 5 * time.Second
+
+	script := filepath.Join(t.TempDir(), "fake-tymuxd")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 300\n"), 0o700))
+	proc, err := startDaemonAttempt(DaemonConfig{Addr: "http://127.0.0.1:1", BinaryPath: script})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = syscall.Kill(proc.Pid, syscall.SIGKILL) })
+
+	start := time.Now()
+	require.NoError(t, terminateProcess(proc.Pid))
+	require.Less(t, time.Since(start), 2*time.Second, "exited child must read as gone, not wait for SIGKILL")
 }
