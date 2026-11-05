@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/search"
 )
 
 // ArtifactRescanner queues a transcript scan from the top for one history file.
@@ -19,7 +20,15 @@ type ArtifactRescanner interface {
 type ArtifactService struct {
 	rescanner    ArtifactRescanner
 	findInstance func(id string) *session.Instance
+
+	// index and allInstances back the cross-session search RPCs.
+	index        *search.ArtifactIndex
+	allInstances func() []*session.Instance
 }
+
+// SetIndex wires the artifact index; late because the extractor that fills it is
+// built after the service.
+func (a *ArtifactService) SetIndex(x *search.ArtifactIndex) { a.index = x }
 
 // SetRescanner wires the extractor; late because it is built after the service.
 func (a *ArtifactService) SetRescanner(r ArtifactRescanner) { a.rescanner = r }

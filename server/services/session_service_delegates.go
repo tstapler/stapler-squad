@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/search"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -583,6 +584,29 @@ func (s *SessionService) RescanSessionArtifacts(
 	req *connect.Request[sessionv1.RescanSessionArtifactsRequest],
 ) (*connect.Response[sessionv1.RescanSessionArtifactsResponse], error) {
 	return s.artifactSvc.RescanSessionArtifacts(ctx, req)
+}
+
+// SearchSessionArtifacts finds sessions by what they produced (PR, commit, branch, text).
+// +api: SearchSessionArtifacts
+func (s *SessionService) SearchSessionArtifacts(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SearchSessionArtifactsRequest],
+) (*connect.Response[sessionv1.SearchSessionArtifactsResponse], error) {
+	return s.artifactSvc.SearchSessionArtifacts(ctx, req)
+}
+
+// FindSessionsByPullRequest lists the sessions tied to one PR.
+// +api: FindSessionsByPullRequest
+func (s *SessionService) FindSessionsByPullRequest(
+	ctx context.Context,
+	req *connect.Request[sessionv1.FindSessionsByPullRequestRequest],
+) (*connect.Response[sessionv1.FindSessionsByPullRequestResponse], error) {
+	return s.artifactSvc.FindSessionsByPullRequest(ctx, req)
+}
+
+// SetArtifactIndex wires the artifact index behind the search RPCs.
+func (s *SessionService) SetArtifactIndex(x *search.ArtifactIndex) {
+	s.artifactSvc.SetIndex(x)
 }
 
 // SetArtifactRescanner wires the artifact extractor behind RescanSessionArtifacts.
