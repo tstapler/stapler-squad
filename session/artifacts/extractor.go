@@ -1,12 +1,17 @@
 package artifacts
 
 import (
+	"net/url"
 	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/tstapler/stapler-squad/github"
 )
 
 var (
-	// GitHub PR URL: https://github.com/<owner>/<repo>/pull/<number>
-	rePRURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+	// PR URL on github.com or a GitHub Enterprise host: https://<host>/<owner>/<repo>/pull/<number>
+	rePRURL = regexp.MustCompile(`(?i)https://[a-z0-9.-]+(?::\d+)?/[\w.-]+/[\w.-]+/pull/\d+`)
 	// 40-hex commit SHA — only when following a git output keyword to avoid false positives
 	// (npm hashes, Docker digests, TLS fingerprints all match bare \b[0-9a-f]{40}\b)
 	reCommitSHA = regexp.MustCompile(`(?i)(?:^|\b)commit\s+([0-9a-f]{40})\b`)
@@ -82,4 +87,21 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// parsePRURL splits a pull request URL into its host, owner, repo and number.
+func parsePRURL(raw string) (PRRecord, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return PRRecord{}, false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return PRRecord{}, false
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return PRRecord{}, false
+	}
+	return PRRecord{Host: github.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
 }

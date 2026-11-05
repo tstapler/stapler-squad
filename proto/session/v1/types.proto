@@ -501,6 +501,76 @@ message SessionArtifacts {
   // False for programs that never get a transcript (non-Claude), so the UI can
   // say so instead of "waiting for transcript link".
   bool transcript_supported = 6;
+  // Typed, timestamped records (blob v2), oldest first. Empty for sessions scanned
+  // before v2 and from servers that predate the field; pr_urls, commit_shas and
+  // external_urls stay populated either way.
+  repeated ArtifactRecordProto records = 7;
+}
+
+// ArtifactRecordProto is one typed finding from a session transcript. kind names
+// the populated member of the oneof: "pr", "branch", "commit", "issue", "plan_doc",
+// "ci_link" or "command".
+message ArtifactRecordProto {
+  string kind = 1;
+  // When the transcript line that produced the record was written; unset if unknown.
+  google.protobuf.Timestamp first_seen_at = 2;
+  oneof record {
+    ArtifactPRRecord pr = 10;
+    ArtifactBranchRecord branch = 11;
+    ArtifactCommitRecord commit = 12;
+    ArtifactIssueRecord issue = 13;
+    ArtifactPlanDocRecord plan_doc = 14;
+    ArtifactCILinkRecord ci_link = 15;
+    ArtifactCommandRecord command = 16;
+  }
+}
+
+message ArtifactPRRecord {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+  // "created" when the session ran gh pr create, "mentioned" when it only saw the PR.
+  string source = 5;
+  string branch = 6;
+  string base = 7;
+}
+
+message ArtifactBranchRecord {
+  string name = 1;
+  // "created" or "pushed".
+  string action = 2;
+}
+
+message ArtifactCommitRecord {
+  string sha = 1;
+  string subject = 2;
+  string branch = 3;
+}
+
+message ArtifactIssueRecord {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+  // "fixes", "closes", "resolves" or "mentioned".
+  string relation = 5;
+}
+
+message ArtifactPlanDocRecord {
+  string path = 1;
+}
+
+message ArtifactCILinkRecord {
+  string url = 1;
+}
+
+message ArtifactCommandRecord {
+  string type = 1;
+  string command = 2;
+  string detail = 3;
+  // Text the command printed, at most 512 bytes.
+  string result = 4;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.
