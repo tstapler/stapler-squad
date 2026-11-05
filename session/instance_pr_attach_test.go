@@ -48,6 +48,8 @@ func (f *fakePRPersister) UpdateGitHubPRStatusTerminal(title string, terminal bo
 	return f.terminalErr
 }
 
+func (f *fakePRPersister) PersistPRMirror(string, string, int, bool) error { return nil }
+
 func (f *fakePRPersister) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -32,6 +32,7 @@ func prMirrorOf(g GitHubIntegration) PRMirror {
 type prSetPersister interface {
 	AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error)
 	UpdateGitHubPRStatusTerminal(title string, terminal bool) error
+	PersistPRMirror(sessionUUID, url string, number int, terminal bool) error
 }
 
 // SetPRPersister injects the storage backend AttachPR persists through.
@@ -250,6 +251,13 @@ func (i *Instance) persistPRAttach(view PRView) {
 	case err == nil && res.Tombstoned:
 		_ = i.sendSyncErr(func(s *instanceState) error { detachPRLocked(s.inst, view.Ref); return nil })
 		log.Info("attach skipped: PR was detached earlier", "session", snap.Title, "pr", view.Ref.String())
+		// The tombstoned attach wrote no mirror, but the detach may have changed the
+		// in-memory scalars (down to zero); the stored columns must follow.
+		g := i.Snapshot().GitHub
+		if perr := i.prPersister.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal); perr != nil {
+			i.prPersistPending.Store(true)
+			log.Warn("persist mirror after tombstoned attach failed", "session", snap.Title, "err", perr)
+		}
 	case err == nil:
 	case errors.Is(err, ErrSessionNotPersisted):
 		i.prPersistPending.Store(true)
