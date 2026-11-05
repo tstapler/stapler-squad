@@ -24,6 +24,8 @@ type ClosureReport struct {
 	Bound []string
 	// UsedBy maps a boundary declaration to "moved users/staying users".
 	UsedBy map[string]string
+	// Why maps a staying declaration that moves to the cluster-file declarations it references directly.
+	Why map[string][]string
 }
 
 type declGraph struct {
@@ -163,10 +165,15 @@ func Closure(root, dir string, moveFiles, also []string) (*ClosureReport, error)
 		movedFile[f] = true
 	}
 	moved := g.movedSet(movedFile, also)
-	rep := &ClosureReport{Moves: map[string][]string{}, UsedBy: map[string]string{}}
+	rep := &ClosureReport{Moves: map[string][]string{}, UsedBy: map[string]string{}, Why: map[string][]string{}}
 	for n := range moved {
 		if f := g.files[n]; !movedFile[f] {
 			rep.Moves[f] = append(rep.Moves[f], n)
+			for _, r := range g.refs[n] {
+				if movedFile[g.files[r]] {
+					rep.Why[n] = append(rep.Why[n], r)
+				}
+			}
 		}
 	}
 	for f := range rep.Moves {
@@ -249,11 +256,134 @@ func runClosure(args []string, stdout io.Writer) int {
 	for _, f := range fs {
 		fmt.Fprintf(stdout, "MOVE %s: %s\n", f, strings.Join(rep.Moves[f], ","))
 	}
+	var wn []string
+	for n := range rep.Why {
+		wn = append(wn, n)
+	}
+	sort.Strings(wn)
+	for _, n := range wn {
+		fmt.Fprintf(stdout, "WHY %s <- %s\n", n, strings.Join(rep.Why[n], ","))
+	}
 	fmt.Fprintf(stdout, "EXPORT %s\n", strings.Join(rep.Exports, ","))
 	fmt.Fprintf(stdout, "FREE %s\n", strings.Join(rep.Free, ","))
 	fmt.Fprintf(stdout, "BOUND %s\n", strings.Join(rep.Bound, ","))
 	for _, n := range append(append([]string{}, rep.Bound...), rep.Free...) {
 		fmt.Fprintf(stdout, "USE %s %s\n", n, rep.UsedBy[n])
+	}
+	return 0
+}
+
+// PeelCandidate is a cluster declaration that staying declarations use but that does not itself depend on the anchor
+// type: it can be relocated out of the cluster instead of dragging its users along.
+type PeelCandidate struct {
+	Name, File string
+	Test       bool
+	// NeedsCore is true when its closure reaches a declaration outside the cluster files that is not test-only.
+	NeedsCore bool
+	// Closure is the cluster declarations it needs (itself included), which must be relocated together.
+	Closure []string
+	Users   []string
+}
+
+// Peel lists cluster declarations (declared in the named files) referenced by non-cluster declarations whose closure
+// inside the cluster never reaches the anchor declaration.
+func Peel(root, dir string, clusterFiles []string, anchor string) ([]PeelCandidate, error) {
+	g, err := loadDeclGraph(root, dir)
+	if err != nil {
+		return nil, err
+	}
+	inCluster := map[string]bool{}
+	cf := map[string]bool{}
+	for _, f := range clusterFiles {
+		cf[f] = true
+	}
+	for n, f := range g.files {
+		if cf[f] {
+			inCluster[n] = true
+		}
+	}
+	users := map[string][]string{}
+	for u, rs := range g.refs {
+		if inCluster[u] {
+			continue
+		}
+		for _, r := range rs {
+			if inCluster[r] {
+				users[r] = append(users[r], u)
+			}
+		}
+	}
+	var out []PeelCandidate
+	for n, us := range users {
+		seen := map[string]bool{n: true}
+		queue := []string{n}
+		needsCore := false
+		bound := false
+		for len(queue) > 0 && !bound {
+			cur := queue[0]
+			queue = queue[1:]
+			for _, r := range g.refs[cur] {
+				if r == anchor {
+					bound = true
+				}
+				if seen[r] {
+					continue
+				}
+				seen[r] = true
+				if inCluster[r] {
+					queue = append(queue, r)
+				} else if !isTestFile(g.files[r]) {
+					needsCore = true
+				}
+			}
+		}
+		if bound {
+			continue
+		}
+		c := PeelCandidate{Name: n, File: g.files[n], Test: isTestFile(g.files[n]), NeedsCore: needsCore, Users: us}
+		for x := range seen {
+			if inCluster[x] {
+				c.Closure = append(c.Closure, x)
+			}
+		}
+		sort.Strings(c.Closure)
+		sort.Strings(c.Users)
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func runPeel(args []string, stdout io.Writer) int {
+	var dir, files, anchor string
+	root := workspace()
+	for i := 0; i+1 < len(args); i += 2 {
+		switch args[i] {
+		case "--dir":
+			dir = args[i+1]
+		case "--files":
+			files = args[i+1]
+		case "--anchor":
+			anchor = args[i+1]
+		case "--root":
+			root = args[i+1]
+		}
+	}
+	if dir == "" || files == "" || anchor == "" {
+		fmt.Fprintln(os.Stderr, "usage: scoping peel --dir DIR --files a.go,b.go --anchor Type")
+		return 2
+	}
+	cands, err := Peel(root, dir, strings.Split(files, ","), anchor)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, c := range cands {
+		kind := "prod"
+		if c.Test {
+			kind = "test"
+		}
+		fmt.Fprintf(stdout, "PEEL %s (%s, %s, needs-core=%v) closure=[%s] users=%d\n", c.Name, c.File, kind, c.NeedsCore, strings.Join(c.Closure, ","), len(c.Users))
 	}
 	return 0
 }

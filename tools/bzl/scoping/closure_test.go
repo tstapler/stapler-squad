@@ -72,3 +72,28 @@ func TestGitMvFallsBackToRenameForUntrackedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPeelListsClusterDeclarationsTheStayingCodeUsesWithoutTheAnchor(t *testing.T) {
+	if os.Getenv("TEST_TMPDIR") != "" {
+		t.Skip("needs the host go toolchain, unavailable in the Bazel sandbox")
+	}
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/m\n\ngo 1.21\n")
+	write(t, root, "p/core.go", "package p\n\nfunc coreFn() int { return 1 }\n")
+	write(t, root, "p/cluster.go", "package p\n\ntype Svc struct{}\n\nfunc newSvc() *Svc { return &Svc{} }\n\ntype Pure struct{ N int }\n\nfunc pureFn() Pure { return Pure{N: coreFn()} }\n")
+	write(t, root, "p/use_test.go", "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { _ = newSvc(); _ = pureFn() }\n")
+	got, err := Peel(root, "p", []string{"cluster.go"}, "Svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, c := range got {
+		names = append(names, c.Name)
+		if c.Name == "pureFn" && (!c.NeedsCore || strings.Join(c.Closure, ",") != "Pure,pureFn") {
+			t.Fatalf("pureFn needs the core and pulls Pure with it: %+v", c)
+		}
+	}
+	if strings.Join(names, ",") != "pureFn" {
+		t.Fatalf("only pureFn is peelable (newSvc reaches the anchor): %v", names)
+	}
+}
