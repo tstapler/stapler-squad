@@ -210,6 +210,15 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		s.liveness = v1.Liveness_LIVENESS_DEAD
 		s.restartIsPending = false
 		s.mu.Unlock()
+		if s.exitFollowedByRestart() {
+			// tymuxd relaunches the same pane after this Exited; the stream end that
+			// follows reaches ReconnectLoop (exited stays false) and redials it.
+			s.mu.Lock()
+			s.restartIsPending = true
+			s.mu.Unlock()
+			log.Info("tymux: pane exited but tymuxd will restart it, keeping the session", "session_id", s.GetSessionIdentifier(), "reason", exitReason(p.Exited))
+			return
+		}
 		s.deliverExit(exitReason(p.Exited))
 	case *v1.AttachEvent_GapExceeded:
 		// The daemon follows GapExceeded with a priming Snapshot (the
@@ -224,6 +233,21 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		_ = s.resyncViaCapturePane(ctx)
 		cancel()
 	}
+}
+
+// exitFollowedByRestart reports whether tymuxd's restart policy is about to relaunch the pane
+// that just sent Exited. False when closing, when the daemon cannot say, or when it is not
+// between restarts, so those paths keep Exited final.
+func (s *tymuxGRPCSession) exitFollowedByRestart() bool {
+	if s.closing.Load() {
+		return false
+	}
+	s.mu.RLock()
+	paneID := s.paneID
+	s.mu.RUnlock()
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	return !s.closing.Load() && s.restartPending(ctx, paneID)
 }
 
 // exitReason renders an ExitStatus (ADR-001: an absent code is a
@@ -493,6 +517,12 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 			if viewOnly {
 				break // Viewing never revives a pane, even after a daemon restart.
 			}
+			switch s.deadPaneDisposition(paneID) {
+			case deadPaneRestarting:
+				continue // tymuxd is restarting it; reviving would bypass its backoff
+			case deadPaneTerminal:
+				return s.giveUpPaneNotRunning(genCtx, sessionID, paneID)
+			}
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
 			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()
@@ -566,6 +596,13 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		return nil, nil, false, lifecycle.ReasonDeliberateClose
 	}
 
+	if genCtx.Err() != nil {
+		// A reopen (RestoreWithWorkDir) cancelled this generation; its replacement owns the exit.
+		lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonDeliberateSupersede)
+		log.Info("tymux: standing Attach stream reconnect abandoned (superseded)", "session_id", sessionID, "pane_id", paneID, "cause", cause)
+		return nil, nil, false, lifecycle.ReasonDeliberateSupersede
+	}
+
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
 	if lastDialNotFound {
@@ -585,5 +622,41 @@ func (s *tymuxGRPCSession) giveUpPaneGone(genCtx context.Context, sessionID, pan
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach redial found no such pane, giving up", "session_id", sessionID, "pane_id", paneID, "err", err)
 	s.deliverExit("reconnect failed: pane no longer exists in tymuxd")
+	return nil, nil, false, lifecycle.ReasonReconnectExhausted
+}
+
+type deadPaneState int
+
+const (
+	deadPaneUnknown deadPaneState = iota // revive, as after a daemon restart
+	deadPaneRestarting
+	deadPaneTerminal
+)
+
+// deadPaneDisposition classifies a pane whose redial hit errPaneDead using tymuxd's lifecycle state.
+func (s *tymuxGRPCSession) deadPaneDisposition(paneID string) deadPaneState {
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	state, ok := s.paneLifecycleState(ctx, paneID)
+	switch {
+	case !ok:
+		return deadPaneUnknown
+	case isRestartPending(state):
+		return deadPaneRestarting
+	case isTerminalPaneState(state):
+		return deadPaneTerminal
+	}
+	return deadPaneUnknown
+}
+
+// giveUpPaneNotRunning ends ReconnectLoop for a FAILED/STOPPED pane, which only an operator can
+// bring back, so squad shows the session Stopped instead of retrying a revive that cannot succeed.
+func (s *tymuxGRPCSession) giveUpPaneNotRunning(genCtx context.Context, sessionID, paneID string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
+	s.mu.Lock()
+	s.reconnecting = false
+	s.mu.Unlock()
+	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
+	log.Warn("tymux: pane is FAILED or STOPPED, giving up reconnect", "session_id", sessionID, "pane_id", paneID)
+	s.deliverExit("reconnect failed: pane is failed or stopped in tymuxd")
 	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }

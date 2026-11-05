@@ -1272,3 +1272,149 @@ func TestReconnectLoop_DialsCurrentPane_NotStaleArgument(t *testing.T) {
 
 	assert.True(t, ok, "a single-attempt budget must not be spent on the dead pane")
 }
+
+func exitedEvent(code int32) *v1.AttachEvent {
+	return &v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}}
+}
+
+func setPaneState(transport *fakeTransport, state v1.PaneState) {
+	transport.capabilities = []string{capPaneLifecycle}
+	transport.paneStatusFn = func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+		return connect.NewResponse(&v1.PaneStatus{State: state}), nil
+	}
+}
+
+// Exited while tymuxd's restart policy is about to relaunch the pane must not end the session:
+// no exit callback, no ReviveSession (it would bypass the backoff), and the stream redials.
+func TestHandleAttachEvent_ExitedWithRestartPending_KeepsSessionAndReattaches(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+	setPaneState(transport, v1.PaneState_PANE_STATE_BACKOFF)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	var revived int32
+	transport.reviveSessionFn = func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+	var calls int32
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		if atomic.AddInt32(&calls, 1) == 1 {
+			st.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane not live yet"))
+		} else {
+			st.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{Snapshot: &v1.PaneSnapshot{Liveness: v1.Liveness_LIVENESS_LIVE}}})
+		}
+		return st
+	}
+	_, err := sess.Attach()
+	require.NoError(t, err)
+
+	stream.push(exitedEvent(130))
+	close(stream.events) // tymuxd closes the stream right after Exited
+
+	wait.RequireEventually(t, func() bool { return atomic.LoadInt32(&calls) >= 2 }, time.Second, time.Millisecond, "stream never redialled")
+	wait.RequireEventually(t, func() bool {
+		concrete.mu.RLock()
+		defer concrete.mu.RUnlock()
+		return !concrete.reconnecting && concrete.liveness == v1.Liveness_LIVENESS_LIVE
+	}, time.Second, time.Millisecond, "reattach never completed")
+
+	concrete.mu.RLock()
+	exited := concrete.exited
+	concrete.mu.RUnlock()
+	assert.False(t, exited)
+	assert.EqualValues(t, 0, atomic.LoadInt32(&revived))
+	select {
+	case got := <-exits:
+		t.Fatalf("restart-pending Exited must not deliver an exit, got %q", got)
+	default:
+	}
+}
+
+func TestHandleAttachEvent_ExitedWithoutRestartPending_DeliversExit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state v1.PaneState
+		caps  bool
+	}{
+		{"exited state", v1.PaneState_PANE_STATE_EXITED, true},
+		{"failed state", v1.PaneState_PANE_STATE_FAILED, true},
+		{"no lifecycle capability", v1.PaneState_PANE_STATE_BACKOFF, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, stream, transport := startedSessionWithStream(t)
+			setPaneState(transport, tc.state)
+			if !tc.caps {
+				transport.capabilities = nil
+			}
+			exits := make(chan string, 1)
+			sess.SetOnExitCallback(func(reason string) { exits <- reason })
+			_, err := sess.Attach()
+			require.NoError(t, err)
+
+			stream.push(exitedEvent(1))
+
+			select {
+			case got := <-exits:
+				assert.Equal(t, "exited: code=1", got)
+			case <-time.After(time.Second):
+				t.Fatal("exit was never delivered")
+			}
+		})
+	}
+}
+
+// A deliberate Close must keep Exited final even if the daemon reports a pending restart.
+func TestHandleAttachEvent_ExitedDuringClose_IsNotRestartPending(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := sess.(*tymuxGRPCSession)
+	setPaneState(transport, v1.PaneState_PANE_STATE_BACKOFF)
+	assert.True(t, concrete.exitFollowedByRestart())
+
+	concrete.beginClosing()
+
+	assert.False(t, concrete.exitFollowedByRestart())
+}
+
+// A FAILED pane (restart budget spent) is an operator matter: stop reviving, deliver the exit.
+func TestReconnectLoop_TerminalPaneState_GivesUpWithoutRevive(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+	setPaneState(transport, v1.PaneState_PANE_STATE_FAILED)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	var revived int32
+	transport.reviveSessionFn = func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane not live"))
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonReconnectExhausted, reason)
+	assert.EqualValues(t, 0, atomic.LoadInt32(&revived))
+	assert.Len(t, exits, 1)
+}
+
+// A reopen cancels the generation's ctx without beginClosing(): that is a supersede, not exhaustion.
+func TestReconnectLoop_GenerationCancelledWithoutClosing_IsSupersedeAndDeliversNoExit(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	genCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, ok, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	assert.Empty(t, exits)
+}
