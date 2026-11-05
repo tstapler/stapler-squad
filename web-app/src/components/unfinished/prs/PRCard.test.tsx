@@ -6,11 +6,39 @@ import {
   LinkedSessionStatus,
 } from "@/gen/session/v1/types_pb";
 import { PRCard } from "./PRCard";
+import { SessionServiceContext, type SessionServiceContextValue } from "@/lib/contexts/SessionServiceContext";
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { failingPR, fakeNudgeClient, makePR, session } from "./prTestFixtures";
 
 jest.mock("./PRCard.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
+
+let mockTracking: unknown[] = [];
+jest.mock("@/lib/hooks/useSessionsForPullRequest", () => ({ useSessionsForPullRequest: () => mockTracking }));
+jest.mock("./PRSessionChip.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
+afterEach(() => { mockTracking = []; });
+
+const inStore = (ui: React.ReactElement) => (
+  <SessionServiceContext.Provider value={{ sessions: [], loading: false, hasLoadedOnce: true } as unknown as SessionServiceContextValue}>{ui}</SessionServiceContext.Provider>
+);
+
+describe("PRCard session chip (ux.md S6)", () => {
+  it("prCard_should_showNoSessionChip_When_NoSessionTracksThePr", () => {
+    render(inStore(<PRCard pr={makePR()} />));
+    expect(screen.queryByTestId("pr-session-chip")).toBeNull();
+  });
+
+  it("prCard_should_nameTheSession_When_OneTracksIt_AndCountThem_When_Several", () => {
+    mockTracking = [{ id: "a", title: "refactor-auth" }];
+    const { unmount } = render(inStore(<PRCard pr={makePR()} />));
+    expect(screen.getByRole("link", { name: "Open session refactor-auth" })).toHaveTextContent("session: refactor-auth");
+    unmount();
+
+    mockTracking = [{ id: "a", title: "refactor-auth" }, { id: "b", title: "rework" }];
+    render(inStore(<PRCard pr={makePR()} />));
+    expect(screen.getByRole("button", { name: /2 sessions/ })).toBeInTheDocument();
+  });
+});
 
 describe("PRCard chips", () => {
   it("prCard_should_SayChecksNotListedAndHideNudge_When_RollupFailsWithNoItemisedCheck", () => {

@@ -15,6 +15,7 @@ import type { PRActionClient } from "@/lib/hooks/usePRActions";
 import { NudgeButton } from "./NudgeButton";
 import { PRActionBar } from "./PRActionBar";
 import { PRExpandedInfo } from "./PRExpandedInfo";
+import { PRTrackingSessionChip } from "./PRTrackingSessionChip";
 import * as styles from "./PRCard.css";
 
 const cx = (...names: string[]) => names.join(" ");
@@ -182,6 +183,7 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFi
         <span className={styles.prRepo}>
           {pr.owner}/{pr.repo} #{pr.number}
         </span>
+        <PRTrackingSessionChip pr={pr} />
         {showHostAccount && (
           <span className={styles.hostAccountLabel} data-testid="pr-host-account">
             {pr.host || "github.com"} - {pr.accountLogin}

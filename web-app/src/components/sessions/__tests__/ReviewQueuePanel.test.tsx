@@ -19,9 +19,12 @@ import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePa
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+import { makePr } from "@/lib/pr/__testUtils__/pullRequests";
 
 afterEach(() => {
   mockSearchParams = new URLSearchParams();
+  mockLiveSessions = [];
+  mockMultiPrUi = false;
 });
 
 // ---------------------------------------------------------------------------
@@ -65,12 +68,16 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
 const mockDraftPullRequest = jest.fn();
 const mockCreatePullRequest = jest.fn();
 
+let mockLiveSessions: unknown[] = [];
+let mockMultiPrUi = false;
 jest.mock("@/lib/contexts/SessionServiceContext", () => ({
   useSessionServiceContext: () => ({
     draftPullRequest: mockDraftPullRequest,
     createPullRequest: mockCreatePullRequest,
+    sessions: mockLiveSessions,
   }),
 }));
+jest.mock("@/lib/features/sessionMultiPr", () => ({ useSessionMultiPR: () => mockMultiPrUi }));
 
 // CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
 // stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
@@ -794,6 +801,23 @@ describe("ReviewQueuePanel — combinable filters", () => {
     renderPanel();
     openFilters();
 
+    fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("Has PR means any open PR when the multi-PR UI is on, not the item's legacy URL", () => {
+    mockMultiPrUi = true;
+    mockLiveSessions = [
+      { id: "s1", title: "S1", pullRequests: [makePr({ number: 1, state: "merged" }), makePr({ number: 2 })] },
+      { id: "s2", title: "S2", pullRequests: [makePr({ number: 3, state: "merged" })] },
+    ];
+    const items = ["s1", "s2"].map((id) => makeReviewItem({ sessionId: id, sessionName: id, githubPrUrl: "https://github.com/org/repo/pull/1" }));
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+    openFilters();
     fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
 
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();

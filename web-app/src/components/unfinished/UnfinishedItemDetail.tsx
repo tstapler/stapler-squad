@@ -16,6 +16,10 @@ import { WorktreeDiffModal } from "./WorktreeDiffModal";
 import { VcsWidget } from "@/components/shared/VcsWidget";
 import { fromUnfinishedWorktree } from "@/lib/vcs/adapters";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { PullRequestChip } from "@/components/shared/PullRequestChip";
+import { useWorktreePullRequests } from "@/lib/hooks/useSessionsForPullRequest";
+import { openPullRequestsAnchor } from "@/lib/pr/anchor";
+import { legacyWorktreeBadgeProps } from "@/lib/pr/legacyPullRequest";
 import * as styles from "./UnfinishedItemDetail.css";
 
 interface UnfinishedItemDetailProps {
@@ -35,6 +39,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
   const [showDiffModal, setShowDiffModal] = useState(false);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const sessionPullRequests = useWorktreePullRequests(worktree.sessionIds);
 
   // Close picker on outside click
   useEffect(() => {
@@ -85,13 +90,18 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
       {/* VCS status: diff stats + ahead commits, compact mode */}
       <div className={styles.vcsRow}>
         <VcsWidget data={fromUnfinishedWorktree(worktree)} mode="compact" />
-        <GitHubBadge
-          prNumber={worktree.githubPrNumber}
-          prUrl={worktree.githubPrUrl}
-          prState={worktree.githubPrState}
-          prPriority={worktree.githubPrPriority}
-          compact
-        />
+        {sessionPullRequests.length > 0 ? (
+          <PullRequestChip
+            pullRequests={sessionPullRequests}
+            compact
+            onOpenList={() => {
+              router.push(routes.sessionDetail(worktree.sessionIds[0]));
+              openPullRequestsAnchor();
+            }}
+          />
+        ) : (
+          <GitHubBadge {...legacyWorktreeBadgeProps(worktree)} compact />
+        )}
       </div>
 
       {/* Action buttons */}

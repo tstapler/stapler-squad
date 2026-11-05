@@ -1,4 +1,4 @@
-import type { Session } from "@/gen/session/v1/types_pb";
+import type { ReviewItem, Session, UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 
 /**
  * The only place (with lib/vcs/adapters.ts) that reads the legacy single-PR scalars off a Session
@@ -52,4 +52,19 @@ export function displayedPullRequest(session: Session, multiPrUi: boolean): Disp
   return legacy && legacy.url
     ? { number: legacy.number, url: legacy.url, owner: session.githubOwner, repo: session.githubRepo, checkConclusion: session.githubCheckConclusion }
     : undefined;
+}
+
+/** The review-queue item's single PR URL (the item carries no PR list). */
+export function reviewItemLegacyPrUrl(item: ReviewItem): string {
+  return item.githubPrUrl;
+}
+
+/** Props of GitHubBadge for an Up Next worktree row (the worktree carries no PR list). */
+export function legacyWorktreeBadgeProps(worktree: UnfinishedWorktree) {
+  return {
+    prNumber: worktree.githubPrNumber,
+    prUrl: worktree.githubPrUrl,
+    prState: worktree.githubPrState,
+    prPriority: worktree.githubPrPriority,
+  };
 }
