@@ -222,6 +222,8 @@ export interface SessionCardProps {
   onRename?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestart?: (sessionId: string) => Promise<boolean>;
   onRetryNow?: (sessionId: string) => Promise<boolean>;
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
@@ -264,6 +266,8 @@ function SessionCardInner({
   onRename,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onUpdateTags,
   onCreateCheckpoint,
   onListCheckpoints,
@@ -1287,6 +1291,8 @@ function SessionCardInner({
           }}
           onRestart={onRestart}
           onRetryNow={onRetryNow}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
           onClone={onClone}
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}

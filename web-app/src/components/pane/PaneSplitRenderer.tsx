@@ -267,6 +267,8 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onRenameSession: actions.onRenameSession,
     onRestartSession: actions.onRestartSession,
     onRetryNowSession: actions.onRetryNowSession,
+    onArchiveSession: actions.onArchiveSession,
+    onUnarchiveSession: actions.onUnarchiveSession,
     onUpdateTags: actions.onUpdateTags,
     onNewSession: actions.onNewSession,
     onCreateCheckpoint: actions.onCreateCheckpoint,

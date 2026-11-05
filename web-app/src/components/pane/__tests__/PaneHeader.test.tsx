@@ -7,11 +7,15 @@ import type { SessionActionsOverflowProps } from "@/components/sessions/SessionA
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 
 const mockOnRetryNowSession = jest.fn().mockResolvedValue(true);
+const mockOnArchiveSession = jest.fn().mockResolvedValue(true);
+const mockOnUnarchiveSession = jest.fn().mockResolvedValue(true);
 const mockOnHibernateSession = jest.fn();
 const mockOnResumeFromHibernation = jest.fn();
 jest.mock("@/lib/contexts/CockpitActionsContext", () => ({
   useCockpitActions: () => ({
     onRetryNowSession: mockOnRetryNowSession,
+    onArchiveSession: mockOnArchiveSession,
+    onUnarchiveSession: mockOnUnarchiveSession,
     onHibernateSession: mockOnHibernateSession,
     onResumeFromHibernation: mockOnResumeFromHibernation,
   }),
@@ -26,7 +30,7 @@ jest.mock("@/lib/hooks/useSessionActions", () => ({
 // badge behavior under test here — stub it out rather than standing up that provider.
 type OverflowProps = Pick<
   SessionActionsOverflowProps,
-  "onRetryNow" | "onHibernate" | "onResumeFromHibernation" | "onOpenInNewPane" | "onChangeProgram"
+  "onRetryNow" | "onArchive" | "onUnarchive" | "onHibernate" | "onResumeFromHibernation" | "onOpenInNewPane" | "onChangeProgram"
 >;
 const mockOverflow = jest.fn((_props: OverflowProps) => null);
 jest.mock("@/components/sessions/SessionActionsOverflow", () => ({
@@ -105,6 +109,19 @@ describe("PaneHeader — retry now wiring", () => {
     const props = mockOverflow.mock.calls[0][0];
     void props.onRetryNow?.("s1");
     expect(mockOnRetryNowSession).toHaveBeenCalledWith("s1");
+  });
+});
+
+describe("PaneHeader — archive wiring", () => {
+  it("forwards the cockpit's archive and unarchive actions to the session actions overflow menu", () => {
+    const session = { id: "s1", title: "Session One" } as Session;
+    const pane: LeafPane = { ...listPane, viewKind: "session-detail", sessionId: "s1" };
+    renderHeader({ pane, sessions: [session] });
+    const props = mockOverflow.mock.calls[0][0];
+    void props.onArchive?.("s1");
+    void props.onUnarchive?.("s1");
+    expect(mockOnArchiveSession).toHaveBeenCalledWith("s1");
+    expect(mockOnUnarchiveSession).toHaveBeenCalledWith("s1");
   });
 });
 

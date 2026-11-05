@@ -75,6 +75,8 @@ export function PaneHeader({
               onDelete={() => cockpit.onDeleteSession(session.id)}
               onRestart={(id) => cockpit.onRestartSession(id)}
               onRetryNow={(id) => cockpit.onRetryNowSession(id)}
+              onArchive={(id) => cockpit.onArchiveSession(id)}
+              onUnarchive={(id) => cockpit.onUnarchiveSession(id)}
               onClone={() => cockpit.onCloneSession(session.id)}
               onOpenInNewPane={() => triggerPickerForceNew(session)}
               onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}

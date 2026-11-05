@@ -16,6 +16,8 @@ export interface CockpitActions {
   onHibernateSession: (sessionId: string) => void;
   onResumeFromHibernation: (sessionId: string) => void;
   onRetryNowSession: (sessionId: string) => Promise<boolean>;
+  onArchiveSession: (sessionId: string) => Promise<boolean>;
+  onUnarchiveSession: (sessionId: string) => Promise<boolean>;
   onUpdateTags: (sessionId: string, tags: string[]) => void;
   onNewSession: () => void;
   onCreateCheckpoint: (sessionId: string, label: string) => Promise<boolean>;

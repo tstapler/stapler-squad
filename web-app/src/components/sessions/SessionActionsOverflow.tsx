@@ -57,6 +57,10 @@ export interface SessionActionsOverflowProps {
   /** Immediately restart a session's retry policy, bypassing any pending backoff
    *  delay — including from PERMANENTLY_FAILED (session-retry-backoff, AC6). */
   onRetryNow?: (sessionId: string) => Promise<boolean | void>;
+  /** Soft-archive: sets archived_at and moves status to Stopped. Shown for non-archived sessions. */
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  /** Clear archived_at so the session returns to the default list (status stays Stopped). Shown for archived sessions. */
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onClone?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
@@ -128,6 +132,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onDelete,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onClone,
   onOpenInNewPane,
   onNewWorkspace,
@@ -175,6 +181,9 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryError, setRetryError] = useState("");
+  const [isArchiveConfirmOpen, setIsArchiveConfirmOpen] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -218,6 +227,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const restartDialogRef = useRef<HTMLDivElement>(null);
   const retryDialogRef = useRef<HTMLDivElement>(null);
+  const archiveDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
@@ -241,6 +251,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useFocusTrap(overflowMenuRef, showOverflow, overflowButtonRef);
   useFocusTrap(restartDialogRef, isRestartConfirmOpen, overflowButtonRef);
   useFocusTrap(retryDialogRef, isRetryConfirmOpen, overflowButtonRef);
+  useFocusTrap(archiveDialogRef, isArchiveConfirmOpen, overflowButtonRef);
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen, overflowButtonRef);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, overflowButtonRef);
   useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen, overflowButtonRef);
@@ -377,6 +388,24 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
+  const handleArchiveConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsArchiving(true);
+    setArchiveError("");
+    try {
+      // archiveSession resolves false (not throws) on failure; keep the dialog open then.
+      if ((await onArchive?.(session.id)) === false) {
+        setArchiveError("Failed to archive session.");
+      } else {
+        setIsArchiveConfirmOpen(false);
+      }
+    } catch (err) {
+      setArchiveError(err instanceof Error ? err.message : "Failed to archive session.");
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   const commitProgramChange = async (program: string) => {
     setIsSavingProgram(true);
     setProgramError("");
@@ -416,7 +445,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const hasGroup2 = true;
   const hasOrganize = !!(onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || (onSteerAutonomousSession && session.autonomousMode));
-  const hasMore = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
+  const isArchived = !!session.archivedAt;
+  const hasMore = !!(onClearConversationState || (isArchived ? onUnarchive : onArchive) || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
 
   return (
     <>
@@ -481,6 +511,37 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 {isRetrying ? "Retrying..." : "Retry now"}
               </button>
               <button onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); setRetryError(""); }} disabled={isRetrying} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {isArchiveConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsArchiveConfirmOpen(false); }}>
+          <div
+            ref={archiveDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="archiveDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsArchiveConfirmOpen(false); }}
+          >
+            <h3 id="archiveDialogTitle">Archive Session</h3>
+            <p>Archive &quot;{session.title}&quot;?</p>
+            <p className={warningText}>
+              It is marked Stopped, unpinned, and hidden from the session list (use &quot;Show archived&quot; to find it).
+              Its worktree and history are kept. Unarchive restores it to the list but leaves it Stopped.
+            </p>
+            {archiveError && <p className={errorMessage}>{archiveError}</p>}
+            <div className={dialogActions}>
+              <button onClick={handleArchiveConfirm} disabled={isArchiving} className={submitButton}>
+                {isArchiving ? "Archiving..." : "Archive"}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsArchiveConfirmOpen(false); setArchiveError(""); }} disabled={isArchiving} className={cancelButton}>
                 Cancel
               </button>
             </div>
@@ -1107,6 +1168,28 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   data-testid="session-retry-now-menuitem"
                 >
                   <span aria-hidden="true">🔁</span> Retry now
+                </button>
+              )}
+              {onArchive && !isArchived && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsArchiveConfirmOpen(true); }}
+                  aria-label={`Archive session ${session.title}`}
+                  data-testid="session-archive-menuitem"
+                >
+                  <span aria-hidden="true">📦</span> Archive
+                </button>
+              )}
+              {onUnarchive && isArchived && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); void onUnarchive(session.id); }}
+                  aria-label={`Unarchive session ${session.title}`}
+                  data-testid="session-unarchive-menuitem"
+                >
+                  <span aria-hidden="true">📤</span> Unarchive
                 </button>
               )}
                 </MenuSection>

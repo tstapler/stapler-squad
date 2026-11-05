@@ -130,6 +130,8 @@ function HomeContent() {
     pinSession,
     unpinSession,
     retrySession,
+    archiveSession,
+    unarchiveSession,
     hibernateSession,
     resumeHibernatedSession,
     clearConversationState,
@@ -428,6 +430,22 @@ function HomeContent() {
     await deleteSession(sessionId);
   }, [selectedSessionId, closeSession, track, deleteSession]);
 
+  // The event stream does not carry archive state to the client store, so refetch (including
+  // archived; the list filters them client-side) to pick up the new archivedAt/status.
+  const handleArchiveSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    track({ name: "session_archived", category: "user_action" });
+    const ok = await archiveSession(sessionId);
+    if (ok) await listSessions({ includeArchived: true });
+    return ok;
+  }, [track, archiveSession, listSessions]);
+
+  const handleUnarchiveSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    track({ name: "session_unarchived", category: "user_action" });
+    const ok = await unarchiveSession(sessionId);
+    if (ok) await listSessions({ includeArchived: true });
+    return ok;
+  }, [track, unarchiveSession, listSessions]);
+
   // Handle new workspace on same project
   const handleNewWorkspaceSession = useCallback((sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
@@ -614,6 +632,8 @@ function HomeContent() {
     onHibernateSession: (id: string) => void hibernateSession(id),
     onResumeFromHibernation: (id: string) => void resumeHibernatedSession(id),
     onRetryNowSession: retrySession,
+    onArchiveSession: handleArchiveSession,
+    onUnarchiveSession: handleUnarchiveSession,
     onUpdateTags: handleUpdateTags,
     onNewSession: handleNewSession,
     onCreateCheckpoint: createCheckpoint,
@@ -629,7 +649,7 @@ function HomeContent() {
   }), [
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
-    restartSession, retrySession, hibernateSession, resumeHibernatedSession, handleUpdateTags, handleNewSession, createCheckpoint,
+    restartSession, retrySession, handleArchiveSession, handleUnarchiveSession, hibernateSession, resumeHibernatedSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleSetRateLimitEnabled,
     handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);

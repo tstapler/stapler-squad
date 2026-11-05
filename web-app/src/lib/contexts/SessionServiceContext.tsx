@@ -45,6 +45,8 @@ export interface SessionServiceContextValue {
   pinSession: (id: string) => Promise<boolean>;
   unpinSession: (id: string) => Promise<boolean>;
   retrySession: (id: string) => Promise<boolean>;
+  archiveSession: (id: string) => Promise<boolean>;
+  unarchiveSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
