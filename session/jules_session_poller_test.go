@@ -102,6 +102,12 @@ type fakeTransition struct {
 	expectedStatus string
 }
 
+type fakeLinkRecord struct {
+	itemID string
+	prURL  string
+	source AttachSource
+}
+
 type fakePRRecord struct {
 	itemID   string
 	prURL    string
@@ -120,6 +126,9 @@ type fakeJulesPollerStorage struct {
 	notes       []fakeNote
 	transitions []fakeTransition
 	prRecorded  []fakePRRecord
+	// links records AttachItemPRLink calls; tombstoned URLs report attached=false.
+	links      []fakeLinkRecord
+	tombstoned map[string]bool
 	// gatedCallers records the registry caller of every gated write, in order.
 	gatedCallers []TransitionCaller
 }
@@ -183,6 +192,16 @@ func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, req 
 	f.prRecorded = append(f.prRecorded, fakePRRecord{req.Observed.ID, pr.URL, pr.Number})
 	f.gatedCallers = append(f.gatedCallers, req.Caller)
 	return nil
+}
+
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, itemID, prURL string, source AttachSource) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tombstoned[prURL] {
+		return false, nil
+	}
+	f.links = append(f.links, fakeLinkRecord{itemID, prURL, source})
+	return true, nil
 }
 
 func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req TransitionRequest) (*BacklogItemData, error) {
@@ -476,12 +495,11 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	assert.Equal(t, "jules_completed", endedRow.EndReason)
 }
 
-// TestApplyJulesState_should_LogMultiplePROutputsAtWarn_When_CompletedWithMoreThanOnePROutput
-// guards the interim behavior recorded in plan.md's Unresolved Questions for
-// "does Session.outputs[] ever contain more than one pull request": the first
-// non-empty pullRequest.url still wins, but len(outputs) > 1 must log
-// "jules multiple pr outputs" at Warn so the assumption is observable.
-func TestApplyJulesState_should_LogMultiplePROutputsAtWarn_When_CompletedWithMoreThanOnePROutput(t *testing.T) {
+// TestJulesApplyCompleted_ShouldCreateTwoItemDirectLinks_WhenTwoOutputs: every valid
+// Outputs[] PR becomes an item-direct link with attach_source=jules, the first stays
+// the legacy scalar PR, the old "multiple outputs" warning is gone, and a tombstoned
+// ref is skipped on a re-poll.
+func TestJulesApplyCompleted_ShouldCreateTwoItemDirectLinks_WhenTwoOutputs(t *testing.T) {
 	getLog := captureSlog(t)
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
@@ -490,42 +508,42 @@ func TestApplyJulesState_should_LogMultiplePROutputsAtWarn_When_CompletedWithMor
 	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", jules.JulesStateCompleted)
+	pr31 := "https://github.com/tstapler/stapler-squad/pull/31"
+	pr32 := "https://github.com/tstapler/stapler-squad/pull/32"
 	s.Outputs = []jules.JulesSessionOutput{
-		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/1"}},
-		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/2"}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: pr31}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "javascript:alert(1)//pull/9"}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: pr32}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: pr31}},
 	}
 
 	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
 
+	require.Len(t, storage.links, 2, "invalid and duplicate outputs are not linked")
+	assert.Equal(t, fakeLinkRecord{"item-1", pr31, AttachSourceJules}, storage.links[0])
+	assert.Equal(t, fakeLinkRecord{"item-1", pr32, AttachSourceJules}, storage.links[1])
 	require.Len(t, storage.prRecorded, 1)
-	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/1", storage.prRecorded[0].prURL, "must take the first non-empty pullRequest.url")
-
-	logOutput := getLog()
-	assert.Contains(t, logOutput, "jules multiple pr outputs")
-	assert.Contains(t, logOutput, "jules_session="+entry.SessionUUID)
-	assert.Contains(t, logOutput, "output_count=2")
-	assert.Contains(t, logOutput, "level=WARN")
+	assert.Equal(t, pr31, storage.prRecorded[0].prURL, "the first PR stays the legacy scalar")
+	assert.NotContains(t, getLog(), "jules multiple pr outputs")
 }
 
-// TestApplyJulesState_should_NotLogMultiplePROutputs_When_CompletedWithSinglePROutput
-// is the negative case for the same interim behavior: a single output must not
-// trip the "jules multiple pr outputs" warning.
-func TestApplyJulesState_should_NotLogMultiplePROutputs_When_CompletedWithSinglePROutput(t *testing.T) {
-	getLog := captureSlog(t)
+func TestJulesApplyCompleted_ShouldSkipTombstonedRef_WhenRepolled(t *testing.T) {
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
+	pr32 := "https://github.com/tstapler/stapler-squad/pull/32"
+	storage.tombstoned = map[string]bool{pr32: true}
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
 	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
-	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", jules.JulesStateCompleted)
 	s.Outputs = []jules.JulesSessionOutput{
-		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/1"}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/31"}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: pr32}},
 	}
+	require.NoError(t, p.applyJulesState(context.Background(), entry, testRow("row-1", nil, time.Now()), s))
 
-	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
-
-	assert.NotContains(t, getLog(), "jules multiple pr outputs")
+	require.Len(t, storage.links, 1)
+	assert.NotEqual(t, pr32, storage.links[0].prURL)
 }
 
 // TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs guards

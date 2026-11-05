@@ -100,10 +100,11 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 	case string(session.BacklogStatusInProgress):
 		body = progressStartedComment(current.ClaimingHostID)
 	case string(session.BacklogStatusReview):
-		if current.PrURL == "" {
+		urls := progressPRLines(ctx, storage, current)
+		if len(urls) == 0 {
 			return
 		}
-		body = progressReviewComment(current.PrURL)
+		body = progressReviewComments(urls)
 	default:
 		return
 	}
@@ -141,6 +142,70 @@ func progressCommentAlreadyPosted(lastPosted, newStatus string) bool {
 
 // progressCommentTimeout bounds the network I/O done on the subscriber goroutine.
 const progressCommentTimeout = 15 * time.Second
+
+// progressPR is one PR to name in the review comment.
+type progressPR struct {
+	URL   string
+	State session.PRState
+}
+
+// progressPRLines lists every PR of the item's set when reader:backlog is on;
+// otherwise, or when the set cannot be read, it is the single tracked PR URL.
+func progressPRLines(ctx context.Context, storage *session.Storage, item *session.BacklogItemData) []progressPR {
+	single := func() []progressPR {
+		if item.PrURL == "" {
+			return nil
+		}
+		return []progressPR{{URL: item.PrURL}}
+	}
+	if !config.SessionMultiPR(config.SessionMultiPRScopeBacklog) {
+		return single()
+	}
+	prs, err := storage.ItemPRs(ctx, item.ID)
+	if err != nil || len(prs) == 0 {
+		if err != nil {
+			log.Warn("backlog_github_progress_sync: read item PR set failed, using tracked PR", "item", item.ID, "err", err)
+		}
+		return single()
+	}
+	out := make([]progressPR, 0, len(prs))
+	for _, v := range prs {
+		url := v.URL
+		if url == "" {
+			url = fmt.Sprintf("https://%s/%s/%s/pull/%d", v.Ref.Host(), v.Ref.Owner(), v.Ref.Repo(), v.Ref.Number())
+		}
+		out = append(out, progressPR{URL: url, State: v.State})
+	}
+	return out
+}
+
+// progressReviewComments is the review comment for one or more PRs. A single PR
+// reads exactly as before; several are listed with their state (merged, open,
+// closed, unknown). Only canonical github.com pull URLs are echoed.
+func progressReviewComments(prs []progressPR) string {
+	if len(prs) == 1 {
+		return progressReviewComment(prs[0].URL)
+	}
+	var lines []string
+	for _, pr := range prs {
+		if !strings.HasPrefix(pr.URL, "https://github.com/") {
+			continue
+		}
+		ref, err := githubpkg.ParseGitHubRefWithHosts(pr.URL, nil)
+		if err != nil || ref.Type != githubpkg.RefTypePR {
+			continue
+		}
+		state := string(pr.State)
+		if state == "" {
+			state = string(session.PRStateUnknown)
+		}
+		lines = append(lines, fmt.Sprintf("- %s (%s)", pr.URL, state))
+	}
+	if len(lines) == 0 {
+		return progressReviewComment("")
+	}
+	return "Pull requests have been opened for this issue:\n" + strings.Join(lines, "\n")
+}
 
 // progressReviewComment links the PR only when prURL is a canonical github.com
 // pull URL, so a malformed stored value is never echoed into a public comment.

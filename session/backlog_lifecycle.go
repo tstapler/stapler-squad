@@ -153,6 +153,9 @@ type BacklogLifecycleListener struct {
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
 
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
+
 	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
 	// ciRerunner disables the free-rerun shortcut.
 	ciRerunner ciRerunClient
@@ -2003,6 +2006,22 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	return nil
 }
 
+// otherPRsHoldItem reports, under reader:backlog, that the item's derived PR set
+// has an open or unknown PR (or could not be read, which holds: later, never earlier).
+func (l *BacklogLifecycleListener) otherPRsHoldItem(ctx context.Context, er *EntRepository, itemID string) (bool, string) {
+	if !l.backlogReaderEnabled() {
+		return false, ""
+	}
+	prs, err := er.ItemPRsByID(ctx, itemID)
+	if err != nil {
+		return true, "pr set unreadable: " + err.Error()
+	}
+	if ItemPRVerdict(prs) == ItemVerdictOpen {
+		return true, "verdict open"
+	}
+	return false, ""
+}
+
 // reconcileBouncingItems flags items that have crossed in_progress->review
 // >= bounceThreshold times within bounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
@@ -2061,6 +2080,12 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			if mergedErr != nil {
 				log.Debug("[BacklogLifecycle] reconcileBouncingItems IsPRMerged failed", "item", item.ID, "pr", item.PrNumber, "error", mergedErr)
 			} else if merged {
+				// reader:backlog: the scalar PR merging is not enough while another PR of the
+				// item's set is open or unknown; re-evaluated next pass, not flagged bouncing.
+				if hold, why := l.otherPRsHoldItem(ctx, er, item.ID); hold {
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: tracked PR merged but the item PR set still holds it", "item", item.ID, "pr", item.PrNumber, "reason", why)
+					continue
+				}
 				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
 				// via a live GitHub lookup, that PR #item.PrNumber's head
 				// branch still matches this item's currently-tracked branch

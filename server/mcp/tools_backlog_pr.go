@@ -232,6 +232,18 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
 
+	// replaces_pr_number names the tracked PR a correction replaces; it must be
+	// the item's current one, so a stale or guessed number cannot select the
+	// reassignment path.
+	if raw, present := args["replaces_pr_number"]; present {
+		rp, isNum := raw.(float64)
+		if !isNum || rp <= 0 || int(rp) != item.PrNumber {
+			return errResult(ErrInvalidArgument, fmt.Sprintf(
+				"replaces_pr_number=%v is not this item's tracked PR (#%d) — omit it to report an additional PR, or pass the tracked number to replace it",
+				raw, item.PrNumber), ""), nil
+		}
+	}
+
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
 	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
 		return mcpgo.NewToolResultText(fmt.Sprintf(

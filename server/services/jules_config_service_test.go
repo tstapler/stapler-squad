@@ -79,6 +79,10 @@ func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ se
 	return nil
 }
 
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ session.AttachSource) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*session.BacklogItemData, error) {
 	return &session.BacklogItemData{}, nil
 }

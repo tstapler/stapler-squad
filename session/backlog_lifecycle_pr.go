@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -187,7 +188,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingWithoutPRItems(ctx context.
 	}
 
 	for _, item := range items {
-		if item.PrNumber != 0 {
+		if l.itemHasPRReference(ctx, er, item) {
 			continue
 		}
 
@@ -224,6 +225,22 @@ func (l *BacklogLifecycleListener) reconcilePRPendingWithoutPRItems(ctx context.
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
 	// reason once the item leaves 'pr_pending' (successfully reopened for a
 	// fresh attempt, or manually recovered).
+}
+
+// itemHasPRReference reports whether the pr_pending item has any PR. Flag off it
+// is the stored number; with reader:backlog the condition is the derived set being
+// empty, and a failed read counts as "has one" so a transient error never raises
+// a false stuck alert.
+func (l *BacklogLifecycleListener) itemHasPRReference(ctx context.Context, er *EntRepository, item BacklogItemData) bool {
+	if !l.backlogReaderEnabled() {
+		return item.PrNumber != 0
+	}
+	prs, err := er.ItemPRsByID(ctx, item.ID)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] reconcilePRPendingWithoutPRItems ItemPRs item=%s: %v", item.ID, err)
+		return true
+	}
+	return len(prs) > 0
 }
 
 // reconcileOrphanedAgentPRs is the Epic 3.2 reconciliation backstop from "PR
@@ -2005,6 +2022,28 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 	}
 	for _, item := range items {
 		l.reconcilePRPendingItem(ctx, er, item)
+		l.syncItemPRMirror(ctx, er, item.ID.String())
+	}
+}
+
+// backlogReaderEnabled reports whether the reader:backlog scope is effective;
+// tests install backlogReaderOverride instead of writing config.
+func (l *BacklogLifecycleListener) backlogReaderEnabled() bool {
+	if l.backlogReaderOverride != nil {
+		return l.backlogReaderOverride()
+	}
+	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
+}
+
+// syncItemPRMirror ends each ReconcilePRPending pass for an item by letting
+// pr_number/pr_url follow the derived PR set, so a session-link change (such as
+// discovery on the current round) lands within one tick. Off with reader:backlog.
+func (l *BacklogLifecycleListener) syncItemPRMirror(ctx context.Context, er *EntRepository, itemID string) {
+	if !l.backlogReaderEnabled() {
+		return
+	}
+	if _, err := er.RecomputeItemPRMirror(ctx, itemID); err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s mirror recompute: %v", itemID, err)
 	}
 }
 
