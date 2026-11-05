@@ -26,3 +26,13 @@ func TestPeelLeavesStopsAtFilesTheCoreStillUses(t *testing.T) {
 		t.Fatalf("a cycle must stay: %+v", got)
 	}
 }
+
+func TestReverseEdgesPeelsLowerLayers(t *testing.T) {
+	t.Parallel()
+	// app uses lib; lib uses nothing: peeling the reversed graph removes lib first, then app.
+	edges := map[string]map[string]bool{"app.go": {"lib.go": true}, "lib.go": {}, "alone.go": {}}
+	got := PeelLeaves(reverseEdges(edges), map[string]int{"app.go": 1, "lib.go": 2, "alone.go": 4})
+	if len(got) != 2 || got[0].Files[0] != "alone.go" || strings.Join(got[1].Files, ",") != "app.go,lib.go" {
+		t.Fatalf("got %+v", got)
+	}
+}

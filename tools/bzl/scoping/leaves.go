@@ -38,6 +38,23 @@ func (g *declGraph) fileEdges() map[string]map[string]bool {
 	return edges
 }
 
+// reverseEdges flips "f uses g" into "g is used by f", so peeling it finds the lower layers.
+func reverseEdges(edges map[string]map[string]bool) map[string]map[string]bool {
+	rev := map[string]map[string]bool{}
+	for f := range edges {
+		if rev[f] == nil {
+			rev[f] = map[string]bool{}
+		}
+		for g := range edges[f] {
+			if rev[g] == nil {
+				rev[g] = map[string]bool{}
+			}
+			rev[g][f] = true
+		}
+	}
+	return rev
+}
+
 // PeelLeaves repeatedly removes files nobody else in the package uses and groups what it removed into connected
 // clusters. loc maps a file to its line count.
 func PeelLeaves(edges map[string]map[string]bool, loc map[string]int) []LeafCluster {
@@ -115,6 +132,7 @@ func PeelLeaves(edges map[string]map[string]bool, loc map[string]int) []LeafClus
 
 func runLeaves(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("leaves", flag.ContinueOnError)
+	bases := fs.Bool("bases", false, "peel files that use nothing else in the package (lower layers) instead of files nothing uses")
 	dir := fs.String("dir", "", "package directory, relative to the root")
 	minLOC := fs.Int("min-loc", 400, "smallest cluster to print (SC2)")
 	root := fs.String("root", workspace(), "repository root")
@@ -128,6 +146,9 @@ func runLeaves(args []string, stdout io.Writer) int {
 		return 1
 	}
 	edges := g.fileEdges()
+	if *bases {
+		edges = reverseEdges(edges)
+	}
 	loc := map[string]int{}
 	for f := range edges {
 		if b, err := os.ReadFile(filepath.Join(*root, *dir, f)); err == nil {
