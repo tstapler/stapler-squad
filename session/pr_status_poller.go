@@ -56,6 +56,9 @@ type PRStatusPollerConfig struct {
 	// NoPRBackoff is how long to wait before re-checking a session after ErrNoPR.
 	// Zero disables the backoff (always re-check).
 	NoPRBackoff time.Duration
+	// MaxColdPollsPerTick bounds unknown or never-polled PR states fetched per
+	// tick after a deploy (zero means the default, 20).
+	MaxColdPollsPerTick int
 }
 
 // DefaultPRStatusPollerConfig returns sensible defaults.
@@ -86,6 +89,21 @@ type PRStatusPoller struct {
 	// multiPRScope reports whether a session_multi_pr reader scope is effective.
 	// A field so tests can pin scopes without a config file; production reads the live config.
 	multiPRScope func(scope string) bool
+
+	// refresherOn reads the live state-refresher kill switch (default: config).
+	refresherOn func() bool
+	// clock is the injected time source of the state loop (nil means time.Now).
+	clock func() time.Time
+	// onPRUnknown is raised once when a polled PR becomes unknown. Guarded by mu.
+	onPRUnknown func(PRView)
+
+	// stateBackoffs holds the in-memory retry gates of non-counted failures,
+	// keyed by PullRequestState id; guarded by stateMu, never p.mu.
+	stateMu       sync.Mutex
+	stateBackoffs map[int]stateBackoff
+	hostHealth    *hostHealth
+	// refresherState remembers the last logged switch value (0 unset, 1 off, 2 on).
+	refresherState atomic.Int32
 
 	// authState stores pollerAuthResult atomically; readers are lock-free.
 	authState atomic.Value //nolint:exhaustruct
@@ -125,6 +143,9 @@ func NewPRStatusPollerWithConfig(storage *Storage, cfg PRStatusPollerConfig) *PR
 		ghClient:      realGHClient{},
 		noPRPollAfter: make(map[string]time.Time),
 		multiPRScope:  config.SessionMultiPR,
+		refresherOn:   config.SessionMultiPRRefresher,
+		stateBackoffs: map[int]stateBackoff{},
+		hostHealth:    newHostHealth(),
 	}
 }
 
@@ -214,9 +235,11 @@ func (p *PRStatusPoller) RemoveInstance(title string) {
 	defer p.mu.Unlock()
 	filtered := make([]*Instance, 0, len(p.instances))
 	for _, inst := range p.instances {
-		if !inst.MatchesID(title) {
-			filtered = append(filtered, inst)
+		if inst.MatchesID(title) {
+			delete(p.noPRPollAfter, pollKey(inst.Snapshot()))
+			continue
 		}
+		filtered = append(filtered, inst)
 	}
 	p.instances = filtered
 	delete(p.noPRPollAfter, title)
@@ -298,6 +321,16 @@ func (p *PRStatusPoller) checkAllSessions() {
 		return
 	}
 
+	// The PR-keyed loop owns snapshots of linked sessions only when reader:poller
+	// is effective and the refresher runs; otherwise the legacy per-session loop does.
+	stateLoopOwnsLinked := p.multiPRScope(config.SessionMultiPRScopePoller) && p.refresherEnabled()
+	if p.refresherEnabled() {
+		p.pollPullRequestStates(p.ctx, stateLoopOwnsLinked)
+	}
+	if stateLoopOwnsLinked {
+		instances = withoutPRLinks(instances)
+	}
+
 	sem := make(chan struct{}, p.config.ConcurrentFetches)
 	var wg sync.WaitGroup
 
@@ -323,6 +356,26 @@ func (p *PRStatusPoller) checkAllSessions() {
 	}
 
 	wg.Wait()
+}
+
+// withoutPRLinks keeps the sessions the PR-keyed loop cannot serve (no link rows).
+func withoutPRLinks(instances []*Instance) []*Instance {
+	var out []*Instance
+	for _, inst := range instances {
+		if !inst.Snapshot().GitHub.HasPRLinks {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// pollKey keys a session's discovery backoff: its uuid, else its title (legacy
+// rows without a uuid).
+func pollKey(snap *InstanceSnapshot) string {
+	if snap.UUID != "" {
+		return snap.UUID
+	}
+	return snap.Title
 }
 
 // pollableSessions filters instances to those the legacy per-session loop should
@@ -351,7 +404,7 @@ func pollableSessions(instances []*Instance, now time.Time, noPRPollAfter map[st
 			continue
 		}
 
-		if pollAfter, ok := noPRPollAfter[instSnap.Title]; ok && now.Before(pollAfter) {
+		if pollAfter, ok := noPRPollAfter[pollKey(instSnap)]; ok && now.Before(pollAfter) {
 			continue // no-PR backoff still in effect
 		}
 		out = append(out, inst)
@@ -435,7 +488,7 @@ func (p *PRStatusPoller) discoverPRsForBranch(ctx context.Context, inst *Instanc
 		// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
 		if p.config.NoPRBackoff > 0 {
 			p.mu.Lock()
-			p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+			p.noPRPollAfter[pollKey(inst.Snapshot())] = time.Now().Add(p.config.NoPRBackoff)
 			p.mu.Unlock()
 		}
 		return
@@ -443,7 +496,7 @@ func (p *PRStatusPoller) discoverPRsForBranch(ctx context.Context, inst *Instanc
 	// Persist discovered PR number and clear no-PR backoff.
 	inst.SetGitHubPRNumber(prInfo.Number)
 	p.mu.Lock()
-	delete(p.noPRPollAfter, inst.Title)
+	delete(p.noPRPollAfter, pollKey(inst.Snapshot()))
 	p.mu.Unlock()
 	if p.storage != nil {
 		if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
@@ -502,7 +555,7 @@ func (p *PRStatusPoller) handleFetchError(err error) bool {
 func (p *PRStatusPoller) applyNoPR(inst *Instance) {
 	if p.config.NoPRBackoff > 0 {
 		p.mu.Lock()
-		p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+		p.noPRPollAfter[pollKey(inst.Snapshot())] = time.Now().Add(p.config.NoPRBackoff)
 		p.mu.Unlock()
 	}
 	p.applyPRUpdate(inst, nil)
