@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -24,35 +25,53 @@ const (
 	transportUnix = "unix"
 )
 
-// transportReprobeInterval is how long a fallback to the Unix socket sticks before the next call
-// cheaply re-probes TCP. The re-probe runs on a caller's own RPC, never on a timer.
+// transportReprobeInterval is how long a fallback to TCP sticks before the next call cheaply
+// re-probes the Unix socket. The re-probe runs on a caller's own RPC, never on a timer.
 const transportReprobeInterval = 30 * time.Second
 
-// transportProbeTimeout bounds each GetServerInfo probe the selector makes.
+// transportProbeTimeout bounds each GetServerInfo probe the selector makes on the failure path.
 var transportProbeTimeout = 3 * time.Second
+
+// transportReprobeTimeout bounds the periodic socket re-probe, which runs on a caller's own RPC:
+// a local socket answers or refuses at once, so a long wait would only tax that caller.
+var transportReprobeTimeout = 500 * time.Millisecond
+
+// transportProbeWarnEvery rate-limits the Warn for an unexpected (neither refused nor denied)
+// error while the selector is sticky on TCP.
+const transportProbeWarnEvery = 10 * time.Minute
 
 var (
 	transportActiveGauge = mustInt64Gauge("tymux_transport",
-		metric.WithDescription("1 for the transport (tcp|unix) squad's tymux client currently uses to reach tymuxd, 0 for the other"))
+		metric.WithDescription("1 for the transport (tcp|unix) squad's tymux client currently uses to reach the tymuxd at daemon (its TCP address), 0 for the other"))
 	transportTransitionCounter = mustInt64Counter("tymux_transport_transitions_total",
-		metric.WithDescription("Switches of squad's tymux client between the TCP and Unix-socket transports, by from/to"))
+		metric.WithDescription("Switches of squad's tymux client between the TCP and Unix-socket transports, by daemon and from/to"))
 )
 
-func recordTransportActive(active string) {
+// recordTransportActive publishes the active transport for one daemon; the gauge is keyed by the
+// daemon's address so a second daemon's selector cannot overwrite it.
+func recordTransportActive(daemon, active string) {
 	for _, kind := range []string{transportTCP, transportUnix} {
 		v := int64(0)
 		if kind == active {
 			v = 1
 		}
-		transportActiveGauge.Record(context.Background(), v, metric.WithAttributes(attribute.String("transport", kind)))
+		transportActiveGauge.Record(context.Background(), v,
+			metric.WithAttributes(attribute.String("daemon", daemon), attribute.String("transport", kind)))
 	}
 }
 
+// ErrTymuxdSocketAccessDenied means the kernel refused connect() on tymuxd's Unix control socket
+// (EACCES): a daemon is listening and does not authorize this user. It is a hard error, never a
+// reason to fall back to the unauthenticated TCP listener (same rule as upstream udsdialer).
+var ErrTymuxdSocketAccessDenied = errors.New("tymux: not authorized to use tymuxd's Unix control socket")
+
 // selectingTransport is the single place that decides which transport reaches tymuxd right now.
-// It starts on TCP. When a call is refused (nothing listening on TCP) and tymuxd's Unix control
-// socket answers, it sticks to the socket and re-probes TCP every transportReprobeInterval.
-// Existing Attach streams are untouched by a switch (a dead listener does not close connections
-// it already accepted); only new dials, including ReconnectLoop's redial, go through the choice.
+// The Unix control socket is primary: tymuxd authenticates its peers (SO_PEERCRED) while the TCP
+// listener is deprecated and unauthenticated. A call refused on the socket (ENOENT/ECONNREFUSED)
+// falls back to TCP if that answers, sticks there, and re-probes the socket every
+// transportReprobeInterval. EACCES never falls back. Existing Attach streams are untouched by a
+// switch; only new dials, including ReconnectLoop's redial, go through the choice.
+// One instance is shared by every session of a daemon (see sharedTransportFor).
 type selectingTransport struct {
 	tcp, unix rpcTransport
 	closers   []*http.Client
@@ -60,13 +79,15 @@ type selectingTransport struct {
 	addr      string
 	quiet     bool // one-shot probe: no metrics, Debug logging
 
-	mu           sync.Mutex
-	useUnix      bool
-	nextTCPProbe time.Time
+	mu            sync.Mutex
+	useTCP        bool
+	nextUnixProbe time.Time
+	lastProbeWarn time.Time
 }
 
+// newSelectingTransport builds a session selector. The process-global gauge is written by the
+// shared owner (sharedTransportFor's builder), not here, so a discarded duplicate cannot reset it.
 func newSelectingTransport(tcp, unix rpcTransport, addr string, closers ...*http.Client) *selectingTransport {
-	recordTransportActive(transportTCP)
 	return &selectingTransport{tcp: tcp, unix: unix, closers: closers, now: time.Now, addr: addr}
 }
 
@@ -86,10 +107,10 @@ func (s *selectingTransport) Active() string {
 }
 
 func (s *selectingTransport) activeLocked() string {
-	if s.useUnix {
-		return transportUnix
+	if s.useTCP {
+		return transportTCP
 	}
-	return transportTCP
+	return transportUnix
 }
 
 func (s *selectingTransport) closeIdle() {
@@ -98,37 +119,59 @@ func (s *selectingTransport) closeIdle() {
 	}
 }
 
-// pick returns the transport for a new call, first re-probing TCP when a Unix fallback is due.
+// pick returns the transport for a new call, first re-probing the Unix socket when a TCP fallback
+// is due.
 func (s *selectingTransport) pick(ctx context.Context) (rpcTransport, string) {
 	s.mu.Lock()
-	if s.useUnix && !s.now().Before(s.nextTCPProbe) {
-		prev := s.nextTCPProbe
-		s.nextTCPProbe = s.now().Add(transportReprobeInterval) // claim the probe: other callers skip it
+	if s.useTCP && !s.now().Before(s.nextUnixProbe) {
+		prev := s.nextUnixProbe
+		s.nextUnixProbe = s.now().Add(transportReprobeInterval) // claim the probe: other callers skip it
 		s.mu.Unlock()
+		err := probeTransport(ctx, s.unix, transportReprobeTimeout)
 		switch {
-		case probeTransport(ctx, s.tcp):
-			s.switchTo(transportTCP, "tcp listener answers again")
+		case err == nil:
+			s.switchTo(transportUnix, "control socket answers again")
+		case isAccessDenied(err):
+			// A socket now exists and denies us: surface that, do not keep using TCP.
+			s.switchTo(transportUnix, "control socket denies access")
 		case ctx.Err() != nil:
-			s.mu.Lock() // our own cancellation says nothing about TCP: give the probe back
-			s.nextTCPProbe = prev
+			s.mu.Lock() // our own cancellation says nothing about the socket: give the probe back
+			s.nextUnixProbe = prev
 			s.mu.Unlock()
+		case !isDialRefused(err):
+			s.warnProbeError(err)
 		}
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
-	if s.useUnix {
-		return s.unix, transportUnix
+	if s.useTCP {
+		return s.tcp, transportTCP
 	}
-	return s.tcp, transportTCP
+	return s.unix, transportUnix
 }
 
 // probeTransport is bound by the caller's ctx as well as transportProbeTimeout, so a cancelled
 // RPC never waits on a probe.
-func probeTransport(ctx context.Context, t rpcTransport) bool {
-	ctx, cancel := context.WithTimeout(ctx, transportProbeTimeout)
+func probeTransport(ctx context.Context, t rpcTransport, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	_, err := t.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{}))
-	return err == nil
+	return err
+}
+
+// warnProbeError logs, at most once per transportProbeWarnEvery, a re-probe error that is neither
+// a refusal nor a denial (EINVAL, ENOTDIR...): the socket is unusable for a reason nobody has
+// seen, and staying on TCP silently would hide it. It reports whether it logged.
+func (s *selectingTransport) warnProbeError(err error) bool {
+	s.mu.Lock()
+	if !s.lastProbeWarn.IsZero() && s.now().Sub(s.lastProbeWarn) < transportProbeWarnEvery {
+		s.mu.Unlock()
+		return false
+	}
+	s.lastProbeWarn = s.now()
+	s.mu.Unlock()
+	log.Warn("[tymux] control socket probe failed unexpectedly; staying on the TCP fallback", "addr", s.addr, "err", err)
+	return true
 }
 
 // switchReason is the human-readable cause logged with a transport change.
@@ -141,18 +184,18 @@ func (s *selectingTransport) switchTo(to string, why switchReason) {
 		s.mu.Unlock()
 		return
 	}
-	s.useUnix = to == transportUnix
-	if s.useUnix {
-		s.nextTCPProbe = s.now().Add(transportReprobeInterval)
+	s.useTCP = to == transportTCP
+	if s.useTCP {
+		s.nextUnixProbe = s.now().Add(transportReprobeInterval)
 	}
 	s.mu.Unlock()
 	if s.quiet {
 		log.Debug("[tymux] probe transport changed", "from", from, "to", to, "addr", s.addr)
 		return
 	}
-	recordTransportActive(to)
+	recordTransportActive(s.addr, to)
 	transportTransitionCounter.Add(context.Background(), 1,
-		metric.WithAttributes(attribute.String("from", from), attribute.String("to", to)))
+		metric.WithAttributes(attribute.String("daemon", s.addr), attribute.String("from", from), attribute.String("to", to)))
 	log.Warn("[tymux] tymuxd transport changed", "from", from, "to", to, "why", string(why), "addr", s.addr)
 }
 
@@ -161,23 +204,54 @@ func isDialRefused(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT)
 }
 
+// isAccessDenied reports a kernel permission refusal of connect(): a daemon listens there and
+// does not authorize this user. EPERM is treated exactly like EACCES.
+func isAccessDenied(err error) bool {
+	return errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM)
+}
+
+// isSocketUnusable reports errors proving the socket path can never work (EINVAL: a sun_path over
+// the platform limit), as opposed to a daemon that is merely absent.
+func isSocketUnusable(err error) bool {
+	return socketPathBroken(err)
+}
+
+// annotate makes an EACCES/EPERM from the control socket a clear, matchable hard error.
+func annotate(kind string, err error) error {
+	if kind == transportUnix && isAccessDenied(err) && !errors.Is(err, ErrTymuxdSocketAccessDenied) {
+		return fmt.Errorf("%w: %w", ErrTymuxdSocketAccessDenied, err)
+	}
+	return err
+}
+
 // failover reacts to a failed call over `from`. It reports whether the active transport changed
-// (or already had), so the caller should retry once.
+// (or already had), so the caller should retry once. Only a refused dial qualifies: EACCES and
+// every other error are returned as they are.
 func (s *selectingTransport) failover(ctx context.Context, from string, err error) bool {
-	if err == nil || !isDialRefused(err) {
+	if err == nil {
+		return false
+	}
+	if !isDialRefused(err) && (from != transportUnix || !isSocketUnusable(err)) {
 		return false
 	}
 	if cur := s.Active(); cur != from {
 		return true // another caller already switched
 	}
 	switch from {
-	case transportTCP:
-		if s.unix == nil || !probeTransport(ctx, s.unix) {
+	case transportUnix:
+		if s.tcp == nil || probeTransport(ctx, s.tcp, transportProbeTimeout) != nil {
 			return false
 		}
-		s.switchTo(transportUnix, "tcp listener refused connections while the control socket answers")
+		why := switchReason("control socket refused connections while the tcp listener answers")
+		if isSocketUnusable(err) {
+			why = switchReason("control socket path is unusable (" + err.Error() + "); falling back to the deprecated tcp listener")
+		}
+		s.switchTo(transportTCP, why)
 	default:
-		s.switchTo(transportTCP, "control socket refused connections")
+		if s.unix == nil || probeTransport(ctx, s.unix, transportProbeTimeout) != nil {
+			return false // never log a switch to a socket that did not answer
+		}
+		s.switchTo(transportUnix, "tcp listener refused connections while the control socket answers")
 	}
 	return true
 }
@@ -186,10 +260,10 @@ func invoke[Resp any](ctx context.Context, s *selectingTransport, call func(rpcT
 	t, kind := s.pick(ctx)
 	resp, err := call(t)
 	if err != nil && s.failover(ctx, kind, err) {
-		t, _ = s.pick(ctx)
-		return call(t)
+		t, kind = s.pick(ctx)
+		resp, err = call(t)
 	}
-	return resp, err
+	return resp, annotate(kind, err)
 }
 
 func (s *selectingTransport) CreateSession(ctx context.Context, r *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -249,7 +323,7 @@ func (f *failoverStream) observe(err error) error {
 	if err != nil {
 		f.sel.failover(f.ctx, f.kind, err)
 	}
-	return err
+	return annotate(f.kind, err)
 }
 
 // Send surfaces the real dial error: connect-go reports only io.EOF from Send when the request
