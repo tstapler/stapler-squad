@@ -31,13 +31,11 @@ function overflowElement(source: string): string {
 describe("SessionActionsOverflow call sites supply every callback", () => {
   const overflowProps = interfaceHandlers(read("SessionActionsOverflow.tsx"), "SessionActionsOverflowProps");
 
-  // Props intentionally not supplied by a call site, with the reason.
-  const DETAIL_ONLY = "SessionDetail-specific; removal awaits owner decision";
-  const detailOnly = { onRenameRequest: DETAIL_ONLY, onWorkspaceSwitchRequest: DETAIL_ONLY };
+  // Props intentionally not supplied by a call site, with the reason. Empty: every site supplies all.
   const exempt: Record<string, Record<string, string>> = {
-    "SessionCard.tsx": detailOnly,
-    "SessionRow.tsx": detailOnly,
-    "PaneHeader.tsx": detailOnly,
+    "SessionCard.tsx": {},
+    "SessionRow.tsx": {},
+    "PaneHeader.tsx": {},
   };
   const sites: Array<[string, () => string]> = [
     ["SessionCard.tsx", () => read("SessionCard.tsx")],

@@ -68,10 +68,6 @@ export interface SessionActionsOverflowProps {
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
-  /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
-  onRenameRequest?: () => void;
-  /** Trigger workspace switch in parent (SessionDetail-specific) */
-  onWorkspaceSwitchRequest?: () => void;
   /** Save a new program for the session. Empty string = system default. */
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
@@ -143,8 +139,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onSteerAutonomousSession,
   onClearConversationState,
   onUpdateTags,
-  onRenameRequest,
-  onWorkspaceSwitchRequest,
   onChangeProgram,
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
@@ -420,7 +414,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   // Create/View PR item is now always rendered (no longer gated on a
   // caller-supplied callback prop — see Task 2.3.1a).
   const hasGroup2 = true;
-  const hasOrganize = !!(onRenameRequest || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasOrganize = !!(onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || (onSteerAutonomousSession && session.autonomousMode));
   const hasMore = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
 
@@ -972,14 +966,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               )}
               {hasOrganize && (
                 <MenuSection id="organize" label="Organize" openId={openSection} onToggle={toggleSection}>
-              {onRenameRequest && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
-                  aria-label={`Rename session ${session.title}`}
-                >
-                  <span aria-hidden="true">✏️</span> Rename
-                </button>
-              )}
               {onClone && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onClone(); }}
@@ -1010,14 +996,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   aria-label={`New workspace from ${session.title}`}
                 >
                   <span aria-hidden="true">➕</span> New Workspace
-                </button>
-              )}
-              {onWorkspaceSwitchRequest && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onWorkspaceSwitchRequest(); }}
-                  aria-label={`Switch workspace for ${session.title}`}
-                >
-                  <span aria-hidden="true">⎇</span> Switch Workspace
                 </button>
               )}
                 </MenuSection>

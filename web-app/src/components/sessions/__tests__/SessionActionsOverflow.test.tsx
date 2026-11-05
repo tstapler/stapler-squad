@@ -150,12 +150,6 @@ describe("SessionActionsOverflow", () => {
       openMenu("More");
       expect(screen.queryByRole("menuitem", { name: /clear conversation/i })).not.toBeInTheDocument();
     });
-
-    it("shows Rename when onRenameRequest provided", () => {
-      renderOverflow({ onRenameRequest: jest.fn() });
-      openMenu("Organize");
-      expect(screen.getByRole("menuitem", { name: /rename/i })).toBeInTheDocument();
-    });
   });
 
   describe("delete flow", () => {
