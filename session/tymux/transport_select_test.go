@@ -24,7 +24,6 @@ type fakeEndpoint struct {
 	err     atomic.Pointer[error]
 	calls   atomic.Int32
 	streams atomic.Int32
-	rxErr   atomic.Pointer[error]
 }
 
 func (f *fakeEndpoint) fail(err error) { f.err.Store(&err) }
