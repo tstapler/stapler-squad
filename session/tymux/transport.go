@@ -77,6 +77,15 @@ var _ attachStream = (*connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEv
 // return type to the other.
 type grpcTransport struct {
 	client tymuxv1connect.TymuxServiceClient
+	http   *http.Client
+}
+
+// closeIdle drops the pooled h2c connections so a one-shot caller does not
+// leave a socket open on tymuxd per call.
+func (t *grpcTransport) closeIdle() {
+	if t.http != nil {
+		t.http.CloseIdleConnections()
+	}
 }
 
 func (t *grpcTransport) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -157,15 +166,49 @@ func newH2CClient() *http.Client {
 // NewRealTransport constructs an rpcTransport backed by a real Connect-Go
 // gRPC client against a live tymuxd. addr is the tymuxd base URL (e.g.
 // "http://127.0.0.1:7419"); pass "" to use tymuxdAddr()'s
-// TYMUXD_ADDR-or-default resolution.
+// TYMUXD_ADDR-or-default resolution. When the daemon at addr has a known Unix
+// control socket (socketPathForAddr), the result also falls back to that socket
+// while TCP is refused; see selectingTransport.
 func NewRealTransport(addr string) rpcTransport {
+	return newRealTransport(addr, false)
+}
+
+// newRealTransport builds the transport; quiet selects the one-shot-probe variant that leaves
+// the session transport's process-global metrics alone.
+func newRealTransport(addr string, quiet bool) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
 	if sharedDaemonBlockedInTest(addr) {
 		addr = deadLoopbackAddr
 	}
-	return &grpcTransport{client: newTymuxClient(newH2CClient(), addr)}
+	tcp := newTCPTransport(addr)
+	sock := socketPathForAddr(addr)
+	if sock == "" {
+		return tcp
+	}
+	unix, unixHTTP := newUnixTransport(sock)
+	if quiet {
+		return newQuietSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+	}
+	return newSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+}
+
+// newTCPTransport is the TCP-only transport; probeDaemon uses it directly so a healthy Unix
+// socket can never mask a dead TCP listener in the probe itself.
+func newTCPTransport(addr string) *grpcTransport {
+	hc := newH2CClient()
+	return &grpcTransport{client: newTymuxClient(hc, addr), http: hc}
+}
+
+// newProbeTransport is NewRealTransport for one-shot calls: the returned
+// release func must be deferred, or each probe leaks a connection to tymuxd.
+func newProbeTransport(addr string) (rpcTransport, func()) {
+	t := newRealTransport(addr, true)
+	if c, ok := t.(interface{ closeIdle() }); ok {
+		return t, c.closeIdle
+	}
+	return t, func() {}
 }
 
 // newTymuxClient builds the generated client with gRPC framing (tymuxd is a

@@ -753,6 +753,11 @@ func (s *SessionService) RetrySession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Retry revives the session, so an archived (deliberately retired) one must be unarchived first.
+	if instance.IsArchived() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session %s is archived; unarchive it before retrying", req.Msg.Id))
+	}
+
 	if err := instance.RetryNow(instance.GetEffectiveRootDir()); err != nil {
 		if errors.Is(err, session.ErrRetryInFlight) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)

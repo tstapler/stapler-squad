@@ -9,7 +9,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 func TestSessionGone_NotFoundMapsToNotFoundEndStreamCode(t *testing.T) {
@@ -57,9 +59,18 @@ func TestDefinitivelyGone_RequiresBackendToAgree(t *testing.T) {
 	assert.False(t, definitivelyGone(errors.New("boom"), func() bool { return false }))
 }
 
+func TestLogCurrentPaneFailure_PaneNotRunningIsQuietAndNonFatal(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("failed to capture fresh pane content: %w",
+		fmt.Errorf("%w: %w", tymux.ErrPaneNotRunning, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))))
+
+	assert.NoError(t, logCurrentPaneFailure("mid-stream current pane request", "pane-quiet-test", "r1", err))
+	assert.False(t, goneLogThrottle.allow("pane-not-running:pane-quiet-test", time.Now()), "first failure must have claimed the throttle slot")
+}
+
 func TestPaneNotLiveReply(t *testing.T) {
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "r1"}
-	out := paneNotLiveReply(req, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running")))
+	out := paneNotLiveReply(req, fmt.Errorf("%w: %w", tymux.ErrPaneNotRunning, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))))
 	if out == nil || out.GetResyncId() != "r1" || len(out.GetData()) != 0 {
 		t.Fatalf("want empty reply echoing resync id, got %v", out)
 	}

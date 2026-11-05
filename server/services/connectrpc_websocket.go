@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
@@ -247,7 +248,11 @@ func fullStateFrame(ctx context.Context, pane any) (snapshotFrame, bool) {
 	}
 	snap, ok, err := f.CapturePaneRedraw(ctx)
 	if err != nil {
-		log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		if errors.Is(err, tymux.ErrPaneNotRunning) {
+			log.Debug("full-state redraw skipped, pane is not running", "err", err)
+		} else {
+			log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		}
 		return snapshotFrame{}, false
 	}
 	if !ok {
@@ -2306,7 +2311,10 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)
 		return wrapSessionGone(captureErr)
 	}
-	if captureErr != nil {
+	if errors.Is(captureErr, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaHub] initial capture", sessionID, captureErr)
+		content = ""
+	} else if captureErr != nil {
 		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
 			"session", sessionID, "err", captureErr)
 		content = ""
@@ -3337,11 +3345,11 @@ func answerCurrentPane(ctx context.Context, sessionID string, instance *session.
 }
 
 // paneNotLiveReply is the empty answer to a resync aimed at a pane with no live process
-// (FailedPrecondition). Staying silent leaves the client's stall watchdog to fire after 4s,
+// (tymux.ErrPaneNotRunning). Staying silent leaves the client's stall watchdog to fire after 4s,
 // reset the stream, and re-ask; an empty output completes the resync instead. Nil for any
 // other error.
 func paneNotLiveReply(req *sessionv1.CurrentPaneRequest, err error) *sessionv1.TerminalOutput {
-	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+	if !errors.Is(err, tymux.ErrPaneNotRunning) {
 		return nil
 	}
 	return &sessionv1.TerminalOutput{ResyncId: req.GetResyncId()}
@@ -3358,10 +3366,8 @@ func logCurrentPaneFailure(what, sessionID, resyncID string, err error) error {
 		}
 		return nil
 	}
-	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
-		// Pane exists but has no live process (exited, or restored without a screen); a
-		// resyncing client re-asks every frame, so log once per interval, not per request.
-		logPaneNotLive("[streamViaControlMode] "+what, sessionID, err)
+	if errors.Is(err, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaControlMode] "+what, sessionID, err)
 		return nil
 	}
 	log.Error("[streamViaControlMode] failed to handle "+what, "session", sessionID, "resync_id", resyncID, "err", err)

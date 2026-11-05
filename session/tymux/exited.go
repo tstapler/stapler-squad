@@ -18,6 +18,12 @@ import (
 // implies "the pane is alive".
 var ErrPaneExited = errors.New("tymux: pane exited")
 
+// ErrPaneNotRunning matches (errors.Is) a capture of a pane tymuxd holds without a live process
+// (FAILED_PRECONDITION) that this session did not or could not revive: a view-only session, a
+// FAILED/STOPPED pane, or a failed ReviveSession. Callers should treat it as a steady state, not
+// a fault worth logging on every resync.
+var ErrPaneNotRunning = errors.New("tymux: pane not running")
+
 // ErrPaneNotRevivable matches (errors.Is) a restore that tymuxd will not revive: the pane is
 // FAILED or STOPPED (the pre-check in reviveForRestore), or tymuxd's ReviveSession answered
 // FAILED_PRECONDITION, which v1.12.0 also returns when relaunching fails (EngineError::ReviveLaunch,

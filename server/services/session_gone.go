@@ -85,12 +85,13 @@ func logSessionGone(site, sessionID string, err error) {
 	log.Debug(site+": session gone (suppressed repeat)", "session", sessionID, "err", err)
 }
 
-// logPaneNotLive is logSessionGone's counterpart for a pane that exists but has no live
-// process: Warn once per interval per session, Debug for repeats.
-func logPaneNotLive(site, sessionID string, err error) {
-	if goneLogThrottle.allow("notlive:"+sessionID, time.Now()) {
-		log.Warn(site+": pane not live", "session", sessionID, "err", err)
+// logPaneNotRunning reports a capture of a pane that has no live process and was not revived
+// (view-only, FAILED/STOPPED, or a failed revive). That is a steady state a resyncing client
+// re-asks about every few seconds, so it logs at Warn once per interval per session, Debug after.
+func logPaneNotRunning(site, sessionID string, err error) {
+	if goneLogThrottle.allow("pane-not-running:"+sessionID, time.Now()) {
+		log.Warn(site+": pane is not running, nothing to capture", "session", sessionID, "err", err)
 		return
 	}
-	log.Debug(site+": pane not live (suppressed repeat)", "session", sessionID, "err", err)
+	log.Debug(site+": pane is not running (suppressed repeat)", "session", sessionID, "err", err)
 }
