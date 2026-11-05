@@ -333,6 +333,9 @@ func unixSocketPath(cfg DaemonConfig) string {
 		warnOverlongSocketPath(path)
 		return ""
 	}
+	if abs, err := filepath.Abs(path); err == nil && path != "" {
+		path = abs // upstream's trust check refuses unclean or relative paths; the kernel resolves both the same
+	}
 	return path
 }
 

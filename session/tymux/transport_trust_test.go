@@ -75,3 +75,10 @@ func TestCheckedDial_GroupWritableDirectoryIsRefusedAndProbedAsAccessDenied(t *t
 	require.Equal(t, daemonProbeAccessDenied, probeEndpoint(context.Background(), "unix", sock, nil),
 		"an untrusted socket is alive-but-forbidden: never killed, never falls back to TCP")
 }
+
+func TestUnixSocketPath_UncleanOverrideIsCleaned(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "")
+	t.Setenv("TYMUXD_ADDR", "http://127.0.0.1:19997")
+	t.Setenv("TYMUXD_SOCKET_PATH", "/tmp//a/../x.sock")
+	require.Equal(t, "/tmp/x.sock", unixSocketPath(ResolveDaemonConfig()))
+}
