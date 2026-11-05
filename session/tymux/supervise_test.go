@@ -144,10 +144,11 @@ func TestEnsureDaemonRunning_SpawnsAndRetriesUntilHealthy(t *testing.T) {
 func TestEnsureDaemonRunning_PortSquattedFailsLoudly(t *testing.T) {
 	withFastRetryBounds(t, 3, time.Millisecond, 2*time.Millisecond)
 
-	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
-	defer stubPortListening(func(DaemonConfig) bool { return true })()
-
 	var spawnCalls int32
+	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+	// The squatter binds after the spawn: a listener that is already up before it is never spawned over.
+	defer stubPortListening(func(DaemonConfig) bool { return atomic.LoadInt32(&spawnCalls) > 0 })()
+
 	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 		atomic.AddInt32(&spawnCalls, 1)
 		return &os.Process{}, nil // see sentinel-value note above
@@ -205,10 +206,10 @@ func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExha
 		t.Run(tc.name, func(t *testing.T) {
 			withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
 
-			defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
-			defer stubPortListening(func(DaemonConfig) bool { return tc.portListening })()
-
 			var spawned atomic.Bool
+			defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+			defer stubPortListening(func(DaemonConfig) bool { return tc.portListening && spawned.Load() })()
+
 			defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 				spawned.Store(true)
 				return &os.Process{}, nil // see sentinel-value note above
@@ -337,10 +338,10 @@ func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCalle
 	synctest.Test(t, func(t *testing.T) {
 		withFastRetryBounds(t, 3, time.Millisecond, 2*time.Millisecond)
 
-		defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
-		defer stubPortListening(func(DaemonConfig) bool { return true })()
-
 		var spawnCalls int32
+		defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+		defer stubPortListening(func(DaemonConfig) bool { return atomic.LoadInt32(&spawnCalls) > 0 })()
+
 		defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 			atomic.AddInt32(&spawnCalls, 1)
 			time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest synctest fake clock: blocks the leader until all racers are parked on the singleflight

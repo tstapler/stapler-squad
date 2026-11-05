@@ -50,9 +50,11 @@ const clientProtocolVersion = 1
 
 const (
 	versionProbeTimeout    = 5 * time.Second
-	daemonStopGracePeriod  = 10 * time.Second
 	daemonStopPollInterval = 100 * time.Millisecond
 )
+
+// daemonStopGracePeriod is how long a stopped daemon gets to exit on SIGTERM before SIGKILL; a var so tests can shrink it.
+var daemonStopGracePeriod = 10 * time.Second
 
 // Injection seams so tests need no real daemon, lsof, or /proc.
 var (
