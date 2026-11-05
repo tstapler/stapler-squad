@@ -22,23 +22,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// CallerClass is the caller class a ledger section is kept for; the recorder
-// keeps one section per class.
-type CallerClass string
-
-const (
-	ClassOperator CallerClass = "operator"
-	ClassAgent    CallerClass = "agent"
-	ClassSystem   CallerClass = "system"
-)
-
-// Config labels of the `config` series.
-const (
-	ConfigSeeded    = "seeded"
-	ConfigEdited    = "edited"
-	ConfigUnlabeled = "unlabeled"
-)
-
 const (
 	shadowLedgerFile     = "workflow-engine-shadow-ledger.json"
 	shadowLedgerVersion  = 1
@@ -51,60 +34,6 @@ const (
 	labelerRefreshWindow = 30 * time.Second
 )
 
-// EdgeStats counts shadowed calls over one (from,to) edge. Read-path samples
-// never count toward soak evidence; StatefulSkips marks an edge whose stateful
-// gate the shadow could not evaluate.
-type EdgeStats struct {
-	TransitionSamples int64 `json:"transition_samples"`
-	ReadSamples       int64 `json:"read_samples"`
-	Divergences       int64 `json:"divergences"`
-	StatefulSkips     int64 `json:"stateful_skips"`
-}
-
-// ClassLedger is the persisted aggregate for one caller class. Keys are
-// "Method|path", "Method|class|config|path" and the NotComparedReason.
-type ClassLedger struct {
-	Calls       map[string]int64     `json:"calls"`
-	Divergence  map[string]int64     `json:"divergence"`
-	NotCompared map[string]int64     `json:"not_compared"`
-	Edges       map[string]EdgeStats `json:"edges"`
-	ConfigSeen  map[string]int64     `json:"config_seen"`
-	// CallerDivergence counts divergences per registry caller, keyed
-	// "caller|divergence_class".
-	CallerDivergence map[string]int64 `json:"caller_divergence,omitempty"`
-	// CallerEdgeDivergence is the same count per edge, keyed
-	// "caller|from->to|divergence_class": the unit of the owner's guard_new
-	// acknowledgement.
-	CallerEdgeDivergence map[string]int64 `json:"caller_edge_divergence,omitempty"`
-	FirstSampleAt        time.Time        `json:"first_sample_at"`
-	LastSampleAt         time.Time        `json:"last_sample_at"`
-}
-
-// ReproRecord is a redacted divergence: an item id hash, never a title or id.
-type ReproRecord struct {
-	At         time.Time `json:"at"`
-	Class      string    `json:"class"`
-	Method     string    `json:"method"`
-	Path       string    `json:"path"`
-	From       string    `json:"from"`
-	To         string    `json:"to"`
-	ItemHash   string    `json:"item_hash,omitempty"`
-	Divergence string    `json:"divergence"`
-	Caller     string    `json:"caller,omitempty"`
-	Config     string    `json:"config"`
-	Default    string    `json:"default"`
-	Enforce    string    `json:"enforce"`
-}
-
-// ShadowLedger is the whole persisted soak state.
-type ShadowLedger struct {
-	Version      int                     `json:"version"`
-	BinaryStarts []time.Time             `json:"binary_starts"`
-	Classes      map[string]*ClassLedger `json:"classes"`
-	Repro        []ReproRecord           `json:"repro"`
-	SavedAt      time.Time               `json:"saved_at"`
-}
-
 func newClassLedger() *ClassLedger {
 	return &ClassLedger{
 		Calls: map[string]int64{}, Divergence: map[string]int64{}, NotCompared: map[string]int64{},
@@ -116,14 +45,6 @@ func ledgerCallKey(m EngineMethod, p CallPath) string { return string(m) + "|" +
 
 func ledgerDivergenceKey(m EngineMethod, c DivergenceClass, cfg string, p CallPath) string {
 	return strings.Join([]string{string(m), string(c), cfg, string(p)}, "|")
-}
-
-// EdgeKey renders an edge; an empty to (AllowedTransitions) renders "from->*".
-func EdgeKey(from, to BacklogStatus) string {
-	if to == "" {
-		return string(from) + "->*"
-	}
-	return string(from) + "->" + string(to)
 }
 
 func normalizeConfigLabel(l string) string {
@@ -674,14 +595,4 @@ func NewConfigLabeler(fingerprint func() (string, error), clock Clock) func() st
 		cur.Store(&entry{label: label, expires: now.Add(labelerRefreshWindow)})
 		return label
 	}
-}
-
-// sortedKeys returns m's keys in order, for stable output.
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

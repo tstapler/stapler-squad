@@ -38,12 +38,6 @@ const bounceThreshold = 3
 // bounceLookback bounds the bouncing detector to *active* thrashing.
 const bounceLookback = 24 * time.Hour
 
-// bounceMainBranch is the branch reconcileBouncingItems' shipped-without-a-PR
-// fallback checks a bouncing item's most recent work-session commit against.
-// Matches server/services/backlog_service_triage.go's prFixMainBranch — kept
-// as an independent constant since this package cannot import server/services.
-const bounceMainBranch = "main"
-
 // multiReasonThreshold is the minimum count of simultaneously open
 // *non-escalation* stuck reasons on one item before it is escalated to
 // domain.StuckReasonMultipleReasons. Fixed per plan.md's Pattern Decisions

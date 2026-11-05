@@ -188,36 +188,6 @@ other questions for a later turn.
 `
 }
 
-// extractTopLevelJSONObjects returns every complete JSON object found in raw, in
-// the order they appear, by attempting a real JSON decode starting at each `{`.
-//
-// This is more robust than a naive first-`{`/last-`}` scan (which spans across an
-// unrelated brace in prose and the real JSON, producing an unparseable concatenated
-// blob) and more robust than a hand-rolled brace-depth counter (which permanently
-// "gets stuck" if an earlier `{` in prose is never closed — depth never returns to
-// zero, silently swallowing every well-formed object that follows). Delegating to
-// json.Decoder makes each attempt independent: a malformed or unmatched brace at
-// one position simply fails to decode there and has no effect on whether a later,
-// well-formed object is found. A `{` embedded inside an already-successfully-parsed
-// object's string value is never re-examined, since the scan skips forward past
-// the full span the decoder consumed.
-func extractTopLevelJSONObjects(raw string) []string {
-	var candidates []string
-	for i := 0; i < len(raw); i++ {
-		if raw[i] != '{' {
-			continue
-		}
-		dec := json.NewDecoder(strings.NewReader(raw[i:]))
-		var v json.RawMessage
-		if err := dec.Decode(&v); err != nil {
-			continue // not a valid JSON value starting here; keep scanning byte by byte
-		}
-		candidates = append(candidates, string(v))
-		i += int(dec.InputOffset()) - 1 // -1 compensates for the loop's own i++
-	}
-	return candidates
-}
-
 // ParseHeadlessTriageResult unmarshals an LLM JSON response into HeadlessTriageResult.
 // Tolerates preamble text before the JSON block (e.g. "Here is the result:\n\n{...}")
 // and stray unrelated braces earlier in the response (e.g. an illustrative snippet).

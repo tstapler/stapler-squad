@@ -21,33 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
-// Notifier publishes an operator-facing notification. Implemented outside this
-// package (typically a thin adapter over the event bus) since this package cannot
-// import pkg/events directly — pkg/events imports session, so the reverse import
-// would be a cycle. notificationType is an int32 value matching
-// sessionv1.NotificationType; this package stays free of the proto dependency
-// and just passes the raw value through.
-//
-// urgent and important are the Eisenhower-style axes every call site classifies
-// itself on: urgent means time-sensitive right now, important means it matters
-// to a real outcome rather than being routine/transient telemetry. The
-// implementation (EventBusNotifier) derives the stored NotificationPriority
-// from the pair; push delivery (server/push/subscriber.go's shouldNotify)
-// fires only when both are true. Replaced a single ad hoc priority argument
-// (2026-09) because the numeric priority picked at each call site didn't
-// reliably track what actually deserved a push — see the notification
-// push-gate redesign PR for the classification behind each site.
-type Notifier interface {
-	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
-
-	// NotifySession notifies about a bare session with no linked BacklogItem.
-	// Implementations must not write sessionID into metadata["item_id"] — that
-	// key means "this is about backlog item <value>" to every consumer
-	// (NotificationItem.tsx, NotificationsPage.tsx). Use Notify when a real
-	// BacklogItemID exists.
-	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
-}
-
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
 // config.Config.AutoSpawnReadyItemsOrDefault) backlog items as there are free WIP
 // slots, highest-priority first. Called the moment a slot frees up (onSessionExited)
@@ -749,15 +722,6 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
 		true, true, // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 	)
-}
-
-// isGateDenial reports whether err is the engine refusing a transition (graph,
-// Configured gate or Default guard) rather than a write failure. The gate has
-// already reported such a denial for a system caller.
-func isGateDenial(err error) bool {
-	return errors.Is(err, ErrTransitionNotAllowed) ||
-		errors.Is(err, ErrGateNotSatisfied) ||
-		errors.Is(err, ErrVerdictRequired)
 }
 
 // logSystemTransitionFailure logs a failed gated system write: a denial or a
@@ -1689,16 +1653,6 @@ func (l *BacklogLifecycleListener) resolveStuckLogged(ctx context.Context, er *E
 func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Context, er *EntRepository, itemID, caller string) {
 	l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBouncing, caller)
 	l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBounceCapExhausted, caller)
-}
-
-// findOpenStuckStateFor returns the row for (itemID, reason) from rows, if present.
-func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool) {
-	for _, row := range rows {
-		if row.ItemID == itemID && row.Reason == reason {
-			return row, true
-		}
-	}
-	return OpenStuckStateData{}, false
 }
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's

@@ -254,20 +254,6 @@ func ComputeContentHash(fields ...string) string {
 	return sum[:16]
 }
 
-// recognizedPlaceholders is the allow-list of {{...}} placeholder names
-// renderTemplate substitutes. Story 2.3.1 (Phase 2) introduces
-// ValidatePipelineModeContent, which must agree with this same allow-list at
-// write time — see plan.md's Domain Glossary entry for renderTemplate.
-var recognizedPlaceholders = []string{
-	"item_id",
-	"item_title",
-	"item_description",
-	"criteria_index",
-	"criteria_count",
-	"criteria_text",
-	"repo_path",
-}
-
 // renderTemplate performs fixed-placeholder substitution on tmpl using
 // strings.NewReplacer — deliberately NOT text/template: no conditionals, no
 // loops, not Turing-complete, to resist the "templating engine" rabbit hole

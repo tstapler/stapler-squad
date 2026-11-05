@@ -1,77 +1,16 @@
 package session
 
 import (
-	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
-var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
-
 // SanitizeForAgentContext strips HTML tags from s and truncates to maxLen,
 // appending " [truncated]" if truncation occurred.
 func SanitizeForAgentContext(s string, maxLen int) string {
 	return sanitizeField(s, maxLen)
-}
-
-// sanitizeField strips HTML tags and truncates to maxLen with a "[truncated]" suffix.
-func sanitizeField(s string, maxLen int) string {
-	s = htmlTagRe.ReplaceAllString(s, "")
-	if len(s) > maxLen {
-		s = s[:maxLen] + " [truncated]"
-	}
-	return s
-}
-
-// truncateField truncates to maxLen with a "[truncated]" suffix, without stripping HTML.
-// Use this for structured fields (e.g. title) where the envelope context renders
-// injection payloads inert and stripping content would be destructive.
-func truncateField(s string, maxLen int) string {
-	if len(s) > maxLen {
-		return s[:maxLen] + " [truncated]"
-	}
-	return s
-}
-
-// buildAcChecklist renders a numbered checklist from AC criteria.
-// pending → "[ ]", done → "[✓]", in_progress → "[✗]"
-func buildAcChecklist(criteria []AcCriterion) string {
-	if len(criteria) == 0 {
-		return "(no acceptance criteria)"
-	}
-	var sb strings.Builder
-	for _, c := range criteria {
-		var marker string
-		switch c.Status {
-		case "done":
-			marker = "[✓]"
-		case "in_progress":
-			marker = "[✗]"
-		default:
-			marker = "[ ]"
-		}
-		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, sanitizeField(c.Text, 500))
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-// parsePerCriterionVerdicts unmarshals the JSON array stored in
-// ReviewVerdictSummary.PerCriterion (produced via json.Marshal([]CriterionVerdict) in
-// review_gate.go) into a typed slice. Malformed or empty input yields a nil slice and no
-// error is fatal to prompt construction — callers should treat a parse failure as "no
-// per-criterion evidence available" rather than aborting.
-func parsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	var verdicts []CriterionVerdict
-	if err := json.Unmarshal([]byte(raw), &verdicts); err != nil {
-		return nil, err
-	}
-	return verdicts, nil
 }
 
 // maxPriorAttemptsWithFullEvidence caps how many of the most recent ended prior sessions
@@ -80,27 +19,6 @@ func parsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
 // omit the denser evidence to keep BuildTokenBudgetedPrompt's estimate from ballooning on
 // items with many rework cycles.
 const maxPriorAttemptsWithFullEvidence = 3
-
-// MaxSameSessionReviewAttempts bounds how many times a single live work session should
-// loop on /backlog/review (equivalently, the request_review MCP tool) before giving up on
-// reaching PASS in-session and shipping the current state as a PR for human review instead
-// of retrying indefinitely. Exported so server/mcp/tools_backlog.go's get_backlog_item
-// status response — the other place a running session reads this same instruction from, on
-// every single poll — renders the identical number instead of drifting out of sync with
-// taskProtocolBlock below and backlog_commands.go's review.md, the two other copies of this
-// loop-bound.
-//
-// Deliberately independent of BacklogService.effectiveReworkCap's operator-configurable
-// ceiling (server/services/backlog_service_triage.go): that cap governs a different
-// mechanism — spawning a brand-new work session across an item's whole history once
-// AutoReopenAfterFailedReview decides the current one is gone — which never even
-// activates while this session stays alive (see AutoReopenAfterFailedReview's
-// hasActiveWorkSession guard and doc comment). Threading the operator-configured value
-// into this static prompt text would require adding a parameter to
-// BuildSessionInitialPrompt/BuildTokenBudgetedPrompt and every call site (PipelineEngine,
-// BacklogService, WriteBacklogContextFile, and their tests) — a larger, separate change
-// left as a candidate follow-up rather than folded into this fix.
-const MaxSameSessionReviewAttempts = 3
 
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
 var taskProtocolBlock = fmt.Sprintf(`## Your Task Protocol
@@ -119,31 +37,6 @@ unclosed instances have previously exhausted this machine's memory.
 7. NEVER end your session without calling `+"`/backlog/review`"+` — this is how the task is closed properly.
 8. After `+"`/backlog/review`"+`, end your turn and stay idle in this session — do not exit, do NOT poll, and do NOT use ScheduleWakeup or /loop to wait (every wake re-reads your whole context). The app sends you a message with the verdict as soon as it is recorded. PASS → immediately run `+"`/backlog/ship`"+` yourself to open the pull request (it drives `+"`/github:pr-ship`"+`, which can rebase, resolve merge conflicts, and react to failing CI checks) — shipping the PR is part of this task, not a separate step someone else does; do not stop here. FAIL/PARTIAL → fix the noted gaps yourself and run `+"`/backlog/review`"+` again.
 9. `+"`/backlog/review`"+`'s underlying request_review call reports which attempt you're on out of %d allowed in THIS session — the count is tracked server-side, so trust what it reports. Once it says you've hit the cap, STOP looping: run `+"`/backlog/ship`"+` anyway to open a PR so a human can pick up the review directly, rather than retrying `+"`/backlog/review`"+` again. Nothing will kill or replace this session while you do any of this.`, MaxSameSessionReviewAttempts)
-
-// reviewVerdictSummariesMostRecentFirst extracts the review verdicts from
-// priorSessions (ordered oldest-first, as Storage.ListItemSessions returns)
-// into a most-recent-first []ReviewVerdictSummary — mirroring exactly what
-// Storage.GetRecentReviewVerdictSummaries returns (that query filters on
-// itemsession.HasReviewVerdict() only, NOT on whether the session has ended
-// — a review session can write a verdict and be inspected here before its
-// own EndedAt is recorded), but computed from data already in hand rather
-// than a second query. Only review-role sessions that actually wrote a
-// verdict are included, same as that storage query's own filter. Takes the
-// full priorSessions, not the EndedAt-filtered "ended" subset other
-// rendering in this file uses — filtering by EndedAt here would silently
-// diverge from AutoReopenAfterFailedReview's own decision logic (a real bug
-// caught by TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
-// asserting on the actual respawned prompt, not just the status transition).
-func reviewVerdictSummariesMostRecentFirst(priorSessions []ItemSessionSummary) []ReviewVerdictSummary {
-	var out []ReviewVerdictSummary
-	for i := len(priorSessions) - 1; i >= 0; i-- {
-		s := priorSessions[i]
-		if s.Role == SessionRoleReview && s.ReviewVerdict != nil {
-			out = append(out, *s.ReviewVerdict)
-		}
-	}
-	return out
-}
 
 // reviewHadVerdictMostRecentFirst extracts, most-recent-first, one bool per
 // review-role session in priorSessions — true if that session ever wrote a
