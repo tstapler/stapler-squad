@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"sync"
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
@@ -1839,8 +1840,9 @@ func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID strin
 
 	dir := t.TempDir()
 	if gitInit {
-		out, gerr := exec.Command("git", "-C", dir, "init", "-q", "-b", "feature-x").CombinedOutput()
-		require.NoError(t, gerr, string(out))
+		repo, gerr := gogit.PlainInit(dir, false)
+		require.NoError(t, gerr)
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/feature-x")))
 	}
 	ref, err := session.NewPRRef("", "acme", "widgets", 1)
 	require.NoError(t, err)
