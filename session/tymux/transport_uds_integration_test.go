@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+	"github.com/tstapler/tymux/clients/go/selecting"
 )
 
 // paneService answers GetServerInfo and a CapturePane carrying a rows x cols grid, so the same
@@ -106,7 +107,7 @@ func TestUDSDefault_BothListenersUp_TrafficUsesOnlyTheSocket(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, snap.Msg.GetGrid(), 2)
 
-	require.Equal(t, transportUnix, tr.(*selectingTransport).Active())
+	require.Equal(t, selecting.Unix, tr.(*selecting.Client).Active())
 	require.Positive(t, d.unixHits.Load())
 	require.Zero(t, d.tcpHits.Load(), "the unauthenticated TCP listener saw no request")
 	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()))
@@ -121,7 +122,7 @@ func TestUDSDefault_SocketGone_FallsBackToTCP_AndSupervisorTreatsItAsNoSocket(t 
 	_, err := tr.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
 
 	require.NoError(t, err)
-	require.Equal(t, transportTCP, tr.(*selectingTransport).Active())
+	require.Equal(t, selecting.TCP, tr.(*selecting.Client).Active())
 	require.Positive(t, d.tcpHits.Load())
 	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()), "no socket file: an older daemon, not degraded")
 }
@@ -140,7 +141,7 @@ func TestUDSDefault_SocketDeniesAccess_HardErrorNoTCP(t *testing.T) {
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
 	require.ErrorIs(t, err, syscall.EACCES)
 	require.Zero(t, d.tcpHits.Load(), "EACCES must never reach the unauthenticated listener")
-	require.Equal(t, transportUnix, tr.(*selectingTransport).Active())
+	require.Equal(t, selecting.Unix, tr.(*selecting.Client).Active())
 }
 
 // The fixture's stop must leave nothing listening the instant it returns, even when it races the
@@ -155,10 +156,10 @@ func TestStartTestDaemon_StopLeavesNothingListeningImmediately(t *testing.T) {
 
 		_, err := net.Dial("unix", d.sock)
 		require.Error(t, err)
-		require.True(t, isDialRefused(err), "stopped Unix listener must refuse, got %v", err)
+		require.True(t, dialRefused("unix", err), "stopped Unix listener must refuse, got %v", err)
 		_, err = net.Dial("tcp", strings.TrimPrefix(d.addr, "http://"))
 		require.Error(t, err)
-		require.True(t, isDialRefused(err), "stopped TCP listener must refuse, got %v", err)
+		require.True(t, dialRefused("tcp", err), "stopped TCP listener must refuse, got %v", err)
 	}
 }
 
@@ -172,7 +173,7 @@ func TestStartTestDaemon_StopLeavesNothingListeningImmediately(t *testing.T) {
 // the sub-benchmarks alternates per RPC so run order does not favor either transport.
 func BenchmarkTransportRoundTrip(b *testing.B) {
 	d := startTestDaemon(b, newPaneService(50, 200)) // a full 200x50 screen, ~10k cells
-	tcp := newTCPTransport(d.addr)
+	tcp, _ := newTCPTransport(d.addr)
 	unix, _ := newUnixTransport(d.sock)
 	ctx := context.Background()
 	info := func(tr rpcTransport) error {
