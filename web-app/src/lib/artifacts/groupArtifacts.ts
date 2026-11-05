@@ -58,7 +58,8 @@ function item(base: Omit<ArtifactItem, "redacted" | "copyValue" | "copyName"> & 
   return { ...base, redacted, copyValue: redacted ? undefined : base.copyValue, copyName: redacted ? undefined : base.copyName };
 }
 
-function toItem(rec: ArtifactRecordProto, index: number): ArtifactItem | null {
+/** A non-PR record as a displayable item (null for PR and unknown records). */
+export function toItem(rec: ArtifactRecordProto, index: number): ArtifactItem | null {
   const atMs = rec.firstSeenAt ? timestampMs(rec.firstSeenAt) : undefined;
   const key = `${rec.kind}-${index}`;
   const r = rec.record;

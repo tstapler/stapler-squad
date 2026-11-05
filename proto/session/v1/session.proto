@@ -324,6 +324,10 @@ service SessionService {
   // attached link (Tracked) first, then those that only saw it (Seen in transcript).
   rpc FindSessionsByPullRequest(FindSessionsByPullRequestRequest) returns (FindSessionsByPullRequestResponse) {}
 
+  // ListSessionArtifacts browses the typed artifact records of every visible
+  // session, newest first, filtered by kind, repo, PR state or PR (the /artifacts page).
+  rpc ListSessionArtifacts(ListSessionArtifactsRequest) returns (ListSessionArtifactsResponse) {}
+
   // File Viewer RPCs
 
   // ListFiles returns the immediate children of a directory in a session's worktree.
@@ -3909,6 +3913,49 @@ message FindSessionsByPullRequestResponse {
   // descending then title; one row per session.
   repeated SessionArtifactHit hits = 1;
   int32 unscanned_session_count = 2;
+}
+
+// ListSessionArtifactsRequest filters and pages the cross-session artifact browse.
+message ListSessionArtifactsRequest {
+  // Record kinds to keep ("pr", "branch", "commit", "issue", "plan_doc", "ci_link",
+  // "command"); empty keeps every kind.
+  repeated string types = 1;
+  // "owner/repo", case-insensitive; keeps only records that name that repo (PR and issue records).
+  string repo = 2;
+  // PR state ("open", "merged", "closed", "unknown"); keeps only PR records in that state.
+  string state = 3;
+  // Keeps only the sessions tied to this PR (attached link or transcript mention).
+  PullRequestRef pr = 4;
+  // Opaque token from the previous response's next_page_token.
+  string page_token = 5;
+  // Rows per page (default 50, max 200).
+  int32 page_size = 6;
+  bool exclude_automation_sessions = 7;
+  bool include_archived = 8;
+}
+
+// SessionArtifactRow is one artifact record with the session that produced it.
+message SessionArtifactRow {
+  string session_id = 1;
+  string session_title = 2;
+  google.protobuf.Timestamp session_last_activity = 3;
+  bool session_archived = 4;
+  ArtifactRecordProto record = 5;
+  // Set for PR records: the session's own PR entry when it tracks the PR,
+  // otherwise a minimal entry with state "unknown".
+  SessionPullRequest pull_request = 6;
+  // "session_pr" (Tracked) or "artifact" (Seen in transcript).
+  string source = 7;
+}
+
+message ListSessionArtifactsResponse {
+  repeated SessionArtifactRow rows = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+  // Rows matching the filters across all pages.
+  int32 total_count = 3;
+  // Visible sessions whose scan_state is not_linked or scanning, so results may be incomplete.
+  int32 unscanned_session_count = 4;
 }
 
 // ============================================================================

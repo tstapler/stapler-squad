@@ -18,6 +18,7 @@ import {
   Import,
   FileText,
   Gauge,
+  Package,
 } from "lucide-react";
 import { routes } from "./routes";
 
@@ -73,6 +74,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.files,           label: "Files",            icon: FolderOpen,   headerNav: false, group: "settings" },
   { href: routes.settingsFeatures, label: "Feature Flags",   icon: ToggleLeft,   headerNav: false, group: "settings" },
   { href: routes.settingsBacklogQuota, label: "Backlog Quota", icon: Gauge, headerNav: false, featureFlag: "backlog", group: "settings" },
+  { href: routes.artifacts,       label: "Artifacts",        icon: Package,      headerNav: false, group: "work" },
   { href: routes.sessionsImport,  label: "Import",           icon: Import,       headerNav: false, group: "work" },
 ];
 

@@ -67,3 +67,8 @@ func seenAt(t time.Time) *timestamppb.Timestamp {
 	}
 	return timestamppb.New(t)
 }
+
+// ArtifactRecordToProto maps one typed record to the wire (nil for an unknown variant).
+func ArtifactRecordToProto(r artifacts.ArtifactRecord) *sessionv1.ArtifactRecordProto {
+	return artifactRecordToProto(r)
+}

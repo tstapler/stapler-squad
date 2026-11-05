@@ -604,6 +604,15 @@ func (s *SessionService) FindSessionsByPullRequest(
 	return s.artifactSvc.FindSessionsByPullRequest(ctx, req)
 }
 
+// ListSessionArtifacts browses artifact records across sessions (the /artifacts page).
+// +api: ListSessionArtifacts
+func (s *SessionService) ListSessionArtifacts(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListSessionArtifactsRequest],
+) (*connect.Response[sessionv1.ListSessionArtifactsResponse], error) {
+	return s.artifactSvc.ListSessionArtifacts(ctx, req)
+}
+
 // SetArtifactIndex wires the artifact index behind the search RPCs.
 func (s *SessionService) SetArtifactIndex(x *search.ArtifactIndex) {
 	s.artifactSvc.SetIndex(x)
