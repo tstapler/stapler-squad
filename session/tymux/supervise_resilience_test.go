@@ -103,10 +103,10 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		grpcOKServer(t, ln)
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), DaemonConfig{Addr: "http://" + ln.Addr().String()}))
 	})
-	t.Run("unix socket answering must not mask a dead TCP listener", func(t *testing.T) {
+	t.Run("unix socket answering a dead TCP listener is degraded, still usable", func(t *testing.T) {
 		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t)}
-		require.Equal(t, daemonProbeNotListening, probeDaemon(context.Background(), cfg))
-		require.False(t, checkDaemonHealthy(context.Background(), cfg), "squad's clients are TCP-only")
+		require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), cfg), "not Healthy: the monitor must still see TCP is down")
+		require.True(t, checkDaemonHealthy(context.Background(), cfg), "the client falls back to the socket")
 	})
 	t.Run("caller deadline mid-answer is unhealthy, not busy", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -128,17 +128,18 @@ func answeringUnixSocket(t *testing.T) string {
 	return sock
 }
 
-// TCP dead, Unix socket alive: report an error and keep the daemon (it may hold live panes).
-func TestEnsureDaemonRunning_TCPDeadUnixUp_ReportsAndDoesNotKill(t *testing.T) {
+// TCP dead, Unix socket alive: degraded but usable, so the daemon is reused: no error, no stop, no spawn.
+func TestEnsureDaemonRunning_TCPDeadUnixUp_ReusesDaemon(t *testing.T) {
 	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
 	shrinkProbeTimeouts(t)
 	stop, spawn := neverCalled(t)
 	defer stubStopTymuxd(stop)()
 	defer stubStartDaemonAttempt(spawn)()
 
-	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
+	ready, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
 
-	require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+	require.NoError(t, err)
+	require.Equal(t, TymuxdReady{}, ready)
 }
 
 func dialErr(errno syscall.Errno) error {
@@ -244,7 +245,13 @@ func TestEnsureDaemonRunning_ListenerUpButUnhealthy_IsNotStopped(t *testing.T) {
 
 			_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19982", BinaryPath: "tymuxd"})
 
-			require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			if tc.tcp {
+				require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			} else {
+				require.ErrorIs(t, err, ErrTymuxdControlSocketUnresponsive)
+				require.NotErrorIs(t, err, ErrTymuxdPortSquatted, "nothing listens on TCP, so nothing is squatting the port")
+				require.NotContains(t, err.Error(), "something is listening")
+			}
 		})
 	}
 }

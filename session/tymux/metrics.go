@@ -101,6 +101,8 @@ var (
 		metric.WithDescription("Time from spawning tymuxd until it answers health checks (or the retry budget is exhausted), by outcome"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
+	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
+		metric.WithDescription("1 while tymuxd's TCP listener is down but its Unix control socket answers (sessions use the fallback), otherwise 0"))
 	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
 		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))
 )
@@ -117,6 +119,14 @@ func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
 	}
 	daemonHealthyGauge.Record(ctx, value)
 	daemonFailureGauge.Record(ctx, int64(failures))
+}
+
+func recordDaemonDegraded(ctx context.Context, degraded bool) {
+	value := int64(0)
+	if degraded {
+		value = 1
+	}
+	daemonDegradedGauge.Record(ctx, value)
 }
 
 func recordDaemonRestart(reason string) {

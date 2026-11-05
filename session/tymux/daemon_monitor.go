@@ -32,6 +32,10 @@ const daemonMonitorThreshold = 6
 // busy daemon under load is indistinguishable from a wedged one, and killing it destroys every pane.
 const daemonWedgedAfter = 10 * time.Minute
 
+// daemonDegradedWarnEvery rate-limits the "TCP listener down, using the control socket" warning:
+// the state can last for hours, and the transport selector already logs each switch.
+const daemonDegradedWarnEvery = 10 * time.Minute
+
 // neededCacheTTL spares the persisted-session query the monitor's 5s tick would otherwise repeat.
 const neededCacheTTL = 15 * time.Second
 
@@ -108,6 +112,7 @@ func (w *wedgeTracker) observe(ctx context.Context, cfg DaemonConfig, result dae
 func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 	owned := false
 	var wedge wedgeTracker
+	var lastDegradedWarn time.Time
 	failures := 0
 	delay := m.interval
 	for {
@@ -132,6 +137,15 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 		}
 		if wedge.observe(ctx, cfg, result, time.Now()) && m.onWedged != nil {
 			m.onWedged()
+		}
+		degraded := result == daemonProbeDegraded
+		recordDaemonDegraded(ctx, degraded)
+		if degraded && (lastDegradedWarn.IsZero() || time.Since(lastDegradedWarn) >= daemonDegradedWarnEvery) {
+			lastDegradedWarn = time.Now()
+			log.Warn("[tymux] degraded: tymuxd TCP listener is down, sessions are using its Unix control socket; the daemon is left running", "addr", cfg.Addr)
+		}
+		if !degraded {
+			lastDegradedWarn = time.Time{}
 		}
 		healthy := result >= daemonProbeBusy
 		if healthy {
