@@ -131,3 +131,38 @@ holds a `ChainDispatcher`, `WireChainFirer` is a package function over `Storage.
 types became `session/internal/sessiontest` (with the hermetic `TestMain` body) and the 17 bound ones were copied as twins, git CLI helpers
 went to the sanctioned `testutil/gitfixture`, and the path-keyed guards were re-pointed (wake-polling map, workflow bypass inventory and
 strict test, `transition_callers.go` file constants, denied-guard source scans, golden `testdata`, `go_sources` filegroups).
+
+## Epic 13 continuation 4 (branch `sdd/bazel-epic13-next`)
+
+Parent values (tip of `sdd/bazel-epic0`): T9a 0.4330, T9b 0.6573, T9c 0.3785, `server/services` 77,715, `session` 77,473. Marginals below are
+`scoping t9`/`replay` on the tree before and after the move (pp = percentage points, negative is better; SC6 needs lib -0.10, test -0.30, 3% of
+changes lower, or universal -1.0). New tooling that picked the candidates: `scoping touch` (T9b gain of moving a file set: replayed production changes
+whose only universal-package files are in the set) and `scoping leaves [--bases]` (files nothing else in the package uses; with `--bases` the files that
+use nothing else in the package, i.e. lower layers). The lesson from the numbers: a leaf cluster still depends on the core, so a core change still
+rebuilds it and its lib share barely moves; a lower cluster (the core imports it) leaves the core's invalidation set and does move it.
+
+| Step | Decision | T9a test share | T9b universal | T9c lib share | `server/services` / `session` LOC | Criteria |
+|---|---|---|---|---|---|---|
+| parent | | 0.4330 | 0.6573 | 0.3785 | 77,715 / 77,473 | |
+| `server/services/wsconn` (`connectrpc_websocket*`, `websocket_transport`, `ws_*`, `session_gone`, `terminal_stream_metrics`; 18 files, 8.5k LOC) | executed (4e0c21d58) | 0.4271 (-0.59 pp) | 0.6129 (-4.4 pp) | 0.3744 (-0.40 pp) | 69,539 / 77,473 | SC1: 9 declarations relocated first (`sendInputToTmux*` and `runTmuxGatedErr` to `tmux_input_send.go`/`external_pane_resize.go`, the stream-hub name helpers, `resizeExternalCapturePaneSession` over a new core `ExternalPaneTarget`), 0 staying uses after; SC2: 12% of services; SC3: 1 importer (`server`); SC4: 11 replayed changes touch only its files; SC6: all three |
+| `session/importer` (`import_*`, `create_managed_instance`, `suspended_process_store`, `history_linker`, `history_watcher`, `scan_coalescer`; 13 files, 2.0k LOC) | executed (47124d07f) | 0.4233 (-0.38 pp) | 0.5968 (-1.6 pp) | 0.3707 (-0.37 pp) | 69,543 / 75,514 | SC1: 3 declarations relocated (`jsonlStartTime` and two constants to `history.go`), 0 staying uses; SC2: 2.7% of session; SC3: 3 importers (`server`, `server/services`, `server/services/inttest`); SC4: 4 sole-touch changes; SC6: universal -1.6 pp, lib -0.37 pp |
+| `session/ptyio` (`circular_buffer`, `locked`, `pty_access`, `pty_readwait_*`, `response_stream`; 6 files, 1.3k LOC; lower package) | executed (4ecd90973) | 0.4213 | 0.5806 (-1.6 pp) | 0.3695 (-0.12 pp) | 69,543 / 74,306 | SC1: 0 relocations, 7 distinct declarations used by the core; SC2: 1.7% of session; SC3: 1 importer (`session`); SC4: no import edge to the rest of `session`; SC6: universal -1.6 pp and lib -0.12 pp |
+| `session/hostclaim` (`host_*`, `claim_gossiper/index/lookup_auth/url`; 7 files, 1.7k LOC; lower package) | implemented, tested, then reverted (6a28a742d, d5d69307f) by criterion SC3 | 0.4198 | 0.5968 | 0.3664 (-0.43 pp) | 69,546 / 73,835 | SC1: 10 uses; SC3 fails: 7 non-test importers outside `session` (`.`, `server`, `server/auth`, `server/services`, `server/services/backlogsvc`, `server/services/internal/svctest`, `session/backlog`) against 5; SC6 passes |
+| lower `command_executor/history/queue` over `ptyio` (3 files, 1.4k LOC) | skipped by criterion SC1 (13 distinct staying uses) | 0.4179 | 0.5806 | 0.3639 (-0.13 pp) | 69,546 / 71,252 | SC6 passes; with this and `hostclaim` `session` would be 71,252 |
+| `server/services` `github_*` (7 files, 2.7k LOC) | skipped by criteria SC1 and SC6 (`GitHubService` is held by `SessionService`, a cycle; lib 0.00, test -0.02 pp, universal -0.40 pp) | | | | | |
+| `session` leaf clusters: `session_summary`+`handoff_summary_*` (1.5k), `pane_reply`/`question_*`/`dialog_presence` (1.4k), `backlog_crypto`/`backlog_sync`/`feature_controller` (0.8k), `executor_program`+`pipeline_mode_*` (0.8k), `hibernation`/`orphan` sweepers (0.7k) | skipped by criterion SC6 (lib 0.00 pp, test -0.00 to -0.07 pp, universal 0.00); 0 staying non-test uses each | | | | | |
+| `session` leaf `external_*` (3 files, 1.2k) | skipped by criterion SC6 (lib -0.086 pp, test -0.089 pp, 3% rule +0.26 pp; the closest miss) | | | | | |
+| `session` families with staying uses: `history` rest (13 uses; lib -0.085, universal -0.4), `claude_*` (12; lib 0.00), `pi_*` (5; lib 0.00), `review_*` (23), `gate_*` (17), `command_*` (13), `workflow_*` (22), `autonomous_*` (7; lib 0.00), `claim*` (6; lib 0.00) | skipped by criteria SC1 and/or SC6 (numbers in parentheses) | | | | | |
+| `session` `storage*` (8 files, 4.0k) and `ent_*` (22 files, 9.6k) | skipped by criterion SC1: 14 distinct staying uses each (284 and 121 staying test uses); both pass SC6 (`ent_*`: lib -0.134 pp, test -0.188 pp, universal -1.2 pp) and are the Tier C interface-extraction work | | | | | |
+| lower `git_worktree_*` (0.9k), `process_terminate`+`tmux_process_manager` (0.8k, 2 files), `instance_shells`/`shell*` | skipped by criterion SC6 (lib -0.07 pp each) and SC2 (2 files); `shell*` uses `Instance` methods so `scoping move --lower` refuses it | | | | | |
+| `session` `pr_*` (3 files, 421 LOC) | not movable: `pr_tracking.go` and `pr_provenance.go` declare methods on `Instance`, `Storage` and `ClaimIndexRecorder` | | | | | |
+
+Final tree: `scoping t9` T9a PASS (0.4213), T9b PASS (0.5806 against 0.61), T9c PASS (0.3695), T9d FAIL (`server/services` 69,543 passes, `session`
+74,306 against 72,000), T9e PASS. `session` needs 2,306 more lines. The two moves that would close it, `hostclaim` (-1,683) and the `command_*` lower
+package (-1,376), fail SC3 and SC1 as written; both are lower packages whose "uses" and importers are just their callers, so the owner may want SC1 and SC3
+read as relocation count and rewrite blast radius for lower packages (ADR-010 Decision 2 words SC1 as declarations relocated into the core). The cluster
+maps stay as measured above; `baseline.json` is unchanged (it is the pre-epic anchor `scoping t9` compares against).
+
+Flakes seen: `TestUnaryWsBridge_should_CountConnectionOpenAndPeerClose` failed once while `go test` ran two packages at once under load, then passed three
+more times and under Bazel; `//server:server_test` failed once on `TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup`
+(TempDir cleanup "directory not empty", background sweeper) and passed twice with `--cache_test_results=no`.

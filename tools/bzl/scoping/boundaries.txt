@@ -8,5 +8,4 @@ server/services/devtools !server/web
 server/services/backlogsvc !server/web
 session/importer !server
 server/services/wsconn !server/web
-session/hostclaim !server
 session/ptyio !server

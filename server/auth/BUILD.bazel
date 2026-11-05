@@ -22,7 +22,7 @@ go_library(
     deps = [
         "//config",
         "//log",
-        "//session/hostclaim",
+        "//session",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_go_webauthn_webauthn//webauthn",
         "@com_github_gofrs_flock//:flock",
@@ -48,7 +48,7 @@ go_test(
     embed = [":auth"],
     deps = [
         "//envtest",
-        "//session/hostclaim",
+        "//session",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

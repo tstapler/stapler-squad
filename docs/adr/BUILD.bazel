@@ -1,5 +1,5 @@
 # Hand-written: exposes ADRs read by tests (Gazelle ignores BUILD files without Go sources).
 exports_files(
     ["ADR-002-workspace-host-registry-gossip.md"],
-    visibility = ["//session/hostclaim:__pkg__"],
+    visibility = ["//session:__pkg__"],
 )

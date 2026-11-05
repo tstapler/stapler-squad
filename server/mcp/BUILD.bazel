@@ -143,7 +143,6 @@ go_test(
         "//session/domain",
         "//session/git",
         "//session/headless",
-        "//session/hostclaim",
         "//session/scrollback",
         "//session/sendkeysguard",
         "//session/streamhub",
