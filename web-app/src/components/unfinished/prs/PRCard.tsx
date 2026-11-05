@@ -3,6 +3,7 @@
 
 import { useId, useState } from "react";
 import { Link } from "@/lib/nav";
+import { useAnalytics } from "@/lib/analytics";
 import {
   LinkedSessionStatus,
   type LinkedSession,
@@ -42,6 +43,7 @@ function ciChip(pr: UserPR, a: PRAttention): React.ReactNode {
 }
 
 function FailingChecks({ pr, count }: { pr: UserPR; count: number }) {
+  const { track } = useAnalytics();
   const [open, setOpen] = useState(false);
   const listId = useId();
   const capped = pr.failingChecks.length >= 10;
@@ -52,10 +54,12 @@ function FailingChecks({ pr, count }: { pr: UserPR; count: number }) {
         className={cx(styles.chipError, styles.chipInteractive)}
         aria-expanded={open}
         aria-controls={listId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          track({ name: "unfinished_pr_failing_checks_toggled", category: "user_action", component: "PRCard", labels: { open: String(!open) } });
+          setOpen((v) => !v);
+        }}
         data-testid="failing-checks-toggle"
       >
-        {/* analytics-exempt */}
         CI: {count} failing
       </button>
       {open && (

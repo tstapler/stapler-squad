@@ -8,7 +8,7 @@ import * as s from "./PullRequestDialogs.css";
 type MergeMethod = "merge" | "squash" | "rebase";
 
 /** Runs one action; keeps the dialog open with an inline alert on failure (UX-S3-4). */
-function useDialogAction(run: () => Promise<PrActionResult>, onDone: () => void) {
+function useDialogAction(run: () => Promise<PrActionResult>, onDone: (notice?: string) => void) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<{ kind: PrFailureKind; message: string } | null>(null);
   const submit = async () => {
@@ -16,7 +16,7 @@ function useDialogAction(run: () => Promise<PrActionResult>, onDone: () => void)
     setFailed(null);
     const result = await run();
     setBusy(false);
-    if (result.ok) onDone();
+    if (result.ok) onDone(result.notice);
     else setFailed({ kind: result.kind, message: result.message });
   };
   return { busy, failed, submit };
@@ -153,7 +153,8 @@ const URL_ERRORS: Partial<Record<PrFailureKind, string>> = {
 interface TrackDialogProps {
   onAttach: (url: string) => Promise<PrActionResult>;
   onClose: () => void;
-  onDone: () => void;
+  /** Receives the server's note when the PR was already tracked, so the host can say so. */
+  onDone: (notice?: string) => void;
 }
 
 /** "Track a PR by URL": one field, inline errors (invalid URL, not found, already tracked). */

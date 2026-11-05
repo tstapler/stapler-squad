@@ -65,6 +65,7 @@ export function useBacklogServiceMock(
     rejectPlan: jest.Mock;
     triggerTriage: jest.Mock;
     listPipelineModes?: jest.Mock;
+    associatePullRequest?: jest.Mock;
   }
 ) {
   return {
@@ -86,6 +87,7 @@ export function useBacklogServiceMock(
         unarchiveBacklogItem: jest.fn(),
         deleteBacklogItem: jest.fn(),
         updateBacklogItem: jest.fn().mockResolvedValue(null),
+        associatePullRequest: m.associatePullRequest ?? jest.fn(),
         listPipelineModes: m.listPipelineModes ?? jest.fn().mockResolvedValue([]),
         lastError: null,
       };

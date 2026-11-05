@@ -57,6 +57,7 @@ import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
 import { PlanVerdictBox } from "./PlanVerdictBox";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import { prAssociationToast } from "@/lib/backlog/prAssociationToast";
 import { resolveJulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
@@ -146,6 +147,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
+    associatePullRequest,
     listPipelineModes,
     lastError,
   } = useBacklogService();
@@ -1308,13 +1310,8 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
       const toastKey = `${item.id}:manual_associate_pr`;
       setActionLoading("manual_associate_pr");
       try {
-        const updated = await updateBacklogItem(item.id, { ...currentFlags(), prUrl, prNumber });
-        if (!updated) {
-          const msg = lastError?.message ?? "Failed to link PR — please try again.";
-          showActionToast(msg, "error", toastKey);
-          throw new Error(msg);
-        }
-        showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
+        const { association } = await associatePullRequest(item.id, { ...currentFlags(), prUrl, prNumber });
+        showActionToast(prAssociationToast(association, prNumber), "success", toastKey);
         await load();
       } catch (e) {
         showActionToast(getErrorMessage(e, "PR association failed."), "error", toastKey);
@@ -1323,7 +1320,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, updateBacklogItem, lastError, load, currentFlags, showActionToast]
+    [item, associatePullRequest, load, currentFlags, showActionToast]
   );
 
   const itemPrActions = useItemPullRequestActions({

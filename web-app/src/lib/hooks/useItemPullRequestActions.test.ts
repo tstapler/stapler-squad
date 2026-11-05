@@ -1,4 +1,5 @@
 import { renderHook } from "@testing-library/react";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { useItemPullRequestActions } from "./useItemPullRequestActions";
 
 const detachItemPullRequest = jest.fn();
@@ -44,5 +45,11 @@ describe("useItemPullRequestActions", () => {
 
     const bad = setup(jest.fn().mockRejectedValue(new Error("item is not in review")));
     expect(await bad.trackByUrl("https://github.com/acme/app/pull/24")).toMatchObject({ ok: false, message: expect.stringContaining("not in review") });
+  });
+
+  it("trackByUrl_should_showTheServersFailedPreconditionMessageVerbatim", async () => {
+    const message = "item is in status ready; PR can only be linked in review or pr_pending";
+    const bad = setup(jest.fn().mockRejectedValue(new ConnectError(message, Code.FailedPrecondition)));
+    expect(await bad.trackByUrl("https://github.com/acme/app/pull/24")).toEqual({ ok: false, kind: "other", message });
   });
 });

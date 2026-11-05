@@ -41,6 +41,8 @@ export const rowLine = style({ display: "flex", alignItems: "center", flexWrap: 
 export const rowMeta = style({ fontSize: vars.fontSize.xs, color: vars.color.textSecondary, display: "flex", flexWrap: "wrap", gap: vars.space["2"] });
 export const glyph = style({ width: 14, height: 14, flexShrink: 0 });
 
+export const prTitleText = style({ fontSize: vars.fontSize.sm, color: vars.color.textPrimary, overflowWrap: "anywhere", minWidth: 0 });
+
 export const prLink = style({
   color: vars.color.textPrimary,
   fontWeight: 600,

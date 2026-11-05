@@ -159,7 +159,7 @@ test.describe("multi-pr-session-mobile", () => {
     const title = `e2e-multipr-m-backlog-${Date.now()}`;
     const itemId = await createBacklogItemDirect(request, { title, status: "review" });
     await seedBacklogItemPrs(page, itemId, {
-      pullRequests: [prJson({ number: 21, state: "merged" }), prJson({ number: 23, state: "unknown" })],
+      pullRequests: [prJson({ number: 21, state: "merged" }), prJson({ number: 23, state: "unknown", itemDirect: true })],
       prHolds: [holdJson("KIND_SESSION_ACTIVE", 21, { idleWindowSeconds: 600 }), holdJson("KIND_MAX_HOLD", 21)],
     });
     const backlog = new BacklogPage(page);

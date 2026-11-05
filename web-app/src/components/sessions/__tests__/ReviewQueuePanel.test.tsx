@@ -40,6 +40,9 @@ const mockAcknowledgeSessions = jest.fn().mockResolvedValue({ failed: [] });
 let mockSearchParams = new URLSearchParams();
 const mockReplace = jest.fn();
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 jest.mock("@/lib/nav", () => ({
   ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
@@ -2063,5 +2066,59 @@ describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
     rerender(<ReviewQueuePanel />);
 
     expect(screen.queryByTestId("review-item-session-approval")).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewQueuePanel — analytics events", () => {
+  const expectEvent = (name: string, labels?: Record<string, string>) =>
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name, category: "user_action", component: "ReviewQueuePanel", ...(labels ? { labels } : {}) }));
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("tracks opening the filter panel, a priority filter, the PR filter and clearing them", () => {
+    const urgent = makeReviewItem({ sessionId: "s-urgent", priority: Priority.URGENT });
+    const other = makeReviewItem({ sessionId: "s-other", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, other]));
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    expectEvent("review_queue_filters_toggled", { open: "true" });
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+    expectEvent("review_queue_filter_changed", { dimension: "priority" });
+    fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+    expectEvent("review_queue_pr_filter_changed", { value: "has-pr" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear active filter" }));
+    expectEvent("review_queue_filters_cleared");
+  });
+
+  it("tracks the sort direction toggle with the direction it switched to", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeReviewItem()]));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Sort direction/ }));
+    expectEvent("review_queue_sort_direction_changed", { direction: "desc" });
+  });
+
+  it("tracks the staleness Retry and a row open", () => {
+    const onSessionClick = jest.fn();
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "sess-a" })], { error: new Error("blip"), lastUpdatedAt: Date.now() - 65_000 })
+    );
+    render(<ReviewQueuePanel onSessionClick={onSessionClick} />);
+    fireEvent.click(within(screen.getByTestId("review-queue-staleness")).getByRole("button", { name: "Retry" }));
+    expectEvent("review_queue_refresh_retried");
+    fireEvent.click(screen.getByTestId("review-item-sess-a"));
+    expectEvent("review_queue_item_opened");
+    expect(onSessionClick).toHaveBeenCalledWith("sess-a");
+  });
+
+  it("tracks the manual refresh button with its source", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeReviewItem()]));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh review queue" }));
+    expectEvent("review_queue_refreshed", { source: "button" });
   });
 });

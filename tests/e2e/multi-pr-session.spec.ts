@@ -311,11 +311,32 @@ test.describe("multi-pr-session", () => {
     expect(await axeLightAndDark(page, '[data-testid="pr-switcher"]', openVcsTab)).toEqual([]);
   });
 
+  test("list_should_showServerTitleAndVerifyCounters_AndAskToFixShouldReportTheServerOutcome", async ({ page }) => {
+    const prs: PrSeed[] = [
+      { number: 12, isActive: true, title: "Add token refresh" },
+      { number: 9, state: "unknown", outcomeUnverified: true, verifyAttempts: 2, verifyAttemptLimit: 5 },
+      { number: 8, state: "unknown", outcomeUnverified: true, verifyAttempts: 5, verifyAttemptLimit: 5, verifyExhausted: true },
+    ];
+    const id = await seedSession(page, `e2e-multipr-server-fields-${Date.now()}`, prs);
+    const asked = await mockPrRpc(page, "AskSessionToFixPullRequest", { outcome: "NUDGE_OUTCOME_DELIVERED", pr: { host: "github.com", owner: "acme", repo: "app", number: 12 } });
+    const detail = new SessionDetailPage(page);
+    await detail.openPullRequests(id);
+
+    await expect(detail.getPullRequestRow(12).getByTestId("pr-title-12")).toHaveText("Add token refresh");
+    await expect(detail.getPullRequestRow(9)).toContainText("Checking... (attempt 2 of 5)");
+    await expect(detail.getPullRequestRow(8)).toContainText("Couldn't verify after 5 attempts. Treated as closed.");
+
+    await detail.getPullRequestRow(12).getByRole("button", { name: "Ask to fix #12 acme/app" }).click();
+    await expect.poll(() => asked.length).toBe(1);
+    expect(asked[0]).toMatchObject({ id, pr: { owner: "acme", repo: "app", number: 12 } });
+    await expect(page.getByTestId("pr-note")).toContainText("Request sent to");
+  });
+
   test("backlogItem_should_showKofNmergedHeldLinesAndStopTracking", async ({ page, request }) => {
     await enableBacklogFeatureFlag(request);
     const title = `e2e-multipr-backlog-${Date.now()}`;
     const itemId = await createBacklogItemDirect(request, { title, status: "review" });
-    const prs = [prJson({ number: 21, state: "merged" }), prJson({ number: 22, state: "merged" }), prJson({ number: 23, state: "unknown" })];
+    const prs = [prJson({ number: 21, state: "merged" }), prJson({ number: 22, state: "merged" }), prJson({ number: 23, state: "unknown", itemDirect: true, title: "Wire the UI" })];
     await seedBacklogItemPrs(page, itemId, {
       pullRequests: prs,
       prHolds: [holdJson("KIND_SESSION_ACTIVE", 21, { idleWindowSeconds: 600 }), holdJson("KIND_UNKNOWN", 23)],
@@ -348,6 +369,8 @@ test.describe("multi-pr-session", () => {
       await expect(page.getByTestId("item-pr-progress")).toBeVisible();
     });
 
+    await expect(page.getByTestId("item-pr-title-23")).toHaveText("Wire the UI");
+    await expect(page.getByTestId("item-pr-stop-22")).toHaveCount(0);
     await page.getByTestId("item-pr-stop-23").click();
     await page.getByTestId("item-pr-stop-dialog").getByRole("button", { name: "Stop tracking" }).click();
     await expect.poll(() => detached.length).toBe(1);

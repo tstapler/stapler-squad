@@ -475,3 +475,18 @@ describe("StuckItem", () => {
     });
   });
 });
+
+describe("StuckItem — k of N merged (server pr_count / pr_merged_count)", () => {
+  it("shows the server's counts only when the item has more than one PR", () => {
+    render(<StuckItem item={makeItem({ prCount: 3, prMergedCount: 2 })} isExpanded={false} onToggleExpand={jest.fn()} />);
+    expect(screen.getByTestId("stuck-item-pr-progress")).toHaveTextContent("2 of 3 merged");
+  });
+
+  it.each([
+    ["one PR", { prCount: 1, prMergedCount: 1 }],
+    ["counts not computed (flag off)", { prCount: 0, prMergedCount: 0 }],
+  ])("shows nothing for %s", (_label, counts) => {
+    render(<StuckItem item={makeItem(counts)} isExpanded={false} onToggleExpand={jest.fn()} />);
+    expect(screen.queryByTestId("stuck-item-pr-progress")).toBeNull();
+  });
+});

@@ -131,7 +131,7 @@ describe("PullRequestSection with the multi-PR list (ux.md S5)", () => {
   });
   const renderSection = (item: BacklogItem, prActions?: ItemPullRequestActions) =>
     render(<PullRequestSection item={item} actionLoading={null} onMarkDone={jest.fn()} prActions={prActions} />);
-  const threePrs = () => [makePr({ number: 21, state: "merged" }), makePr({ number: 22, state: "merged" }), makePr({ number: 23 })];
+  const threePrs = () => [makePr({ number: 21, state: "merged" }), makePr({ number: 22, state: "merged" }), makePr({ number: 23, itemDirect: true })];
 
   beforeEach(() => { mockFlags = backlogFlags(true); });
   afterEach(() => { mockFlags = []; });
@@ -161,7 +161,7 @@ describe("PullRequestSection with the multi-PR list (ux.md S5)", () => {
 
   it("section should render for an archived item and Stop tracking should call the exit with the row's ref", async () => {
     const actions = fakeActions();
-    renderSection(makeItem({ status: "archived", pullRequests: [makePr({ number: 31, state: "unknown", host: "github.com" })] }), actions);
+    renderSection(makeItem({ status: "archived", pullRequests: [makePr({ number: 31, state: "unknown", host: "github.com", itemDirect: true })] }), actions);
     await userEvent.click(await screen.findByRole("button", { name: "Stop tracking #31 acme/app" }));
     const dialog = screen.getByTestId("item-pr-stop-dialog");
     expect(dialog).toHaveTextContent("It won't be added back automatically");
@@ -179,6 +179,23 @@ describe("PullRequestSection with the multi-PR list (ux.md S5)", () => {
     rerender(<PullRequestSection item={makeItem({ pullRequests: threePrs() })} actionLoading={null} onMarkDone={jest.fn()} readOnly prActions={actions} />);
     expect(screen.queryByTestId("item-pr-stop-23")).toBeNull();
     expect(screen.queryByRole("button", { name: "Track a PR by URL" })).toBeNull();
+  });
+
+  it("section should offer Stop tracking only for item-direct rows and name the session as the source of the rest", async () => {
+    const actions = fakeActions();
+    const prs = [makePr({ number: 23, state: "open", itemDirect: true, title: "Wire the UI" }), makePr({ number: 24, state: "open", itemDirect: false })];
+    renderSection(makeItem({ pullRequests: prs }), actions);
+    expect(await screen.findByTestId("item-pr-stop-23")).toBeInTheDocument();
+    expect(screen.queryByTestId("item-pr-stop-24")).toBeNull();
+    expect(screen.getByTestId("item-pr-via-session-24")).toHaveTextContent("Tracked by the item's session");
+    expect(screen.queryByTestId("item-pr-via-session-23")).toBeNull();
+    expect(screen.getByTestId("item-pr-title-23")).toHaveTextContent("Wire the UI");
+    expect(screen.getByRole("link", { name: "Pull request #23 acme/app, Wire the UI, opens in new tab" })).toBeInTheDocument();
+  });
+
+  it("section should show the server's verify counters on an unverified row", async () => {
+    renderSection(makeItem({ pullRequests: [makePr({ number: 25, state: "unknown", outcomeUnverified: true, verifyAttempts: 3, verifyAttemptLimit: 7 })] }));
+    expect(await screen.findByTestId("item-pr-row-25")).toHaveTextContent("Checking... (attempt 3 of 7)");
   });
 
   it("Track a PR by URL should show the inline error and keep the dialog open", async () => {
