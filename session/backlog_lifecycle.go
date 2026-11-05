@@ -371,6 +371,11 @@ func (l *BacklogLifecycleListener) PipelineEngine() PipelineEngine {
 // Safe to call concurrently.
 func (l *BacklogLifecycleListener) SetEnabled(v bool) { l.enabled.Store(v) }
 
+var _ BacklogListener = (*BacklogLifecycleListener)(nil)
+
+// IsEnabled reports whether SetEnabled(true) was last called.
+func (l *BacklogLifecycleListener) IsEnabled() bool { return l.enabled.Load() }
+
 // SetHeadlessPool wires in the headless LLM pool after construction.
 // Calling this enables the headless review gate path even when the listener was
 // created via NewBacklogLifecycleListenerWithSpawner.

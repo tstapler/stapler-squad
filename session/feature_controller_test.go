@@ -2,18 +2,25 @@ package session
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// fakeBacklogListener is the BacklogListener switch without the lifecycle machinery.
+type fakeBacklogListener struct{ on atomic.Bool }
+
+func (f *fakeBacklogListener) SetEnabled(v bool) { f.on.Store(v) }
+func (f *fakeBacklogListener) IsEnabled() bool   { return f.on.Load() }
+
 // newTestBacklogController creates a BacklogController with a real (but minimal) storage
-// and a real BacklogLifecycleListener, suitable for unit-testing Enable/Disable semantics.
+// and a fake BacklogListener, suitable for unit-testing Enable/Disable semantics.
 // The caller is responsible for calling cleanup().
 func newTestBacklogController(t *testing.T) (*BacklogController, func()) {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 
-	listener := NewBacklogLifecycleListener(storage)
+	listener := &fakeBacklogListener{}
 	registry := NewPluginRegistry()
 
 	ctrl := NewBacklogController(listener, storage, registry, nil)
