@@ -2,6 +2,8 @@ package interceptors
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -36,13 +38,35 @@ func TestFederatedSessionGuard_RejectsRemoteIDs(t *testing.T) {
 	}
 }
 
+// A real handler chain: GetSession for a remote ID reaches the handler, while
+// DeleteSession for the same ID is rejected before it.
 func TestFederatedSessionGuard_ReadsPassWhenHandlerServesThem(t *testing.T) {
-	// A bare request has no procedure, so GetSession is not exempt and is rejected.
-	if _, rejected := guardCode(t, &sessionv1.GetSessionRequest{Id: testRemoteHost + "/abc"}); !rejected {
-		t.Fatal("unlisted procedure with remote id should be rejected")
+	t.Parallel()
+	guard := connect.WithInterceptors(NewFederatedSessionGuard())
+	mux := http.NewServeMux()
+	reached := false
+	mux.Handle(sessionv1connect.SessionServiceGetSessionProcedure, connect.NewUnaryHandler(
+		sessionv1connect.SessionServiceGetSessionProcedure,
+		func(context.Context, *connect.Request[sessionv1.GetSessionRequest]) (*connect.Response[sessionv1.GetSessionResponse], error) {
+			reached = true
+			return connect.NewResponse(&sessionv1.GetSessionResponse{}), nil
+		}, guard))
+	mux.Handle(sessionv1connect.SessionServiceDeleteSessionProcedure, connect.NewUnaryHandler(
+		sessionv1connect.SessionServiceDeleteSessionProcedure,
+		func(context.Context, *connect.Request[sessionv1.DeleteSessionRequest]) (*connect.Response[sessionv1.DeleteSessionResponse], error) {
+			t.Error("delete of a remote id must not reach the handler")
+			return connect.NewResponse(&sessionv1.DeleteSessionResponse{}), nil
+		}, guard))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
+
+	if _, err := client.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{Id: testRemoteHost + "/abc"})); err != nil || !reached {
+		t.Fatalf("GetSession for remote id: err=%v reached=%v", err, reached)
 	}
-	if _, ok := federatedReadProcedures[sessionv1connect.SessionServiceGetSessionProcedure]; !ok {
-		t.Fatal("GetSession must be exempt so the handler can serve the mirrored session")
+	_, err := client.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: testRemoteHost + "/abc"}))
+	if connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("DeleteSession for remote id: err=%v", err)
 	}
 }
 
