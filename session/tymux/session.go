@@ -1067,6 +1067,11 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 			log.Warn("tymux: IsAlive: pane gone daemon-side", logKeySessionID, sessionID, logKeyErr, err)
 			return false
 		}
+		if errors.Is(err, ErrPaneNotRunning) {
+			if alive, known := s.paneNotRunningVerdict(paneID); known {
+				return alive
+			}
+		}
 		if errors.Is(err, ErrTymuxdUnreachable) {
 			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		} else {
@@ -1082,6 +1087,33 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	s.restartIsPending = pending
 	s.mu.Unlock()
 	return pending || snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+}
+
+// paneNotRunningVerdict settles IsAlive for a pane whose capture answered FAILED_PRECONDITION
+// using tymuxd's lifecycle state: restart pending is alive, FAILED/STOPPED/EXITED is confirmed
+// dead (and cached as such). known is false when the daemon cannot say, so the caller falls back
+// to the cached liveness.
+func (s *tymuxGRPCSession) paneNotRunningVerdict(paneID string) (alive, known bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleRPCTimeout)
+	defer cancel()
+	state, ok := s.paneLifecycleState(ctx, paneID)
+	if !ok {
+		return false, false
+	}
+	switch {
+	case isRestartPending(state):
+		s.mu.Lock()
+		s.restartIsPending = true
+		s.mu.Unlock()
+		return true, true
+	case isTerminalPaneState(state) || state == v1.PaneState_PANE_STATE_EXITED:
+		s.mu.Lock()
+		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
+		s.mu.Unlock()
+		return false, true
+	}
+	return false, false
 }
 
 // daemonConfirmsPaneGone double-checks a CapturePane NotFound with a
