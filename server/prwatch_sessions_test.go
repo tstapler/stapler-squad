@@ -255,7 +255,7 @@ func TestPRWatchSessions_should_EmitOneEntryPerOpenPR_When_PollerScopeOn(t *test
 	refs, err := s.List(context.Background())
 	require.NoError(t, err)
 
-	var prs []int
+	prs := make([]int, 0, len(refs))
 	for _, r := range refs {
 		assert.Equal(t, "u1", r.UUID)
 		assert.Equal(t, prwatch.SkipReason(""), r.SkipReason)

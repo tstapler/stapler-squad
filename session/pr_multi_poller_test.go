@@ -142,7 +142,7 @@ func TestPoller_ShouldNotRepollMerged_WhenThreeTicks(t *testing.T) {
 func TestPoller_ShouldFetchOnceAndRefreshBothSessions_WhenTwoSessionsShareOpenPR(t *testing.T) {
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", ApprovedCount: 3}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	var insts []*Instance
+	insts := make([]*Instance, 0, 2)
 	for _, id := range []string{"u1", "u2"} {
 		inst := newPRTestInstance(t)
 		inst.UUID, inst.Title = id, id
