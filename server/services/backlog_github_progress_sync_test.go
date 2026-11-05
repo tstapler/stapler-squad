@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -244,5 +243,5 @@ func TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL(t *testing.T) {
 
 type stubHostRecorder struct{ id string }
 
-func (stubHostRecorder) RecordClaim(context.Context, hostclaim.ClaimRecord) error { return nil }
-func (s stubHostRecorder) LocalHostID() string                                    { return s.id }
+func (stubHostRecorder) RecordClaim(context.Context, session.ClaimRecord) error { return nil }
+func (s stubHostRecorder) LocalHostID() string                                  { return s.id }

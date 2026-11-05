@@ -24,7 +24,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -1475,12 +1474,12 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 // storage the claim checkers. backlogSvc may be nil. Failures disable gossip
 // with a warning rather than aborting remote access.
 func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *backlogsvc.BacklogService) {
-	hostIdentity, err := hostclaim.LoadOrCreateHostIdentity(configDir)
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
 		return
 	}
-	hostRegistry, err := hostclaim.NewHostRegistry(configDir, hostclaim.DefaultHostRegistryTTL)
+	hostRegistry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
 	if err != nil {
 		log.Warn("failed to open host registry, host advertisement disabled", "err", err)
 		return
@@ -1492,21 +1491,21 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	for _, ip := range lanIPs {
 		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
 	}
-	advertiser := hostclaim.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, hostclaim.DefaultHostAdvertisementInterval)
+	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
 	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
 	go advertiser.Run(ctx)
-	pruneTicker := time.NewTicker(hostclaim.DefaultHostAdvertisementInterval)
+	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
 	go func() {
 		defer pruneTicker.Stop()
 		hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
 	}()
 
-	claimIndex, err := hostclaim.NewClaimIndex(configDir, hostRegistry)
+	claimIndex, err := session.NewClaimIndex(configDir, hostRegistry)
 	if err != nil {
 		log.Warn("failed to open claim index, cross-host claim gossip disabled", "err", err)
 		return
 	}
-	claimGossiper, err := hostclaim.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, hostclaim.DefaultHostAdvertisementInterval)
+	claimGossiper, err := session.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, session.DefaultHostAdvertisementInterval)
 	if err != nil {
 		log.Warn("failed to build claim gossiper, cross-host claim gossip disabled", "err", err)
 		return
@@ -1897,7 +1896,7 @@ func runListKnownHosts(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
 	}
-	registry, err := hostclaim.NewHostRegistry(configDir, hostclaim.DefaultHostRegistryTTL)
+	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
 	if err != nil {
 		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
 	}
@@ -1909,7 +1908,7 @@ func runListKnownHosts(out io.Writer) error {
 // advertised address(es), last-seen time) to out, sorted by HostID for
 // deterministic output. Separated from runListKnownHosts so the formatting
 // logic is directly testable without touching disk.
-func formatKnownHosts(out io.Writer, entries []hostclaim.RegistryEntry) {
+func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
 	if len(entries) == 0 {
 		fmt.Fprintln(out, "No known hosts.")
 		return

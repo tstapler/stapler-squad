@@ -12,10 +12,9 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
-type fakeProvenanceSource struct{ host hostclaim.HostIdentity }
+type fakeProvenanceSource struct{ host session.HostIdentity }
 
 func (f fakeProvenanceSource) PRProvenanceComment(item *session.BacklogItemData) (string, bool) {
 	return session.FormatPRProvenanceComment(f.host.ID, "ssq://laptop"+session.BacklogItemDeepLinkPath(item)), true
@@ -27,10 +26,10 @@ type postedComment struct {
 	body   string
 }
 
-func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.RepoRef, int, string) error) (*session.BacklogItemData, hostclaim.HostIdentity, string, string) {
+func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.RepoRef, int, string) error) (*session.BacklogItemData, session.HostIdentity, string, string) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
+	host, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 	storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)

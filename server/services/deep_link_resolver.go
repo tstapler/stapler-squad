@@ -13,7 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/deeplink"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // backlogItemGetter is the narrow slice of *session.Storage the
@@ -109,7 +108,7 @@ func peerTLSTransport() *http.Transport {
 
 // ResolveHost implements HostResolver.
 func (r *registryHostResolver) ResolveHost(ctx context.Context, hostname string) (advertisedAddress string, lastSeenAt string, reachable bool, ok bool) {
-	registry, err := hostclaim.NewHostRegistry(r.stateDir, r.registryTTL)
+	registry, err := session.NewHostRegistry(r.stateDir, r.registryTTL)
 	if err != nil {
 		log.Warn("deep_link.host_registry_open_failed", "err", err)
 		return "", "", false, false

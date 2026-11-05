@@ -10,15 +10,14 @@ import (
 	"time"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakeClaimRecorder struct {
-	calls []hostclaim.ClaimRecord
+	calls []ClaimRecord
 	err   error
 }
 
-func (f *fakeClaimRecorder) RecordClaim(_ context.Context, record hostclaim.ClaimRecord) error {
+func (f *fakeClaimRecorder) RecordClaim(_ context.Context, record ClaimRecord) error {
 	f.calls = append(f.calls, record)
 	return f.err
 }
@@ -138,7 +137,7 @@ func TestStorage_CreateBacklogItem_should_PopulateRealClaimIndexEntry_When_Using
 
 func TestNewClaimIndexRecorder_should_ReturnError_When_IdentityOrIndexMissing(t *testing.T) {
 	index := newTestClaimIndex(t, t.TempDir(), &fakeClock{now: time.Now()})
-	if _, err := NewClaimIndexRecorder(hostclaim.HostIdentity{}, index, nil, "h", nil); err == nil {
+	if _, err := NewClaimIndexRecorder(HostIdentity{}, index, nil, "h", nil); err == nil {
 		t.Errorf("zero identity: error = nil, want error")
 	}
 	if _, err := NewClaimIndexRecorder(newTestIdentity(t), nil, nil, "h", nil); err == nil {

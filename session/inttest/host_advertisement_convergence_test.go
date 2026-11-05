@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/auth"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/internal/peeraddr"
 )
 
@@ -21,9 +21,9 @@ import (
 // importing server/auth back does not create a build cycle: the production
 // session package never imports server/auth, only this test binary does.
 type convergenceNode struct {
-	identity   hostclaim.HostIdentity
-	registry   *hostclaim.HostRegistry
-	advertiser *hostclaim.HostAdvertiser
+	identity   session.HostIdentity
+	registry   *session.HostRegistry
+	advertiser *session.HostAdvertiser
 	server     *httptest.Server
 	addr       string // bare "host:port", the AdvertisedAddress format (ADR-002)
 }
@@ -37,11 +37,11 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 	peeraddr.AllowImplausible = true
 	t.Cleanup(func() { peeraddr.AllowImplausible = false })
 
-	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
 	}
-	registry, err := hostclaim.NewHostRegistry(t.TempDir(), hostclaim.DefaultHostRegistryTTL)
+	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
 	if err != nil {
 		t.Fatalf("NewHostRegistry() error = %v, want nil", err)
 	}
@@ -50,7 +50,7 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 	server := httptest.NewUnstartedServer(mux)
 	addr := server.Listener.Addr().String()
 
-	advertiser := hostclaim.NewHostAdvertiser(identity, registry, []string{addr}, time.Hour)
+	advertiser := session.NewHostAdvertiser(identity, registry, []string{addr}, time.Hour)
 	auth.RegisterHostAdvertisementRoute(mux, identity, registry, advertiser, []string{addr})
 	// StartTLS, not Start: every production --remote-port server is
 	// TLS-only (server/server.go's StartRemote always calls ServeTLS), and
@@ -67,7 +67,7 @@ func newConvergenceNode(t *testing.T) *convergenceNode {
 // already know how to reach each other before gossip begins.
 func seedKnownPeer(t *testing.T, node, peer *convergenceNode) {
 	t.Helper()
-	record := hostclaim.BuildAdvertisement(peer.identity, []string{peer.addr}, time.Now())
+	record := session.BuildAdvertisement(peer.identity, []string{peer.addr}, time.Now())
 	if _, _, err := node.registry.Advertise(record); err != nil {
 		t.Fatalf("seeding known peer failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAdvertisementEndpoint_should_ConvergeThreeNodeTopology_When_BoundedReGo
 	// nodeB.server.Client() is pre-configured to trust the httptest
 	// server's self-signed cert (mirroring peerTLSTransport's production
 	// InsecureSkipVerify, but scoped to this specific test server).
-	resp, err := nodeB.server.Client().Post(nodeB.server.URL+hostclaim.AdvertisementEndpointPath, "application/json", strings.NewReader("{not valid json"))
+	resp, err := nodeB.server.Client().Post(nodeB.server.URL+session.AdvertisementEndpointPath, "application/json", strings.NewReader("{not valid json"))
 	if err != nil {
 		t.Fatalf("POST malformed payload: %v", err)
 	}

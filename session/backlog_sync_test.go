@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // fakeSyncPlugin lets tests control exactly what Fetch returns and inspect the
@@ -1418,9 +1417,9 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	require.Equal(t, 1, events[0].ItemsCreated+events[0].ItemsUpdated+events[0].ItemsSkipped+events[0].ItemsErrored, "aggregate counts must partition the single synced item exactly once")
 }
 
-type fakeForeignClaims map[string]hostclaim.ClaimRecord
+type fakeForeignClaims map[string]ClaimRecord
 
-func (f fakeForeignClaims) ForeignClaim(url string) (hostclaim.ClaimRecord, bool) {
+func (f fakeForeignClaims) ForeignClaim(url string) (ClaimRecord, bool) {
 	r, ok := f[url]
 	return r, ok
 }
@@ -1439,7 +1438,7 @@ func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClai
 
 	hostA := newTestIdentity(t)
 	storage.SetForeignClaimLookup(fakeForeignClaims{
-		"https://github.com/o/r/issues/1": hostclaim.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/1", "ssq://hostA/x", time.Now()),
+		"https://github.com/o/r/issues/1": NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/1", "ssq://hostA/x", time.Now()),
 	})
 
 	var buf bytes.Buffer

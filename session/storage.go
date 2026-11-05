@@ -18,7 +18,6 @@ import (
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -349,10 +348,10 @@ func (s *Storage) SetForeignClaimLookup(l ForeignClaimLookup) {
 
 // ForeignClaim reports a claim on externalURL held by another host, consulting
 // only local state. It reports false when no lookup is wired or externalURL is empty.
-func (s *Storage) ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool) {
+func (s *Storage) ForeignClaim(externalURL string) (ClaimRecord, bool) {
 	lookup := s.foreignClaims.Load()
 	if lookup == nil || externalURL == "" {
-		return hostclaim.ClaimRecord{}, false
+		return ClaimRecord{}, false
 	}
 	return (*lookup).ForeignClaim(externalURL)
 }
@@ -1086,7 +1085,7 @@ func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
 	if recorder == nil || item == nil || item.ExternalURL == "" {
 		return
 	}
-	err := (*recorder).RecordClaim(ctx, hostclaim.ClaimRecord{
+	err := (*recorder).RecordClaim(ctx, ClaimRecord{
 		ExternalURL:  item.ExternalURL,
 		ItemDeepLink: BacklogItemDeepLinkPath(item),
 		ClaimedAt:    item.CreatedAt,

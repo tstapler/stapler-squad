@@ -1,4 +1,4 @@
-package hostclaim
+package session
 
 import (
 	"bytes"
@@ -181,10 +181,10 @@ func (c *ClaimIndex) RecordClaim(record ClaimRecord) (ClaimOutcome, error) {
 	return c.merge(record, true)
 }
 
-// RecordOwn stores a claim this host signed itself. It skips the registry, time
+// recordOwn stores a claim this host signed itself. It skips the registry, time
 // and cap checks a peer's claim gets: this host is not in its own HostRegistry
 // and its clock and volume are trusted.
-func (c *ClaimIndex) RecordOwn(record ClaimRecord) (ClaimOutcome, error) {
+func (c *ClaimIndex) recordOwn(record ClaimRecord) (ClaimOutcome, error) {
 	if record.ExternalURL == "" || !record.ClaimingHostID.IsValid() || !record.Verify() {
 		return ClaimOutcome{}, nil
 	}

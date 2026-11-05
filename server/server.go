@@ -31,7 +31,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -1228,7 +1227,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Storage != nil {
 		var hostResolver services.HostResolver
 		if configErr == nil {
-			hostResolver = services.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
+			hostResolver = services.NewRegistryHostResolver(configDir, session.DefaultHostRegistryTTL)
 		} else {
 			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
 		}

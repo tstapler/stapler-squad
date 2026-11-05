@@ -24,7 +24,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -2841,7 +2840,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetHeadlessPool(pool)
 	listener.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
-	listener.SetHostRefFn(func() (hostclaim.HostID, string) { return testHostID, "onyx.lan" })
+	listener.SetHostRefFn(func() (session.HostID, string) { return testHostID, "onyx.lan" })
 	fakeCreator := &fakePRCreator{
 		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
 		createNumber: 321,

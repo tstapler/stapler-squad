@@ -15,7 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -116,12 +115,12 @@ func Test_formatKnownHosts_should_PrintNoKnownHostsMessage_When_GivenEmptySnapsh
 }
 
 func Test_formatKnownHosts_should_PrintHostIDAddressesAndLastSeen_When_GivenEntries(t *testing.T) {
-	id, err := hostclaim.NewHostID()
+	id, err := session.NewHostID()
 	if err != nil {
 		t.Fatalf("NewHostID() error = %v", err)
 	}
 	lastSeen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	entries := []hostclaim.RegistryEntry{
+	entries := []session.RegistryEntry{
 		{
 			HostID:            id,
 			AdvertisedAddress: []string{"192.168.1.42:8543", "10.0.0.5:8543"},
@@ -144,11 +143,11 @@ func Test_formatKnownHosts_should_PrintHostIDAddressesAndLastSeen_When_GivenEntr
 }
 
 func Test_formatKnownHosts_should_SortEntriesByHostID_When_GivenMultipleEntries(t *testing.T) {
-	idA, err := hostclaim.NewHostID()
+	idA, err := session.NewHostID()
 	if err != nil {
 		t.Fatalf("NewHostID() error = %v", err)
 	}
-	idB, err := hostclaim.NewHostID()
+	idB, err := session.NewHostID()
 	if err != nil {
 		t.Fatalf("NewHostID() error = %v", err)
 	}
@@ -158,7 +157,7 @@ func Test_formatKnownHosts_should_SortEntriesByHostID_When_GivenMultipleEntries(
 		first, second = second, first
 	}
 
-	entries := []hostclaim.RegistryEntry{
+	entries := []session.RegistryEntry{
 		{HostID: second, AdvertisedAddress: []string{"host-b:8543"}},
 		{HostID: first, AdvertisedAddress: []string{"host-a:8543"}},
 	}

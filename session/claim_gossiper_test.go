@@ -1,4 +1,4 @@
-package hostclaim
+package session
 
 import (
 	"context"
@@ -206,8 +206,8 @@ func TestClaimGossiper_BackfillOnce_should_SendOnlyUnsentClaims_When_CalledRepea
 	f := newGossipFixture(t)
 	first := newClaimPeer(t, f.clock)
 	f.addPeer(t, first)
-	if outcome, err := f.index.RecordOwn(f.claim(testIssueURL)); err != nil || !outcome.Accepted {
-		t.Fatalf("local RecordOwn = %+v, err %v", outcome, err)
+	if outcome, err := f.index.recordOwn(f.claim(testIssueURL)); err != nil || !outcome.Accepted {
+		t.Fatalf("local recordOwn = %+v, err %v", outcome, err)
 	}
 
 	ctx := context.Background()

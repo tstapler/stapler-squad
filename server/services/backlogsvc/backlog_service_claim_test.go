@@ -21,7 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 const claimIssueURL = "https://github.com/acme/widgets/issues/42"
@@ -44,10 +43,10 @@ func (f *fakeClaimChecker) CheckClaimLocalOnly(context.Context, string) (service
 	return f.verdict, f.err
 }
 
-func (f *fakeClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord {
+func (f *fakeClaimChecker) ListForeignClaims() []session.ClaimRecord {
 	f.localCalls.Add(1)
 	if f.err == nil && f.verdict.Kind == services.ClaimHeldByOther {
-		return []hostclaim.ClaimRecord{f.verdict.Record}
+		return []session.ClaimRecord{f.verdict.Record}
 	}
 	return nil
 }
@@ -55,7 +54,7 @@ func (f *fakeClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord {
 func heldByHostA(t *testing.T) services.ClaimVerdict {
 	t.Helper()
 	hostA := svctest.NewClaimTestIdentity(t)
-	return services.NewHeldByOtherVerdict(hostclaim.NewSignedClaimRecord(hostA, claimIssueURL, "ssq://hostA/backlog/v1/bl_1", time.Now()))
+	return services.NewHeldByOtherVerdict(session.NewSignedClaimRecord(hostA, claimIssueURL, "ssq://hostA/backlog/v1/bl_1", time.Now()))
 }
 
 func captureClaimLogs(t *testing.T) *bytes.Buffer {
@@ -355,8 +354,8 @@ func TestDequeueNextQueuedItems_should_DequeueAsBefore_When_FeatureFlagOff(t *te
 
 func TestDequeueNextQueuedItems_should_NeverIssueNetworkCallWhileDequeueMuHeld_When_CandidateHasExternalURL(t *testing.T) {
 	self, peerID := svctest.NewClaimTestIdentity(t), svctest.NewClaimTestIdentity(t)
-	peer, hits := svctest.ClaimPeer(t, peerID, svctest.ClaimingHandler(hostclaim.NewSignedClaimRecord(peerID, claimIssueURL, "ssq://p/x", time.Now())))
-	local := services.NewLocalClaimChecker(svctest.NewClaimTestIndex(t), self.ID, svctest.FakePeerLister{Entries: []hostclaim.RegistryEntry{peer}})
+	peer, hits := svctest.ClaimPeer(t, peerID, svctest.ClaimingHandler(session.NewSignedClaimRecord(peerID, claimIssueURL, "ssq://p/x", time.Now())))
+	local := services.NewLocalClaimChecker(svctest.NewClaimTestIndex(t), self.ID, svctest.FakePeerLister{Entries: []session.RegistryEntry{peer}})
 	svc, _, repoPath := newDequeueClaimService(t, local)
 	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 
@@ -547,9 +546,9 @@ func TestCheckCrossHostClaim_should_RequireExternalURL(t *testing.T) {
 func TestListForeignClaims_should_ReturnOnlyOtherHostsClaims_When_FlagOn(t *testing.T) {
 	self, other := svctest.NewClaimTestIdentity(t), svctest.NewClaimTestIdentity(t)
 	index := svctest.NewClaimTestIndex(t, other)
-	for _, c := range []hostclaim.ClaimRecord{
-		hostclaim.NewSignedClaimRecord(self, "https://github.com/acme/widgets/issues/1", "ssq://self/backlog/v1/a", time.Now()),
-		hostclaim.NewSignedClaimRecord(other, "https://github.com/acme/widgets/issues/2", "ssq://other/backlog/v1/b", time.Now()),
+	for _, c := range []session.ClaimRecord{
+		session.NewSignedClaimRecord(self, "https://github.com/acme/widgets/issues/1", "ssq://self/backlog/v1/a", time.Now()),
+		session.NewSignedClaimRecord(other, "https://github.com/acme/widgets/issues/2", "ssq://other/backlog/v1/b", time.Now()),
 	} {
 		_, err := index.RecordClaim(c)
 		require.NoError(t, err)

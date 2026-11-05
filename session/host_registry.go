@@ -1,4 +1,4 @@
-package hostclaim
+package session
 
 import (
 	"bytes"
