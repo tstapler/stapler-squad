@@ -44,6 +44,10 @@ import { setActiveSessionUUID } from "@/lib/telemetry/active-session";
 import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
+import { SessionInactiveNotice } from "./SessionInactiveNotice";
+import { createClient } from "@connectrpc/connect";
+import { getConnectTransport } from "@/lib/api/transport";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
 import { routes } from "@/lib/routes";
@@ -745,6 +749,19 @@ export function SessionDetailView({
     }
   };
 
+  const [isRetryingNow, setIsRetryingNow] = useState(false);
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingNow(true);
+    try {
+      const client = createClient(SessionService, getConnectTransport({ baseUrl: getApiBaseUrl() }));
+      await client.retrySession({ id: session.id });
+    } catch (err) {
+      console.error("retrySession failed", err);
+    } finally {
+      setIsRetryingNow(false);
+    }
+  }, [session.id]);
+
   const handleResumeFromCrash = async () => {
     await actions.resumeFromCrash();
   };
@@ -1014,6 +1031,14 @@ export function SessionDetailView({
         >
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
+            {session.instanceType !== InstanceType.EXTERNAL && (
+              <SessionInactiveNotice
+                status={session.status}
+                archived={session.archivedAt !== undefined}
+                onRetryNow={handleRetryNow}
+                retrying={isRetryingNow}
+              />
+            )}
             {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
               <div className={styles.noTerminalPlaceholder}>
                 <span className={styles.noTerminalIcon}>⛓️</span>
