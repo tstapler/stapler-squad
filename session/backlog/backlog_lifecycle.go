@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -98,7 +99,7 @@ type BacklogLifecycleListener struct {
 
 	// hostRefFn names this instance (host ID and hostname) in the PR footer;
 	// guarded by dashboardBaseURLFnMu. Nil means the footer carries no host.
-	hostRefFn func() (session.HostID, string)
+	hostRefFn func() (hostclaim.HostID, string)
 
 	// repoSettingsMu guards the pre-PR repo-settings seam (see
 	// SetRepoSettingsSeam) and the per-repo preflight dedupe state.
@@ -836,7 +837,7 @@ func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
 
 // SetHostRefFn wires the resolver that names this instance (host ID and
 // ssq:// hostname) in PR-body footers. Either value may be empty.
-func (l *BacklogLifecycleListener) SetHostRefFn(fn func() (session.HostID, string)) {
+func (l *BacklogLifecycleListener) SetHostRefFn(fn func() (hostclaim.HostID, string)) {
 	l.dashboardBaseURLFnMu.Lock()
 	defer l.dashboardBaseURLFnMu.Unlock()
 	l.hostRefFn = fn

@@ -11,7 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakeClaimCheckService struct {
@@ -32,9 +32,9 @@ func callCheckClaim(t *testing.T, svc claimCheckService, args map[string]interfa
 }
 
 func TestCheckCrossHostClaimTool_should_ReturnClaimedTrueWithHostAndDeepLink_When_VerdictHeldByOther(t *testing.T) {
-	hostA, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	hostA, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
-	record := session.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/42", "ssq://hostA/backlog/v1/bl_1", time.Now())
+	record := hostclaim.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/42", "ssq://hostA/backlog/v1/bl_1", time.Now())
 
 	m := callCheckClaim(t, fakeClaimCheckService{verdict: services.NewHeldByOtherVerdict(record)},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})

@@ -5,8 +5,8 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // prBaseURLSources are the inputs resolvePRBodyBaseURL chooses between.
@@ -47,14 +47,14 @@ func resolvePRBodyBaseURL(src prBaseURLSources) string {
 // newHostRefResolver returns a resolver for this instance's host ID and first
 // advertised hostname. The identity is loaded (or minted) on first use and
 // cached; a load failure yields an empty host ID rather than failing the PR.
-func newHostRefResolver(configDir string, hostnames func() []string) func() (session.HostID, string) {
+func newHostRefResolver(configDir string, hostnames func() []string) func() (hostclaim.HostID, string) {
 	var (
 		once sync.Once
-		id   session.HostID
+		id   hostclaim.HostID
 	)
-	return func() (session.HostID, string) {
+	return func() (hostclaim.HostID, string) {
 		once.Do(func() {
-			identity, err := session.LoadOrCreateHostIdentity(configDir)
+			identity, err := hostclaim.LoadOrCreateHostIdentity(configDir)
 			if err != nil {
 				log.Warn("pr_footer.host_identity_unavailable", "err", err)
 				return

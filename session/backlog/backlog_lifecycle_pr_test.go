@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -135,8 +136,8 @@ func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 	require.Contains(t, got, "[truncated]")
 }
 
-var testHostID = func() session.HostID {
-	id, err := session.ParseHostID("host_01ARZ3NDEKTSV4RRFFQ69G5FAV")
+var testHostID = func() hostclaim.HostID {
+	id, err := hostclaim.ParseHostID("host_01ARZ3NDEKTSV4RRFFQ69G5FAV")
 	if err != nil {
 		panic(err)
 	}
@@ -259,7 +260,7 @@ func TestListenerPRFooterOrigin(t *testing.T) {
 	require.Equal(t, "", l.getPRFooterOrigin().BaseURL, "loopback must be dropped")
 
 	l.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
-	l.SetHostRefFn(func() (session.HostID, string) { return testHostID, "onyx.lan" })
+	l.SetHostRefFn(func() (hostclaim.HostID, string) { return testHostID, "onyx.lan" })
 	require.Equal(t, PRFooterOrigin{BaseURL: "https://ssq.example.com", HostID: testHostID, Hostname: "onyx.lan"}, l.getPRFooterOrigin())
 }
 

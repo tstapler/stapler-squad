@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // minClaimOverrideReasonLength mirrors the web app's MIN_OVERRIDE_REASON_LENGTH
@@ -61,7 +62,7 @@ func validateClaimOverrideReason(reason string) error {
 	return nil
 }
 
-func alreadyClaimedElsewhereProto(externalURL string, record session.ClaimRecord) *sessionv1.AlreadyClaimedElsewhere {
+func alreadyClaimedElsewhereProto(externalURL string, record hostclaim.ClaimRecord) *sessionv1.AlreadyClaimedElsewhere {
 	return &sessionv1.AlreadyClaimedElsewhere{
 		ExternalUrl:    externalURL,
 		ClaimingHostId: record.ClaimingHostID.String(),
@@ -185,20 +186,20 @@ func (s *BacklogService) ListForeignClaims(_ context.Context, _ *connect.Request
 // foreignClaimSet is one sweep's view of the claims other hosts hold, keyed by
 // normalized external URL. Reading the index costs a flocked disk read and JSON
 // parse, so a sweep takes it once instead of once per candidate.
-type foreignClaimSet map[string]session.ClaimRecord
+type foreignClaimSet map[string]hostclaim.ClaimRecord
 
 // foreignClaimsSnapshot reads the local index once. Local-only, no network.
 func (s *BacklogService) foreignClaimsSnapshot() foreignClaimSet {
 	records := s.checker().ListForeignClaims()
 	set := make(foreignClaimSet, len(records))
 	for _, record := range records {
-		set[session.NormalizeClaimURL(record.ExternalURL)] = record
+		set[hostclaim.NormalizeClaimURL(record.ExternalURL)] = record
 	}
 	return set
 }
 
-func (f foreignClaimSet) heldFor(externalURL string) (session.ClaimRecord, bool) {
-	record, ok := f[session.NormalizeClaimURL(externalURL)]
+func (f foreignClaimSet) heldFor(externalURL string) (hostclaim.ClaimRecord, bool) {
+	record, ok := f[hostclaim.NormalizeClaimURL(externalURL)]
 	return record, ok
 }
 
@@ -225,7 +226,7 @@ func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *session.
 
 // notifyBlockedByClaim writes the durable StuckReasonBlockedByClaim row,
 // mirroring notifyBlockedByDependency's call shape.
-func (s *BacklogService) notifyBlockedByClaim(ctx context.Context, item *session.BacklogItemData, claim session.ClaimRecord) {
+func (s *BacklogService) notifyBlockedByClaim(ctx context.Context, item *session.BacklogItemData, claim hostclaim.ClaimRecord) {
 	message := fmt.Sprintf("claimed by host %s (%s); override to work on it from this host",
 		claim.ClaimingHostID.String(), claim.ItemDeepLink)
 	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonBlockedByClaim, session.BacklogStatus(item.Status), message)
