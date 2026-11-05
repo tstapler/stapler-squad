@@ -65,6 +65,12 @@ function isReadOnlyProps(props: TriageReviewPanelProps): props is TriageReviewPa
  * Shows when triageStatus === "completed" AND item.status === "idea" AND not dismissed.
  *
  * Per UX spec Section 3.1 and Section 7.2.
+ *
+ * Invariant (`hasSuggestions` gate): TriageDiffSection — and with it the
+ * question-answer UI — renders only when at least one suggestion has
+ * `rationale !== "question"`. A fixture holding only question suggestions
+ * renders no diff section at all, so tests of the answer flow must include
+ * at least one non-question suggestion.
  */
 export function TriageReviewPanel(props: TriageReviewPanelProps) {
   const { item, triageResult } = props;
