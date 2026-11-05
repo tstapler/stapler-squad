@@ -440,6 +440,19 @@ message SessionPullRequest {
   google.protobuf.Timestamp rate_limit_reset_at = 22;
   // Derived by the adapter (state unknown and terminal), not stored.
   bool outcome_unverified = 23;
+  // PR title as last seen by the poller; empty until the first successful poll.
+  string title = 24;
+  // Counted failed polls of an unverified-terminal row (outcome_unverified);
+  // 0 for every other row. The hold ends at verify_attempt_limit.
+  int32 verify_attempts = 25;
+  // The counted-failure count that ends the hold on an unverified-terminal row.
+  int32 verify_attempt_limit = 26;
+  // True once verify_attempts reached the limit over the minimum span: the hold
+  // has ended and the row is treated as closed.
+  bool verify_exhausted = 27;
+  // True on a backlog item's PR list when the item itself links the PR
+  // (item-direct); false when it came only from the current round's session.
+  bool item_direct = 28;
 }
 
 // PrHold explains one reason a worktree or session is not being cleaned up.

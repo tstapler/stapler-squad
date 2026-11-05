@@ -43,7 +43,7 @@ func SessionPullRequestsForList(prs []session.PRView, currentBranch string) []*s
 }
 
 func sessionPullRequest(v session.PRView, isActive bool) *sessionv1.SessionPullRequest {
-	return &sessionv1.SessionPullRequest{
+	out := &sessionv1.SessionPullRequest{
 		Host: v.Ref.Host(), Owner: v.Ref.Owner(), Repo: v.Ref.Repo(),
 		Number: clampInt32(v.Ref.Number()), Url: v.URL, State: string(v.State), IsDraft: v.IsDraft,
 		Role: string(v.Role), HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch,
@@ -54,7 +54,15 @@ func sessionPullRequest(v session.PRView, isActive bool) *sessionv1.SessionPullR
 		PollError:             pollErrorToProto(v.PollError),
 		LastPolledAt:          optTimestamp(v.LastPolledAt), RateLimitResetAt: optTimestamp(v.RateLimitResetAt),
 		OutcomeUnverified: v.State == session.PRStateUnknown && v.StoredTerminal,
+		Title:             v.Title,
+		ItemDirect:        v.BacklogItemID != "",
 	}
+	if v.UnverifiedTerminal() {
+		out.VerifyAttempts = clampInt32(v.PollFailCount)
+		out.VerifyAttemptLimit = clampInt32(session.VerifyAttemptLimit)
+		out.VerifyExhausted = v.VerifyExhausted()
+	}
+	return out
 }
 
 func clampInt32(n int) int32 {

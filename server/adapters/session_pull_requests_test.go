@@ -107,3 +107,37 @@ func TestListSessions_ShouldAddAtMostKnownBytesPerSession_WhenEachHasThreePRs(t 
 	assert.LessOrEqual(t, perSessionMax, 1536, "1.5 KiB per session")
 	assert.LessOrEqual(t, added, 40*1024, "40 KiB for 200 sessions")
 }
+
+func TestSessionPullRequests_ShouldCarryTitleVerifyAttemptsAndItemDirect(t *testing.T) {
+	t.Parallel()
+	unverified := prView(t, 9, session.PRStateUnknown, true)
+	unverified.Title, unverified.PollFailCount = "Old change", 3
+	settled := prView(t, 10, session.PRStateOpen, false)
+	settled.PollFailCount = 4 // a live row's failures are not verify attempts
+	direct := prView(t, 11, session.PRStateOpen, false)
+	direct.BacklogItemID = "item-1"
+
+	got := SessionPullRequests([]session.PRView{unverified, settled, direct}, "")
+
+	assert.Equal(t, "Old change", got[0].Title)
+	assert.EqualValues(t, 3, got[0].VerifyAttempts)
+	assert.EqualValues(t, session.VerifyAttemptLimit, got[0].VerifyAttemptLimit)
+	assert.False(t, got[0].VerifyExhausted)
+	assert.False(t, got[0].ItemDirect)
+	assert.Zero(t, got[1].VerifyAttempts)
+	assert.Zero(t, got[1].VerifyAttemptLimit)
+	assert.True(t, got[2].ItemDirect)
+}
+
+func TestSessionPullRequests_ShouldFlagVerifyExhausted_WhenFiveFailuresSpanThirtyMinutes(t *testing.T) {
+	t.Parallel()
+	v := prView(t, 9, session.PRStateUnknown, true)
+	v.PollFailCount = session.VerifyAttemptLimit
+	v.FirstFailAt = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	v.LastPolledAt = v.FirstFailAt.Add(31 * time.Minute)
+
+	got := SessionPullRequests([]session.PRView{v}, "")
+
+	assert.True(t, got[0].VerifyExhausted)
+	assert.EqualValues(t, session.VerifyAttemptLimit, got[0].VerifyAttempts)
+}

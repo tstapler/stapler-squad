@@ -1,0 +1,19 @@
+{
+  "id": "session:ask-to-fix-pr",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "AskSessionToFixPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_pr_refs.go",
+  "tested": true,
+  "testIds": [
+    "TestAskSessionToFixPullRequest_ShouldDeliverOnceToTargetPR_WhenIdleAndFailingCheck",
+    "TestAskSessionToFixPullRequest_ShouldFailPrecondition_WhenPRNotAttached",
+    "TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenForPR",
+    "TestAskSessionToFixPullRequest_ShouldReportNothingToFix_WhenPRClean",
+    "TestAskSessionToFixPullRequest_ShouldReportPausedWithoutFetching_WhenSessionSuspended",
+    "TestAskSessionToFixPullRequest_ShouldTargetActivePR_WhenSelectorUnset"
+  ],
+  "lastModified": "2026-11-05T09:55:00-08:00"
+}

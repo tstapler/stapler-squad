@@ -19,6 +19,7 @@ var uiOnlyPRRPCs = map[string]string{
 	"RefreshSessionPullRequests": "refresh_session_pull_requests",
 	"DetachSessionPullRequest":   "detach_session_pull_request",
 	"AttachSessionPullRequest":   "attach_session_pull_request",
+	"AskSessionToFixPullRequest": "ask_session_to_fix_pull_request",
 	"DetachItemPullRequest":      "detach_item_pull_request",
 }
 

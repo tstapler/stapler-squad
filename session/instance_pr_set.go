@@ -90,7 +90,7 @@ func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRIn
 	}
 	before := activePRNumber(inst)
 	view := PRView{
-		Ref: ref, State: initial.state(), StoredTerminal: initial.Terminal, URL: initial.URL,
+		Ref: ref, State: initial.state(), StoredTerminal: initial.Terminal, URL: initial.URL, Title: initial.Title,
 		HeadBranch: initial.HeadBranch, BaseBranch: initial.BaseBranch, IsDraft: initial.IsDraft,
 		SessionUUID: inst.UUID, Role: AssignRole(inst.PRs, initial.BaseBranch),
 		AttachSource: source, AttachedAt: now,
@@ -110,6 +110,19 @@ func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRIn
 // reports whether ref is in the set.
 func (i *Instance) ApplyPRUpdate(ref PRRef, u PRStatusUpdate) bool {
 	return i.mutatePR(ref, func(v *PRView) { applyUpdateToView(v, u) })
+}
+
+// MirrorPRPollFacts copies the poll bookkeeping and title of a fresh state row
+// onto the live view, so the session's PR list reports verify attempts and the
+// title without waiting for a reload. Zero fields in fresh clear the view's.
+func (i *Instance) MirrorPRPollFacts(ref PRRef, fresh PRView) bool {
+	return i.mutatePR(ref, func(v *PRView) {
+		if fresh.Title != "" {
+			v.Title = fresh.Title
+		}
+		v.PollFailCount, v.FirstFailAt, v.PollError = fresh.PollFailCount, fresh.FirstFailAt, fresh.PollError
+		v.LastPolledAt, v.RateLimitResetAt = fresh.LastPolledAt, fresh.RateLimitResetAt
+	})
 }
 
 func applyUpdateToView(v *PRView, u PRStatusUpdate) {
@@ -284,7 +297,7 @@ func (i *Instance) persistPRAttach(view PRView) {
 
 func prInitialOf(v PRView) PRInitial {
 	return PRInitial{
-		State: v.State, Terminal: v.StoredTerminal, URL: v.URL,
+		State: v.State, Terminal: v.StoredTerminal, URL: v.URL, Title: v.Title,
 		HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch, IsDraft: v.IsDraft,
 	}
 }

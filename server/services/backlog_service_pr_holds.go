@@ -27,6 +27,34 @@ func (s *BacklogService) attachPRSet(ctx context.Context, p *sessionv1.BacklogIt
 	p.PrHolds = s.prHolds(ctx, item, prs)
 }
 
+// populatePRCounts fills each stuck row's pr_count / pr_merged_count from the
+// item's derived PR set. It is a no-op unless reader:backlog is on, and a failed
+// read leaves that row's counts at 0 ("not computed").
+func (s *BacklogService) populatePRCounts(ctx context.Context, items []*sessionv1.StuckBacklogItem) {
+	if !s.cleanup.scopeOn() {
+		return
+	}
+	for _, it := range items {
+		prs, err := s.storage.ItemPRs(ctx, it.ItemId)
+		if err != nil {
+			log.WarningLog().Printf("[ListStuckBacklogItems] item PR set unreadable for %s: %v", it.ItemId, err)
+			continue
+		}
+		it.PrCount, it.PrMergedCount = countItemPRs(prs)
+	}
+}
+
+// countItemPRs returns the set size and how many of its PRs are merged.
+func countItemPRs(prs []session.PRView) (total, merged int32) {
+	for _, v := range prs {
+		total++
+		if v.State == session.PRStateMerged {
+			merged++
+		}
+	}
+	return total, merged
+}
+
 // prHolds derives the held lines from the same facts the gate reads: non-terminal PRs
 // of the derived set, superseded rounds' non-terminal PRs, a live work session, and a
 // live session past the max hold. The client never recomputes a hold.
