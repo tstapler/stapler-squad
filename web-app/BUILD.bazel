@@ -113,5 +113,5 @@ bun_jest_test(
 filegroup(
     name = "transport_fixtures",
     srcs = glob(["src/lib/transport/__fixtures__/**"]),
-    visibility = ["//server/services:__pkg__"],
+    visibility = ["//server/services/wsconn:__pkg__"],
 )

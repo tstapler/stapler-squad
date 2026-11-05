@@ -45,7 +45,7 @@ go_test(
     deps = [
         "//proto/session/v1:sessionv1_go",
         "//proto/session/v1:sessionv1connect_go",
-        "//session",
+        "//session/hostclaim",
         "@com_connectrpc_connect//:connect",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

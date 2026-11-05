@@ -1,0 +1,84 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "ptyio",
+    srcs = [
+        "circular_buffer.go",
+        "locked.go",
+        "pty_access.go",
+        "pty_readwait_other.go",
+        "pty_readwait_unix.go",
+        "response_stream.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/ptyio",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/analytics",
+        "@com_github_spaolacci_murmur3//:murmur3",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ptyio",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ptyio_test",
+    srcs = [
+        "circular_buffer_test.go",
+        "pty_access_test.go",
+        "pty_readwait_unix_test.go",
+        "response_stream_pty_bench_test.go",
+        "response_stream_pty_shutdown_test.go",
+        "response_stream_test.go",
+    ],
+    embed = [":ptyio"],
+    deps = [
+        "//envtest",
+        "//executor/safeexec",
+        "//pkg/analytics",
+        "//testutil/wait",
+        "@com_github_creack_pty//:pty",
+        "@org_golang_x_term//:term",
+    ],
+)
