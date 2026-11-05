@@ -2271,13 +2271,22 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 	return subscriberID
 }
 
+// handshakeSize returns the handshake's target size, if it carried one.
+func handshakeSize(req *sessionv1.CurrentPaneRequest) (cols, rows int, ok bool) {
+	if req.TargetCols == nil || req.TargetRows == nil {
+		return 0, 0, false
+	}
+	return int(*req.TargetCols), int(*req.TargetRows), true
+}
+
 // voteHandshakeSize casts the subscriber's resize vote from the handshake's target size.
 func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer TerminalWriter, req *sessionv1.CurrentPaneRequest) {
-	if req.TargetCols == nil || req.TargetRows == nil {
+	cols, rows, ok := handshakeSize(req)
+	if !ok {
 		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
 		return
 	}
-	voteSize(connCtx, hub, id, writer, int(*req.TargetCols), int(*req.TargetRows))
+	voteSize(connCtx, hub, id, writer, cols, rows)
 }
 
 // voteSize needs the pane writer as proof the subscriber may resize; a nil writer (read-only) casts no vote.

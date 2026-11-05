@@ -54,6 +54,7 @@ func TestAttachUpgradableSubscriber_should_UpgradeViaServiceEventBus_When_Status
 	svc.GetEventBus().Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 
 	waitClosed(t, w.Upgraded(), "upgrade")
+	w.WaitVotes()
 	got := hub.NegotiatedSize()
 	require.Equal(t, [2]int{100, 30}, [2]int{got.Cols(), got.Rows()})
 	waitClosed(t, watchDone, "bus subscription release after upgrade")
@@ -97,11 +98,57 @@ func TestAttachUpgradableSubscriber_should_UpgradeOnNextFrame_When_NoServiceBus(
 	require.NotNil(t, w.Writer(), "the next frame's writer lookup upgrades")
 
 	waitClosed(t, w.Upgraded(), "upgrade")
+	w.WaitVotes()
 	got := hub.NegotiatedSize()
 	require.Equal(t, [2]int{100, 30}, [2]int{got.Cols(), got.Rows()})
 }
 
-func TestSessionStartedPublisher_should_PublishSessionUpdated_When_InstanceStarts(t *testing.T) {
+func drain(ch <-chan *events.Event) (n int) {
+	for {
+		select {
+		case <-ch:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
+func TestSessionStartedPublisher_should_PublishExactlyOncePerStart_When_InstanceIsActive(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	inst := newTymuxInstanceWithStatus(t, session.Active)
+	ch, _ := svc.GetEventBus().Subscribe(context.Background())
+	l := &sessionStartedPublisher{svc: svc, inst: inst}
+
+	require.True(t, l.publishIfActive())
+	ev := <-ch
+	require.Equal(t, events.EventSessionUpdated, ev.Type)
+	require.Equal(t, inst.UUID, ev.Session.UUID)
+	require.Zero(t, drain(ch), "one start publishes one event")
+
+	require.True(t, l.publishIfActive())
+	<-ch
+	require.Zero(t, drain(ch))
+}
+
+func TestSessionStartedPublisher_should_PublishNothing_When_TransitionFailedOrArchived(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	ch, _ := svc.GetEventBus().Subscribe(context.Background())
+
+	failed := newTymuxInstanceWithStatus(t, session.Stopped) // reconcile fired EventStarted, transition failed
+	require.False(t, (&sessionStartedPublisher{svc: svc, inst: failed}).publishIfActive())
+
+	archivedAt := time.Now()
+	archived := newTymuxInstanceWithStatus(t, session.Active)
+	session.SetStatusForTest(t, archived, session.Active, &archivedAt)
+	require.False(t, (&sessionStartedPublisher{svc: svc, inst: archived}).publishIfActive())
+
+	require.Zero(t, drain(ch))
+}
+
+func TestSessionStartedPublisher_should_PublishViaLifecycleListener_When_InstanceStarts(t *testing.T) {
 	t.Parallel()
 	svc := newServiceWithBus(t)
 	inst := newTymuxInstanceWithStatus(t, session.Active)
@@ -112,7 +159,6 @@ func TestSessionStartedPublisher_should_PublishSessionUpdated_When_InstanceStart
 	select {
 	case ev := <-ch:
 		require.Equal(t, events.EventSessionUpdated, ev.Type)
-		require.Equal(t, inst.UUID, ev.Session.UUID)
 	case <-time.After(10 * time.Second):
 		t.Fatal("no session-updated event published for EventStarted")
 	}

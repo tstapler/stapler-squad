@@ -172,6 +172,7 @@ func waitUpgraded(t *testing.T, w *upgradableWriter) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("writer was never upgraded")
 	}
+	w.WaitVotes()
 }
 
 func TestWireWriterUpgrade_should_UpgradeSubscriberAndVote_When_StatusFlipsWithNoClientFrame(t *testing.T) {
@@ -247,6 +248,62 @@ func TestUpgradableWriter_should_NotExposeWriterToOtherCallers_UntilUpgradeCallb
 	require.NotNil(t, w.Writer())
 }
 
+func TestWireWriterUpgrade_should_NotBlockReadLoop_When_ResizeVoteIsSlow(t *testing.T) {
+	t.Parallel()
+	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	w := h.newUpgradableWriter(inst)
+	hub, id := attachReadOnly(t)
+	entered, release, voted := make(chan struct{}), make(chan struct{}), make(chan [2]int, 1)
+	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{
+		hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(100, 30),
+		vote: func(_ context.Context, _ TerminalWriter, cols, rows int) {
+			close(entered)
+			<-release // a hung SetWindowSize / CapturePaneContentRaw
+			voted <- [2]int{cols, rows}
+		},
+	})
+	session.SetStatusForTest(t, inst, session.Active, nil)
+
+	got := make(chan TerminalWriter, 1)
+	go func() { got <- w.Writer() }() // the input read loop triggering the upgrade
+	select {
+	case writer := <-got:
+		require.NotNil(t, writer, "the first input after the upgrade must be forwarded, not dropped")
+	case <-time.After(10 * time.Second):
+		t.Fatal("read loop blocked on the resize vote")
+	}
+	<-entered
+	require.NotNil(t, w.Writer(), "concurrent callers see the writer while the vote is in flight")
+	close(release)
+	require.Equal(t, [2]int{100, 30}, <-voted)
+}
+
+func TestWireWriterUpgrade_should_UpgradeCapabilityBeforeExposingWriter(t *testing.T) {
+	t.Parallel()
+	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	w := h.newUpgradableWriter(inst)
+	hub, id := attachReadOnly(t)
+	size := mustSize(t, 90, 20)
+	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{
+		hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(90, 20),
+		vote: func(_ context.Context, _ TerminalWriter, _, _ int) {},
+	})
+	session.SetStatusForTest(t, inst, session.Active, nil)
+	require.NotNil(t, w.Writer())
+
+	hub.RequestResize(context.Background(), id, size)
+	require.Equal(t, size, hub.NegotiatedSize(), "once the writer is exposed the subscriber can already vote")
+}
+
+func mustSize(t *testing.T, cols, rows int) streamhub.TerminalSize {
+	t.Helper()
+	size, err := streamhub.NewTerminalSize(cols, rows)
+	require.NoError(t, err)
+	return size
+}
+
 func TestWireWriterUpgrade_should_VoteResizeRecordedAfterUpgrade(t *testing.T) {
 	t.Parallel()
 	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
@@ -260,6 +317,7 @@ func TestWireWriterUpgrade_should_VoteResizeRecordedAfterUpgrade(t *testing.T) {
 
 	// The read loop saw "read-only" just before the upgrade, then recorded its resize after it.
 	w.NoteDroppedResize(160, 50)
+	w.WaitVotes()
 
 	got := hub.NegotiatedSize()
 	require.Equal(t, [2]int{160, 50}, [2]int{got.Cols(), got.Rows()}, "a resize dropped in the upgrade race must still be voted")

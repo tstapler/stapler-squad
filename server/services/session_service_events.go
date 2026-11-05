@@ -110,7 +110,19 @@ func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent,
 	if event != session.EventStarted {
 		return
 	}
-	go l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
+	go l.publishIfActive()
+}
+
+// publishIfActive publishes only for a live, un-archived Active instance: the review
+// queue poller fires EventStarted even when its transition failed, and that must not
+// emit a status update on every reconcile cycle.
+func (l *sessionStartedPublisher) publishIfActive() bool {
+	snap := l.inst.Snapshot()
+	if snap.Status != session.Active || snap.ArchivedAt != nil {
+		return false
+	}
+	l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
+	return true
 }
 
 // sessionExitedPublisher publishes a SessionUpdatedEvent and saves the instance

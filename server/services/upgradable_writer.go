@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -34,7 +35,8 @@ type upgradableWriter struct {
 	lateResize func(writer TerminalWriter, cols, rows int)
 	lastCols   int
 	lastRows   int
-	done       chan struct{} // closed after the upgrade callback has run
+	done       chan struct{}  // closed after the upgrade callback has run
+	votes      sync.WaitGroup // in-flight asynchronous resize votes
 }
 
 func (h *ConnectRPCWebSocketHandler) newUpgradableWriter(instance *session.Instance) *upgradableWriter {
@@ -58,6 +60,9 @@ func (u *upgradableWriter) NoteDroppedResize(cols, rows int) {
 		late(granted, cols, rows)
 	}
 }
+
+// WaitVotes blocks until every resize vote started so far has finished (tests, shutdown).
+func (u *upgradableWriter) WaitVotes() { u.votes.Wait() }
 
 // LastDroppedResize returns the latest resize recorded by NoteDroppedResize.
 func (u *upgradableWriter) LastDroppedResize() (cols, rows int, ok bool) {
@@ -141,8 +146,12 @@ type writerUpgrade struct {
 	writer    *upgradableWriter
 	instance  *session.Instance
 	handshake *sessionv1.CurrentPaneRequest
-	bus       *events.EventBus // nil: upgrade only when a client frame next asks for the writer
+	bus       *events.EventBus                                                 // nil: upgrade only when a client frame next asks for the writer
+	vote      func(ctx context.Context, writer TerminalWriter, cols, rows int) // nil: cast it on hub
 }
+
+// resizeVoteTimeout bounds one post-upgrade resize vote (SetWindowSize + capture).
+const resizeVoteTimeout = 5 * time.Second
 
 // attachUpgradableSubscriber attaches the stream to hub and arranges for a
 // read-only attach to upgrade when the instance's block clears. The returned
@@ -166,15 +175,33 @@ func (h *ConnectRPCWebSocketHandler) attachUpgradableSubscriber(connCtx context.
 // clears, observed from session events so no client frame is needed. The returned
 // channel closes when the bus watcher (if any) has unsubscribed.
 func (h *ConnectRPCWebSocketHandler) wireWriterUpgrade(connCtx context.Context, w writerUpgrade) <-chan struct{} {
-	var voteMu sync.Mutex // serializes votes so the last recorded size wins
-	voteLatest := func(writer TerminalWriter) {
-		voteMu.Lock()
-		defer voteMu.Unlock()
-		if cols, rows, ok := w.writer.LastDroppedResize(); ok {
-			voteSize(connCtx, w.hub, w.id, writer, cols, rows)
-			return
+	castVote := w.vote
+	if castVote == nil {
+		castVote = func(ctx context.Context, writer TerminalWriter, cols, rows int) {
+			voteSize(ctx, w.hub, w.id, writer, cols, rows)
 		}
-		voteHandshakeSize(connCtx, w.hub, w.id, writer, w.handshake)
+	}
+	var voteMu sync.Mutex // serializes votes so the last recorded size wins
+	// voteLatest runs asynchronously: a hung tmux resize must not block the input read
+	// loop or keep the writer hidden. Each run votes the latest size recorded when it runs.
+	voteLatest := func(writer TerminalWriter) {
+		w.writer.votes.Add(1)
+		go func() {
+			defer w.writer.votes.Done()
+			voteMu.Lock()
+			defer voteMu.Unlock()
+			ctx, cancel := context.WithTimeout(connCtx, resizeVoteTimeout)
+			defer cancel()
+			cols, rows, ok := w.writer.LastDroppedResize()
+			if !ok {
+				cols, rows, ok = handshakeSize(w.handshake)
+			}
+			if !ok {
+				log.Warn("[streamViaHub] no size known for the post-upgrade resize vote, layout may be incorrect")
+				return
+			}
+			castVote(ctx, writer, cols, rows)
+		}()
 	}
 	w.writer.mu.Lock()
 	w.writer.lateResize = func(writer TerminalWriter, _, _ int) { voteLatest(writer) }
