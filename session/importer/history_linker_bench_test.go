@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"sync/atomic"
@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // slowPanePM models the tmux exec behind GetPanePID: it blocks for delay
 // (a timer wait, like a subprocess wait) and then reports no live pane so the
 // path fallback runs.
 type slowPanePM struct {
-	ProcessManager
+	session.ProcessManager
 	delay time.Duration
 	calls *atomic.Int64
 }
@@ -34,11 +35,11 @@ func (p slowPanePM) GetPanePID() (int32, error) {
 func BenchmarkHistoryLinker_CorrelateParallel(b *testing.B) {
 	const n = 64
 	var calls atomic.Int64
-	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, b.TempDir()), nil)
-	insts := make([]*Instance, 0, n)
+	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, b.TempDir()), nil)
+	insts := make([]*session.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "bench-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &Instance{Title: title, Path: b.TempDir(), Status: Running}
+		inst := &session.Instance{Title: title, Path: b.TempDir(), Status: session.Running}
 		inst.SetProcessManagerForTest(slowPanePM{delay: 200 * time.Microsecond, calls: &calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)

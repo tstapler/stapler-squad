@@ -1,8 +1,9 @@
-package session
+package importer
 
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // ReconcileSuspendedProcesses runs once at server startup and resolves every
@@ -31,7 +32,7 @@ import (
 // A record is removed only after a successful resume, so it is not
 // reconciled again on the next restart. A resume failure leaves the record
 // in place for the next reconciliation pass to retry.
-func ReconcileSuspendedProcesses(_ context.Context, suspended *SuspendedProcessStore, storage InstanceStore) error {
+func ReconcileSuspendedProcesses(_ context.Context, suspended *SuspendedProcessStore, storage session.InstanceStore) error {
 	if suspended == nil {
 		return nil
 	}
@@ -60,7 +61,7 @@ func ReconcileSuspendedProcesses(_ context.Context, suspended *SuspendedProcessS
 			// concern to resume/kill it via the normal confirm/cancel flow.
 			continue
 		}
-		if err := ResumeOriginalProcess(record.PID); err != nil {
+		if err := session.ResumeOriginalProcess(record.PID); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("reconcile suspended processes: failed to resume pid %d (instance %q): %w", record.PID, record.InstanceID, err)
 			}

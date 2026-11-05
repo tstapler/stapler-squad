@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -868,10 +869,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// CodeUnimplemented rather than the CodeNotFound used by the
 	// config-persisted "backlog" flag, since this is an unshipped/opt-in
 	// capability rather than a togglable UI feature.
-	suspendedStore, err := session.NewSuspendedProcessStore()
+	suspendedStore, err := importer.NewSuspendedProcessStore()
 	if err != nil {
 		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
-	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+	} else if err := importer.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
 		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
 	}
 	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)

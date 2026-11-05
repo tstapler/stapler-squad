@@ -1,6 +1,9 @@
-package session
+package importer
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/tstapler/stapler-squad/session"
+)
 
 // KillOutcomeStatus enumerates the possible results of
 // ConfirmKillExternalSession. This is a Go domain type, not a proto message
@@ -55,11 +58,11 @@ func KillExternalOriginalProcess(checker AliveChecker, pid int32, createTimeMs i
 	// running again before the kill signal can take effect. Ignore errors --
 	// if the process already exited or was never actually stopped, the kill
 	// below will simply be a no-op / fail on its own terms.
-	_ = ResumeOriginalProcess(pid)
+	_ = session.ResumeOriginalProcess(pid)
 
-	throwaway := &Instance{
-		InstanceType: InstanceTypeExternal,
-		ExternalMetadata: &ExternalInstanceMetadata{
+	throwaway := &session.Instance{
+		InstanceType: session.InstanceTypeExternal,
+		ExternalMetadata: &session.ExternalInstanceMetadata{
 			TmuxSessionName: tmuxSession,
 		},
 	}

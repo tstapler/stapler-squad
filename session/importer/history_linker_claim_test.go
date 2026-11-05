@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"os"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestHistoryLinker_SkipsConversationOwnedBySibling(t *testing.T) {
@@ -17,10 +18,10 @@ func TestHistoryLinker_SkipsConversationOwnedBySibling(t *testing.T) {
 	f.write(t, claimOther, "{}", 2*time.Second)
 	siblingPath := f.write(t, claimSibling, "{}", time.Second) // newest
 
-	sibling := &Instance{Title: "sibling", Path: "/repo/shared", Status: Running}
+	sibling := &session.Instance{Title: "sibling", Path: "/repo/shared", Status: session.Running}
 	sibling.SetHistoryInfo(claimSibling, siblingPath)
-	fresh := &Instance{Title: "fresh", Path: "/repo/shared", Status: Running}
-	f.linker.SetInstances([]*Instance{sibling, fresh})
+	fresh := &session.Instance{Title: "fresh", Path: "/repo/shared", Status: session.Running}
+	f.linker.SetInstances([]*session.Instance{sibling, fresh})
 
 	f.linker.correlateSession(fresh, false)
 
@@ -33,10 +34,10 @@ func TestHistoryLinker_AllConversationsClaimed_StaysUnlinked(t *testing.T) {
 	f := newLinkerFixture(t, "/repo/shared")
 	siblingPath := f.write(t, claimSibling, "{}", time.Second)
 
-	sibling := &Instance{Title: "sibling", Path: "/repo/shared", Status: Running}
+	sibling := &session.Instance{Title: "sibling", Path: "/repo/shared", Status: session.Running}
 	sibling.SetHistoryInfo(claimSibling, siblingPath)
-	lonely := &Instance{Title: "lonely", Path: "/repo/shared", Status: Running}
-	f.linker.SetInstances([]*Instance{sibling, lonely})
+	lonely := &session.Instance{Title: "lonely", Path: "/repo/shared", Status: session.Running}
+	f.linker.SetInstances([]*session.Instance{sibling, lonely})
 
 	f.linker.correlateSession(lonely, false)
 
@@ -48,9 +49,9 @@ func TestHistoryLinker_LinkedSession_KeepsOwnConversation(t *testing.T) {
 	f := newLinkerFixture(t, "/repo/shared")
 	ownPath := f.write(t, claimOther, "{}", time.Second) // newest
 
-	inst := &Instance{Title: "self", Path: "/repo/shared", Status: Running}
+	inst := &session.Instance{Title: "self", Path: "/repo/shared", Status: session.Running}
 	inst.SetHistoryInfo(claimOther, ownPath)
-	f.linker.SetInstances([]*Instance{inst})
+	f.linker.SetInstances([]*session.Instance{inst})
 
 	f.linker.correlateSession(inst, true)
 
@@ -64,11 +65,11 @@ func TestHistoryLinker_LinkedSession_ClearMovesToUnclaimedNotSiblingFile(t *test
 	f.write(t, claimOther, "{}", 2*time.Second)                // post-/clear conversation
 	siblingPath := f.write(t, claimSibling, "{}", time.Second) // newest, owned by sibling
 
-	sibling := &Instance{Title: "sibling", Path: "/repo/shared", Status: Running}
+	sibling := &session.Instance{Title: "sibling", Path: "/repo/shared", Status: session.Running}
 	sibling.SetHistoryInfo(claimSibling, siblingPath)
-	inst := &Instance{Title: "cleared", Path: "/repo/shared", Status: Running, EverHadConversationHistory: true}
+	inst := &session.Instance{Title: "cleared", Path: "/repo/shared", Status: session.Running, EverHadConversationHistory: true}
 	inst.SetHistoryInfo(claimOldStart, oldPath)
-	f.linker.SetInstances([]*Instance{sibling, inst})
+	f.linker.SetInstances([]*session.Instance{sibling, inst})
 
 	f.linker.correlateSession(inst, true)
 
@@ -84,8 +85,8 @@ func TestHistoryLinker_NeverLinked_SkipsConversationPredatingSession(t *testing.
 	f.write(t, claimOwnStart, stampedEntry(created.Add(10*time.Second)), 5*time.Second)
 	f.write(t, claimOldStart, stampedEntry(created.Add(-time.Hour)), time.Second) // newest mtime
 
-	fresh := &Instance{Title: "fresh", Path: "/repo/predate", Status: Running, CreatedAt: created}
-	f.linker.SetInstances([]*Instance{fresh})
+	fresh := &session.Instance{Title: "fresh", Path: "/repo/predate", Status: session.Running, CreatedAt: created}
+	f.linker.SetInstances([]*session.Instance{fresh})
 
 	f.linker.correlateSession(fresh, false)
 
@@ -100,19 +101,19 @@ func TestHistoryLinker_PredatingConversation_AcceptedWhenNotFreshlyUnlinked(t *t
 
 	tests := []struct {
 		name string
-		inst *Instance
-		prep func(*Instance, string)
+		inst *session.Instance
+		prep func(*session.Instance, string)
 	}{
 		{
 			name: "EverHadConversationHistory",
-			inst: &Instance{Title: "veteran", Path: "/repo/p", Status: Running, CreatedAt: created, EverHadConversationHistory: true},
+			inst: &session.Instance{Title: "veteran", Path: "/repo/p", Status: session.Running, CreatedAt: created, EverHadConversationHistory: true},
 		},
 		{
 			// resume_id sessions are pre-linked to the older conversation they resume.
 			name: "linked via resume_id",
-			inst: &Instance{Title: "resumed", Path: "/repo/p", Status: Running, CreatedAt: created},
-			prep: func(i *Instance, path string) {
-				i.SetClaudeSession(&ClaudeSessionData{ConversationUUID: claimOther})
+			inst: &session.Instance{Title: "resumed", Path: "/repo/p", Status: session.Running, CreatedAt: created},
+			prep: func(i *session.Instance, path string) {
+				i.SetClaudeSession(&session.ClaudeSessionData{ConversationUUID: claimOther})
 			},
 		},
 	}
@@ -124,7 +125,7 @@ func TestHistoryLinker_PredatingConversation_AcceptedWhenNotFreshlyUnlinked(t *t
 			if tt.prep != nil {
 				tt.prep(tt.inst, path)
 			}
-			f.linker.SetInstances([]*Instance{tt.inst})
+			f.linker.SetInstances([]*session.Instance{tt.inst})
 
 			f.linker.correlateSession(tt.inst, true)
 
@@ -139,15 +140,15 @@ func TestHistoryLinker_StartBoundary_EqualToCreatedAtAccepted(t *testing.T) {
 	created := f.now.Add(-time.Minute).Truncate(time.Millisecond)
 	f.write(t, claimOwnStart, stampedEntry(created), time.Second)
 
-	fresh := &Instance{Title: "fresh", Path: "/repo/edge", Status: Running, CreatedAt: created}
-	f.linker.SetInstances([]*Instance{fresh})
+	fresh := &session.Instance{Title: "fresh", Path: "/repo/edge", Status: session.Running, CreatedAt: created}
+	f.linker.SetInstances([]*session.Instance{fresh})
 	f.linker.correlateSession(fresh, false)
 	assert.True(t, fresh.HasClaudeSession())
 
 	f2 := newLinkerFixture(t, "/repo/edge")
 	f2.write(t, claimOwnStart, stampedEntry(created.Add(-time.Millisecond)), time.Second)
-	fresh2 := &Instance{Title: "fresh2", Path: "/repo/edge", Status: Running, CreatedAt: created}
-	f2.linker.SetInstances([]*Instance{fresh2})
+	fresh2 := &session.Instance{Title: "fresh2", Path: "/repo/edge", Status: session.Running, CreatedAt: created}
+	f2.linker.SetInstances([]*session.Instance{fresh2})
 	f2.linker.correlateSession(fresh2, false)
 	assert.False(t, fresh2.HasClaudeSession())
 }
@@ -168,15 +169,15 @@ func TestJSONLStartTime(t *testing.T) {
 		{"empty file", "", false},
 		{"malformed json", "not json\n", false},
 		{"no timestamps", "{}\n{}\n", false},
-		{"timestamp past entry scan limit", strings.Repeat("{}\n", jsonlStartScanEntries) + stamped, false},
-		{"first entry beyond read cap", `{"pad":"` + strings.Repeat("x", jsonlStartScanBytes) + `"}` + "\n" + stamped, false},
+		{"timestamp past entry scan limit", strings.Repeat("{}\n", session.JsonlStartScanEntries) + stamped, false},
+		{"first entry beyond read cap", `{"pad":"` + strings.Repeat("x", session.JsonlStartScanBytes) + `"}` + "\n" + stamped, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			p := filepath.Join(t.TempDir(), "c.jsonl")
 			require.NoError(t, os.WriteFile(p, []byte(tt.content), 0644))
-			got, ok := jsonlStartTime(p)
+			got, ok := session.JsonlStartTime(p)
 			require.Equal(t, tt.wantOK, ok)
 			if ok {
 				assert.True(t, got.Equal(want), "got %s", got)
@@ -184,7 +185,7 @@ func TestJSONLStartTime(t *testing.T) {
 		})
 	}
 
-	_, ok := jsonlStartTime(filepath.Join(t.TempDir(), "missing.jsonl"))
+	_, ok := session.JsonlStartTime(filepath.Join(t.TempDir(), "missing.jsonl"))
 	assert.False(t, ok, "unreadable file fails open")
 }
 
@@ -193,8 +194,8 @@ func TestHistoryLinker_UndatableConversation_AdoptedByFreshSession(t *testing.T)
 	f := newLinkerFixture(t, "/repo/undated")
 	f.write(t, claimOwnStart, "{}\n", time.Second)
 
-	fresh := &Instance{Title: "fresh", Path: "/repo/undated", Status: Running, CreatedAt: f.now.Add(-time.Minute)}
-	f.linker.SetInstances([]*Instance{fresh})
+	fresh := &session.Instance{Title: "fresh", Path: "/repo/undated", Status: session.Running, CreatedAt: f.now.Add(-time.Minute)}
+	f.linker.SetInstances([]*session.Instance{fresh})
 	f.linker.correlateSession(fresh, false)
 
 	assert.True(t, fresh.HasClaudeSession())

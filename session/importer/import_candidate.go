@@ -1,4 +1,4 @@
-package session
+package importer
 
 import "github.com/tstapler/stapler-squad/session/mux"
 

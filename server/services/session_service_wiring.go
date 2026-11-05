@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -242,7 +243,7 @@ func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
 
 // SetHistoryLinker wires the HistoryLinker so deleted sessions are also removed
 // from it and cannot be re-persisted by the shutdown hook.
-func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
+func (s *SessionService) SetHistoryLinker(hl *importer.HistoryLinker) {
 	s.historyLinker = hl
 }
 

@@ -1,8 +1,9 @@
-package session
+package importer
 
 import (
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session"
 	"path/filepath"
 	"strings"
 )
@@ -21,12 +22,12 @@ var ErrPathAlreadyManaged = errors.New("import commit: path is already managed b
 // worktree path. registry is typically session.Storage, accessed through
 // the InstanceStore interface (ListInstanceData) so this function stays
 // testable against a fake without a real ent-backed Storage.
-func CheckPathNotAlreadyManaged(candidatePath string, registry InstanceStore) error {
+func CheckPathNotAlreadyManaged(candidatePath string, registry session.InstanceStore) error {
 	if registry == nil {
 		return fmt.Errorf("check path not already managed: registry is required")
 	}
 
-	resolved, err := ResolveSessionPath(candidatePath)
+	resolved, err := session.ResolveSessionPath(candidatePath)
 	if err != nil {
 		return fmt.Errorf("check path not already managed: %w", err)
 	}
@@ -41,7 +42,7 @@ func CheckPathNotAlreadyManaged(candidatePath string, registry InstanceStore) er
 			if managedPath == "" {
 				continue
 			}
-			resolvedManaged, err := ResolveSessionPath(managedPath)
+			resolvedManaged, err := session.ResolveSessionPath(managedPath)
 			if err != nil {
 				continue
 			}

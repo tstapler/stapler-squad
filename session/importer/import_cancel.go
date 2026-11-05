@@ -1,11 +1,14 @@
-package session
+package importer
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/tstapler/stapler-squad/session"
+)
 
 // CancelPendingKillParams holds everything needed to abandon an in-progress
 // import: delete the committed Instance, then resume the original process.
 type CancelPendingKillParams struct {
-	Storage   InstanceStore
+	Storage   session.InstanceStore
 	Suspended *SuspendedProcessStore
 
 	InstanceID  string
@@ -30,7 +33,7 @@ func CancelPendingKill(params CancelPendingKillParams) (resumed bool, err error)
 	}
 
 	if params.OriginalPID > 0 {
-		if err := ResumeOriginalProcess(params.OriginalPID); err != nil {
+		if err := session.ResumeOriginalProcess(params.OriginalPID); err != nil {
 			return false, fmt.Errorf("cancel pending kill: instance deleted but failed to resume original process: %w", err)
 		}
 	}

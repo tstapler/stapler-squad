@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // spawnSleeper starts a real short-lived child process so
@@ -41,7 +42,7 @@ func TestCancelPendingKill_DeletesInstanceBeforeResumingProcess_When_DeleteSucce
 	if err := suspended.Add(SuspendedProcessRecord{PID: pid, InstanceID: "imported-1"}); err != nil {
 		t.Fatalf("failed to seed suspended process record: %v", err)
 	}
-	if err := SuspendOriginalProcess(pid); err != nil {
+	if err := session.SuspendOriginalProcess(pid); err != nil {
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
@@ -84,7 +85,7 @@ func TestCancelPendingKill_SkipsResume_When_DeleteFails(t *testing.T) {
 	if err := suspended.Add(SuspendedProcessRecord{PID: pid, InstanceID: "imported-2"}); err != nil {
 		t.Fatalf("failed to seed suspended process record: %v", err)
 	}
-	if err := SuspendOriginalProcess(pid); err != nil {
+	if err := session.SuspendOriginalProcess(pid); err != nil {
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
@@ -114,5 +115,5 @@ func TestCancelPendingKill_SkipsResume_When_DeleteFails(t *testing.T) {
 
 	// Clean up: resume the still-suspended process ourselves so t.Cleanup's
 	// Kill/Wait doesn't hang on a stopped process.
-	_ = ResumeOriginalProcess(pid)
+	_ = session.ResumeOriginalProcess(pid)
 }

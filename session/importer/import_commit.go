@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // commitMu serializes the collision-check-then-create critical section in
@@ -49,13 +50,13 @@ var ErrAmbiguousWithoutChoice = errors.New("import commit: correlation is ambigu
 // persist a managed Instance for an external candidate, start it resumed,
 // and suspend the original process.
 type CommitImportParams struct {
-	Detector     *HistoryFileDetector
-	Storage      InstanceStore
-	Registry     *Registry
+	Detector     *session.HistoryFileDetector
+	Storage      session.InstanceStore
+	Registry     *session.Registry
 	Linker       *HistoryLinker
 	Suspended    *SuspendedProcessStore
 	AliveChecker AliveChecker
-	TmuxQuerier  TmuxSocketQuerier
+	TmuxQuerier  session.TmuxSocketQuerier
 
 	Candidate            ExternalSessionCandidate
 	ExpectedCorrelation  CorrelationResult
@@ -75,7 +76,7 @@ type CommitImportParams struct {
 
 // CommitImportResult is the domain-level outcome of a successful commit.
 type CommitImportResult struct {
-	Instance *Instance
+	Instance *session.Instance
 	// FreshCreateTimeMs is the caller-supplied OriginalCreateTimeMs, echoed
 	// back for the caller to mint a fresh PIDIdentity in the RPC response
 	// (per import.proto's doc comment on
@@ -129,7 +130,7 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 	}
 
 	commitMu.Lock()
-	instance, err := func() (*Instance, error) {
+	instance, err := func() (*session.Instance, error) {
 		defer commitMu.Unlock()
 
 		if err := CheckPathNotAlreadyManaged(params.Candidate.Path, params.Storage); err != nil {
@@ -139,17 +140,17 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 		title := importInstanceTitle(params.Candidate)
 		cfg := config.LoadConfig()
 		return CreateManagedInstance(ctx, CreateManagedInstanceParams{
-			Options: InstanceOptions{
+			Options: session.InstanceOptions{
 				Title:            title,
 				Path:             params.Candidate.Path,
 				Program:          params.Candidate.Program,
-				SessionType:      SessionTypeDirectory,
+				SessionType:      session.SessionTypeDirectory,
 				TmuxServerSocket: params.TmuxServerSocket,
 				// Backend consults the session-name override map
 				// (tymux-bundled-integration Epic 4.4.3) so a canary override
 				// applies through this restore-from-state path too; there's no
 				// per-request override concept here.
-				Backend: ResolveSessionBackendForTitle(cfg, title, ""),
+				Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 			},
 			Storage:  params.Storage,
 			Registry: params.Registry,
@@ -220,7 +221,7 @@ func resolveResumeUUID(fresh, expected CorrelationResult, disambiguationChoice s
 // unfreeze). If suspension itself fails after the record was persisted, the
 // record is removed again so a subsequent restart doesn't try to resume a
 // process that was never actually stopped.
-func startAndSuspend(_ context.Context, params CommitImportParams, instance *Instance) error {
+func startAndSuspend(_ context.Context, params CommitImportParams, instance *session.Instance) error {
 	if err := instance.Start(false); err != nil {
 		return fmt.Errorf("commit import: failed to start resumed instance: %w", err)
 	}
@@ -255,7 +256,7 @@ func startAndSuspend(_ context.Context, params CommitImportParams, instance *Ins
 		}
 	}
 
-	if err := SuspendOriginalProcess(params.OriginalPID); err != nil {
+	if err := session.SuspendOriginalProcess(params.OriginalPID); err != nil {
 		if params.Suspended != nil {
 			_ = params.Suspended.Remove(instance.Title)
 		}

@@ -91,7 +91,9 @@
 // (10 real `claude` CLI invocations on a developer's own machine, per the
 // plan's original spike design) should be run before Phase 1 exits its
 // flagged soak period.
-package session
+package importer
+
+import "github.com/tstapler/stapler-squad/session"
 
 // CorrelationKind is the discriminant of a CorrelationResult. Callers must
 // exhaustively switch on it — Ambiguous and NotFound are valid, non-error
@@ -146,7 +148,7 @@ type CorrelationResult struct {
 	UUID       string
 	Confidence CorrelationConfidence
 	// Candidates is populated only when Kind == CorrelationAmbiguous.
-	Candidates []HistoryFileInfo
+	Candidates []session.HistoryFileInfo
 }
 
 // CorrelateCandidate runs HistoryFileDetector against a candidate and
@@ -158,7 +160,7 @@ type CorrelationResult struct {
 // open Claude file, or PlainTmux candidates that have no PID-openable file),
 // it falls back to path-based detection using DetectAllByPath so that
 // ambiguity is never silently collapsed to "most recent".
-func CorrelateCandidate(detector *HistoryFileDetector, candidate ExternalSessionCandidate) (CorrelationResult, error) {
+func CorrelateCandidate(detector *session.HistoryFileDetector, candidate ExternalSessionCandidate) (CorrelationResult, error) {
 	if candidate.PID > 0 {
 		info, err := detector.Detect(candidate.PID)
 		if err != nil {

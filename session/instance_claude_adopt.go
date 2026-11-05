@@ -47,7 +47,7 @@ func (i *Instance) detectAdoptableByPath(detector *HistoryFileDetector, path str
 			}
 		}
 		if !notBefore.IsZero() {
-			if started, ok := jsonlStartTime(c.HistoryFilePath); ok && started.Before(notBefore) {
+			if started, ok := JsonlStartTime(c.HistoryFilePath); ok && started.Before(notBefore) {
 				log.Debug("tryextractconversationuuid: skipping conversation that predates session",
 					"session", i.Title, "conv_uuid", c.ConversationUUID)
 				continue

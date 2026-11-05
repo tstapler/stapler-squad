@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid is the
@@ -23,7 +24,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	registry := NewRegistry(storage, nil)
+	registry := session.NewRegistry(storage, nil)
 
 	dir := t.TempDir()
 
@@ -32,7 +33,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 			Title:       "cmi-happy-path",
 			Path:        dir,
 			Program:     "claude",
-			SessionType: SessionTypeDirectory,
+			SessionType: session.SessionTypeDirectory,
 		},
 		Storage:  storage,
 		Registry: registry,
@@ -79,7 +80,7 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_DirectoryMissingAndNo
 			Title:       "cmi-missing-path",
 			Path:        missingPath,
 			Program:     "claude",
-			SessionType: SessionTypeDirectory,
+			SessionType: session.SessionTypeDirectory,
 		},
 		Storage:         storage,
 		CreateIfMissing: false,
@@ -117,7 +118,7 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_NewWorktreeMissing(t 
 					Title:       "cmi-new-worktree-missing-path",
 					Path:        missingPath,
 					Program:     "claude",
-					SessionType: SessionTypeNewWorktree,
+					SessionType: session.SessionTypeNewWorktree,
 				},
 				Storage:         storage,
 				CreateIfMissing: createIfMissing,
@@ -147,7 +148,7 @@ func TestCreateManagedInstance_ReturnsErrResumePathNotExist_When_ResumingMissing
 			Title:       "cmi-missing-resume-path",
 			Path:        missingPath,
 			Program:     "claude",
-			SessionType: SessionTypeDirectory,
+			SessionType: session.SessionTypeDirectory,
 		},
 		Storage:  storage,
 		ResumeID: "abc-123",

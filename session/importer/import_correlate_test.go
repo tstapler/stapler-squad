@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"os"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestCorrelateCandidate_ReturnsResolvedPIDExact_When_DetectFindsOneMatchByPID(t *testing.T) {
@@ -19,7 +20,7 @@ func TestCorrelateCandidate_ReturnsResolvedPIDExact_When_DetectFindsOneMatchByPI
 	inspector := &mockProcessInspector{
 		files: []string{historyPath},
 	}
-	detector := NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 
 	candidate := ExternalSessionCandidate{
 		SourceKind: MuxDiscovered,
@@ -39,7 +40,7 @@ func TestCorrelateCandidate_ReturnsAmbiguous_When_PathDetectionFindsTwoCandidate
 	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/ambiguousproject"
-	projectDir := ClaudeProjectDirName(projectPath)
+	projectDir := session.ClaudeProjectDirName(projectPath)
 	dir := filepath.Join(tmpHome, ".claude", "projects", projectDir)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
@@ -51,7 +52,7 @@ func TestCorrelateCandidate_ReturnsAmbiguous_When_PathDetectionFindsTwoCandidate
 	// No PID supplied (dead/unmanaged process with no open Claude fd), so
 	// CorrelateCandidate must fall back to path detection.
 	inspector := &mockProcessInspector{files: nil}
-	detector := NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 
 	candidate := ExternalSessionCandidate{
 		SourceKind: MuxDiscovered,
@@ -71,7 +72,7 @@ func TestCorrelateCandidate_ReturnsNotFound_When_NeitherPIDNorPathMatch(t *testi
 	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &mockProcessInspector{files: nil}
-	detector := NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 
 	candidate := ExternalSessionCandidate{
 		SourceKind: MuxDiscovered,

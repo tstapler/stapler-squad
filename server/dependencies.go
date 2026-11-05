@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
@@ -70,7 +71,7 @@ type ServerDependencies struct {
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
-	HistoryLinker           *session.HistoryLinker
+	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
 	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
@@ -516,7 +517,7 @@ type RuntimeDeps struct {
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
 	PRStatusPoller          *prpoller.PRStatusPoller
-	HistoryLinker           *session.HistoryLinker
+	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
 	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
@@ -1199,7 +1200,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
-	historyLinker := session.NewHistoryLinkerFromRealInspector()
+	historyLinker := importer.NewHistoryLinkerFromRealInspector()
 	log.Info("HistoryLinker initialized", "instances", len(instances))
 
 	// Step 9: ScrollbackManager (independent of above)

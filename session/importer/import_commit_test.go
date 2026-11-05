@@ -1,4 +1,4 @@
-package session
+package importer
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -19,9 +20,9 @@ import (
 // for the fd-based fast path. This keeps commit tests focused on the
 // persist/start/suspend orchestration rather than history-file correlation,
 // which is already covered by import_correlate_test.go.
-func newNotFoundDetector(t *testing.T) *HistoryFileDetector {
+func newNotFoundDetector(t *testing.T) *session.HistoryFileDetector {
 	t.Helper()
-	return NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir())
+	return session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir())
 }
 
 func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKindDiffersFromExpected(t *testing.T) {
@@ -50,7 +51,7 @@ func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathColli
 	t.Parallel()
 	path := t.TempDir()
 	store := &fakeInstanceStore{
-		instances: []InstanceData{{Title: "existing", Path: path}},
+		instances: []session.InstanceData{{Title: "existing", Path: path}},
 	}
 	detector := newNotFoundDetector(t)
 
@@ -145,7 +146,7 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 
 	// Clean up: resume the original process so t.Cleanup's Kill/Wait on the
 	// sleeper doesn't hang on a stopped process.
-	_ = ResumeOriginalProcess(pid)
+	_ = session.ResumeOriginalProcess(pid)
 }
 
 // TestCommitImportExternalSession_HonorsSessionNameOverrideMap verifies that
@@ -196,10 +197,10 @@ func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) 
 	require.NotNil(t, result.Instance)
 	t.Cleanup(func() { _ = result.Instance.Kill() })
 
-	assert.Equal(t, BackendTmux, result.Instance.Backend,
+	assert.Equal(t, session.BackendTmux, result.Instance.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 
-	_ = ResumeOriginalProcess(pid)
+	_ = session.ResumeOriginalProcess(pid)
 }
 
 func TestCommitImportExternalSession_CompensatingDeletesInstance_When_SuspendOriginalProcessFails(t *testing.T) {

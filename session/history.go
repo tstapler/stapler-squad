@@ -599,15 +599,15 @@ func (sh *ClaudeSessionHistory) GetMessagesFromConversationFile(sessionID string
 
 // jsonlStartTime returns the first timestamp in a Claude JSONL file. ok=false means
 // undatable (unreadable, none found, or past the read cap), so callers fail open.
-func jsonlStartTime(path string) (t time.Time, ok bool) {
+func JsonlStartTime(path string) (t time.Time, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return time.Time{}, false
 	}
 	defer f.Close()
 
-	dec := json.NewDecoder(io.LimitReader(f, jsonlStartScanBytes))
-	for range jsonlStartScanEntries {
+	dec := json.NewDecoder(io.LimitReader(f, JsonlStartScanBytes))
+	for range JsonlStartScanEntries {
 		var entry struct {
 			Timestamp string `json:"timestamp"`
 		}
@@ -622,6 +622,6 @@ func jsonlStartTime(path string) (t time.Time, ok bool) {
 }
 
 const (
-	jsonlStartScanEntries = 20      // entries to scan for a timestamp
-	jsonlStartScanBytes   = 1 << 20 // read cap; entries can embed multi-MB pasted content
+	JsonlStartScanEntries = 20      // entries to scan for a timestamp
+	JsonlStartScanBytes   = 1 << 20 // read cap; entries can embed multi-MB pasted content
 )

@@ -1,9 +1,10 @@
-package session
+package importer
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session"
 	"os"
 )
 
@@ -45,7 +46,7 @@ type CreateManagedInstanceParams struct {
 	// Storage persists the constructed Instance (mirrors
 	// SessionService.storage; typically a *session.Storage backed by
 	// EntRepository). Required.
-	Storage InstanceStore
+	Storage session.InstanceStore
 
 	// Registry, if non-nil, registers the instance's live handle before
 	// Storage.AddInstance runs, matching CreateSession's existing
@@ -54,7 +55,7 @@ type CreateManagedInstanceParams struct {
 	// callers that don't use the live-handle registry (there are none today,
 	// but the field is a plain pointer, not an interface, so this is not
 	// speculative) may leave it nil.
-	Registry *Registry
+	Registry *session.Registry
 
 	// CreateIfMissing controls whether a Directory-mode session may be
 	// created even though its target path does not yet exist on disk. This
@@ -90,7 +91,7 @@ type CreateManagedInstanceParams struct {
 // a distinct name in this file so CreateManagedInstanceParams reads clearly
 // at call sites (options for the instance to create) without forcing every
 // caller to spell out the full InstanceOptions literal inline.
-type CreateInstanceOptions = InstanceOptions
+type CreateInstanceOptions = session.InstanceOptions
 
 // CreateManagedInstance resolves path/session-type concerns, constructs a
 // real *Instance via NewInstance, registers it in the live-handle registry
@@ -104,7 +105,7 @@ type CreateInstanceOptions = InstanceOptions
 // On any failure after a successful Registry.Register, the registration is
 // rolled back via Registry.ForceRelease before returning the error, so no
 // phantom live-handle entry is left behind.
-func CreateManagedInstance(ctx context.Context, params CreateManagedInstanceParams) (*Instance, error) {
+func CreateManagedInstance(ctx context.Context, params CreateManagedInstanceParams) (*session.Instance, error) {
 	if params.Storage == nil {
 		return nil, fmt.Errorf("create managed instance: Storage is required")
 	}
@@ -127,9 +128,9 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// nonexistent path in the first place (BUG discovered 2026-09-05:
 	// "steam-controls" session; that flow now correctly routes through
 	// SessionTypeNewProject instead, which does support bootstrapping).
-	if !params.DeferredPathResolution && (opts.SessionType == SessionTypeDirectory || opts.SessionType == SessionTypeNewWorktree) {
+	if !params.DeferredPathResolution && (opts.SessionType == session.SessionTypeDirectory || opts.SessionType == session.SessionTypeNewWorktree) {
 		if _, statErr := os.Stat(opts.Path); os.IsNotExist(statErr) {
-			if opts.SessionType == SessionTypeNewWorktree || !params.CreateIfMissing {
+			if opts.SessionType == session.SessionTypeNewWorktree || !params.CreateIfMissing {
 				if opts.ResumeId != "" {
 					return nil, fmt.Errorf("%w: %s", ErrResumePathNotExist, opts.Path)
 				}
@@ -141,7 +142,7 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 		}
 	}
 
-	instance, err := NewInstance(opts)
+	instance, err := session.NewInstance(opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInstanceConstructionFailed, err)
 	}
@@ -154,7 +155,7 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// refcount to 2, making plain release() decrement 2->1 and leave a
 	// phantom entry alive.
 	if params.Registry != nil {
-		live := NewLiveInstance(instance)
+		live := session.NewLiveInstance(instance)
 		if _, regErr := params.Registry.Register(live); regErr != nil {
 			live.Stop()
 			return nil, fmt.Errorf("%w: %w", ErrInstanceRegistrationFailed, regErr)

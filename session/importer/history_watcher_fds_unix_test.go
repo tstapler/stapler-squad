@@ -1,6 +1,6 @@
 //go:build unix
 
-package session
+package importer
 
 import (
 	"context"
