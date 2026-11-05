@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -71,7 +72,9 @@ func startTestDaemon(tb testing.TB, svc paneService) *testDaemon {
 		srv := &http.Server{Handler: h, Protocols: new(http.Protocols)}
 		srv.Protocols.SetUnencryptedHTTP2(true)
 		go func() { _ = srv.Serve(ln) }()
-		stop := func() { _ = srv.Close() }
+		// Close the listener ourselves: srv.Close only closes listeners Serve has already
+		// registered, so a stop that races the goroutine's start would leave a live backlog.
+		stop := func() { _ = ln.Close(); _ = srv.Close() }
 		tb.Cleanup(stop)
 		return stop
 	}
@@ -138,6 +141,25 @@ func TestUDSDefault_SocketDeniesAccess_HardErrorNoTCP(t *testing.T) {
 	require.ErrorIs(t, err, syscall.EACCES)
 	require.Zero(t, d.tcpHits.Load(), "EACCES must never reach the unauthenticated listener")
 	require.Equal(t, transportUnix, tr.(*selectingTransport).Active())
+}
+
+// The fixture's stop must leave nothing listening the instant it returns, even when it races the
+// serve goroutine's start: otherwise a client connects to the half-closed backlog and gets
+// ECONNRESET (seen on Linux) instead of the ENOENT/ECONNREFUSED the selector reads as "no listener".
+func TestStartTestDaemon_StopLeavesNothingListeningImmediately(t *testing.T) {
+	t.Parallel()
+	for range 300 {
+		d := startTestDaemon(t, newPaneService(1, 1))
+		d.stopUnix()
+		d.stopTCP()
+
+		_, err := net.Dial("unix", d.sock)
+		require.Error(t, err)
+		require.True(t, isDialRefused(err), "stopped Unix listener must refuse, got %v", err)
+		_, err = net.Dial("tcp", strings.TrimPrefix(d.addr, "http://"))
+		require.Error(t, err)
+		require.True(t, isDialRefused(err), "stopped TCP listener must refuse, got %v", err)
+	}
 }
 
 // BenchmarkTransportRoundTrip compares one unary round trip over the Unix socket and loopback TCP
