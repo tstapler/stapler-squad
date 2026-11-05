@@ -50,6 +50,7 @@ import { DependenciesSection } from "./detail/DependenciesSection";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
+import { useItemPullRequestActions } from "@/lib/hooks/useItemPullRequestActions";
 import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
@@ -1325,6 +1326,12 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     [item, updateBacklogItem, lastError, load, currentFlags, showActionToast]
   );
 
+  const itemPrActions = useItemPullRequestActions({
+    itemId: item?.id ?? "",
+    associate: handleManualAssociatePR,
+    onChanged: load,
+  });
+
   const handleGateSkip = useCallback(async () => {
     if (!item) return;
     const toastKey = `${item.id}:gate_skip`;
@@ -1826,15 +1833,14 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             <LastReviewResultSection item={item} defaultExpanded={lastReviewResultExpanded} />
           )}
 
-          {item.status === "pr_pending" && (
-            <PullRequestSection
-              item={item}
-              actionLoading={actionLoading}
-              onMarkDone={() => handleAction("mark_done")}
-              readOnly={terminalState !== null}
-              stuckReasons={stuckItemGroup.map((i) => i.reason)}
-            />
-          )}
+          <PullRequestSection
+            item={item}
+            actionLoading={actionLoading}
+            onMarkDone={() => handleAction("mark_done")}
+            readOnly={terminalState !== null}
+            stuckReasons={stuckItemGroup.map((i) => i.reason)}
+            prActions={itemPrActions}
+          />
 
           <GroupLabel>Reference</GroupLabel>
           {item.externalUrl && (

@@ -7,6 +7,8 @@ import type { PipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { routes } from "@/lib/routes";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { useItemPullRequests } from "@/lib/hooks/useItemPullRequests";
+import { itemPrSummary } from "@/lib/pr/itemPullRequests";
 import { BlockerChip } from "../BlockerChip";
 import { StageTracker } from "./StageTracker";
 import { LivenessLine } from "./LivenessLine";
@@ -97,6 +99,8 @@ function StuckBlock({
  * Falls back to a plain link when prNumber is unknown (GitHubBadge needs it).
  */
 function PrBadge({ item }: { item: BacklogItem }) {
+  const list = useItemPullRequests(item);
+  if (list) return <PrProgressChip pullRequests={list} />;
   if (!item.prUrl || item.status === "pr_pending") return null;
   return (
     <span data-testid="lifecycle-pr-badge">
@@ -107,6 +111,16 @@ function PrBadge({ item }: { item: BacklogItem }) {
           Pull request
         </a>
       )}
+    </span>
+  );
+}
+
+/** "2 of 3 merged" in the sticky header; the rows and actions live in the Pull Requests section. */
+function PrProgressChip({ pullRequests }: { pullRequests: NonNullable<ReturnType<typeof useItemPullRequests>> }) {
+  const summary = itemPrSummary(pullRequests);
+  return (
+    <span className={styles.pipelineBadge} data-testid="lifecycle-pr-progress">
+      PRs: {summary.text.split(".")[0]}
     </span>
   );
 }
