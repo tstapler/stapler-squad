@@ -179,11 +179,15 @@ func (s *selectingTransport) KillSession(ctx context.Context, r *connect.Request
 }
 
 func (s *selectingTransport) ListSessions(ctx context.Context, r *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-	return invoke(s, func(t rpcTransport) (*connect.Response[v1.ListSessionsResponse], error) { return t.ListSessions(ctx, r) })
+	return invoke(s, func(t rpcTransport) (*connect.Response[v1.ListSessionsResponse], error) {
+		return t.ListSessions(ctx, r)
+	})
 }
 
 func (s *selectingTransport) ReviveSession(ctx context.Context, r *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
-	return invoke(s, func(t rpcTransport) (*connect.Response[v1.ReviveSessionResponse], error) { return t.ReviveSession(ctx, r) })
+	return invoke(s, func(t rpcTransport) (*connect.Response[v1.ReviveSessionResponse], error) {
+		return t.ReviveSession(ctx, r)
+	})
 }
 
 func (s *selectingTransport) CapturePane(ctx context.Context, r *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {

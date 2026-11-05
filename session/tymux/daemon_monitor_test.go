@@ -313,3 +313,26 @@ func TestDaemonMonitor_HealthyAnswerEndsBusyStreak(t *testing.T) {
 	})
 	require.Zero(t, reports, "a Healthy probe at 9m restarts the 10m clock; 15m is too early to report")
 }
+
+// TCP down, Unix socket up is degraded-but-usable: the monitor must never "recover" (ensure/stop/spawn)
+// a daemon the client reaches over the socket, however long the state lasts.
+func TestDaemonMonitor_DegradedDaemonIsNeverRecovered(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var ensures atomic.Int64
+		m := daemonMonitor{interval: time.Second, maxBackoff: time.Second, threshold: 1,
+			probe:  func(context.Context, DaemonConfig) daemonProbeResult { return daemonProbeDegraded },
+			ensure: func(context.Context, DaemonConfig) (TymuxdReady, error) { ensures.Add(1); return TymuxdReady{}, nil },
+		}
+		done := startDaemonMonitorTest(ctx, m)
+		for range 30 {
+			time.Sleep(time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+			synctest.Wait()
+		}
+		cancel()
+		<-done
+		require.Zero(t, ensures.Load(), "a degraded daemon is reused, never recovered, so no recovery-failed noise each tick")
+	})
+}
