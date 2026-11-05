@@ -168,6 +168,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           }}
           data-testid="triage-undo-button"
         >
+{/* analytics-exempt */}
           Undo
         </button>
       </div>,
@@ -207,6 +208,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               data-testid="triage-dismiss-button"
               disabled={isApplying}
             >
+{/* analytics-exempt */}
               Skip ×
             </button>
           )}
@@ -300,6 +302,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isApplying}
                 data-testid="triage-apply-button"
               >
+{/* analytics-exempt */}
                 {isApplying ? "Applying…" : "Apply suggestions"}
               </button>
             ) : (
@@ -311,6 +314,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isApplying}
                 data-testid="triage-mark-ready-button"
               >
+{/* analytics-exempt */}
                 {isApplying ? "Applying…" : "Mark ready"}
               </button>
             )}
@@ -321,6 +325,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               disabled={isApplying}
               data-testid="triage-skip-button"
             >
+{/* analytics-exempt */}
               Skip — review later
             </button>
             {onRefine && !showRefineForm && (
@@ -331,6 +336,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 disabled={isApplying}
                 data-testid="triage-refine-toggle-button"
               >
+{/* analytics-exempt */}
                 Not quite — give feedback
               </button>
             )}
@@ -372,6 +378,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isRefining}
                 data-testid="triage-refine-submit-button"
               >
+{/* analytics-exempt */}
                 {isRefining ? "Refining…" : "Refine triage"}
               </button>
               <button
@@ -384,6 +391,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 disabled={isRefining}
                 data-testid="triage-refine-cancel-button"
               >
+{/* analytics-exempt */}
                 Cancel
               </button>
             </div>
