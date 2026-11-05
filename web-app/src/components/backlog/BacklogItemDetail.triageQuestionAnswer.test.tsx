@@ -98,19 +98,7 @@ beforeEach(() => {
   triggerTriage.mockClear().mockResolvedValue(undefined);
 });
 
-
-beforeAll(() => {
-  jest.spyOn(console, "error").mockImplementation(() => {});
-});
-afterAll(() => {
-  jest.restoreAllMocks();
-});
-
-beforeEach(() => {
-  triggerTriage.mockClear().mockResolvedValue(undefined);
-});
-
-function makeItem(questions: string[]): BacklogItem {
+function makeItem(questions: string[], withAcSuggestion = true): BacklogItem {
   return {
     id: "item-1",
     title: "Answer triage questions",
@@ -138,7 +126,7 @@ function makeItem(questions: string[]): BacklogItem {
     triageResult: {
       summary: "Found 1 suggestion and clarifying questions.",
       suggestions: [
-        { text: "Add a regression test for the new path", rationale: "coverage" },
+        ...(withAcSuggestion ? [{ text: "Add a regression test for the new path", rationale: "coverage" }] : []),
         ...questions.map((q) => ({ text: q, rationale: "question" })),
       ],
       clarifyingQuestions: [],
@@ -149,8 +137,8 @@ function makeItem(questions: string[]): BacklogItem {
   };
 }
 
-async function renderItem(questions: string[]) {
-  getBacklogItem.mockReset().mockResolvedValue(makeItem(questions));
+async function renderItem(questions: string[], withAcSuggestion = true) {
+  getBacklogItem.mockReset().mockResolvedValue(makeItem(questions, withAcSuggestion));
   render(<BacklogItemDetail itemId="item-1" />);
   await act(async () => {
     await Promise.resolve();
@@ -162,6 +150,11 @@ describe("BacklogItemDetail — triage question answer flow", () => {
   it("renders the question block only because the fixture has a non-question suggestion (hasSuggestions gate)", async () => {
     await renderItem(["What database should this use?"]);
     expect(await screen.findByTestId("triage-question-answer-toggle-0")).toBeInTheDocument();
+  });
+
+  it("hides the question block when only question suggestions exist (hasSuggestions gate)", async () => {
+    await renderItem(["What database should this use?"], false);
+    expect(screen.queryByTestId("triage-question-answer-toggle-0")).not.toBeInTheDocument();
   });
 
   it("submits a composed Q:/A: answer through handleRefineTriage to triggerTriage and shows the answered marker", async () => {

@@ -8,7 +8,7 @@
  *
  * The durable-snapshot half (Backlog item detail) was fully mocked-RPC-driven and moved to
  * Jest: VcsWidget.test.tsx (As-of timestamp, no-history copy) and adapters.test.ts
- * (fromShipStatus). See project_plans/e2e-test-parallelization/decisions/test-content-triage-sample.md.
+ * (fromShipStatus). See project_plans/e2e-test-parallelization/decisions/test-content-triage-sample-2.md.
  */
 
 import { test, expect } from "@playwright/test";

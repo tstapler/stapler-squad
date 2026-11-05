@@ -11,8 +11,8 @@ concentrate in small, hook-free files. Counts are from the per-file table below.
 
 - **Pool**: every `*.spec.ts` file under `tests/e2e/` that has no file-scope `beforeAll`/`afterAll`, i.e. outside
   the 54-file pool of the first sample. Current counts (2026-11-04, after merging `origin/main`):
-  `find tests/e2e -type f -name "*.spec.ts" | wc -l` = 202 files, of which
-  `grep -rlE "\b(test\.)?(beforeAll|afterAll)\s*\(" tests/e2e --include="*.spec.ts" | wc -l` = 60 have file-scope
+  `find tests/e2e -type f -name "*.spec.ts" | wc -l` = 203 files, of which
+  `grep -rlE "\b(test\.)?(beforeAll|afterAll)\s*\(" tests/e2e --include="*.spec.ts" | wc -l` = 61 have file-scope
   hooks, leaving 142 outside. (The 54-file pool was 60 minus files in the other risk categories; not re-derived
   here, so a file with hooks could in principle belong to neither.)
 - **Sample**: the 20 **smallest** files in that pool by `wc -l` (18–51 lines), ascending. Five zero-line
@@ -78,3 +78,5 @@ Tyler chose **Option D** (B + C) on 2026-11-04:
 
 Rationale: component-level Jest already covered the scenarios, so the missing piece was a `BacklogItemDetail`
 integration test for the prop-threading chain; the first sample's own caveat said its candidate count may undersell.
+
+Accepted coverage gap: the Jest test mocks `useBacklogService` and sets `item.triageResult` directly, so it no longer covers the proto itemSessions→triageResult mapping, the real `TriggerTriage` request body, or the 400 `failed_precondition` error mapping that the deleted e2e spec exercised. Those are accepted as lower-risk than the e2e cost; add a focused adapter test if any of them regresses.
