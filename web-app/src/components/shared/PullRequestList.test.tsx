@@ -170,6 +170,16 @@ describe("PullRequestList load states", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load pull requests");
   });
 
+  it("styles_should_wrapLongTextAndKeepTouchTargetsAtFortyFourPixels_ForPhones", () => {
+    const css = fs.readFileSync(path.resolve(__dirname, "PullRequestList.css.ts"), "utf-8");
+    const dialogs = fs.readFileSync(path.resolve(__dirname, "PullRequestDialogs.css.ts"), "utf-8");
+    expect(css).toContain('overflowWrap: "anywhere"');
+    expect(css).toContain("minHeight: MIN_TOUCH_TARGET");
+    expect(css).toContain("--bottom-nav-height");
+    expect(dialogs).toContain("alignItems: \"flex-end\"");
+    expect(css).not.toMatch(/overflowX: "(scroll|auto)"/);
+  });
+
   it("skeleton_should_stopAnimatingUnderReducedMotion", () => {
     const css = fs.readFileSync(path.resolve(__dirname, "PullRequestList.css.ts"), "utf-8");
     expect(css).toMatch(/prefers-reduced-motion: reduce[^}]*animation: "none"/s);

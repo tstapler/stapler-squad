@@ -1,6 +1,8 @@
 "use client";
 // +feature: session-change-program session-pin-toggle
 
+import { displayedPullRequest } from "@/lib/pr/legacyPullRequest";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
 import { useState, useRef, useContext, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal, Pin, PinOff } from "lucide-react";
@@ -215,6 +217,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [pendingProgramValue, setPendingProgramValue] = useState("");
   const availablePrograms = useAvailablePrograms();
   const { draftPullRequest, createPullRequest } = useSessionServiceContext();
+  const shownPr = displayedPullRequest(session, useSessionMultiPR());
 
   // Keep the picker's selected value in sync with the session while the dialog is
   // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
@@ -978,18 +981,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               {(hasGroup2 || hasOrganize || hasGroup4 || hasMore) && menuSeparator}
               {hasGroup2 && (
                 <MenuSection id="workflow" label="Workflow" openId={openSection} onToggle={toggleSection}>
-              {session.githubPrUrl ? (
+              {shownPr ? (
                 <a
-                  href={session.githubPrUrl}
+                  href={shownPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   role="menuitem"
                   className={overflowMenuItem}
-                  aria-label={`PR #${session.githubPrNumber}: ${session.title}`}
+                  aria-label={`PR #${shownPr.number}: ${session.title}`}
                   data-testid="github-pr-link"
                   onClick={(e) => { e.stopPropagation(); close(); }}
                 >
-                  <span aria-hidden="true">✅</span> View PR #{session.githubPrNumber}
+                  <span aria-hidden="true">✅</span> View PR #{shownPr.number}
                 </a>
               ) : (
                 <button

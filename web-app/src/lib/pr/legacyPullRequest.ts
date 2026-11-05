@@ -36,6 +36,7 @@ export interface DisplayedPullRequest {
   url: string;
   owner: string;
   repo: string;
+  checkConclusion: string;
 }
 
 /**
@@ -45,8 +46,10 @@ export interface DisplayedPullRequest {
 export function displayedPullRequest(session: Session, multiPrUi: boolean): DisplayedPullRequest | undefined {
   if (multiPrUi && session.pullRequests.length > 0) {
     const pr = session.pullRequests.find((p) => p.isActive) ?? session.pullRequests[0];
-    return { number: pr.number, url: pr.url, owner: pr.owner, repo: pr.repo };
+    return { number: pr.number, url: pr.url, owner: pr.owner, repo: pr.repo, checkConclusion: pr.checkConclusion };
   }
   const legacy = legacyPullRequest(session);
-  return legacy && legacy.url ? { number: legacy.number, url: legacy.url, owner: session.githubOwner, repo: session.githubRepo } : undefined;
+  return legacy && legacy.url
+    ? { number: legacy.number, url: legacy.url, owner: session.githubOwner, repo: session.githubRepo, checkConclusion: session.githubCheckConclusion }
+    : undefined;
 }

@@ -60,6 +60,13 @@ export interface GithubSummary {
   lastCheckedAt?: Date;
 }
 
+/** One tracked PR in a session's list: its summary plus what the switcher needs to offer it. */
+export interface GithubPrEntry {
+  summary: GithubSummary;
+  isOpen: boolean;
+  isActive: boolean;
+}
+
 export type VcsWidgetMode = "full" | "compact";
 
 interface VcsWidgetDataCommon {
@@ -71,6 +78,12 @@ interface VcsWidgetDataCommon {
   branchExists: boolean;
   commits: CommitSummary[];
   github: GithubSummary | null;
+  /**
+   * Every PR of a multi-PR session, active one included. `github` stays the active PR's summary (what
+   * every single-PR consumer reads); the widget's switcher substitutes another entry's summary for it.
+   * Absent for sources that only know one PR.
+   */
+  githubPrs?: GithubPrEntry[];
   shipped: boolean;
   /**
    * Set when the underlying source failed to load (e.g. "no work session ever
