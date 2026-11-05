@@ -1291,7 +1291,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree row pointing at this exact path — cleaning it up here would delete the
 	// directory the session spawned above just started using.
 	if isReopen {
-		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
+		// Only PR clauses may hold prior rounds' worktrees: the session just spawned
+		// is live by construction and is not in priorSessions.
+		s.cleanupWorktrees(session.WithCleanupPath(ctx, session.CleanupPathRework), priorSessions, worktreePath, session.GateOptions{IgnoreLive: true})
 		// Archive the superseded prior-round work session(s) now that the new
 		// session has replaced them — otherwise every rework round piles up a
 		// fresh work session that's never cleaned up until the item eventually
@@ -3675,7 +3677,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	// otherwise lingers indefinitely and can later be found "missing" by a session that
 	// still references it.
 	if len(freed) > 0 {
-		s.cleanupItemWorktrees(ctx, freed)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathTombstone), freed)
 	}
 }
 

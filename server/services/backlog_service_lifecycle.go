@@ -542,7 +542,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	// Best-effort: clean up git worktrees for work sessions on archive.
 	if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-		s.cleanupItemWorktrees(ctx, sessions)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathArchiveRPC), sessions)
 	}
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
@@ -1023,7 +1023,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
 	if session.IsTerminalStatus(to) {
-		s.CleanupTerminalItem(ctx, req.Msg.ItemId)
+		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 
 	// Backward to idea/refining: reset planning approval so triage must re-run.

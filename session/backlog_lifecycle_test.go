@@ -5171,12 +5171,14 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 type fakeWorktreeCleaner struct {
 	mu           sync.Mutex
 	cleanedItems []string
+	outcome      CleanupOutcome // zero value is CleanupDone
 }
 
-func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) {
+func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) CleanupOutcome {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleanedItems = append(f.cleanedItems, itemID)
+	return f.outcome
 }
 
 func (f *fakeWorktreeCleaner) calls() []string {

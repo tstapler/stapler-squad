@@ -195,3 +195,12 @@ func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er
 	}
 	return ItemPRVerdict(prs), nil
 }
+
+// ruleLProbe is the probe RULE L consults: nil (skip nothing, today's behavior)
+// unless reader:backlog is on and a probe is wired.
+func (l *BacklogLifecycleListener) ruleLProbe() LiveWorkProbe {
+	if !l.backlogReaderEnabled() {
+		return nil
+	}
+	return l.LiveWorkProbe()
+}

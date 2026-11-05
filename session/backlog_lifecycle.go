@@ -160,6 +160,12 @@ type BacklogLifecycleListener struct {
 	// hold bookkeeping (backlog_lifecycle_live_work.go).
 	liveWork liveWorkState
 
+	// terminalWork is the bounded worker behind PRStatesWentTerminal.
+	terminalWork struct {
+		once sync.Once
+		ch   chan []int
+	}
+
 	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
 	// ciRerunner disables the free-rerun shortcut.
 	ciRerunner ciRerunClient
@@ -815,10 +821,14 @@ func (l *BacklogLifecycleListener) getWorktreeCleaner() WorktreeCleaner {
 // after a successful terminal transition so cleanup does not depend solely
 // on the 60s sweep. No-op when unwired (matches WorktreeCleaner's nil-safety
 // contract).
-func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) {
+func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) CleanupOutcome {
 	if c := l.getWorktreeCleaner(); c != nil {
-		c.CleanupTerminalItem(ctx, itemID)
+		if CleanupPathFrom(ctx) == cleanupPathUnknown {
+			ctx = WithCleanupPath(ctx, CleanupPathHook)
+		}
+		return c.CleanupTerminalItem(ctx, itemID)
 	}
+	return CleanupDoneOutcome()
 }
 
 // SetSessionLivenessChecker wires the function used by the zombie-session

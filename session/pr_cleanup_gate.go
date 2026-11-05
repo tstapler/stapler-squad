@@ -32,6 +32,34 @@ type CleanupOutcome struct {
 	LiveOnly bool
 }
 
+// Cleanup path labels of ssq_cleanup_gate_blocked_total{path}; the removal choke
+// point reads the caller's label from the context (WithCleanupPath).
+const (
+	CleanupPathArchiveRPC = "archive_rpc"
+	CleanupPathTransition = "transition"
+	CleanupPathHook       = "hook"
+	CleanupPathSweep      = "sweep"
+	CleanupPathRework     = "rework"
+	CleanupPathTombstone  = "tombstone"
+	CleanupPathListener   = "listener"
+	cleanupPathUnknown    = "unknown"
+)
+
+type cleanupPathKey struct{}
+
+// WithCleanupPath labels ctx with the removal path for the blocked metrics.
+func WithCleanupPath(ctx context.Context, path string) context.Context {
+	return context.WithValue(ctx, cleanupPathKey{}, path)
+}
+
+// CleanupPathFrom returns the label set by WithCleanupPath, or "unknown".
+func CleanupPathFrom(ctx context.Context) string {
+	if p, ok := ctx.Value(cleanupPathKey{}).(string); ok && p != "" {
+		return p
+	}
+	return cleanupPathUnknown
+}
+
 // CleanupDoneOutcome is the all-clear outcome.
 func CleanupDoneOutcome() CleanupOutcome { return CleanupOutcome{Status: CleanupDone} }
 
