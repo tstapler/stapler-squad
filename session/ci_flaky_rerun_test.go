@@ -68,9 +68,11 @@ type fakeCIRerun struct {
 func (f *fakeCIRerun) ChangedFiles(context.Context, string, int) ([]string, error) {
 	return f.files, f.filesErr
 }
+
 func (f *fakeCIRerun) FailedLogs(_ context.Context, _ string, id int64) (string, error) {
 	return f.logs[id], f.logErr
 }
+
 func (f *fakeCIRerun) RerunFailed(_ context.Context, _ string, id int64) error {
 	if f.rerunErr != nil {
 		return f.rerunErr

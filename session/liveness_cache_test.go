@@ -1,10 +1,5 @@
 package session
 
-// liveness_cache_test.go — unit/integration tests for livenessCache and
-// CachingLivenessEngine (Epic 1.3, Story 1.3.1 of
-// project_plans/backlog-custom-workflow-stages). Test names are taken
-// verbatim from implementation/validation.md's "Story 1.3.1" rows.
-
 import (
 	"bytes"
 	"testing"
@@ -12,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	tslog "github.com/tstapler/stapler-squad/log"
 )
 

@@ -263,8 +263,6 @@ func TestNewConfigLabeler_LabelsSeededEditedAndUnlabeled_AndCachesFingerprint(t 
 	require.Equal(t, ConfigUnlabeled, label())
 }
 
-// --- Story 1.5.2: per-class ledger sections and the guard_new class ----------
-
 func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(t *testing.T) {
 	t.Parallel()
 	rig := newShadowRig(t, ConfigSeeded)

@@ -1,10 +1,5 @@
 package session
 
-// backlog_lifecycle_superseded_test.go — regression tests for BUG-047's
-// collateral damage: closeIfSupersededByMain closing a real, unmerged PR
-// because ItemSession.LastCommitSha held the session's spawn-time *base* SHA
-// rather than any commit the session actually authored.
-
 import (
 	"context"
 	"os"

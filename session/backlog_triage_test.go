@@ -8,8 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ─── ParseHeadlessTriageResult ────────────────────────────────────────────────
-
 func TestParseHeadlessTriageResult_ValidJSON(t *testing.T) {
 	t.Parallel()
 	raw := `{"summary":"Nice summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"task 1","estimate":"2h","category":"backend"}]}`
@@ -224,8 +222,6 @@ func TestParseHeadlessTriageResult_StrayUnmatchedOpeningBrace(t *testing.T) {
 	assert.Equal(t, "still found me", result.Summary)
 }
 
-// ─── BuildHeadlessTriagePrompt ────────────────────────────────────────────────
-
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {
 	t.Parallel()
 	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
@@ -268,8 +264,6 @@ func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.NotContains(t, prompt, "Acceptance Criteria")
 }
-
-// ─── BuildHeadlessRetriagePrompt ──────────────────────────────────────────────
 
 func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T) {
 	t.Parallel()

@@ -150,9 +150,6 @@ func TestReconcileCustomGateChecks_should_BeNoOp_When_NoGateSatisfactionRepoWire
 	})
 }
 
-// --- Epic 2.4 follow-up: production call sites for resolveReviewGateContext/
-// resolveCustomCheckGateContext (the gap this task closes) ---
-
 // TestResolveCustomCheckGateContext_should_ReturnNotOK_When_NoWorkflowEngineWired
 // covers the nil-safe default: an unwired workflowEngine (today's production
 // default) must never spawn a custom-check gate.

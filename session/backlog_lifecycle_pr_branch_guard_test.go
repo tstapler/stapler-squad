@@ -79,8 +79,6 @@ func stubMatchingPRByNumberFinder(listener *BacklogLifecycleListener, headBranch
 	})
 }
 
-// --- Task 6.6: verifyPRBelongsToItem unit tests -----------------
-
 func TestVerifyPRBelongsToItem_should_ReturnTrue_When_HeadBranchMatches(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -155,8 +153,6 @@ func TestVerifyPRBelongsToItem_should_ReturnFalse_When_FinderErrors(t *testing.T
 	assert.False(t, matches, "a lookup failure must never be read as a verified match")
 	require.Error(t, err)
 }
-
-// --- Task 6.6: integration tests — the 3 mutation sites skip on guard failure ---
 
 // TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetected
 // is the direct proof of adversarial-review.md's Blocker fix for
@@ -350,8 +346,6 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	assert.NotEqual(t, string(BacklogStatusDone), fetched.Status,
 		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
 }
-
-// --- Task 6.3a: fix-spawn disclaimer tests ----------------------------------
 
 // TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHeadBranchMismatchDetected
 // covers the closed-without-merging fixCtx-building call site (~line 4045):

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"

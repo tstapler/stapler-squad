@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
 	logpkg "github.com/tstapler/stapler-squad/log"
 )
 

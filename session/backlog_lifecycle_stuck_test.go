@@ -246,8 +246,6 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
-// --- Story 2.1.1: pr_ready_unmerged ---
-
 // TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails pins the
 // detection-failure signal: a failed IsPRMerged/GetPRStatus must be operator-visible.
 func TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails(t *testing.T) {
@@ -413,8 +411,6 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_NewCommitClearsReadine
 	assert.Empty(t, open, "pr_ready_unmerged row must resolve on the same tick even though item status is unchanged")
 }
 
-// --- Story 2.1.3: abandoned_review / stale_work durable + zombie detection ---
-
 // TestReconcileStuckReviewItems_should_markAbandoned_When_OnlyActiveSessionIsDeadZombie
 // guards pre-mortem F3: a review item whose only EndedAt-IS-NULL session
 // looks active in the DB but whose underlying tmux/CLI process is confirmed
@@ -493,8 +489,6 @@ func TestReconcileStuckReviewItems_should_notMarkAbandoned_When_ActiveSessionSti
 	require.NoError(t, err)
 	assert.Empty(t, open, "a genuinely-alive active session must not be flagged")
 }
-
-// --- reconcileUnprocessedReviewVerdicts: verdict recorded but never actioned ---
 
 // TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive
 // is the regression test for the exact live bug reported: a work session left
@@ -968,14 +962,6 @@ func TestReconcileStaleWorkSessions_should_resolveStaleWorkRow_When_SessionResum
 	assert.Empty(t, open, "row must resolve immediately once progress resumes, even though status is still in_progress")
 }
 
-// --- stale_work: Phase B automated remediation (docs/tasks/backlog-stuck-
-// item-auto-remediation.md) — reconcileStaleWorkSessions was previously
-// notify-only; a live item (9264efe7-b4c2-455a-9e2a-ab0196a63ecd, rework
-// suffix -r14) sat in_progress for 24h+ with its work session's agent idle
-// at an interactive prompt (TmuxAlive true, PaneProcessDead false — not a
-// zombie the generic health check would ever catch) because nothing ever
-// acted on the detection. ---
-
 // fakeStaleWorkRemediator is a test double implementing StaleWorkRemediator,
 // recording every RemediateStaleWorkSession call on a buffered channel (not a
 // plain counter) because remediateStaleWorkWithBackoffGate dispatches
@@ -1222,12 +1208,6 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	assert.Equal(t, MaxRemediationAttempts+MaxRemediationColdRetries, rows[0].RemediationAttempts, "attempt count must stop at the cold-retry ceiling even with an unlimited rework override")
 }
 
-// --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration
-// (review-gate-stale-session-rework Story 2.1.2) — the mark side
-// (notifyIfActiveWorkSessionStale, server/services/backlog_service_triage.go)
-// has no periodic tick of its own, so this resolve-only pass closes an open
-// row once its blocking session recovers, ends, or the item leaves review. ---
-
 // fakeReworkBlockStaleResolver is a test double implementing
 // ReworkBlockStaleResolver, recording every ResolveReworkBlockedStaleIfRecovered
 // call — mirrors fakeStaleWorkRemediator's shape, but a plain slice+mutex
@@ -1319,22 +1299,6 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWir
 		listener.reconcileReworkBlockedStaleResolution(ctx, er)
 	})
 }
-
-// --- respawn_blocked_active: reconcileRespawnBlockedActiveResolution orchestration ---
-//
-// The mark side (notifyRespawnBlockedByActiveSession, server/services/
-// backlog_service_triage.go) is called from inside AutoRespawnAutonomousWork/
-// AutoReopenForPRFix/AutoRespawnReview, and each of those functions also
-// resolves the row itself the next time its own guard passes. That inline
-// resolve is NOT sufficient on its own for AutoRespawnReview: its only
-// caller, markAbandonedReview, gates the call behind
-// Storage.RemediationDue(StuckReasonAbandonedReview), which eventually parks
-// and stops re-invoking AutoRespawnReview for that item — so a row marked
-// once, right before parking, would never see AutoRespawnReview's guard pass
-// again and would be permanently orphaned without this independent sweep.
-// These tests exercise reconcileRespawnBlockedActiveResolution directly,
-// with no call to AutoRespawnReview at all, to prove the sweep — not the
-// inline resolve — is what actually guarantees resolution.
 
 // TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded
 // is the direct regression test for the orphaned-row scenario: a
@@ -1443,9 +1407,6 @@ func TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows(t
 		listener.reconcileRespawnBlockedActiveResolution(ctx, er)
 	})
 }
-
-// --- orphaned_triage: standing detector for tombstoneOrphanTriageSessions'
-// manual-re-trigger-only blind spot (backlog-feature-improvement audit finding #8) ---
 
 func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_TriageSessionStale(t *testing.T) {
 	t.Parallel()
@@ -2439,11 +2400,6 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 	assert.Empty(t, open, "orphaned_triage row must resolve once the item leaves idea (re-triggered triage succeeded)")
 }
 
-// --- archive_terminal_sessions: safety-net sweep for backlog work sessions that
-// accumulate forever because the TransitionBacklogItemStatus archival hook only
-// fires on a NEW transition into done/archived — see SessionArchiver's doc comment
-// and reconcileTerminalItemSessions. ---
-
 // fakeSessionArchiver is a test stub implementing SessionArchiver. It records every
 // UUID it was asked to archive/kill, in order, and can be configured to fail for
 // specific UUIDs (archive and kill failures are tracked independently).
@@ -2797,11 +2753,6 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 		"the safety net still re-verifies once the TTL elapses (idempotency is the archiver's CAS)")
 }
 
-// --- cleanup_terminal_worktrees: safety-net sweep for backlog item worktrees that
-// accumulate forever because WorktreeCleaner.CleanupTerminalItem was previously only
-// invoked synchronously, on specific internal transition paths — see
-// reconcileTerminalItemWorktrees' doc comment. ---
-
 // TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone proves the
 // sweep invokes the wired WorktreeCleaner for a done item, mirroring
 // TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyDone above.
@@ -2921,8 +2872,6 @@ func TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees(t
 	assert.Contains(t, cleaner.calls(), item.ID,
 		"ReconcileStuck must invoke the cleanup_terminal_worktrees detector, which must in turn call the wired WorktreeCleaner")
 }
-
-// --- Story 2.1.4: bouncing ---
 
 // TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_WithinWindow
 // verifies the cycle-count query only counts in_progress->review
@@ -3890,8 +3839,6 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 		"work committed directly to the main branch (no feature branch) must still be recognized as shipped")
 }
 
-// --- Story 2.1.6: push_failed ---
-
 // TestStayInReviewAndNotify_should_markPushFailedRow_When_PushAndCreatePRFails
 // verifies a push/PR-creation failure writes a durable push_failed row
 // alongside the existing ERROR notification (Story 2.1.6).
@@ -3966,15 +3913,6 @@ func TestPushFailed_should_persistRowSurvivingRestart_When_ItemHasNoPrNumber(t *
 	assert.Equal(t, itemID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
 }
-
-// --- Phase B: automated push_failed remediation ---
-//
-// These tests cover the gap where a push_failed row was write-only —
-// MarkStuck fired once and nothing ever retried, exactly the shape of the
-// live 2026-07-20 repro (backlog item c2ad7bf3-91bf-4d47-8654-0f2f20869080,
-// stelekit branch backlog/stelekit-fix-shift-tab-dedent-desktop, rejected
-// non-fast-forward). reconcilePushFailedItems is the new periodic
-// counterpart to pushAndCreatePR's event-driven attempt.
 
 // TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetryPushSucceeds
 // verifies requirement (c): a non-fast-forward failure that's resolved by a
@@ -4264,8 +4202,6 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	listener.reconcilePushFailedItems(ctx, er)
 	assert.False(t, reconcileCalled, "an item that has moved off review must not be retried")
 }
-
-// --- Story 2.1.5: self-heal sweep (adversarial concern C1) ---
 
 // TestSelfHealSweep_should_resolveAnchoredRow_When_ItemStatusInconsistentWithReason
 // verifies a phantom stale_work row on an item that has since moved to done
@@ -4576,18 +4512,6 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	assert.Empty(t, open, "the racing write must self-correct within one self-heal tick")
 }
 
-// --- blanket terminal-status rule (docs/bugs: orphaned autonomous_stuck and
-// push_failed rows never auto-resolved once their item completed — fixed
-// once each, one-off, in PR #200 and PR #203. rework_cap was the third
-// reason sitting in the same trap, unfixed. Rather than a fourth one-off
-// case, selfHealStuck now checks a single blanket rule up front: any open
-// stuck row on an item that has reached a genuine terminal status (done or
-// archived) is resolved, regardless of reason. The table below is the
-// generic regression proof for that rule — any reason, once its item goes
-// terminal, resolves — superseding the old per-reason
-// resolveAutonomousStuckRow_When_ItemReachesDone/Archived and
-// resolvePushFailedRow_When_ItemReachesDone/Archived tests.) ---
-
 // TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 // is the generic regression proof for selfHealStuck's blanket terminal rule:
 // for every StuckReason — including autonomous_stuck and push_failed (the
@@ -4804,15 +4728,6 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
 }
 
-// --- push_failed: still-relevant negative coverage (docs/bugs: orphaned
-// push_failed rows never auto-resolved once their item completed — fixed by
-// PR #203, now generalized into the blanket terminal rule proven by
-// TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
-// above). The positive done/archived cases live in that generic table now;
-// what's still worth testing per-reason is the negative case below, which
-// guards a specific false-resolve risk unique to push_failed's non-terminal
-// behavior. ---
-
 // TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview
 // verifies an item that is genuinely still stuck (never reached done or
 // archived, e.g. retries are still in flight or the backoff gate has parked
@@ -4882,8 +4797,6 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
 }
 
-// --- Story 2.1.5e: per-detector panic isolation ---
-
 // TestRunStuckDetector_should_recoverAndLogPanic_When_DetectorPanics verifies
 // that a panicking detector is recovered by its own defer, appended to the
 // panicked-names list (never the ok-names list), and does not propagate —
@@ -4926,10 +4839,6 @@ func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t 
 	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
 	assert.True(t, isBouncing(bounceThreshold, bounceThreshold, false))
 }
-
-// --- auto_archive_done: sweep that auto-archives backlog items 3+ days
-// after their most recent transition into "done" (see archiveStaleDoneItems
-// and FindDoneItemsOlderThan's doc comments). ---
 
 // newDoneTestItem creates a BacklogItem in "done" status and backdates a
 // synthetic status-event row recording a transition into "done" doneAgo in
@@ -5340,16 +5249,6 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	assert.Empty(t, open, "leaving pr_pending must resolve the pr_pending_no_pr row via the status-anchored self-heal sweep")
 }
 
-// --- blocked_by_dependency: reconcileBlockedByDependencyResolution orchestration ---
-//
-// The mark side (notifyBlockedByDependency, server/services/
-// backlog_service_triage.go) only runs from inside DequeueNextQueuedItems's
-// claim-error path, so a row marked once and then skipped by that sweep would
-// otherwise sit open forever even after its blocker ships or is archived.
-// These tests exercise reconcileBlockedByDependencyResolution directly to
-// confirm the independent sweep — not any inline resolve — is what
-// guarantees resolution.
-
 // TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHasShipped
 // is the positive case: once the blocker reaches BacklogStatusDone, the sweep
 // must resolve the blocked item's open blocked_by_dependency row.
@@ -5714,11 +5613,6 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	assert.Contains(t, row.Context, "push_failed")
 	assert.NotContains(t, row.Context, "abandoned_review", "the coupled abandoned_review row must be excluded from the escalation context")
 }
-
-// --- Epic 1.4 (backlog-custom-workflow-stages): LivenessEngine wired into
-// reconcileOrphanedTriageItems, reconcileStaleWorkSessions, and
-// reconcileBouncingItems. Test names taken verbatim from validation.md's
-// "Story 1.4.1"/"Story 1.4.3" rows. ---
 
 // newOrphanedTriageTestItemWithMode is newOrphanedTriageTestItem plus a
 // pipelineMode, needed for Epic 1.4's per-(stage,mode) override regression
