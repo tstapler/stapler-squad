@@ -436,8 +436,9 @@ func reconnectBackoffDelay(attempt int, base, max time.Duration) time.Duration {
 
 // waitBackoff sleeps for reconnectBackoffDelay(attempt, ...), returning
 // false early (without completing the sleep) if abortReconnect fires
-// first — Close()/DetachSafely() calling beginClosing() mid-backoff.
-func (s *tymuxGRPCSession) waitBackoff(attempt int) bool {
+// first — Close()/DetachSafely() calling beginClosing() mid-backoff — or
+// genCtx is cancelled because a reopen superseded this reconnect generation.
+func (s *tymuxGRPCSession) waitBackoff(genCtx context.Context, attempt int) bool {
 	s.mu.RLock()
 	base, max := s.reconnectBaseDelay, s.reconnectMaxDelay
 	abort := s.abortReconnect
@@ -446,6 +447,8 @@ func (s *tymuxGRPCSession) waitBackoff(attempt int) bool {
 	case <-time.After(reconnectBackoffDelay(attempt, base, max)):
 		return true
 	case <-abort:
+		return false
+	case <-genCtx.Done():
 		return false
 	}
 }
@@ -501,10 +504,10 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		s.mu.Unlock()
 		log.Info("tymux: standing Attach stream reconnect attempt", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt, "max_attempts", maxAttempts)
 
-		if attempt > 1 && !s.waitBackoff(attempt) {
+		if attempt > 1 && !s.waitBackoff(genCtx, attempt) {
 			break // interrupted by a deliberate Close()/DetachSafely()
 		}
-		if s.closing.Load() {
+		if s.closing.Load() || genCtx.Err() != nil {
 			break
 		}
 
@@ -574,6 +577,13 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		}
 
 		s.mu.Lock()
+		if genCtx.Err() != nil {
+			// A reopen superseded this generation while we dialled; installing would give the
+			// fanout two readers.
+			s.mu.Unlock()
+			cancel()
+			break
+		}
 		s.setStreamLocked(stream)
 		s.cancelAttach = cancel
 		s.reconnecting = false

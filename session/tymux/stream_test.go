@@ -1418,3 +1418,55 @@ func TestReconnectLoop_GenerationCancelledWithoutClosing_IsSupersedeAndDeliversN
 	assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
 	assert.Empty(t, exits)
 }
+
+// A reconnect generation cancelled by a reopen must neither wait out its backoff nor install the
+// stream it dialled over its replacement's.
+func TestReconnectLoop_SupersededDuringDial_DoesNotInstallStream(t *testing.T) {
+	sess, original, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 5)
+	genCtx, cancelGen := context.WithCancel(context.Background())
+	defer cancelGen()
+	var dialedCtx context.Context
+	transport.attachFn = func(ctx context.Context) attachStream {
+		dialedCtx = ctx
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error { cancelGen(); return nil } // reopen lands mid-dial
+		st.push(&v1.AttachEvent{})
+		return st
+	}
+
+	stream, _, ok, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+
+	require.False(t, ok, "a superseded loop must not report a successful reconnect")
+	assert.Nil(t, stream)
+	assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	concrete.mu.RLock()
+	installed := concrete.stream
+	concrete.mu.RUnlock()
+	assert.Same(t, attachStream(original), installed, "the replacement's stream must stay installed")
+	require.NotNil(t, dialedCtx)
+	assert.Error(t, dialedCtx.Err(), "the stream dialled by the superseded loop must be closed")
+}
+
+func TestReconnectLoop_SupersededDuringBackoff_ReturnsPromptly(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Hour, time.Hour, 5)
+	genCtx, cancelGen := context.WithCancel(context.Background())
+	defer cancelGen()
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error { go cancelGen(); return errors.New("daemon unavailable") }
+		return st
+	}
+	done := make(chan lifecycle.Reason, 1)
+	go func() {
+		_, _, _, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+		done <- reason
+	}()
+	select {
+	case reason := <-done:
+		assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded loop kept sleeping in backoff")
+	}
+}
