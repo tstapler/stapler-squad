@@ -166,14 +166,37 @@ func newH2CClient() *http.Client {
 // NewRealTransport constructs an rpcTransport backed by a real Connect-Go
 // gRPC client against a live tymuxd. addr is the tymuxd base URL (e.g.
 // "http://127.0.0.1:7419"); pass "" to use tymuxdAddr()'s
-// TYMUXD_ADDR-or-default resolution.
+// TYMUXD_ADDR-or-default resolution. When the daemon at addr has a known Unix
+// control socket (socketPathForAddr), the result also falls back to that socket
+// while TCP is refused; see selectingTransport.
 func NewRealTransport(addr string) rpcTransport {
+	return newRealTransport(addr, false)
+}
+
+// newRealTransport builds the transport; quiet selects the one-shot-probe variant that leaves
+// the session transport's process-global metrics alone.
+func newRealTransport(addr string, quiet bool) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
 	if sharedDaemonBlockedInTest(addr) {
 		addr = deadLoopbackAddr
 	}
+	tcp := newTCPTransport(addr)
+	sock := socketPathForAddr(addr)
+	if sock == "" {
+		return tcp
+	}
+	unix, unixHTTP := newUnixTransport(sock)
+	if quiet {
+		return newQuietSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+	}
+	return newSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+}
+
+// newTCPTransport is the TCP-only transport; probeDaemon uses it directly so a healthy Unix
+// socket can never mask a dead TCP listener in the probe itself.
+func newTCPTransport(addr string) *grpcTransport {
 	hc := newH2CClient()
 	return &grpcTransport{client: newTymuxClient(hc, addr), http: hc}
 }
@@ -181,9 +204,9 @@ func NewRealTransport(addr string) rpcTransport {
 // newProbeTransport is NewRealTransport for one-shot calls: the returned
 // release func must be deferred, or each probe leaks a connection to tymuxd.
 func newProbeTransport(addr string) (rpcTransport, func()) {
-	t := NewRealTransport(addr)
-	if g, ok := t.(*grpcTransport); ok {
-		return t, g.closeIdle
+	t := newRealTransport(addr, true)
+	if c, ok := t.(interface{ closeIdle() }); ok {
+		return t, c.closeIdle
 	}
 	return t, func() {}
 }

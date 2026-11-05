@@ -92,11 +92,18 @@ jest.mock("@/lib/config", () => ({
   createAuthInterceptor: () => jest.fn(),
 }));
 
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => {
+  const items: never[] = [];
+  return { useStuckBacklogItems: () => ({ items }) };
+});
+
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
+  const listForeignClaims = jest.fn().mockResolvedValue([]); // stable identity: the page effect depends on it
   return {
     ...actual,
     useBacklogService: () => ({
+      listForeignClaims,
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),

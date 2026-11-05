@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -152,7 +153,11 @@ func withBackendOperationSpan(ctx context.Context, backend backendLabel, op stri
 		attribute.String("backend", string(backend)),
 		attribute.String("operation", op),
 	)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrTmuxSessionNotInitialized):
+		// Nothing to restore/start yet: an expected precondition miss, not a backend fault.
+		span.SetAttributes(attribute.Bool("precondition_unmet", true))
+	case err != nil:
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
