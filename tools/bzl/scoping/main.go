@@ -5,6 +5,7 @@
 //	scoping move      --from D --to D --files a.go,..  git mv a cluster into a new package and re-point references
 //	scoping relocate  --dir D --to f.go --decls a,T.m  move declarations between files of one package (no package change)
 //	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
+//	scoping leaves    --dir D [--min-loc N]  files nothing else in D uses, grouped into movable clusters
 //	scoping touch     [--commits N] [--files a,b|--per-file]  T9b gain of moving files (changes that touch only them)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
@@ -330,6 +331,8 @@ func main() {
 		os.Exit(runBudget(os.Args[2:], os.Stdout))
 	case "boundaries":
 		os.Exit(runBoundaries(os.Args[2:], os.Stdout))
+	case "leaves":
+		os.Exit(runLeaves(os.Args[2:], os.Stdout))
 	case "touch":
 		os.Exit(runTouch(os.Args[2:], os.Stdout))
 	case "t9":
