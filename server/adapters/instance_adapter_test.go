@@ -3,6 +3,7 @@ package adapters
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -604,4 +605,41 @@ func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t
 			require.Equal(t, tt.wantSupported, got.GetTranscriptSupported())
 		})
 	}
+}
+
+func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) {
+	seen := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	blob := &artifacts.SessionArtifactsBlob{
+		PRURLs: []string{"https://github.com/acme/app/pull/12"},
+		Records: artifacts.RecordList{
+			artifacts.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: artifacts.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
+			artifacts.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
+			artifacts.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
+			artifacts.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
+			artifacts.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
+			artifacts.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
+			artifacts.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
+		},
+	}
+	got := artifactsToProto(blob, true, func() bool { return true })
+
+	require.Equal(t, blob.PRURLs, got.GetPrUrls(), "pr_urls stays populated for older clients")
+	recs := got.GetRecords()
+	require.Len(t, recs, 7)
+	for i, wantKind := range []string{"pr", "branch", "commit", "issue", "plan_doc", "ci_link", "command"} {
+		require.Equal(t, wantKind, recs[i].GetKind())
+		require.True(t, recs[i].GetFirstSeenAt().AsTime().Equal(seen))
+	}
+	pr := recs[0].GetPr()
+	require.Equal(t, int32(12), pr.GetNumber())
+	require.Equal(t, "created", pr.GetSource())
+	require.Equal(t, "feat-a", pr.GetBase())
+	require.Equal(t, "1a2b3c4", recs[2].GetCommit().GetSha())
+	require.Equal(t, "ok", recs[6].GetCommand().GetResult())
+}
+
+func TestArtifactsToProto_ShouldLeaveRecordsEmpty_WhenBlobIsV1(t *testing.T) {
+	got := artifactsToProto(&artifacts.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
+	require.Empty(t, got.GetRecords())
+	require.Equal(t, []string{"u"}, got.GetPrUrls())
 }

@@ -66,6 +66,7 @@ func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTr
 		LastScannedAt:       timestamppb.New(a.LastScannedAt),
 		ScanState:           string(a.State()),
 		TranscriptSupported: true,
+		Records:             artifactRecordsToProto(a.Records),
 	}
 }
 
