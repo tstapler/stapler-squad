@@ -246,3 +246,28 @@ func instanceHasPR(inst *session.Instance, ref session.PRRef) bool {
 	}
 	return false
 }
+
+// resolveTargetPR is the one place a PR action's selector becomes a PR. An unset
+// selector means the session's active PR; a set one must belong to the session.
+// The returned ref is never the zero ref: a session with no PR gets
+// FailedPrecondition "no pull request", never a call for number 0.
+func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*session.PRRef, error) {
+	var requested *session.PRRef
+	if sel != nil {
+		ref, err := prRefFromProto(sel)
+		if err != nil {
+			return nil, err
+		}
+		requested = &ref
+	}
+	resolved, err := inst.ResolveTargetPR(requested)
+	switch {
+	case errors.Is(err, session.ErrNoPullRequest):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no pull request"))
+	case errors.Is(err, session.ErrPRNotAttached):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	case err != nil:
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return &resolved, nil
+}
