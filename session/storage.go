@@ -1593,6 +1593,23 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
 }
 
+// ListSessionPRViewsByUUIDs returns each session's PR links joined to their
+// states as row data (no live Instance needed). Sessions without links are absent.
+func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+	return s.repo.ListBySessionUUIDs(ctx, uuids)
+}
+
+// ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
+// from one data path; see ItemGuardView.
+func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {
+	return s.repo.ListItemGuardViews(ctx, itemIDs)
+}
+
+// ListItemIDsBySessionUUIDs returns every item id of each session uuid.
+func (s *Storage) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
+	return s.repo.ListItemIDsBySessionUUIDs(ctx, uuids)
+}
+
 // ListItemSessionsBySessionUUIDs batches GetItemSessionBySessionUUID: one query for all UUIDs.
 func (s *Storage) ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]ItemSessionSummary, error) {
 	return s.repo.ListItemSessionsBySessionUUIDs(ctx, uuids)
