@@ -34,7 +34,8 @@ func (s *SessionService) DetachItemPullRequest(
 	if !ok {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("item PR detach needs ent-backed storage"))
 	}
-	if item, gerr := store.GetBacklogItem(ctx, itemID); gerr != nil || item == nil {
+	item, gerr := store.GetBacklogItem(ctx, itemID)
+	if gerr != nil || item == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %s not found", itemID))
 	}
 	found, err := store.DetachItemPR(ctx, itemID, ref)
@@ -45,5 +46,10 @@ func (s *SessionService) DetachItemPullRequest(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is not attached to this item", ref))
 	}
 	log.Info("item PR detached by user", "item", itemID, "pr", ref.String())
+	// The detach may have released the last hold on a finished item's worktrees: re-run
+	// the gate now instead of waiting for the sweep. The gate decides; this never forces.
+	if c := s.prRefs.itemCleaner; c != nil && session.IsTerminalStatus(session.BacklogStatus(item.Status)) {
+		c.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathDetach), itemID)
+	}
 	return connect.NewResponse(&sessionv1.DetachItemPullRequestResponse{}), nil
 }

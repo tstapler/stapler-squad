@@ -1771,6 +1771,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, probeErr
 	}
 	backlogLifecycleListener.SetPRRowRefresher(svc.PRStatusPoller)
+	sessionService.SetItemCleaner(backlogSvc)
 	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
 	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
 	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)

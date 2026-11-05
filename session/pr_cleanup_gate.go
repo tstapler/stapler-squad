@@ -42,6 +42,7 @@ const (
 	CleanupPathRework     = "rework"
 	CleanupPathTombstone  = "tombstone"
 	CleanupPathListener   = "listener"
+	CleanupPathDetach     = "detach"
 	cleanupPathUnknown    = "unknown"
 )
 
