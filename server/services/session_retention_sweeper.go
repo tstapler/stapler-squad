@@ -34,13 +34,16 @@ type SessionRetentionSweeper struct {
 	svc     *SessionService
 	// prSource supplies the per-cycle PR evidence; tests substitute a fake.
 	prSource sweepPRSource
+	// now is the clock; tests inject one.
+	now   func() time.Time
+	holds itemHoldTracker
 }
 
 // NewSessionRetentionSweeper constructs a sweeper. svc is used to perform the actual
 // deletion via its existing DeleteSession RPC handler, so tmux/worktree/DB cleanup
 // logic is not duplicated here.
 func NewSessionRetentionSweeper(storage *session.Storage, cfg *config.Config, svc *SessionService) *SessionRetentionSweeper {
-	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage}
+	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage, now: time.Now}
 }
 
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled.
@@ -103,6 +106,8 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 		return
 	}
 
+	s.surfaceItemPRHolds(dataSlice, pr, cutoff)
+
 	for _, d := range dataSlice {
 		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
 			continue
@@ -122,6 +127,19 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 			log.Warn("session retention sweeper: failed to delete session", "session", d.Title, "err", err)
 		}
 	}
+}
+
+// surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
+func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []session.InstanceData, pr *sweepPRData, cutoff time.Time) {
+	days := s.cfg.SessionRetention.RetentionDaysOrDefault()
+	var holds []ItemPRHold
+	for _, d := range all {
+		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
+			continue
+		}
+		holds = append(holds, pr.itemHolds(d, d.ArchivedAt.AddDate(0, 0, days))...)
+	}
+	s.holds.observe(holds, s.now())
 }
 
 // expiredUUIDs lists the uuids of archived sessions past the cutoff: the only

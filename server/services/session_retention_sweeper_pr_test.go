@@ -274,3 +274,34 @@ func TestRetentionSweeper_ShouldIssueBoundedQueries_WhenManySessions(t *testing.
 	sweeper.sweep(context.Background())
 	assert.Equal(t, 1, fake.viewCall, "one bulk link read per cycle, never one per session")
 }
+
+func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelease(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "held", "u-held")
+	sweeper, fake := newPRSweeper(fix)
+	base := time.Now()
+	sweeper.now = func() time.Time { return base }
+	fake.itemIDs = func(map[string][]string) (map[string][]string, error) {
+		return map[string][]string{"u-held": {"item-h"}}, nil
+	}
+	attached := base.Add(-30 * time.Minute)
+	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
+		open := session.PRView{State: session.PRStateOpen, AttachedAt: attached}
+		return map[string]session.ItemGuardView{"item-h": {Direct: []session.PRView{open}}}, nil
+	}
+	before := ItemPRHoldOverMaxCount()
+
+	sweeper.sweep(context.Background())
+	assert.Equal(t, before, ItemPRHoldOverMaxCount(), "held 30m: below the 1h line")
+	assert.Empty(t, sweeper.OverMaxItemPRHolds())
+
+	base = base.Add(2 * time.Hour)
+	sweeper.sweep(context.Background())
+	sweeper.sweep(context.Background())
+	assert.Equal(t, before+1, ItemPRHoldOverMaxCount(), "counted once per (item, window), not per cycle")
+	require.Len(t, sweeper.OverMaxItemPRHolds(), 1)
+	assert.Equal(t, "item-h", sweeper.OverMaxItemPRHolds()[0].ItemID)
+	assert.True(t, hasStoredTitle(t, fix, "held"), "fail-closed forever: surfacing never releases the session")
+}
