@@ -35,7 +35,7 @@ export const disclosure = style({
 });
 
 export const count = style({ fontWeight: 400, color: vars.color.textSecondary, fontSize: vars.fontSize.xs });
-export const prLink = style({ color: vars.color.primary, fontSize: vars.fontSize.sm, overflowWrap: "anywhere" });
+export const prLink = style({ color: vars.color.textPrimary, fontSize: vars.fontSize.sm, overflowWrap: "anywhere", textDecoration: "underline" });
 export const note = style({ margin: 0, fontSize: vars.fontSize.xs, color: vars.color.textSecondary });
 
 export const items = style({ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: vars.space["1"] });
@@ -55,13 +55,13 @@ export const control = style({
   background: "none",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.sm,
-  color: vars.color.primary,
+  color: vars.color.textPrimary,
   cursor: "pointer",
   fontFamily: "monospace",
   fontSize: vars.fontSize.sm,
   overflowWrap: "anywhere",
   textAlign: "left",
-  textDecoration: "none",
+  textDecoration: "underline",
   selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "2px" } },
 });
 

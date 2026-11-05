@@ -1,7 +1,10 @@
 import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "../../styles/theme-contract.css";
 
+// Both surfaces paint the theme background themselves: the pane behind a tab panel is a fixed dark colour,
+// so theme-coloured text on it is unreadable in the light theme.
 export const container = style({
+  background: vars.color.background,
   height: "100%",
   overflowY: "auto",
   padding: vars.space["4"],
@@ -11,6 +14,8 @@ export const container = style({
 });
 
 export const emptyState = style({
+  background: vars.color.background,
+  flex: 1,
   padding: vars.space["6"],
   color: vars.color.textSecondary,
   textAlign: "center",
@@ -41,8 +46,8 @@ export const list = style({
 });
 
 export const link = style({
-  color: vars.color.primary,
-  textDecoration: "none",
+  color: vars.color.textPrimary,
+  textDecoration: "underline",
   fontSize: vars.fontSize.sm,
   selectors: {
     "&:hover": { textDecoration: "underline" },
@@ -66,7 +71,7 @@ export const urlToggleButton = style({
   background: "none",
   border: "none",
   cursor: "pointer",
-  color: vars.color.primary,
+  color: vars.color.textPrimary,
   fontSize: vars.fontSize.sm,
   padding: `${vars.space["1"]} 0`,
   selectors: {
@@ -110,7 +115,7 @@ export const actionButton = style({
   minWidth: "44px",
   padding: `0 ${vars.space["4"]}`,
   cursor: "pointer",
-  color: vars.color.primary,
+  color: vars.color.textPrimary,
   background: "none",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: "6px",

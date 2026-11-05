@@ -57,6 +57,7 @@ export function PullRequestList(props: PullRequestListProps) {
   const toastFocus = useRef<FocusPlan | null>(null);
   const dialogFocus = useRef<FocusPlan | null>(null);
   const toastSeq = useRef(0);
+  const keyboardToast = useRef(false);
 
   usePullRequestsAnchor(headingRef, !loading);
 
@@ -88,6 +89,7 @@ export function PullRequestList(props: PullRequestListProps) {
   const focusAfterRender = (plan: FocusPlan) => { setTimeout(() => focusDestination(plan), 0); };
 
   const showToast = (message: string, hint: string, undo: () => void, keyboard: boolean) => {
+    keyboardToast.current = keyboard;
     toastSeq.current += 1;
     setToast({ id: toastSeq.current, message, hint, undo, keyboard });
   };
@@ -110,7 +112,8 @@ export function PullRequestList(props: PullRequestListProps) {
     const result = await run(`Couldn't pin #${pr.number}`, () => actions.pin(asTarget(pr)));
     if (!result.ok) return;
     toastFocus.current = plan;
-    focusAfterRender(plan);
+    // A keyboard pin gives the focus to the toast's Undo; a deferred focus on the row would take it back.
+    if (!keyboard) focusAfterRender(plan);
     showToast(`Pinned #${pr.number} as current.`, "Undo, or choose Unpin in the row menu.", () => void actions.pin(previous ? asTarget(previous) : null), keyboard);
   };
 
@@ -125,6 +128,7 @@ export function PullRequestList(props: PullRequestListProps) {
 
   const onCommand = (command: RowCommand, pr: SessionPullRequest, e: { detail?: number }) => {
     const keyboard = (e.detail ?? 1) === 0;
+    keyboardToast.current = false;
     switch (command) {
       case "merge": case "close": case "detach": dialogFocus.current = planFocus(pr); setDialog({ kind: command, pr }); break;
       case "pin": void pin(pr, keyboard); break;
@@ -144,7 +148,7 @@ export function PullRequestList(props: PullRequestListProps) {
 
   const finishDialog = () => {
     setDialog(null);
-    if (dialogFocus.current) focusAfterRender(dialogFocus.current);
+    if (dialogFocus.current && !keyboardToast.current) focusAfterRender(dialogFocus.current);
   };
 
   // Cancel and Esc: the focus trap hands focus back to the invoker, but a row-menu item is gone by then, so

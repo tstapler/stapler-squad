@@ -4,9 +4,9 @@ import type { MouseEvent } from "react";
 import type { SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { chipView } from "@/lib/pr/chipView";
 import { activePullRequest, moreCount, sortPullRequests } from "@/lib/pr/pullRequests";
-import { badge, compact as compactClass, icon, prBadge, priorityLabel, text } from "./GitHubBadge.css";
+import { badge, compact as compactClass, icon, prBadge, text } from "./GitHubBadge.css";
 import { PrStateGlyph } from "./PrStateGlyph";
-import { chipLink, chipRow, moreButton, staleMark, stateClass } from "./PullRequestChip.css";
+import { chipLink, chipRow, moreButton, staleMark, stateClass, stateLabel } from "./PullRequestChip.css";
 
 interface PullRequestChipProps {
   pullRequests: readonly SessionPullRequest[];
@@ -50,7 +50,7 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
         >{/* analytics-exempt */}
           <PrStateGlyph state={view.state} className={`${icon}`} />
           <span className={text}>#{shown.number}</span>
-          <span className={priorityLabel}>{view.label}</span>
+          <span className={stateLabel}>{view.label}</span>
           {view.stale && <span className={staleMark} aria-hidden="true">!</span>}
         </a>
       </span>
