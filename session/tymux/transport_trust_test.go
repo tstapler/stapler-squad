@@ -82,3 +82,29 @@ func TestUnixSocketPath_UncleanOverrideIsCleaned(t *testing.T) {
 	t.Setenv("TYMUXD_SOCKET_PATH", "/tmp//a/../x.sock")
 	require.Equal(t, "/tmp/x.sock", unixSocketPath(ResolveDaemonConfig()))
 }
+
+// Spelling an owned socket path uncleanly or relatively is a config quirk, not a trust problem:
+// the kill veto must see through it (live socket vetoes, missing one does not).
+func TestUnixSocketListening_UncleanSpellingsOfLiveOrMissingSocket(t *testing.T) {
+	const addr = "http://127.0.0.1:19996"
+	live, missing := answeringUnixSocket(t), missingSocketPath(t)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	spell := func(p string) map[string]string {
+		rel, err := filepath.Rel(cwd, p)
+		require.NoError(t, err)
+		return map[string]string{
+			"double slash": filepath.Dir(p) + "//" + filepath.Base(p),
+			"dot-dot":      filepath.Dir(p) + "/../" + filepath.Base(filepath.Dir(p)) + "/" + filepath.Base(p),
+			"relative":     rel,
+		}
+	}
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "")
+	t.Setenv("TYMUXD_ADDR", addr)
+	for name, p := range spell(live) {
+		require.True(t, unixSocketListening(DaemonConfig{Addr: addr, SocketPath: p}), "live socket, %s spelling %q", name, p)
+	}
+	for name, p := range spell(missing) {
+		require.False(t, unixSocketListening(DaemonConfig{Addr: addr, SocketPath: p}), "missing socket, %s spelling %q", name, p)
+	}
+}

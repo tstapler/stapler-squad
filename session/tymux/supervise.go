@@ -313,7 +313,7 @@ func ownedSocketPath(cfg DaemonConfig) string {
 		return ""
 	}
 	if cfg.SocketPath != "" {
-		return cfg.SocketPath
+		return cleanSocketPath(cfg.SocketPath)
 	}
 	if cfg.Addr == defaultTymuxdAddr {
 		return udsdialer.DefaultSocketPath(os.Getuid()) // not ResolveSocketPath: TYMUXD_SOCKET_PATH names another daemon
@@ -333,8 +333,15 @@ func unixSocketPath(cfg DaemonConfig) string {
 		warnOverlongSocketPath(path)
 		return ""
 	}
-	if abs, err := filepath.Abs(path); err == nil && path != "" {
-		path = abs // upstream's trust check refuses unclean or relative paths; the kernel resolves both the same
+	return path
+}
+
+// cleanSocketPath normalizes a configured socket path. Upstream's trust check refuses unclean or
+// relative paths, but that is a spelling problem, not a trust one, so every consumer (client,
+// probe, kill veto) sees the same absolute clean form.
+func cleanSocketPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
 	}
 	return path
 }
