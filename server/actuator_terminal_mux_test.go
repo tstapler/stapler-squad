@@ -9,12 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
-func muxActuatorStatus(t *testing.T, listener, method, query string, b *services.TerminalMuxBridge) (int, int) {
+func muxActuatorStatus(t *testing.T, listener, method, query string, b *wsconn.TerminalMuxBridge) (int, int) {
 	t.Helper()
 	h := services.WithRequestRecord(listener, listener == services.ListenerRemote)(
-		handleActuatorTerminalMux(func() *services.TerminalMuxBridge { return b }))
+		handleActuatorTerminalMux(func() *wsconn.TerminalMuxBridge { return b }))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(method, "/actuator/terminal-mux"+query, nil))
 	size := -1
@@ -26,7 +27,7 @@ func muxActuatorStatus(t *testing.T, listener, method, query string, b *services
 
 func TestActuatorTerminalMux_should_ChangePoolSize_When_PostedOnLocalListenerOnly(t *testing.T) {
 	t.Parallel()
-	b := services.NewTerminalMuxBridge(nil, 2)
+	b := wsconn.NewTerminalMuxBridge(nil, 2)
 	code, size := muxActuatorStatus(t, services.ListenerLocal, http.MethodPost, "?poolSize=4", b)
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 4, size)

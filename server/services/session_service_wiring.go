@@ -315,7 +315,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
 	})
 	inst.SetPreSpawnCollisionGuard(func(worktreePath string) error {
-		if s.reviewQueuePoller == nil {
+		if s.ReviewQueuePoller == nil {
 			log.Warn("SetPreSpawnCollisionGuard: reviewQueuePoller is nil, allowing spawn without a collision check", "session", inst.Title)
 			return nil
 		}
@@ -399,7 +399,7 @@ var _ AutonomousDriverStarter = (*SessionService)(nil)
 // added/removed from the poller and AcknowledgeSession updates poller references.
 // Must be called during server startup before any session mutation RPCs are used.
 func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
-	s.reviewQueuePoller = poller
+	s.ReviewQueuePoller = poller
 	s.AutonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)

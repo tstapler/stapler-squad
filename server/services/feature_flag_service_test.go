@@ -62,7 +62,7 @@ func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(
 }
 
 func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t *testing.T) {
-	require.True(t, featureFlagDefault(programCLIFlagProbeFlagName))
+	require.True(t, FeatureFlagDefault(programCLIFlagProbeFlagName))
 }
 
 // recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
@@ -251,10 +251,10 @@ func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *
 
 func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *testing.T) {
 	t.Parallel()
-	require.True(t, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag))
-	require.False(t, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag))
-	require.Equal(t, config.WorkflowEngineShadowDefault, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag), "declared once in config")
-	require.Equal(t, config.WorkflowEngineEnforceDefault, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag), "declared once in config")
+	require.True(t, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag))
+	require.False(t, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag))
+	require.Equal(t, config.WorkflowEngineShadowDefault, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag), "declared once in config")
+	require.Equal(t, config.WorkflowEngineEnforceDefault, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag), "declared once in config")
 
 	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
 	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
@@ -513,7 +513,7 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	name, def, ok := session.ClassEnforceFlag(session.ClassOperator)
 	require.True(t, ok)
 	require.Equal(t, config.WorkflowEngineEnforceFeatureFlag, name, "operator is bound to the existing enforce flag")
-	require.Equal(t, featureFlagDefault(name), def, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(name), def, "table default equals the registry default")
 
 	for _, class := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
 		name, _, ok := session.ClassEnforceFlag(class)
@@ -529,12 +529,12 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	agentName, agentDef, ok := session.ClassEnforceFlag(session.ClassAgent)
 	require.True(t, ok, "the agent flag is registered in Task 1.5.3c")
 	require.Equal(t, config.WorkflowEngineEnforceAgentFeatureFlag, agentName)
-	require.Equal(t, featureFlagDefault(agentName), agentDef, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(agentName), agentDef, "table default equals the registry default")
 	require.False(t, agentDef, "the agent flag ships off")
 	systemName, systemDef, ok := session.ClassEnforceFlag(session.ClassSystem)
 	require.True(t, ok, "the system flag is registered in Task 1.5.8g")
 	require.Equal(t, config.WorkflowEngineEnforceSystemFeatureFlag, systemName)
-	require.Equal(t, featureFlagDefault(systemName), systemDef, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(systemName), systemDef, "table default equals the registry default")
 	require.False(t, systemDef, "the system flag ships off")
 }
 
@@ -673,7 +673,7 @@ var dfltKnownLiteralSites = map[string]bool{
 // registry default is true, so an unset flag reads false there and true elsewhere.
 // Changing the read is a behavior change and needs an owner decision.
 var dfltKnownPlainReadDisagreements = map[string]bool{
-	"session/instance_tmux.go|" + terminalResyncExecGateFastLaneFlagName: true,
+	"session/instance_tmux.go|" + TerminalResyncExecGateFastLaneFlagName: true,
 }
 
 type dfltFile struct {

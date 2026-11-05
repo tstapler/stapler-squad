@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
 type batchItem struct {
@@ -29,7 +30,7 @@ func (h *chainHarness) postBatch(t *testing.T, withAuth bool, calls ...map[strin
 	t.Helper()
 	body, err := json.Marshal(map[string]any{"calls": calls})
 	require.NoError(t, err)
-	req, err := http.NewRequest(http.MethodPost, h.ts.URL+services.UnaryBatchPath, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, h.ts.URL+wsconn.UnaryBatchPath, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", h.scheme()+"://"+h.host())

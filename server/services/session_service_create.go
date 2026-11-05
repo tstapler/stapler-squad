@@ -933,8 +933,8 @@ func (s *SessionService) CreateSession(
 	s.indexSessionForDelivery(instance)
 
 	// Add the session to the poller so WatchSessions picks it up immediately.
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
 	}
 	if s.sessionTagPoller != nil {

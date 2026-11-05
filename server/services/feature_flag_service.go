@@ -54,7 +54,7 @@ const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
 // config on every call so a Settings toggle applies with no restart.
 func ProgramCLIFlagProbeEnabled() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(
-		programCLIFlagProbeFlagName, featureFlagDefault(programCLIFlagProbeFlagName))
+		programCLIFlagProbeFlagName, FeatureFlagDefault(programCLIFlagProbeFlagName))
 }
 
 // ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
@@ -120,12 +120,12 @@ func (HandoffSummaryFeatureController) IsEnabled() bool {
 // terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
 // handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
 // can't drift between where it's declared and where it's read.
-const terminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
+const TerminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
 
 // terminalResyncSkipStaleDimensionSlowpathFlagName is shared between knownFeatureFlags
 // below and handleCurrentPaneRequest's stale-dimension skip branch (connectrpc_websocket.go)
 // so the flag name can't drift between where it's declared and where it's read.
-const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
+const TerminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
 
 // terminalResyncExecGateFastLaneFlagName is shared between knownFeatureFlags below and
 // currentResyncOptions' UseFastLane field (connectrpc_websocket.go) so the flag name can't
@@ -133,12 +133,12 @@ const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-s
 // this literal (as terminalResyncExecGateFastLaneFlagName there too) rather than importing it,
 // since session cannot import server/services without creating an import cycle — keep both
 // in sync if this flag is ever renamed.
-const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
+const TerminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
 
 // terminalResyncCompressionFlagName is shared between knownFeatureFlags below and
 // writeCurrentPaneResponse's envelope-compression branch (connectrpc_websocket.go) so the
 // flag name can't drift between where it's declared and where it's read.
-const terminalResyncCompressionFlagName = "terminal:resync-compression"
+const TerminalResyncCompressionFlagName = "terminal:resync-compression"
 
 // terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName, and
 // terminalResyncBatchingFlagName are pure client-side concerns (see
@@ -147,9 +147,9 @@ const terminalResyncCompressionFlagName = "terminal:resync-compression"
 // consistency with the other four terminal:resync-* flags above, and so
 // knownFeatureFlags/allTerminalResyncFlagNames reference one declaration instead of a
 // raw string literal.
-const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
-const terminalResyncStaggerFlagName = "terminal:resync-stagger"
-const terminalResyncBatchingFlagName = "terminal:resync-batching"
+const TerminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
+const TerminalResyncStaggerFlagName = "terminal:resync-stagger"
+const TerminalResyncBatchingFlagName = "terminal:resync-batching"
 
 const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 
@@ -158,7 +158,7 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // duplicate the literal -- see config/config.go for the flag's full
 // documentation and
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
-const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+const TerminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
@@ -184,7 +184,7 @@ const (
 )
 
 func filesFlagEnabled(name string) bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	return config.LoadConfig().GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
 }
 
 // FilesEditingEnabled reports whether file editing (WriteFile) is allowed. Default: off.
@@ -286,32 +286,32 @@ var knownFeatureFlags = []struct {
 		description: "Restart-with-summary: generate an AI handoff summary and restart into a fresh session. Read-only here -- the real toggle is config.json's handoff_summary.enabled key. Default: on.",
 	},
 	{
-		name:        terminalResyncVisibilityScopeFlagName,
+		name:        TerminalResyncVisibilityScopeFlagName,
 		description: "Scope terminal resync-on-visibility-change to only the terminal instance actually in the foreground, instead of every mounted terminal. Applies to newly-focused terminals only — already-open tabs need a reload to pick up the change. Default: off.",
 	},
 	{
-		name:        terminalResyncCorrelationIDFlagName,
+		name:        TerminalResyncCorrelationIDFlagName,
 		description: "Tag each terminal resync request/reply pair with a correlation ID so a stale reply from an earlier resync can't be misapplied to a later one. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:        terminalResyncSkipStaleDimensionSlowpathFlagName,
+		name:        TerminalResyncSkipStaleDimensionSlowpathFlagName,
 		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:         terminalResyncExecGateFastLaneFlagName,
+		name:         TerminalResyncExecGateFastLaneFlagName,
 		description:  "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: on (2026-08-25) — without it, a resync-triggered resize's sequential subprocess calls can exceed the client's 4s stall watchdog under exec-gate contention, forcing an unnecessary disconnect+reconnect. Persist an explicit false to opt back out.",
 		defaultValue: true,
 	},
 	{
-		name:        terminalResyncStaggerFlagName,
+		name:        TerminalResyncStaggerFlagName,
 		description: "Stagger resync bursts across multiple terminals instead of firing them all simultaneously, reducing thundering-herd load on the tmux server. Default: off.",
 	},
 	{
-		name:        terminalResyncCompressionFlagName,
+		name:        TerminalResyncCompressionFlagName,
 		description: "Compress terminal resync payloads on the wire to reduce bandwidth for large scrollback resyncs. Default: off.",
 	},
 	{
-		name:        terminalResyncBatchingFlagName,
+		name:        TerminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
 	{
@@ -327,7 +327,7 @@ var knownFeatureFlags = []struct {
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
 	{
-		name:        terminalAppScrollForwardingClaudeFlagName,
+		name:        TerminalAppScrollForwardingClaudeFlagName,
 		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
 	},
 	{
@@ -510,8 +510,8 @@ const workflowEngineModeTTL = time.Second
 // returns false for an unset flag and would silently turn shadow off).
 func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
 	return session.ModeFromFlags(
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
 	)
 }
 
@@ -549,7 +549,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now 
 // site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
 // drift on what "default" means for a given flag. Returns false for an unregistered
 // name, matching GetFeatureFlag's own "absent means false" convention.
-func featureFlagDefault(name string) bool {
+func FeatureFlagDefault(name string) bool {
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
 			return kf.defaultValue
@@ -689,7 +689,7 @@ func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
 	if value, explicit := cfg.FeatureFlags[name]; explicit {
 		parts = append(parts, "Set explicitly: "+onOff(value))
 	} else {
-		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+		parts = append(parts, "Default: "+onOff(FeatureFlagDefault(name))+" (not set explicitly)")
 	}
 	return parts
 }
@@ -832,7 +832,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	}
 
 	cfg := config.LoadConfig()
-	enabled := cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	enabled := cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
 	if op.scope == "" && op.isSet() {
 		enabled = op.enabled // the controller-backed state, as before this change
 	}
@@ -861,7 +861,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
-			previous = featureFlagDefault(name)
+			previous = FeatureFlagDefault(name)
 		}
 		// In-memory mutators: UpdateConfig saves once, so the saving setters
 		// here would fsync config.json twice per flip.

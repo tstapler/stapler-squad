@@ -29,7 +29,7 @@ type AttentionFlags struct {
 // ResolveAttentionFlags reads the six flags from cfg.
 func ResolveAttentionFlags(cfg *config.Config) AttentionFlags {
 	on := func(name string) bool {
-		return cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+		return cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
 	}
 	return AttentionFlags{
 		ProseQuestionDetection:   on(attentionProseQuestionDetectionFlagName),

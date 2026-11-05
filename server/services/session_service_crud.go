@@ -73,8 +73,8 @@ func (s *SessionService) ListSessions(
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
 	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
+	if s.ReviewQueuePoller != nil {
+		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
 		var err error
 		instances, err = s.loadInstancesWithWiring()
@@ -189,9 +189,9 @@ func (s *SessionService) GetSession(
 
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
-	if s.reviewQueuePoller != nil {
+	if s.ReviewQueuePoller != nil {
 		wfNames := s.workflowNames()
-		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
+		if inst := s.ReviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
 				Session: adapters.InstanceToProto(inst, wfNames),
 			}), nil

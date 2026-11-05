@@ -65,7 +65,7 @@ func TestDeleteSession_should_RefuseDirtyWorktree_When_NotForced(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.NotNil(t, svc.reviewQueuePoller.FindInstance("delete-dirty-refused"), "a refused delete must leave the session registered")
+	assert.NotNil(t, svc.ReviewQueuePoller.FindInstance("delete-dirty-refused"), "a refused delete must leave the session registered")
 	assert.FileExists(t, precious)
 }
 

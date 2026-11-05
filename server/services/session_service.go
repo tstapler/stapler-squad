@@ -88,7 +88,7 @@ type SessionService struct {
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
-	reviewQueuePoller *session.ReviewQueuePoller
+	ReviewQueuePoller *session.ReviewQueuePoller
 
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.

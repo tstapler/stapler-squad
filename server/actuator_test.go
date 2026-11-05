@@ -13,7 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/dbpool"
@@ -584,7 +584,7 @@ func TestHandleActuatorUnfinishedScanner_ShouldServeCounterJSON_WithoutTelemetry
 func TestHandleActuatorWsUnary_ShouldServeEmptyReport_WhenBridgeNotBuilt(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	handleActuatorWsUnary(func() *services.UnaryWsBridge { return nil })(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
+	handleActuatorWsUnary(func() *wsconn.UnaryWsBridge { return nil })(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -606,7 +606,7 @@ func TestHandleActuatorWsUnary_ShouldServeEmptyReport_WhenBridgeNotBuilt(t *test
 func TestRegisterActuatorRoutes_ShouldServeWsUnary_WhenBridgeStoredAfterRegistration(t *testing.T) {
 	s := &Server{mux: http.NewServeMux()}
 	s.registerActuatorRoutes()
-	s.wsUnaryBridge.Store(services.NewUnaryWsBridge(func(string) http.Handler { return nil }))
+	s.wsUnaryBridge.Store(wsconn.NewUnaryWsBridge(func(string) http.Handler { return nil }))
 
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))

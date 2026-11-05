@@ -846,7 +846,7 @@ func assertNotConnectCode(t *testing.T, err error, notWant connect.Code, msg str
 func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
-	svc.reviewQueuePoller = nil // simulate the degenerate construction this test targets
+	svc.ReviewQueuePoller = nil // simulate the degenerate construction this test targets
 
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)

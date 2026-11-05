@@ -38,7 +38,7 @@ func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, en
 
 func TestGateFlag_ShouldBeRegisteredDefaultOnWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
 	svc := newGatedFlagService(t)
-	require.True(t, featureFlagDefault(config.HiddenSessionGateFeatureFlag))
+	require.True(t, FeatureFlagDefault(config.HiddenSessionGateFeatureFlag))
 	assert.True(t, svc.DeliveryGate().Flags().Enabled(), "the cache and the registry agree on the default")
 	assert.Equal(t, statsWriterNotRunning,
 		statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))

@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
 func TestUnaryDispatcher_ShouldBeNil_When_ListenerNotStarted(t *testing.T) {
@@ -107,7 +108,7 @@ type chainHarness struct {
 	chainCase
 	stub      *chainStub
 	validator *chainValidator
-	bridge    *services.UnaryWsBridge
+	bridge    *wsconn.UnaryWsBridge
 	ts        *httptest.Server
 	dialer    *websocket.Dialer
 }
@@ -128,10 +129,10 @@ func newChainHarnessWithRemoteAuth(t *testing.T, cc chainCase, remoteAuth bool) 
 	srv.RegisterConnectHandler("/api"+path, http.StripPrefix("/api", h))
 
 	v := &chainValidator{}
-	bridge := services.NewUnaryWsBridge(srv.unaryDispatcher,
-		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
-	srv.mux.Handle(services.UnaryWsPath, bridge)
-	srv.mux.Handle(services.UnaryBatchPath, services.NewUnaryBatchHandler(srv.unaryDispatcher))
+	bridge := wsconn.NewUnaryWsBridge(srv.unaryDispatcher,
+		wsconn.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+	srv.mux.Handle(wsconn.UnaryWsPath, bridge)
+	srv.mux.Handle(wsconn.UnaryBatchPath, wsconn.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	hn := &chainHarness{chainCase: cc, stub: stub, validator: v, bridge: bridge}
 	if cc.listener == services.ListenerLocal {
@@ -177,7 +178,7 @@ func (h *chainHarness) header() http.Header {
 }
 
 func (h *chainHarness) wsURL() string {
-	return "ws" + strings.TrimPrefix(h.ts.URL, "http") + services.UnaryWsPath
+	return "ws" + strings.TrimPrefix(h.ts.URL, "http") + wsconn.UnaryWsPath
 }
 
 func (h *chainHarness) dial(t *testing.T, hd http.Header) (*websocket.Conn, *http.Response, error) {
@@ -254,7 +255,7 @@ func TestWsUnaryChain_should_DenyEveryGuardedProcedureOverWS(t *testing.T) {
 
 func TestWsUnaryChain_should_NeverAllowAGuardedProcedure(t *testing.T) {
 	allowed := map[string]bool{}
-	for _, m := range services.WsUnaryAllowedMethods() {
+	for _, m := range wsconn.WsUnaryAllowedMethods() {
 		allowed["/api"+m] = true
 	}
 	for path := range guardedProcedures {

@@ -46,8 +46,8 @@ func (s *SessionService) WatchSessions(
 		// Fresh connection: send initial snapshot using in-memory poller cache —
 		// avoids a full SQLite scan on every new WatchSessions connection.
 		var instances []*session.Instance
-		if s.reviewQueuePoller != nil {
-			instances = s.reviewQueuePoller.GetInstances()
+		if s.ReviewQueuePoller != nil {
+			instances = s.ReviewQueuePoller.GetInstances()
 		} else {
 			var err error
 			instances, err = s.loadInstancesWithWiring()

@@ -32,7 +32,7 @@ func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *sess
 	require.NoError(t, err)
 	live := session.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
-	svc.reviewQueuePoller.AddInstance(inst)
+	svc.ReviewQueuePoller.AddInstance(inst)
 	return inst
 }
 
@@ -132,7 +132,7 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 	ctx := newPollEnteredCtx(context.Background())
 	go func() {
 		<-ctx.entered
-		svc.reviewQueuePoller.RemoveInstance("await-vanish")
+		svc.ReviewQueuePoller.RemoveInstance("await-vanish")
 	}()
 
 	start := time.Now()

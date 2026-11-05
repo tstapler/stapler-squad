@@ -213,7 +213,7 @@ func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageI
 	// constructor's unrelated wiring (sub-services that assume a fully-formed service).
 	svc := &SessionService{
 		storage:           &fakeInstanceStore{},
-		reviewQueuePoller: poller,
+		ReviewQueuePoller: poller,
 	}
 
 	err := svc.ArchiveSessionByUUID(context.Background(), "not-tracked-anywhere")

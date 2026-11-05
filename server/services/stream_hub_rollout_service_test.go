@@ -109,7 +109,7 @@ func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.SessionOverrides, 1)
-	assert.Equal(t, tmuxSessionNameForStreamPath(inst), resp.Msg.SessionOverrides[0].SessionName)
+	assert.Equal(t, TmuxSessionNameForStreamPath(inst), resp.Msg.SessionOverrides[0].SessionName)
 }
 
 func TestSetStreamHubGlobalOverride_SetsAndClears(t *testing.T) {

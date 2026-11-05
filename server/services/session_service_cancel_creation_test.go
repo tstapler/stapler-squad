@@ -43,7 +43,7 @@ func newCancelTestInstance(t *testing.T, svc *SessionService, storage *session.S
 		live := session.NewLiveInstance(inst)
 		t.Cleanup(live.Stop)
 	}
-	svc.reviewQueuePoller.AddInstance(inst)
+	svc.ReviewQueuePoller.AddInstance(inst)
 	return inst
 }
 
@@ -64,7 +64,7 @@ func TestCancelSessionCreation_should_RemoveInstanceAndCleanUp_When_StatusIsCrea
 	require.NotNil(t, resp)
 	assert.True(t, resp.Msg.Success)
 
-	assert.Nil(t, svc.reviewQueuePoller.FindInstance("cancel-happy-path"), "instance should be removed from the live poller")
+	assert.Nil(t, svc.ReviewQueuePoller.FindInstance("cancel-happy-path"), "instance should be removed from the live poller")
 
 	_, getErr := svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
 		Id: "cancel-happy-path",
@@ -96,7 +96,7 @@ func TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil(t
 		assert.True(t, resp.Msg.Success)
 	})
 
-	assert.Nil(t, svc.reviewQueuePoller.FindInstance("cancel-nil-cancelfunc"))
+	assert.Nil(t, svc.ReviewQueuePoller.FindInstance("cancel-nil-cancelfunc"))
 }
 
 // TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActive
@@ -120,7 +120,7 @@ func TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActi
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 
 	// Instance must be untouched: still present, still Active.
-	require.NotNil(t, svc.reviewQueuePoller.FindInstance("cancel-already-active"))
+	require.NotNil(t, svc.ReviewQueuePoller.FindInstance("cancel-already-active"))
 	status, _ := inst.StatusAndFailureReason()
 	assert.Equal(t, session.Active, status)
 }
@@ -151,7 +151,7 @@ func TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipeli
 	}))
 	wg.Wait()
 
-	stillPresent := svc.reviewQueuePoller.FindInstance("cancel-race-test") != nil
+	stillPresent := svc.ReviewQueuePoller.FindInstance("cancel-race-test") != nil
 
 	if err == nil {
 		// Cancel won the race.

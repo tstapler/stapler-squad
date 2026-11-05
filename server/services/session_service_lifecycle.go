@@ -625,8 +625,8 @@ func (s *SessionService) removeFromAllPollers(id string) {
 	if s.reviewQueueSvc != nil {
 		s.reviewQueueSvc.GetQueue().Remove(id)
 	}
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.RemoveInstance(id)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.RemoveInstance(id)
 	}
 	if s.sessionTagPoller != nil {
 		s.sessionTagPoller.RemoveInstance(id)
@@ -1067,10 +1067,10 @@ func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
 // Instance. This is a safety net for sessions paused before the kill-on-pause change,
 // or for cases where the initial kill attempt fell back to detach.
 func (s *SessionService) ReapPausedTmuxSessions() {
-	if s.reviewQueuePoller == nil {
+	if s.ReviewQueuePoller == nil {
 		return
 	}
-	instances := s.reviewQueuePoller.GetInstances()
+	instances := s.ReviewQueuePoller.GetInstances()
 	for _, inst := range instances {
 		if !inst.IsPaused() {
 			continue

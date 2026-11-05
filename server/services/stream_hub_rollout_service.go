@@ -52,10 +52,10 @@ func NewStreamHubRolloutService(findInstance func(title string) *session.Instanc
 func (s *StreamHubRolloutService) resolveSessionOverrideKey(title string) string {
 	if s.findInstance != nil {
 		if inst := s.findInstance(title); inst != nil {
-			return tmuxSessionNameForStreamPath(inst)
+			return TmuxSessionNameForStreamPath(inst)
 		}
 	}
-	return streamHubSessionKey(title, "")
+	return StreamHubSessionKey(title, "")
 }
 
 // status builds the current StreamHubRolloutStatus from live config —
@@ -150,7 +150,7 @@ func (s *StreamHubRolloutService) SetStreamHubGlobalOverride(
 // tmuxSessionNameForStreamPath and SetStreamHubSessionOverride must derive it
 // identically — they used to duplicate this independently and diverged,
 // silently no-opping every canary override (2026-09-01).
-func streamHubSessionKey(title, tmuxPrefix string) string {
+func StreamHubSessionKey(title, tmuxPrefix string) string {
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"
 	}
@@ -162,7 +162,7 @@ func streamHubSessionKey(title, tmuxPrefix string) string {
 // (session title + tmux prefix, default "staplersquad_"). Resolution must
 // use this same name so a session's StreamOwnershipLock lookup here and its
 // hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
-func tmuxSessionNameForStreamPath(instance *session.Instance) string {
+func TmuxSessionNameForStreamPath(instance *session.Instance) string {
 	snap := instance.Snapshot()
-	return streamHubSessionKey(snap.Title, snap.TmuxPrefix)
+	return StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
 }
