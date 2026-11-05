@@ -3,6 +3,7 @@ package session
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -38,4 +39,16 @@ func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) 
 	orig := newTymuxSessionFn
 	newTymuxSessionFn = fn
 	tb.Cleanup(func() { newTymuxSessionFn = orig })
+}
+
+// SetStatusForTest changes inst's Status and republishes its snapshot, bypassing the
+// state machine, so tests outside this package can model a status change (e.g. a
+// retry) on a zero-valued Instance. archivedAt, when non-nil, also marks it archived.
+func SetStatusForTest(tb testing.TB, inst *Instance, status Status, archivedAt *time.Time) {
+	tb.Helper()
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	inst.Status = status
+	inst.ArchivedAt = archivedAt
+	inst.snapshot.Store(buildSnapshot(inst))
 }
