@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -309,14 +310,15 @@ func TestSelectingTransport_ExistingStreamUnaffectedBySwitch(t *testing.T) {
 func TestSharedTransportFor_OneSelectorPerDaemon(t *testing.T) {
 	t.Parallel()
 	var built atomic.Int32
+	prefix := fmt.Sprintf("shared-test-%p-", &built) // unique per run: the registry is process-global, so -count=N would reuse keys
 	mk := func() *selectingTransport {
 		built.Add(1)
 		s, _, _, _ := newTestSelector()
 		return s
 	}
-	a := sharedTransportFor("shared-test-a", mk)
-	b := sharedTransportFor("shared-test-a", mk)
-	c := sharedTransportFor("shared-test-c", mk)
+	a := sharedTransportFor(prefix+"a", mk)
+	b := sharedTransportFor(prefix+"a", mk)
+	c := sharedTransportFor(prefix+"c", mk)
 
 	require.Same(t, a, b, "every session of one daemon shares one selector")
 	require.NotSame(t, a, c)
@@ -582,7 +584,7 @@ func TestFailoverStream_SendEOFDuringReaderReceive_NeverCallsReceiveConcurrently
 
 	readerDone := make(chan struct{})
 	go func() { defer close(readerDone); _, _ = f.Receive() }()
-	require.Eventually(t, func() bool { return inner.inReceive.Load() == 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return inner.maxReceive.Load() == 1 }, 5*time.Second, time.Millisecond)
 
 	sendDone := make(chan error, 1)
 	go func() { sendDone <- f.Send(&v1.AttachRequest{}) }()
