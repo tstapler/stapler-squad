@@ -272,7 +272,7 @@ func TestRetentionSweeper_ShouldIssueBoundedQueries_WhenManySessions(t *testing.
 	}
 	sweeper, fake := newPRSweeper(fix)
 	sweeper.sweep(context.Background())
-	assert.Equal(t, 1, fake.viewCall, "one bulk link read per cycle, never one per session")
+	assert.Equal(t, 1+5, fake.viewCall, "one bulk link read per cycle plus one single-uuid re-check per session about to be deleted; none for skipped sessions")
 }
 
 func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelease(t *testing.T) {
