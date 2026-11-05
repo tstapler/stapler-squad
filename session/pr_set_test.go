@@ -504,3 +504,18 @@ func TestAssignRole_ShouldFollowTable_WhenAttachSourceAndOrderVary(t *testing.T)
 		})
 	}
 }
+
+func TestInstanceSnapshot_ActiveCheckConclusion(t *testing.T) {
+	t.Parallel()
+	snap := &InstanceSnapshot{GitHub: GitHubIntegration{GitHubCheckConclusion: "success"}}
+	if got := snap.ActiveCheckConclusion(); got != "success" {
+		t.Fatalf("no links: want scalar, got %q", got)
+	}
+	snap.GitHub.PRs = []PRView{
+		{State: PRStateMerged, StoredTerminal: true, CheckConclusion: "success"},
+		{State: PRStateOpen, CheckConclusion: "failure"},
+	}
+	if got := snap.ActiveCheckConclusion(); got != "failure" {
+		t.Fatalf("with links: want the active PR's conclusion, got %q", got)
+	}
+}
