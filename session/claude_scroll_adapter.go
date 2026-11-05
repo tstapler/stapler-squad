@@ -25,7 +25,7 @@ func (a *ClaudeScrollAdapter) Name() string {
 // class of bug named in Tech Debt Disposition), since two independent
 // implementations of the same rule can never re-diverge.
 func (a *ClaudeScrollAdapter) CanHandle(program string) bool {
-	return isClaude(program)
+	return IsClaude(program)
 }
 
 // claudeScrollAdapterZeroValue guards against a zero-value ClaudeScrollAdapter{}

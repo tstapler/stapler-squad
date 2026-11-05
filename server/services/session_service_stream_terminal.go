@@ -62,8 +62,8 @@ func (s *SessionService) StreamTerminal(
 	// timestamp updates are visible to the review queue. Loading fresh from storage
 	// creates a separate object that the poller never sees.
 	var instance *session.Instance
-	if s.reviewQueuePoller != nil {
-		instance = s.reviewQueuePoller.FindInstance(initialMsg.SessionId)
+	if s.ReviewQueuePoller != nil {
+		instance = s.ReviewQueuePoller.FindInstance(initialMsg.SessionId)
 	}
 
 	// Fallback to storage if poller doesn't have it (shouldn't happen normally)

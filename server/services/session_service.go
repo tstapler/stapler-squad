@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -88,7 +89,7 @@ type SessionService struct {
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
-	reviewQueuePoller *session.ReviewQueuePoller
+	ReviewQueuePoller *session.ReviewQueuePoller
 
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
@@ -201,7 +202,7 @@ type SessionService struct {
 	// historyLinker tracks JSONL conversation files per session.
 	// Must be kept in sync with deletions so the shutdown hook does not
 	// re-persist sessions the user has deleted.
-	historyLinker *session.HistoryLinker
+	historyLinker *importer.HistoryLinker
 
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore

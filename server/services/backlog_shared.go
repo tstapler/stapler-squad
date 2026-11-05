@@ -28,5 +28,5 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.C
 // unset flag resolves the same way the Features page reports it.
 func SddDefaultPipelineEnabled() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(
-		SddDefaultPipelineFlagName, featureFlagDefault(SddDefaultPipelineFlagName))
+		SddDefaultPipelineFlagName, FeatureFlagDefault(SddDefaultPipelineFlagName))
 }

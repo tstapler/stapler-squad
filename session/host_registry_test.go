@@ -9,12 +9,31 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
+
+// syncedBuffer is a slog sink safe for the prune goroutine writing while the test reads.
+type syncedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // fakeClock is a controllable Clock for deterministic TTL/prune tests --
 // never wall-clock time.Sleep, per the `fix-flaky-tests-dont-defer` skill.
@@ -532,7 +551,7 @@ func TestPruneTickerLoop_should_ContinueRunning_When_PruneReturnsError(t *testin
 	}
 	clock.Advance(DefaultHostRegistryTTL + time.Second)
 
-	var buf lockedBuffer
+	var buf syncedBuffer
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 

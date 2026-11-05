@@ -235,7 +235,7 @@ func TestIsClaude(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			got := isClaude(tc.program)
+			got := IsClaude(tc.program)
 			if got != tc.want {
 				t.Errorf("isClaude(%q) = %v, want %v", tc.program, got, tc.want)
 			}

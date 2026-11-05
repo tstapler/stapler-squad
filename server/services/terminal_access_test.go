@@ -11,15 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-// testWriter returns a read-write TerminalWriter on the real subprocess seam.
-func testWriter() TerminalWriter {
-	w, err := TerminalReadWrite.Writer(nil)
-	if err != nil {
-		panic(err)
-	}
-	return w
-}
-
 // fakeTmuxSender counts calls on the tmuxInputSender seam.
 type fakeTmuxSender struct {
 	mu      sync.Mutex
@@ -34,7 +25,7 @@ func (f *fakeTmuxSender) SendInput(_, _ string, data []byte) error {
 	return nil
 }
 
-func (f *fakeTmuxSender) Resize(_ capturePaneStreamParams, cols, rows int) {
+func (f *fakeTmuxSender) Resize(_ ExternalPaneTarget, cols, rows int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resizes = append(f.resizes, [2]int{cols, rows})

@@ -25,7 +25,7 @@ const githubIssueProgressCommentsFlagName = "github_issue_progress_comments"
 // GitHubIssueProgressCommentsEnabled reads the flag live, so a Settings toggle
 // applies without a restart.
 func GitHubIssueProgressCommentsEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(githubIssueProgressCommentsFlagName, featureFlagDefault(githubIssueProgressCommentsFlagName))
+	return config.LoadConfig().GetFeatureFlagWithDefault(githubIssueProgressCommentsFlagName, FeatureFlagDefault(githubIssueProgressCommentsFlagName))
 }
 
 // issueProgressCommenter posts a comment and returns the issue's post-comment

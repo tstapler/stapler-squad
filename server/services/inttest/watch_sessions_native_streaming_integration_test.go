@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -98,7 +99,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	// NewHistoryLinkerFromRealInspector's own doc comment): it resolves its
 	// fsnotify watch root inside the isolated test config dir rather than
 	// the operator's real ~/.claude/projects.
-	historyLinker := session.NewHistoryLinkerFromRealInspector()
+	historyLinker := importer.NewHistoryLinkerFromRealInspector()
 
 	return &server.ServerDependencies{
 		SessionService:          sessionService,

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 )
 
 // nudgeGateTestInstance wires cc as inst's controller via the unexported
@@ -70,7 +71,7 @@ func TestCheckNudgeEligibleWithSettleWindow_AcceptsSafeIdlePromptAfterSettleWind
 // but returns the backing *CircularBuffer too, so a test can append further
 // output after construction to simulate the pane's content changing over
 // time — newControllerWithMock's buffer is write-once and not exposed.
-func newControllerWithSharedBuffer(content string) (*ClaudeController, *CircularBuffer) {
+func newControllerWithSharedBuffer(content string) (*ClaudeController, *ptyio.CircularBuffer) {
 	inst := &mockInstance{title: "test", preview: content}
 	cc := &ClaudeController{
 		sessionName: "test",
@@ -78,11 +79,11 @@ func newControllerWithSharedBuffer(content string) (*ClaudeController, *Circular
 	}
 	cc.statusDetector.Store(detection.NewStatusDetector())
 	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
-	buf := NewCircularBuffer(256 * 1024)
+	buf := ptyio.NewCircularBuffer(256 * 1024)
 	if content != "" {
 		_, _ = buf.Write([]byte(content))
 	}
-	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.ptyAccess.Store(ptyio.NewPTYAccess("test", nil, buf))
 	return cc, buf
 }
 

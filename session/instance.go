@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -796,7 +797,7 @@ type Instance struct {
 
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
-	sessionGoal Locked[*SessionGoalData]
+	sessionGoal ptyio.Locked[*SessionGoalData]
 
 	// restartCount and recentRestartTimes track rapid restarts for storm detection.
 	restartCount       int64
@@ -831,7 +832,7 @@ type Instance struct {
 
 	// onStatusChange is called when the ClaudeController detects a status transition.
 	// Wired by the server layer to trigger reactive queue checks.
-	onStatusChange Locked[func(detection.DetectedStatus, string)]
+	onStatusChange ptyio.Locked[func(detection.DetectedStatus, string)]
 
 	// claudeSessionIDSavedCallback is called when SetClaudeConversationUUID stores a
 	// newly discovered session_id. Used by the service layer to trigger a storage save.

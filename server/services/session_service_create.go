@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -902,7 +903,7 @@ func (s *SessionService) CreateSession(
 	// domain function -- see session/create_managed_instance.go (Story
 	// 1.2.0a). This does NOT start tmux/the process; that happens in the
 	// async goroutine below, exactly as before this extraction.
-	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
+	instance, err := importer.CreateManagedInstance(ctx, importer.CreateManagedInstanceParams{
 		Options:                instanceOpts,
 		Storage:                s.storage,
 		Registry:               s.registry,
@@ -912,9 +913,9 @@ func (s *SessionService) CreateSession(
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, session.ErrPathNotExist), errors.Is(err, session.ErrResumePathNotExist):
+		case errors.Is(err, importer.ErrPathNotExist), errors.Is(err, importer.ErrResumePathNotExist):
 			return nil, connect.NewError(connect.CodeNotFound, err)
-		case errors.Is(err, session.ErrInstanceConstructionFailed):
+		case errors.Is(err, importer.ErrInstanceConstructionFailed):
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		case errors.Is(err, session.ErrTitleConflict):
 			// A second, concurrent CreateSession call won the race against the
@@ -933,8 +934,8 @@ func (s *SessionService) CreateSession(
 	s.indexSessionForDelivery(instance)
 
 	// Add the session to the poller so WatchSessions picks it up immediately.
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
 	}
 	if s.sessionTagPoller != nil {

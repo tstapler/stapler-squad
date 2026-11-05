@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -335,7 +336,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 	t.Cleanup(fix.cleanup)
 
 	dir := t.TempDir()
-	instance, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
 		Options: session.InstanceOptions{
 			Title:            "epic22-stale-epoch",
 			Path:             dir,
@@ -477,7 +478,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	instance, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
 		Options: session.InstanceOptions{
 			Title:            "epic42-hook-config-worktree",
 			Path:             repoDir,
@@ -567,7 +568,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 	require.True(t, sessionA.IsBackendProcessAlive(), "session A must have a genuinely live backend process for the guard to detect")
 
 	// Session B: forced to resolve to the identical, already-live directory.
-	instanceB, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+	instanceB, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
 		Options: session.InstanceOptions{
 			Title:            "epic45-collision-target",
 			Path:             repoDir,
@@ -641,7 +642,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 
 	newContender := func(title string) *session.Instance {
 		t.Helper()
-		inst, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
+		inst, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
 			Options: session.InstanceOptions{
 				Title:            title,
 				Path:             repoDir,

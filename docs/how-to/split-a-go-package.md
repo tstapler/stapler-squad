@@ -45,6 +45,10 @@ scoping move --lower ...   # for a test-support cluster that the staying files i
 
 Add the package to `tools/bzl/scoping/budget.txt` and the boundary rules to `tools/bzl/scoping/boundaries.txt`; `make ready-scoping-budget` and `make ready-scoping-boundaries` enforce them. Raising a cap needs a `scoping-budget-raise: <reason>` line in a commit message.
 
+## 5b. Pick candidates from the graph
+
+`scoping touch [--files a,b | --per-file]` prints how many replayed production changes touch only the given files among the universal packages (the T9b gain of moving them). `scoping leaves --dir D` lists files nothing else in D uses; `--bases` lists files that use nothing else in D (lower layers). A leaf cluster still depends on the core and rarely passes SC6; a lower cluster that the core imports usually does, but count its importers against SC3.
+
 ## 6. Record the result
 
 Append the measured numbers (before and after `scoping t9`) to the ledger, one row per cluster, executed or skipped.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 )
 
 // ExecutionResult represents the result of a command execution.
@@ -66,14 +67,14 @@ type executorLifecycle struct {
 type CommandExecutor struct {
 	// Immutable after construction
 	sessionName    string
-	ptyAccess      *PTYAccess
-	responseStream *ResponseStream
+	ptyAccess      *ptyio.PTYAccess
+	responseStream *ptyio.ResponseStream
 	statusDetector detection.TerminalDetector
 	queue          *CommandQueue
 	subscriberID   string
 
 	// lifecycle guards Start/Stop transitions; write-locked only at transition boundary.
-	lifecycle Locked[executorLifecycle]
+	lifecycle ptyio.Locked[executorLifecycle]
 	// executing is true between Start() and Stop(). Atomic so IsExecuting() never contends.
 	executing atomic.Bool
 
@@ -92,8 +93,8 @@ type CommandExecutor struct {
 // NewCommandExecutor creates a new command executor for the given session.
 func NewCommandExecutor(
 	sessionName string,
-	ptyAccess *PTYAccess,
-	responseStream *ResponseStream,
+	ptyAccess *ptyio.PTYAccess,
+	responseStream *ptyio.ResponseStream,
 	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 ) *CommandExecutor {
@@ -111,8 +112,8 @@ func NewCommandExecutor(
 // NewCommandExecutorWithOptions creates a command executor with custom options.
 func NewCommandExecutorWithOptions(
 	sessionName string,
-	ptyAccess *PTYAccess,
-	responseStream *ResponseStream,
+	ptyAccess *ptyio.PTYAccess,
+	responseStream *ptyio.ResponseStream,
 	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 	options ExecutionOptions,
@@ -241,7 +242,7 @@ func (ce *CommandExecutor) executionLoop(ctx context.Context) {
 // to prevent buffer overflow when output arrives during idle periods.
 // Returns true if the caller should continue (timer fired or command ready),
 // false if the response channel closed (caller should exit).
-func (ce *CommandExecutor) waitForCommandOrDrain(ctx context.Context, responseCh <-chan ResponseChunk) bool {
+func (ce *CommandExecutor) waitForCommandOrDrain(ctx context.Context, responseCh <-chan ptyio.ResponseChunk) bool {
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
 	for {
@@ -267,7 +268,7 @@ func (ce *CommandExecutor) waitForCommandOrDrain(ctx context.Context, responseCh
 }
 
 // executeCommand executes a single command and returns the result.
-func (ce *CommandExecutor) executeCommand(ctx context.Context, cmd *Command, responseCh <-chan ResponseChunk) *ExecutionResult {
+func (ce *CommandExecutor) executeCommand(ctx context.Context, cmd *Command, responseCh <-chan ptyio.ResponseChunk) *ExecutionResult {
 	log.Info("executing command", "cmd_id", cmd.ID, "session", ce.sessionName, "text", cmd.Text)
 
 	result := &ExecutionResult{

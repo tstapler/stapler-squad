@@ -1,14 +1,13 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
+	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ptyio"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 	"testing"
 	"time"
-
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestNewCommandExecutor(t *testing.T) {
@@ -20,9 +19,9 @@ func TestNewCommandExecutor(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -50,9 +49,9 @@ func TestNewCommandExecutorWithOptions(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -83,9 +82,9 @@ func TestCommandExecutor_StartAndStop(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -133,9 +132,9 @@ func TestCommandExecutor_DoubleStart(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -166,9 +165,9 @@ func TestCommandExecutor_ExecuteSimpleCommand(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -237,9 +236,9 @@ func TestCommandExecutor_GetCurrentCommand(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -260,9 +259,9 @@ func TestCommandExecutor_SetResultCallback(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -286,9 +285,9 @@ func TestCommandExecutor_SetOptions(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -318,9 +317,9 @@ func TestCommandExecutor_ExecuteImmediate(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -371,9 +370,9 @@ func TestCommandExecutor_ExecuteImmediateNotStarted(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -396,9 +395,9 @@ func TestCommandExecutor_Timeout(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -462,9 +461,9 @@ func TestCommandExecutor_GetSessionName(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -505,9 +504,9 @@ func TestCommandExecutor_StopWithoutStart(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -528,9 +527,9 @@ func TestCommandExecutor_StatusDetection(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -595,8 +594,8 @@ func TestCommandExecutor_NilResponseStream(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -618,9 +617,9 @@ func TestCommandExecutor_ContextCancellation(t *testing.T) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 
@@ -661,9 +660,9 @@ func Benchmark_CommandExecutor_Execution(b *testing.B) {
 	defer reader.Close()
 	defer writer.Close()
 
-	buffer := NewCircularBuffer(1024)
-	ptyAccess := NewPTYAccess("test-session", reader, buffer)
-	responseStream := NewResponseStream("test-session", ptyAccess)
+	buffer := ptyio.NewCircularBuffer(1024)
+	ptyAccess := ptyio.NewPTYAccess("test-session", reader, buffer)
+	responseStream := ptyio.NewResponseStream("test-session", ptyAccess)
 	statusDetector := detection.NewStatusDetector()
 	queue := NewCommandQueue("test-session")
 

@@ -6,3 +6,6 @@ session/internal/sessiontest !server
 server/services/sessionbundle !server/web
 server/services/devtools !server/web
 server/services/backlogsvc !server/web
+session/importer !server
+server/services/wsconn !server/web
+session/ptyio !server

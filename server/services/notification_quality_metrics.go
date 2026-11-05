@@ -36,7 +36,7 @@ const (
 // counterNamed resolves the instrument on every use (the SDK returns the same
 // one per meter), so a test that swaps the meter provider is never stuck with a
 // counter bound to an earlier one.
-func counterNamed(name, desc string) func() metric.Int64Counter {
+func CounterNamed(name, desc string) func() metric.Int64Counter {
 	return func() metric.Int64Counter {
 		c, err := telemetry.GetMeter().Int64Counter(name, metric.WithDescription(desc))
 		if err != nil {
@@ -47,18 +47,18 @@ func counterNamed(name, desc string) func() metric.Int64Counter {
 	}
 }
 
-func addOne(c metric.Int64Counter, attrs ...attribute.KeyValue) {
+func AddOne(c metric.Int64Counter, attrs ...attribute.KeyValue) {
 	if c != nil {
 		c.Add(context.Background(), 1, metric.WithAttributes(attrs...))
 	}
 }
 
 var (
-	reopenCounter = counterNamed(metricReopenAfterAction,
+	reopenCounter = CounterNamed(metricReopenAfterAction,
 		"Operator opened a session's terminal within 60s of an applied inline answer to it")
-	answerUnconfirmedCounter = counterNamed(metricGuidanceUnconfirmed,
+	answerUnconfirmedCounter = CounterNamed(metricGuidanceUnconfirmed,
 		"Keystroke answers that entered the Unconfirmed sub-state (indeterminate write or no acknowledgement at 60s)")
-	scheduleWakeupCounter = counterNamed(metricScheduleWakeupCalls,
+	scheduleWakeupCounter = CounterNamed(metricScheduleWakeupCalls,
 		"ScheduleWakeup PostToolUse receipts by backlog role")
 )
 
@@ -120,13 +120,13 @@ func (t *reopenTracker) attached(ids ...string) {
 	}
 	t.mu.Unlock()
 	for _, kind := range hits {
-		addOne(reopenCounter(), attribute.String("kind", kind))
+		AddOne(reopenCounter(), attribute.String("kind", kind))
 	}
 }
 
 // recordAnswerUnconfirmed counts one answer entering Unconfirmed; the other
 // delivery states are already in guidance_answer_delivery_total{route,state}.
-func recordAnswerUnconfirmed() { addOne(answerUnconfirmedCounter()) }
+func recordAnswerUnconfirmed() { AddOne(answerUnconfirmedCounter()) }
 
 // scheduleWakeupRoles resolves a session's backlog role for the receipt counter.
 type scheduleWakeupRoles struct{ lookup itemSessionLookup }
@@ -151,12 +151,12 @@ func (r scheduleWakeupRoles) roleOf(ctx context.Context, sessionUUID string) str
 // structured line the wake-baseline script reads.
 func observeScheduleWakeup(ctx context.Context, roles scheduleWakeupRoles, sessionUUID string) {
 	role := roles.roleOf(ctx, sessionUUID)
-	addOne(scheduleWakeupCounter(), attribute.String("role", role))
+	AddOne(scheduleWakeupCounter(), attribute.String("role", role))
 	log.Info(scheduleWakeupReceiptEvent, "session", sessionUUID, "role", role)
 }
 
 // noteOperatorOpen is called when a web terminal stream attaches to an agent
 // session's pane.
-func noteOperatorOpen(inst *session.Instance) {
+func NoteOperatorOpen(inst *session.Instance) {
 	defaultReopenTracker.attached(inst.GetStableID(), inst.GetTitle())
 }

@@ -159,7 +159,7 @@ func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFa
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 
 	// Instance must be untouched: still present, still Active.
-	require.NotNil(t, svc.reviewQueuePoller.FindInstance("retry-not-failed"))
+	require.NotNil(t, svc.ReviewQueuePoller.FindInstance("retry-not-failed"))
 	status, _ = inst.StatusAndFailureReason()
 	assert.Equal(t, session.Active, status)
 }

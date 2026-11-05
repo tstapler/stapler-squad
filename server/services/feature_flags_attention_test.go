@@ -31,7 +31,7 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 				}
 			}
 			require.True(t, found, "registry entry missing")
-			require.False(t, featureFlagDefault(name))
+			require.False(t, FeatureFlagDefault(name))
 		})
 	}
 	require.Equal(t, AttentionFlags{}, LoadAttentionFlags())

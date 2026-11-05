@@ -178,7 +178,7 @@ func (i *Instance) trustStore() claudeTrustStore {
 // startup-latency optimization (skip a dialog) at worst, never something
 // session creation should fail over.
 func (i *Instance) markWorkingDirTrusted() {
-	if !isClaude(i.Program) {
+	if !IsClaude(i.Program) {
 		return
 	}
 	dir := i.GetEffectiveRootDir()

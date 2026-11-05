@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -242,7 +243,7 @@ func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
 
 // SetHistoryLinker wires the HistoryLinker so deleted sessions are also removed
 // from it and cannot be re-persisted by the shutdown hook.
-func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
+func (s *SessionService) SetHistoryLinker(hl *importer.HistoryLinker) {
 	s.historyLinker = hl
 }
 
@@ -315,7 +316,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
 	})
 	inst.SetPreSpawnCollisionGuard(func(worktreePath string) error {
-		if s.reviewQueuePoller == nil {
+		if s.ReviewQueuePoller == nil {
 			log.Warn("SetPreSpawnCollisionGuard: reviewQueuePoller is nil, allowing spawn without a collision check", "session", inst.Title)
 			return nil
 		}
@@ -399,7 +400,7 @@ var _ AutonomousDriverStarter = (*SessionService)(nil)
 // added/removed from the poller and AcknowledgeSession updates poller references.
 // Must be called during server startup before any session mutation RPCs are used.
 func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
-	s.reviewQueuePoller = poller
+	s.ReviewQueuePoller = poller
 	s.AutonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)

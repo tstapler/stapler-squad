@@ -248,3 +248,7 @@ func TestSetAutonomousDriverRunID(t *testing.T, d *AutonomousDriver, id uint64) 
 	t.Helper()
 	d.runID.Store(id)
 }
+
+// SetProcessManagerForTest swaps the instance's pane backend so tests in packages that import session can
+// stand in a fake without reaching the unexported field.
+func (i *Instance) SetProcessManagerForTest(pm ProcessManager) { i.processManager = pm }

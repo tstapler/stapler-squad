@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 func writeConversationFixture(t *testing.T, root, project, name, content string) string {
@@ -59,4 +60,18 @@ func TestFindConversationFilePath_CancelledContextAborts(t *testing.T) {
 
 	_, err := findConversationFilePath(ctx, root, "target-session")
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// makeTestInstance creates a minimal Instance for testing (no tmux, not started).
+func makeTestInstance(title string) *Instance {
+	return &Instance{
+		Title:  title,
+		Status: Running,
+	}
+}
+
+// newTestGitWorktree builds a GitWorktree value for use in unit tests without
+// touching the real filesystem or running git commands.
+func newTestGitWorktree(repoPath, worktreePath string) *git.GitWorktree {
+	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, "test-session", "test-branch", "abc123")
 }

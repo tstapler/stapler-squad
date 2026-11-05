@@ -30,76 +30,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-// TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession
-// is REQ-13's integration test (validation.md): terminalAppScrollForwardingClaudeFlagName
-// is re-read fresh from config on every scrollbackResultForRequest call, not
-// cached from an earlier request in the same session -- flipping it mid-session
-// (the same live-settable path UpdateFeatureFlag drives) changes only the next
-// request's behavior. Reuses the nil-*session.Instance-panic proof
-// TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff and
-// TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn
-// (connectrpc_websocket_test.go) already established for "was AppScrollGate
-// reached" -- decisive because AppScrollGate(nil, ...) panics immediately.
-func TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession(t *testing.T) {
-	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalAppScrollForwardingClaudeFlagName, true))
-	assertScrollbackRequestReachesAppScrollGate(t, "native")
-
-	// Flip the flag mid-session, the same live-settable path UpdateFeatureFlag
-	// drives (never an env var/restart gate, per this repo's rollout-flag
-	// convention).
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalAppScrollForwardingClaudeFlagName, false))
-	assertScrollbackRequestSkipsAppScrollGate(t)
-}
-
-// assertScrollbackRequestReachesAppScrollGate asserts a nil-*session.Instance
-// request reaches AppScrollGate -- decisive because AppScrollGate(nil, ...)
-// panics immediately (inst.GetProgram() dereferences a nil receiver's
-// field), mirroring TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn's
-// (connectrpc_websocket_test.go) proof technique.
-func assertScrollbackRequestReachesAppScrollGate(t *testing.T, fallbackContent string) {
-	t.Helper()
-	reachedGate := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				reachedGate = true
-			}
-		}()
-		_, _ = scrollbackResultForRequest(scrollbackRequestParams{
-			writer:    testWriter(),
-			startLine: "-100",
-			endLine:   "-1",
-			logPrefix: "[test]",
-			fallback:  func(string, string) (string, error) { return fallbackContent, nil },
-		})
-	}()
-	require.True(t, reachedGate, "expected AppScrollGate to be reached")
-}
-
-// assertScrollbackRequestSkipsAppScrollGate asserts the fallback runs and
-// AppScrollGate is never reached, mirroring
-// TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff's
-// (connectrpc_websocket_test.go) proof technique.
-func assertScrollbackRequestSkipsAppScrollGate(t *testing.T) {
-	t.Helper()
-	fallbackCalled := false
-	result, err := scrollbackResultForRequest(scrollbackRequestParams{
-		writer:    testWriter(),
-		startLine: "-100",
-		endLine:   "-1",
-		logPrefix: "[test]",
-		fallback: func(string, string) (string, error) {
-			fallbackCalled = true
-			return "tmux-native content", nil
-		},
-	})
-
-	require.NoError(t, err)
-	require.True(t, fallbackCalled, "expected the fallback to be used instead of AppScrollGate")
-	require.Nil(t, result.AppScroll)
-}
-
 type probeStubHandler struct {
 	sessionv1connect.UnimplementedSessionServiceHandler
 }
@@ -132,7 +62,7 @@ func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(
 }
 
 func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t *testing.T) {
-	require.True(t, featureFlagDefault(programCLIFlagProbeFlagName))
+	require.True(t, FeatureFlagDefault(programCLIFlagProbeFlagName))
 }
 
 // recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
@@ -321,10 +251,10 @@ func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *
 
 func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *testing.T) {
 	t.Parallel()
-	require.True(t, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag))
-	require.False(t, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag))
-	require.Equal(t, config.WorkflowEngineShadowDefault, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag), "declared once in config")
-	require.Equal(t, config.WorkflowEngineEnforceDefault, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag), "declared once in config")
+	require.True(t, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag))
+	require.False(t, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag))
+	require.Equal(t, config.WorkflowEngineShadowDefault, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag), "declared once in config")
+	require.Equal(t, config.WorkflowEngineEnforceDefault, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag), "declared once in config")
 
 	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
 	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
@@ -583,7 +513,7 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	name, def, ok := session.ClassEnforceFlag(session.ClassOperator)
 	require.True(t, ok)
 	require.Equal(t, config.WorkflowEngineEnforceFeatureFlag, name, "operator is bound to the existing enforce flag")
-	require.Equal(t, featureFlagDefault(name), def, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(name), def, "table default equals the registry default")
 
 	for _, class := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
 		name, _, ok := session.ClassEnforceFlag(class)
@@ -599,12 +529,12 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	agentName, agentDef, ok := session.ClassEnforceFlag(session.ClassAgent)
 	require.True(t, ok, "the agent flag is registered in Task 1.5.3c")
 	require.Equal(t, config.WorkflowEngineEnforceAgentFeatureFlag, agentName)
-	require.Equal(t, featureFlagDefault(agentName), agentDef, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(agentName), agentDef, "table default equals the registry default")
 	require.False(t, agentDef, "the agent flag ships off")
 	systemName, systemDef, ok := session.ClassEnforceFlag(session.ClassSystem)
 	require.True(t, ok, "the system flag is registered in Task 1.5.8g")
 	require.Equal(t, config.WorkflowEngineEnforceSystemFeatureFlag, systemName)
-	require.Equal(t, featureFlagDefault(systemName), systemDef, "table default equals the registry default")
+	require.Equal(t, FeatureFlagDefault(systemName), systemDef, "table default equals the registry default")
 	require.False(t, systemDef, "the system flag ships off")
 }
 
@@ -743,7 +673,7 @@ var dfltKnownLiteralSites = map[string]bool{
 // registry default is true, so an unset flag reads false there and true elsewhere.
 // Changing the read is a behavior change and needs an owner decision.
 var dfltKnownPlainReadDisagreements = map[string]bool{
-	"session/instance_tmux.go|" + terminalResyncExecGateFastLaneFlagName: true,
+	"session/instance_tmux.go|" + TerminalResyncExecGateFastLaneFlagName: true,
 }
 
 type dfltFile struct {
