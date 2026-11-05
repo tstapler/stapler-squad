@@ -2,5 +2,6 @@
   "make_cold_median_s": 56.04,
   "mid_t1_ratio": 0.014285714285714287,
   "mid_t1_n": 30,
-  "mid_t1_total_test_targets": 210
+  "mid_t1_total_test_targets": 210,
+  "e2e_selected_share_median": 1.0
 }

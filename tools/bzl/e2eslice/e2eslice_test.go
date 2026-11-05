@@ -385,3 +385,65 @@ func TestGrowthOfGaps(t *testing.T) {
 		t.Fatalf("%v", g)
 	}
 }
+
+func TestParseHunksNewSideRanges(t *testing.T) {
+	d := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -3,2 +3,4 @@\n@@ -10 +12,0 @@\n"
+	got := parseHunks(d)["x.go"]
+	if len(got) != 2 || got[0] != (Line{3, 6}) || got[1] != (Line{12, 12}) {
+		t.Fatalf("%v", got)
+	}
+}
+
+func fineFixture(gran Granularity) *FineSelector {
+	caps := []FineCapture{
+		{Spec: "tests/e2e/a.spec.ts", GoPkgs: []string{modulePath + "/p"}, GoFiles: []string{"p/x.go"},
+			GoLines: map[string][]Line{"p/x.go": {{10, 20}}}, GoAll: map[string][]Line{"p/x.go": {{10, 20}, {30, 40}}}},
+		{Spec: "tests/e2e/b.spec.ts", GoPkgs: []string{modulePath + "/p", modulePath + "/q"}, GoFiles: []string{"p/x.go", "p/y.go"},
+			GoLines: map[string][]Line{"p/x.go": {{30, 40}}}, GoAll: map[string][]Line{"p/x.go": {{10, 20}, {30, 40}}}},
+	}
+	hunks := func(string, []string) map[string][]Line { return map[string][]Line{"p/x.go": {{12, 13}}} }
+	return newFineSelector(caps, []string{"tests/e2e/a.spec.ts", "tests/e2e/b.spec.ts"}, []string{"go.mod"}, gran, hunks)
+}
+
+func TestFineSelectorGranularities(t *testing.T) {
+	c := Commit{SHA: "s", Files: []string{"p/x.go"}}
+	if got := fineFixture(GranPackage).Select(c).PerSpec; got != 2 {
+		t.Fatalf("package: %d", got)
+	}
+	if got := fineFixture(GranFile).Select(c).PerSpec; got != 2 {
+		t.Fatalf("file: %d", got)
+	}
+	if got := fineFixture(GranLine).Select(c).PerSpec; got != 1 { // only a.spec ran lines 10-20
+		t.Fatalf("line: %d", got)
+	}
+	if s := fineFixture(GranLine).Select(Commit{Files: []string{"go.mod"}}); !s.All {
+		t.Fatal("global input must select all")
+	}
+	if got := fineFixture(GranFile).Select(Commit{Files: []string{"p/y.go"}}).PerSpec; got != 1 {
+		t.Fatalf("y.go only b: %d", got)
+	}
+}
+
+func TestFineSelectorHunkOutsideBlocksIsConservative(t *testing.T) {
+	s := fineFixture(GranLine)
+	s.hunks = func(string, []string) map[string][]Line { return map[string][]Line{"p/x.go": {{25, 26}}} }
+	if got := s.Select(Commit{SHA: "s", Files: []string{"p/x.go"}}).PerSpec; got != 2 {
+		t.Fatalf("a hunk in no statement block must keep every spec that ran the file: %d", got)
+	}
+}
+
+func TestLineStrictIgnoresHunksOutsideBlocks(t *testing.T) {
+	s := fineFixture(GranLineStrict)
+	s.hunks = func(string, []string) map[string][]Line { return map[string][]Line{"p/x.go": {{25, 26}}} }
+	if got := s.Select(Commit{SHA: "s", Files: []string{"p/x.go"}}).PerSpec; got != 0 {
+		t.Fatalf("strict mode drops a hunk in no block: %d", got)
+	}
+}
+
+func TestPackageGranularityDerivesPackagesFromExecutedFiles(t *testing.T) {
+	caps := []FineCapture{{Spec: "tests/e2e/a.spec.ts", GoFiles: []string{"config/x.go"}}} // go_pkgs rounded config away
+	s := newFineSelector(caps, []string{"tests/e2e/a.spec.ts"}, nil, GranPackage, nil)
+	if got := s.Select(Commit{Files: []string{"config/other.go"}}).PerSpec; got != 1 {
+		t.Fatalf("a package whose files ran must select the spec: %d", got)
+	}
+}

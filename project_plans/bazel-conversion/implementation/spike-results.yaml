@@ -59,3 +59,7 @@
   verdict: FallbackWorkaround
   path: "otel_weave_hermetic rule behind //:stapler-squad (tools/bzl/otel_weave_hermetic.{bzl,sh}, committed overlay tools/bzl/otel_overlay): sandboxed, remote-cacheable toolexec build, byte-reproducible, stamped/embedded/Windows verified; residual non-hermetic parts: the module cache comes from a networked go mod download action (S15b-4), cgo uses the host gcc (S15b-7), every cache miss is a cold GOCACHE (S15b-5), darwin cross not run"
   cost: M
+- spike: S14
+  verdict: Fail
+  path: sound-slice selective e2e not adopted on the measured data (selected-share median 1.00 at package, file and line granularity; S-e start-up 18.4 s vs 3.5 s limit; zero-miss claim not established, sampled backtest); e2e stays a full run and the directive applies to the Go, Jest and integration layers (owner decides per ADR-009, not taken here)
+  cost: M

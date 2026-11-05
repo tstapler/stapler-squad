@@ -5,6 +5,7 @@ go_library(
     name = "e2eslice_lib",
     srcs = [
         "completeness.go",
+        "fine.go",
         "gen.go",
         "graph.go",
         "main.go",

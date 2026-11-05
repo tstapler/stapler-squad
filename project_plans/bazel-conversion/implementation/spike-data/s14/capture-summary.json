@@ -1,0 +1,23 @@
+{
+ "specs": 193,
+ "states": {
+  "failed": 60,
+  "done": 130,
+  "excluded": 3
+ },
+ "go_files_total": 1240,
+ "go_files_in_ge90pct_specs": 870,
+ "go_files_in_ge50pct": 887,
+ "web_files_total": 1361,
+ "web_files_in_ge50pct_specs": 524,
+ "load_at_start_first_pass": {
+  "min": 2.86,
+  "median": 10.13,
+  "max": 23.9
+ },
+ "load_at_start_redo": {
+  "min": 2.86,
+  "max": 23.9
+ },
+ "min_mem_available_gb": 28.89093017578125
+}

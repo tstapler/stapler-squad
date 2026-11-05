@@ -1,0 +1,2320 @@
+{
+  "specs": {
+    "tests/e2e/a11y-responsiveness-states.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 54.475220959,
+          "load_at_start": 19.87,
+          "mem_available_gb_at_start": 37.9968376159668,
+          "note": "onsiveness-states-8d7d2-tions-When-3RetainedWindows-chromium-retry1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-445423205\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › a11y-responsiveness-states.spec.ts:31:5 › axeSweep_should_ReportNoWcagAaViolations_When_3RetainedWindows \n"
+        }
+      ]
+    },
+    "tests/e2e/a11y-route-sweep.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 69.171791452,
+          "load_at_start": 15.36,
+          "mem_available_gb_at_start": 34.46567153930664,
+          "note": " › no serious/critical violations on /unfinished\n\u001b[1A\u001b[2K[46/46] [chromium] › a11y-route-sweep.spec.ts:51:9 › Accessibility route sweep (WCAG 2.2 AA) › no serious/critical violations on /workflows\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2228732167\n\u001b[1A\u001b[2K  46 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/accessibility.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 108.688952115,
+          "load_at_start": 12.76,
+          "mem_available_gb_at_start": 36.90169143676758,
+          "note": "ity.spec.ts:430:7 › Accessibility — backlog live updates (WCAG 4.1.3 AA) › Tab never escapes BacklogFileBrowserModal across a scroll that recycles virtualized rows (modal-focus-trap AC5)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3703699089\n\u001b[1A\u001b[2K  4 skipped\n  26 passed (1.5m)\n"
+        }
+      ]
+    },
+    "tests/e2e/agent-wake-triggers.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 48.930885153,
+          "load_at_start": 19.57,
+          "mem_available_gb_at_start": 34.71577835083008,
+          "note": "rror\n\u001b[1A\u001b[2K[16/16] [chromium] › agent-wake-triggers.spec.ts:153:9 › agent wake triggers (V2-portrait) › ux_ac33_34_peer_help_should_show_not_sent_with_a_plain_reason_and_answered_rows_under_recent\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-568247019\n\u001b[1A\u001b[2K  16 passed (44.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/alias-settings.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 206.14828453,
+          "load_at_start": 13,
+          "mem_available_gb_at_start": 33.563629150390625,
+          "note": "713254687\n\u001b[1A\u001b[2K  3 failed\n    [chromium] › alias-settings.spec.ts:32:7 › alias-settings › AC-02 edit alias description ───────\n    [chromium] › alias-settings.spec.ts:58:7 › alias-settings › AC-04 add environment variable via Advanced section \n    [chromium] › alias-settings.spec.ts:69:7 › alias-settings › AC-05 add tag via tag input Enter key \n  6 passed (3.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/alias.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 127.798259115,
+          "load_at_start": 23.12,
+          "mem_available_gb_at_start": 36.8774528503418,
+          "note": "Stopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1550309460\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › alias.spec.ts:13:7 › alias:invoke › alias:browse_should_showAliasPalette_When_atSignTyped \n    [chromium] › alias.spec.ts:25:7 › alias:invoke › alias:browse_should_showEmptyState_When_atSignTypedAndNoAliasesConfigured \n"
+        }
+      ]
+    },
+    "tests/e2e/android-url-bar.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 66.577982751,
+          "load_at_start": 20.38,
+          "mem_available_gb_at_start": 34.43948745727539,
+          "note": "tom-on-Android-chromium-retry1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4169410452\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › android-url-bar.spec.ts:64:7 › android-url-bar-overflow › no fixed-position element overflows viewport bottom on Android \n  3 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/approval-ci-block.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 117.173730725,
+          "load_at_start": 21.52,
+          "mem_available_gb_at_start": 37.37779998779297,
+          "note": "rectory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3020270264\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › approval-ci-block.spec.ts:136:7 › approval-ci-block › ApprovalBlock_should_AllowApproveAnyway_When_ReviewerOverridesBlock \n    [chromium] › approval-ci-block.spec.ts:152:7 › approval-ci-block › ApprovalBlock_should_RemainKeyboardOperable_When_ApproveDenyButtonsRendered \n  3 passed (1.9m)\n"
+        }
+      ]
+    },
+    "tests/e2e/approval-reconciliation-race.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 86.982085129,
+          "load_at_start": 23.9,
+          "mem_available_gb_at_start": 33.741943359375,
+          "note": "by rule ... no action needed'\n\u001b[1A\u001b[2K[4/4] [chromium] › approval-reconciliation-race.spec.ts:158:7 › approval-reconciliation-race › reconciliation-race message offers only Deny, never Approve anyway\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4051722383\n\u001b[1A\u001b[2K  4 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/askuserquestion-structured.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 124.309215697,
+          "load_at_start": 23.36,
+          "mem_available_gb_at_start": 34.92390823364258,
+          "note": "he_dialog_is_gone\n\u001b[1A\u001b[2K[8/8] [chromium] › askuserquestion-structured.spec.ts:194:7 › question cards (desktop) › tabbed_answer_should_stop_and_pin_an_aborted_card_when_the_pane_changes_mid_sequence\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2792827714\n\u001b[1A\u001b[2K  8 passed (2.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/background-activity.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 68.259068852,
+          "load_at_start": 20.97,
+          "mem_available_gb_at_start": 33.846710205078125,
+          "note": "ze_on_background\n\u001b[1A\u001b[2K[24/24] [chromium] › background-activity.spec.ts:299:9 › background activity (V2-portrait) › tray_row_of_a_hidden_session_should_carry_background_chip_and_view_output_testid\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4036702814\n\u001b[1A\u001b[2K  24 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-board-live-updates.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 20.700430408,
+          "load_at_start": 14.24,
+          "mem_available_gb_at_start": 34.60944747924805,
+          "note": "t a page reload (UX AC #8)\n\u001b[1A\u001b[2K[2/2] [chromium] › backlog-board-live-updates.spec.ts:71:7 › Backlog live updates (board) › exactly one connection indicator is visible on the board view (UX AC #9)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-856458135\n\u001b[1A\u001b[2K  2 passed (19.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-connection-indicator.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 75.504765162,
+          "load_at_start": 13.32,
+          "mem_available_gb_at_start": 35.287384033203125,
+          "note": "#18)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3675055644\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › backlog-connection-indicator.spec.ts:93:7 › Backlog connection indicator › indicator flips to Reconnecting within about one second of a forced disconnect (UX AC #17) \n  3 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-copy-link.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 77.147833426,
+          "load_at_start": 17.99,
+          "mem_available_gb_at_start": 33.6364860534668,
+          "note": "rm_When_ItemHasNoPublicIdYet\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2178251066\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › backlog-copy-link.spec.ts:59:7 › Backlog item Copy Link › copyLink_should_ProduceWellFormedURLWithNoEncodingArtifacts_When_Copied \n  1 skipped\n  4 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-cross-host-handoff.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 80.256552574,
+          "load_at_start": 23.3,
+          "mem_available_gb_at_start": 32.57065200805664,
+          "note": "alLinkRendered\n\u001b[1A\u001b[2K[4/4] [chromium] › backlog-cross-host-handoff.spec.ts:65:7 › Backlog cross-host deep-link handoff › crossHostHandoff_should_BeCompletableViaKeyboardOnly_When_TabbedToManualLink\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1646423050\n\u001b[1A\u001b[2K  4 passed (1.3m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-deep-link-backcompat.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 21.052033416,
+          "load_at_start": 18.34,
+          "mem_available_gb_at_start": 34.337242126464844,
+          "note": " created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › backlog-deep-link-backcompat.spec.ts:24:7 › Backlog legacy ?item= deep link backcompat › legacy_item_query_param_should_ResolveIdenticallyToBeforeFeatureShipped\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3777625041\n\u001b[1A\u001b[2K  1 passed (19.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-deep-link-errors.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 87.010217069,
+          "load_at_start": 15.72,
+          "mem_available_gb_at_start": 31.79167938232422,
+          "note": "d\n    [chromium] › backlog-deep-link-errors.spec.ts:57:7 › Backlog deep-link resolution errors › unreachableHostLink_should_ShowStatusBannerWithLastSeenAndRetry_When_LivenessCheckTimesOut \n    [chromium] › backlog-deep-link-errors.spec.ts:77:7 › Backlog deep-link resolution errors › unregisteredHostLink_should_ShowStatusBannerWithNoAddressAction_When_HostnameUnknown \n  4 passed (1.4m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-deep-link-resolve.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.565067761,
+          "load_at_start": 11.54,
+          "mem_available_gb_at_start": 28.89093017578125,
+          "note": "When_Resolved\n\u001b[1A\u001b[2K[3/3] [chromium] › backlog-deep-link-resolve.spec.ts:74:7 › Backlog same-host deep link resolution › sameHostLink_should_RenderDetailPanelWithoutInterstitial_When_ResolveIsFast\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2776389226\n\u001b[1A\u001b[2K  3 passed (28.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-detail-live-updates.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 109.151078014,
+          "load_at_start": 16.49,
+          "mem_available_gb_at_start": 32.076019287109375,
+          "note": ".ts:47:7 › Backlog live updates (detail panel) › an in_progress item's detail panel updates live to review with no polling network request firing on a timer (UX AC #10) \n    [chromium] › backlog-detail-live-updates.spec.ts:79:7 › Backlog live updates (detail panel) › detail panel keeps showing the open item after it no longer matches the active list filter (UX AC #11) \n  1 passed (1.8m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-edit-buffering.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.535982169,
+          "load_at_start": 10.08,
+          "mem_available_gb_at_start": 34.724571228027344,
+          "note": "] [chromium] › backlog-edit-buffering.spec.ts:115:7 › Backlog edit-mode buffered updates › clicking Save while a buffered update is pending warns before overwriting the concurrent change (UX AC #26)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4213479178\n\u001b[1A\u001b[2K  4 passed (21.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-engine-mode.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 90.752175549,
+          "load_at_start": 15.02,
+          "mem_available_gb_at_start": 36.193031311035156,
+          "note": "ood_value\n\u001b[1A\u001b[2K[40/40] [chromium] › backlog-engine-mode.spec.ts:463:9 › backlog engine mode @ mobile-360x800 › review_line_should_show_due_overdue_neutral_or_absent_in_banner_and_features_summary\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1256188352\n\u001b[1A\u001b[2K  40 passed (1.4m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-features-flags.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 71.861996506,
+          "load_at_start": 8.84,
+          "mem_available_gb_at_start": 35.742576599121094,
+          "note": "in_words_When_each_mode\n\u001b[1A\u001b[2K[34/34] [chromium] › backlog-features-flags.spec.ts:564:9 › backlog features flags @ mobile-360x800 › switch_should_ignore_space_enter_and_revert_While_toggle_pending\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2599312997\n\u001b[1A\u001b[2K  34 passed (1.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-github-sync-settings.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 122.854111231,
+          "load_at_start": 7.58,
+          "mem_available_gb_at_start": 36.95413589477539,
+          "note": "y: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3971653672\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › backlog-github-sync-settings.spec.ts:60:7 › backlog-github-sync-settings › forward and backward sync toggles persist across reload \n    [chromium] › backlog-github-sync-settings.spec.ts:82:7 › backlog-github-sync-settings › enabling both sync directions shows the loop-risk warning \n  1 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-item-detail-redesign.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 35.133465792,
+          "load_at_start": 14.78,
+          "mem_available_gb_at_start": 35.83251953125,
+          "note": "design.spec.ts:246:9 › backlog item detail redesign › PR visibility and action reachability › auto-expands Version Control for an archived item with a PR, and a manual collapse survives a real reload\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-314340658\n\u001b[1A\u001b[2K  9 passed (31.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-item-id-deep-link.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 35.517550344,
+          "load_at_start": 16.43,
+          "mem_available_gb_at_start": 32.143898010253906,
+          "note": "romium] › backlog-item-id-deep-link.spec.ts:166:7 › Backlog item ID + deep link › the board page still opens via the list page deep link after a board round-trip (regression: no full-page redirect)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4177319739\n\u001b[1A\u001b[2K  10 passed (32.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-live-updates.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 24.907925765999998,
+          "load_at_start": 14.62,
+          "mem_available_gb_at_start": 30.360660552978516,
+          "note": "[1A\u001b[2K[5/5] [chromium] › backlog-live-updates.spec.ts:155:7 › Backlog live updates (list) › an item that stops matching the active filter fades out before being removed from the DOM (UX AC #25, #27)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-818158237\n\u001b[1A\u001b[2K  5 passed (22.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-manual-override.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 63.553284308,
+          "load_at_start": 14.29,
+          "mem_available_gb_at_start": 33.39929962158203,
+          "note": "try1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1939303229\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › backlog-manual-override.spec.ts:134:7 › backlog manual override › operator can link an existing PR to an item stuck in review with no live session \n  3 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-pipeline-mode.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 75.060727771,
+          "load_at_start": 13.25,
+          "mem_available_gb_at_start": 32.706947326660156,
+          "note": "ode name for a session snapshot\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1120896955\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › backlog-pipeline-mode.spec.ts:179:7 › backlog-pipeline-mode › AC-02 select a pipeline mode on a backlog item and see the selection persist \n  2 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-plan-approval-flicker.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.860985943,
+          "load_at_start": 9.93,
+          "mem_available_gb_at_start": 35.535797119140625,
+          "note": "tem has no plan yet\n\u001b[1A\u001b[2K[2/2] [chromium] › backlog-plan-approval-flicker.spec.ts:100:7 › plan-approval flicker fix › approves a plan from the Stuck Items card with the real backend RPC, no error\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2400318736\n\u001b[1A\u001b[2K  2 passed (17.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-queue.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.512677756,
+          "load_at_start": 9.35,
+          "mem_available_gb_at_start": 35.0753059387207,
+          "note": "trace-deprecation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › backlog-queue.spec.ts:53:7 › backlog queue › a queued item shows the queued status badge in the backlog list\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1075958996\n\u001b[1A\u001b[2K  1 passed (18.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-quota.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 59.300927593,
+          "load_at_start": 9.61,
+          "mem_available_gb_at_start": 36.98685836791992,
+          "note": "_recover_from_mismatch_with_focus_handoff\n\u001b[1A\u001b[2K[28/28] [chromium] › backlog-quota.spec.ts:461:9 › backlog quota @ mobile-360x800 › quota_should_show_not_configured_only_for_not_configured_source\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2685546832\n\u001b[1A\u001b[2K  28 passed (54.4s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-result-panels-mobile.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.519089955,
+          "load_at_start": 13.19,
+          "mem_available_gb_at_start": 34.86150360107422,
+          "note": "tPanel_should_NotOverflowAnd_Have44pxDisclosure_When_320px\n\u001b[1A\u001b[2K[2/2] [chromium] › backlog-result-panels-mobile.spec.ts:64:5 › reviewVerdictPanel_should_NotOverflowAnd_Have44pxDisclosure_When_320px\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2291306512\n\u001b[1A\u001b[2K  2 passed (17.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-rich-text.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 62.245054868,
+          "load_at_start": 11.64,
+          "mem_available_gb_at_start": 35.982025146484375,
+          "note": "rop on a mobile viewport\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3080164008\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › backlog-rich-text.spec.ts:52:7 › Backlog Rich Text › e2e:backlog-rich-text-upload - Attaching an image inserts markdown and persists after reload \n  2 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-send-back-feedback.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 40.542126166,
+          "load_at_start": 8.23,
+          "mem_available_gb_at_start": 34.127376556396484,
+          "note": "er\n\u001b[1A\u001b[2K[15/15] [chromium] › backlog-send-back-feedback.spec.ts:790:7 › backlog send-back-with-feedback › the unrelated 'Return to Triage' (send_back_idea) button is unchanged and still functions\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-576927133\n\u001b[1A\u001b[2K  15 passed (36.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-session-steer.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 28.992255146,
+          "load_at_start": 7.34,
+          "mem_available_gb_at_start": 36.53571319580078,
+          "note": "ry title for an ended session\n\u001b[1A\u001b[2K[6/6] [chromium] › backlog-session-steer.spec.ts:327:7 › backlog-session-steer › renders a touch-sized Steer button and stacked composer below the sm breakpoint\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1615900188\n\u001b[1A\u001b[2K  6 passed (26.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-settings-a11y.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 99.492924694,
+          "load_at_start": 6.48,
+          "mem_available_gb_at_start": 37.73488998413086,
+          "note": "_cancel_first_dialog\n\u001b[1A\u001b[2K[14/14] [chromium] › backlog-settings-a11y.spec.ts:456:9 › backlog settings a11y @ mobile-360x800 › ack_label_and_quota_rows_should_have_44px_hit_areas_at_360\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-474455740\n\u001b[1A\u001b[2K  2 skipped\n  12 passed (1.5m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-sources-settings.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 233.505172639,
+          "load_at_start": 11.59,
+          "mem_available_gb_at_start": 36.13558578491211,
+          "note": "c.ts:82:7 › backlog-sources-settings › AC-03 toggle a source's enabled state \n    [chromium] › backlog-sources-settings.spec.ts:96:7 › backlog-sources-settings › AC-04 deleting a source removes it from the list \n    [chromium] › backlog-sources-settings.spec.ts:109:7 › backlog-sources-settings › AC-05 view history shows no sync runs yet for a never-synced source \n  2 passed (3.9m)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog-stuck-items.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 28.463644816,
+          "load_at_start": 6.21,
+          "mem_available_gb_at_start": 37.21294403076172,
+          "note": "/unfinished?item=\u003cid\u003e to an auto-expanded stuck item card\n\u001b[1A\u001b[2K[10/10] [chromium] › backlog-stuck-items.spec.ts:300:7 › stuck items › ignores an unknown ?item= id and renders the section normally\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-616754442\n\u001b[1A\u001b[2K  10 passed (26.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog.dev-mode.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.744830738,
+          "load_at_start": 5.65,
+          "mem_available_gb_at_start": 37.37282180786133,
+          "note": "on ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › backlog.dev-mode.spec.ts:37:7 › backlog-dev-mode › should display a seeded backlog item when navigating to the backlog page\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2916226678\n\u001b[1A\u001b[2K  1 passed (16.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/backlog.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 521.023820242,
+          "load_at_start": 5.39,
+          "mem_available_gb_at_start": 35.61907196044922,
+          "note": "in list \n    [chromium] › backlog.spec.ts:387:9 › Backlog › Status Transitions › e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane \n    [chromium] › backlog.spec.ts:497:9 › Backlog › Backlog Tour › e2e:backlog-tour-first-visit - Tour appears on first visit and dismissing it persists across reload \n  1 skipped\n  9 passed (8.6m)\n"
+        }
+      ]
+    },
+    "tests/e2e/browser-passthrough.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 120.900117596,
+          "load_at_start": 5.45,
+          "mem_available_gb_at_start": 35.85586929321289,
+          "note": "ng test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2220046879\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › browser-passthrough.spec.ts:34:7 › browser-passthrough › shows browser tab when cdp available \n    [chromium] › browser-passthrough.spec.ts:49:7 › browser-passthrough › shows loading state when cdp not connected \n  1 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/bulk-select.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.997872416,
+          "load_at_start": 5.12,
+          "mem_available_gb_at_start": 35.4826774597168,
+          "note": ", checkboxes hidden and toolbar gone\n\u001b[1A\u001b[2K[5/5] [chromium] › bulk-select.spec.ts:100:7 › bulk-select › undo restores deleted sessions — delete 2 sessions, click Undo in toast, sessions reappear\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4140186957\n\u001b[1A\u001b[2K  5 passed (22.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/ci-status-badge.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 26.495678037,
+          "load_at_start": 5.33,
+          "mem_available_gb_at_start": 35.60368347167969,
+          "note": "dge › CIBadge_should_OpenChecksPageInNewTab_When_Clicked\n\u001b[1A\u001b[2K[3/3] [chromium] › ci-status-badge.spec.ts:125:7 › ci-status-badge › shows no badge (not an empty placeholder) for the no-PR fixture\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-921762963\n\u001b[1A\u001b[2K  3 passed (24.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/cli-flag-discovery.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.820386554,
+          "load_at_start": 6.4,
+          "mem_available_gb_at_start": 37.25611114501953,
+          "note": "veReachable_When_ViewportShrinks\n\u001b[1A\u001b[2K[9/9] [chromium] › cli-flag-discovery.spec.ts:172:7 › cli-flag-discovery: mid width 800x1024 › check_should_SitInlineAfterTextWithoutHScroll_When_Viewport800\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2665426198\n\u001b[1A\u001b[2K  9 passed (21.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/connection-count-indicator.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.213431236,
+          "load_at_start": 6.89,
+          "mem_available_gb_at_start": 36.21498489379883,
+          "note": "2] [chromium] › connection-count-indicator.spec.ts:210:7 › connection count indicator (multi-connection) › indicator announces departure and then disappears when the second tab closes (design/ux.md Step 5)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3428318112\n\u001b[1A\u001b[2K  2 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/crashed-session-ux.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.866861079,
+          "load_at_start": 7.89,
+          "mem_available_gb_at_start": 36.973819732666016,
+          "note": "on-ux_should_showOverlay_When_crashedSessionOpened\n\u001b[1A\u001b[2K[3/3] [chromium] › crashed-session-ux.spec.ts:91:7 › crashed-session-ux › crashed-session-ux_should_resumeSession_When_overlayResumeClicked\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2452921719\n\u001b[1A\u001b[2K  3 passed (16.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/create-pull-request.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 157.355181765,
+          "load_at_start": 7.55,
+          "mem_available_gb_at_start": 36.25121307373047,
+          "note": "ec.ts:96:7 › create-pull-request › CreatePullRequest_should_PrefillEditSubmitAndShowPrLink_When_HappyPath \n    [chromium] › create-pull-request.spec.ts:139:7 › create-pull-request › CreatePullRequest_should_ShowViewPrLink_When_SessionAlreadyHasPr \n    [chromium] › create-pull-request.spec.ts:165:7 › create-pull-request › CreatePullRequest_should_DisableTrigger_When_NoCommitsAhead \n"
+        }
+      ]
+    },
+    "tests/e2e/deep-link-trailing-slash.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 29.212408636,
+          "load_at_start": 8.49,
+          "mem_available_gb_at_start": 36.79473114013672,
+          "note": "s a full-document navigation to /login\n\u001b[1A\u001b[2K[11/11] [chromium] › deep-link-trailing-slash.spec.ts:64:9 › deep links and trailing slashes › backlog link › /backlog?item=ID opens the backlog item\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-502343808\n\u001b[1A\u001b[2K  11 passed (26.5s)\n"
+        }
+      ]
+    },
+    "tests/e2e/demo.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 55.982008602,
+          "load_at_start": 9.47,
+          "mem_available_gb_at_start": 37.120849609375,
+          "note": "e.register()` is deprecated. Use `module.registerHooks()` instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › demo.spec.ts:208:5 › Demo Flow\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1656216894\n\u001b[1A\u001b[2K  1 passed (54.4s)\n"
+        }
+      ]
+    },
+    "tests/e2e/dev-mode-hmr.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 21.482163999,
+          "load_at_start": 8.52,
+          "mem_available_gb_at_start": 35.835391998291016,
+          "note": "ed: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2311030863\nError: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments.\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2311030863\n\u001b[1A\u001b[2K"
+        }
+      ]
+    },
+    "tests/e2e/enter-detection.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.586875865,
+          "load_at_start": 13.14,
+          "mem_available_gb_at_start": 37.959083557128906,
+          "note": "e-deprecation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[7/7] [chromium] › enter-detection.spec.ts:168:7 › enter-detection › enter-detection_smoke_should_loadPageWithoutErrors\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1440700974\n\u001b[1A\u001b[2K  6 skipped\n  1 passed (16.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/escalation-reasoning.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.081132202,
+          "load_at_start": 12.08,
+          "mem_available_gb_at_start": 37.945133209228516,
+          "note": "cation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › escalation-reasoning.spec.ts:140:7 › escalation-reasoning › shows escalation reason for a real no-match hook escalation\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3240851062\n\u001b[1A\u001b[2K  1 passed (21.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/escape-analytics-global-view.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 35.854008943,
+          "load_at_start": 10.69,
+          "mem_available_gb_at_start": 35.81990051269531,
+          "note": "_When_HeaderButtonActivated\n\u001b[1A\u001b[2K[13/13] [chromium] › escape-analytics-global-view.spec.ts:353:7 › escape-analytics-global-view › EscapeAnalyticsGlobalView_should_HideTable_When_EmptyStateActive\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3885476251\n\u001b[1A\u001b[2K  13 passed (32.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/fanout-session-lifecycle.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.023223633,
+          "load_at_start": 11.56,
+          "mem_available_gb_at_start": 37.85517120361328,
+          "note": " 5 variants with a structured error\n\u001b[1A\u001b[2K[3/3] [chromium] › fanout-session-lifecycle.spec.ts:83:7 › Parallel fan-out lifecycle › server returns a structured not_found for an unknown fan-out group\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3604066995\n\u001b[1A\u001b[2K  3 passed (16.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-a11y.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 37.535719157,
+          "load_at_start": 10.66,
+          "mem_available_gb_at_start": 36.4630126953125,
+          "note": "00PercentZoom\n\u001b[1A\u001b[2K[6/6] [chromium] › files-a11y.spec.ts:119:9 › Files tab axe and keyboard (U-A11Y-1/2/3/5/8) › mobile › filesTab_should_TabThroughTopBarThenPaneThenBottomBar_When_KeyboardOnly\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1557557750\n\u001b[1A\u001b[2K  6 passed (34.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-large.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 44.672937785,
+          "load_at_start": 11.08,
+          "mem_available_gb_at_start": 37.928916931152344,
+          "note": "eadFileRangeCallFails\n\u001b[1A\u001b[2K[9/9] [chromium] › files-large.spec.ts:253:7 › full adapter (files:range-read off) › fullAdapter_should_OpenTruncatedReadOnly_On5Mb_RefuseOver10MiB_And_MakeNoRangeCalls\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2920475270\n\u001b[1A\u001b[2K  9 passed (41.4s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-lazydoc-spike.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 49.618372369,
+          "load_at_start": 9.02,
+          "mem_available_gb_at_start": 37.20504379272461,
+          "note": "adedChars\":77951,\"segs\":203,\"heap\":33100000,\"dirtySegs\":1}\n\n\u001b[1A\u001b[2K[9/9] [chromium] › files-lazydoc-spike.spec.ts:89:9 › lazy document model engine › lazyDoc_should_NotDispatchWhileComposing_engine\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3950983187\n\u001b[1A\u001b[2K  9 passed (47.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-mobile.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 48.292034398,
+          "load_at_start": 6.26,
+          "mem_available_gb_at_start": 36.93013381958008,
+          "note": "e_And_DesktopAt1366x1024CoarseWithViewportHeight470\n\u001b[1A\u001b[2K[18/18] [chromium] › files-mobile.spec.ts:284:7 › layout rule › tablet_should_UseDesktopLayoutWithTouchSizing_When_1366x1024CoarsePointer\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1445873608\n\u001b[1A\u001b[2K  18 passed (42.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-search.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.89293811,
+          "load_at_start": 6.07,
+          "mem_available_gb_at_start": 36.799556732177734,
+          "note": "ch › search_should_LandOnHitLine_In3Interactions_When_QueryTypedAndEnterPressed\n\u001b[1A\u001b[2K[2/2] [chromium] › files-search.spec.ts:23:7 › content search › search_should_OfferHitStepping_When_HitOpened\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-118445036\n\u001b[1A\u001b[2K  2 passed (22.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-shortcuts.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.922711603,
+          "load_at_start": 9.39,
+          "mem_available_gb_at_start": 37.35242462158203,
+          "note": "ntDefaultOnce_When_FocusInsideFilesTabOnChromiumFirefoxWebkit\n\u001b[1A\u001b[2K[2/2] [chromium] › files-shortcuts.spec.ts:72:7 › Files shortcuts › shortcuts_should_NotBePrevented_When_FocusOutsideTheFilesTab\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2905405446\n\u001b[1A\u001b[2K  2 passed (22.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-tabs.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 38.645667668,
+          "load_at_start": 8.61,
+          "mem_available_gb_at_start": 37.4156494140625,
+          "note": "nks › deepLink_should_OpenPinnedAtLine_When_QueryFileAndLine\n\u001b[1A\u001b[2K[5/5] [chromium] › files-tabs.spec.ts:83:7 › stale banner › staleBanner_should_AppearWithoutMovingFocus_And_ReloadKeepLineScroll\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-776090020\n\u001b[1A\u001b[2K  5 passed (36.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-transport-spike.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 27.4183644,
+          "load_at_start": 7.89,
+          "mem_available_gb_at_start": 37.71113586425781,
+          "note": "cal-node-http1 prefetch=0 save p50=32ms p95=33ms queued=0/20 | prefetch=2 save p50=32ms p95=33ms queued=0/20 | prefetch=4 save p50=37ms p95=38ms queued=0/20 | prefetch=8 save p50=36ms p95=38ms queued=0/20\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-847005604\n\u001b[1A\u001b[2K  1 passed (26.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/files-viewer.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 24.094601261,
+          "load_at_start": 7.46,
+          "mem_available_gb_at_start": 38.11861038208008,
+          "note": "=36 of 3000\n\n\u001b[1A\u001b[2K[4/4] [chromium] › files-viewer.spec.ts:89:7 › Story 1.4.3: two buffers keep their scroll position › tabs_should_KeepLine900Visible_When_SwitchedToOtherBufferAndBack\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2592533776\n\u001b[1A\u001b[2K  1 skipped\n  3 passed (22.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/handoff-summary.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 41.147638541,
+          "load_at_start": 9.2,
+          "mem_available_gb_at_start": 35.41355514526367,
+          "note": "renders inside the session card badge row\n\u001b[1A\u001b[2K[10/10] [chromium] › handoff-summary.spec.ts:328:7 › handoff-summary › restarted-from link resolves to the source session or degrades to plain text\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1482769382\n\u001b[1A\u001b[2K  10 passed (37.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/hidden-session-quiet.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 63.446211389,
+          "load_at_start": 12.99,
+          "mem_available_gb_at_start": 37.988792419433594,
+          "note": "y1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2903886872\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › hidden-session-quiet.spec.ts:46:7 › hidden session stays quiet › hidden_session_completion_should_leave_toast_panel_and_notifications_page_empty_when_session_finishes \n"
+        }
+      ]
+    },
+    "tests/e2e/hidden-session-reply.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 35.33216064,
+          "load_at_start": 12.31,
+          "mem_available_gb_at_start": 37.196876525878906,
+          "note": "k_has_no_proof\n\u001b[1A\u001b[2K[14/14] [chromium] › hidden-session-reply.spec.ts:184:9 › hidden-session reply card (V2-portrait) › rp10_axe_should_find_no_serious_violations_in_the_choosing_and_sent_states\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1647112282\n\u001b[1A\u001b[2K  14 passed (31.5s)\n"
+        }
+      ]
+    },
+    "tests/e2e/hidden-session-view.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 29.774464731,
+          "load_at_start": 12.42,
+          "mem_available_gb_at_start": 37.27490234375,
+          "note": "d_card_in_dark_scheme\n\u001b[1A\u001b[2K[8/8] [chromium] › hidden-session-view.spec.ts:164:7 › hidden-session-view › main_list_should_not_use_include_hidden_and_no_prior_read_only_view_should_exist_when_audited\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-84469255\n\u001b[1A\u001b[2K  8 passed (26.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/history-behaviour.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.565297285,
+          "load_at_start": 14.03,
+          "mem_available_gb_at_start": 36.67300796508789,
+          "note": "es the tray and leaves the URL unchanged\n\u001b[1A\u001b[2K[3/3] [chromium] › history-behaviour.spec.ts:71:9 › history behaviour › Up Next tab control › ?tab= changes in place without adding a history entry\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1063159707\n\u001b[1A\u001b[2K  3 passed (17.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/history-search.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.649694249,
+          "load_at_start": 13.41,
+          "mem_available_gb_at_start": 37.30097198486328,
+          "note": " `node --trace-deprecation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › history-search.spec.ts:13:7 › History Search › e2e:history-search - History search UI is accessible\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1654969344\n\u001b[1A\u001b[2K  1 passed (17.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/idle-session-chip.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 67.585234518,
+          "load_at_start": 11.62,
+          "mem_available_gb_at_start": 35.92151641845703,
+          "note": "cycle-of-going-idle-chromium-retry1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1019348207\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › idle-session-chip.spec.ts:54:7 › idle-session-chip › idle SubStatus chip renders on Sessions list within one poll cycle of going idle \n"
+        }
+      ]
+    },
+    "tests/e2e/import-external-session.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.46319788,
+          "load_at_start": 11.08,
+          "mem_available_gb_at_start": 36.905338287353516,
+          "note": "Page_When_navImportClicked\n\u001b[1A\u001b[2K[2/2] [chromium] › import-external-session.spec.ts:19:7 › import-external-session › import-external-session_should_showEmptyState_When_noExternalSessionsDiscovered\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2775246230\n\u001b[1A\u001b[2K  2 passed (16.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/input-drop-badge.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 292.835862668,
+          "load_at_start": 9.38,
+          "mem_available_gb_at_start": 36.967079162597656,
+          "note": "ium] › input-drop-badge.spec.ts:102:7 › input-drop-badge › badge does not overlap the terminal cursor region (design/ux.md UX-AC-2) \n    [chromium] › input-drop-badge.spec.ts:141:7 › input-drop-badge › badge auto-dismisses within the configured timeout \n    [chromium] › input-drop-badge.spec.ts:162:7 › input-drop-badge › badge appearing does not steal focus (design/ux.md §3.1) \n"
+        }
+      ]
+    },
+    "tests/e2e/insights-findings-panel.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.361075398,
+          "load_at_start": 5.33,
+          "mem_available_gb_at_start": 38.002933502197266,
+          "note": "ionFocusedAndEnterPressed\n\u001b[1A\u001b[2K[5/5] [chromium] › insights-findings-panel.spec.ts:84:7 › insights-findings-panel › insights-findings-panel_should_refetchFindings_when_retryButtonClickedAfterError\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3656281711\n\u001b[1A\u001b[2K  5 passed (21.4s)\n"
+        }
+      ]
+    },
+    "tests/e2e/insights-session-route.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 22.731581963,
+          "load_at_start": 5.32,
+          "mem_available_gb_at_start": 38.33551788330078,
+          "note": "dal\n\u001b[1A\u001b[2K[7/7] [chromium] › insights-session-route.spec.ts:141:7 › insights-session-route › insights-session-route_should_showEstimatedMarkerOnlyOnDoubleCountedTool_when_toolsBreakdownTableRenders\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-555908987\n\u001b[1A\u001b[2K  7 passed (20.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/insights-sessions-table-sort.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.793752166,
+          "load_at_start": 5.04,
+          "mem_available_gb_at_start": 38.25751495361328,
+          "note": "ng\n\u001b[1A\u001b[2K[4/4] [chromium] › insights-sessions-table-sort.spec.ts:105:7 › insights-sessions-table-sort › insights-sessions-table-sort_should_surfaceWorstSessionFirst_when_wasteScoreHeaderClickedOnce\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-441244826\n\u001b[1A\u001b[2K  4 passed (16.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/insights-stage-cost-chart.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.430170733,
+          "load_at_start": 4.87,
+          "mem_available_gb_at_start": 38.062278747558594,
+          "note": "raction with the chart\n\u001b[1A\u001b[2K[8/8] [chromium] › insights-stage-cost-chart.spec.ts:235:7 › insights-stage-cost-chart › stage cost chart bar values sum to the total cost card for the same time range\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1974712270\n\u001b[1A\u001b[2K  8 passed (28.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/insights.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.42644374,
+          "load_at_start": 5.25,
+          "mem_available_gb_at_start": 37.701969146728516,
+          "note": " insights-dashboard_should_reachableFromNav_When_hamburgerOpened\n\u001b[1A\u001b[2K[5/5] [chromium] › insights.spec.ts:54:7 › insights-dashboard › insights-dashboard_should_showLoadingOrData_When_apiAvailable\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2977383506\n\u001b[1A\u001b[2K  5 passed (21.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/item-budget-warning.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 22.592120007,
+          "load_at_start": 4.92,
+          "mem_available_gb_at_start": 37.83552551269531,
+          "note": "hromium] › item-budget-warning.spec.ts:101:7 › Item budget warning (design/ux.md Surface D2) › global and per-item budget warnings share consistent warning styling while remaining distinctly labeled\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3059496050\n\u001b[1A\u001b[2K  3 passed (20.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/jules-dispatch.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 65.7523166,
+          "load_at_start": 4.62,
+          "mem_available_gb_at_start": 38.3414421081543,
+          "note": "] [chromium] › jules-dispatch.spec.ts:397:7 › jules dispatch gating › prefills the Branch field from the item's tracked branch, and disables Dispatch to Jules with a no-branch reason when none exists\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4144595489\n\u001b[1A\u001b[2K  6 passed (1.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/jules-settings.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 27.28505782,
+          "load_at_start": 3.57,
+          "mem_available_gb_at_start": 38.14023208618164,
+          "note": "le, test connection — in 4 actions\n\u001b[1A\u001b[2K[2/2] [chromium] › jules-settings.spec.ts:85:7 › jules settings › no key substring appears in the DOM or the GetJulesConfig network response after saving\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3841488292\n\u001b[1A\u001b[2K  2 passed (25.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/jules-status-badge.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 28.10274344,
+          "load_at_start": 4.22,
+          "mem_available_gb_at_start": 37.23985290527344,
+          "note": "s\n\u001b[1A\u001b[2K[3/3] [chromium] › jules-status-badge.spec.ts:250:7 › Jules status badge accessibility \u0026 optimistic-flash (§7.10 / §7.11 / §7.12) › no badge renders before the first Jules state arrives\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1164375515\n\u001b[1A\u001b[2K  3 passed (25.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/jump-to-session.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 126.490227684,
+          "load_at_start": 3.75,
+          "mem_available_gb_at_start": 36.82600402832031,
+          "note": "/tstapler/.cache/tmp/ssq-s14/work/srv-721526087\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › jump-to-session.spec.ts:115:7 › backlog-jump-to-session › opens a real terminal for the most recent session in place, with no page navigation \n    [chromium] › jump-to-session.spec.ts:159:7 › backlog-jump-to-session › switches the open terminal to a different role via the role picker \n  1 passed (2.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/launcher-presets.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 72.357741944,
+          "load_at_start": 5.54,
+          "mem_available_gb_at_start": 38.34911346435547,
+          "note": "edByDefault_When_FileIsMalformed\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3864535205\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › launcher-presets.spec.ts:42:7 › launcher-presets › launcher-presets_should_CreateSessionWithPresetProgram_When_RowClickedAndFormSubmitted \n  2 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/leader-command-bar.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 22.693652355,
+          "load_at_start": 4.99,
+          "mem_available_gb_at_start": 38.01610565185547,
+          "note": " › leader-key command bar › leader_should_neverReachTheTerminalPty\n\u001b[1A\u001b[2K[6/6] [chromium] › leader-command-bar.spec.ts:130:7 › leader-key command bar › openBar_should_haveNoAxeWcagAaViolations\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3965989454\n\u001b[1A\u001b[2K  6 passed (20.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/local-file-browser.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 128.060671593,
+          "load_at_start": 5.02,
+          "mem_available_gb_at_start": 38.45000457763672,
+          "note": " up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3893194397\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › local-file-browser.spec.ts:36:7 › local-file-browser › local-file-browser \u003e navigates into a symlinked directory \n    [chromium] › local-file-browser.spec.ts:72:7 › local-file-browser › local-file-browser \u003e open terminal here creates a directory-mode session \n  3 passed (2.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/log-viewer.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.279204746,
+          "load_at_start": 4.74,
+          "mem_available_gb_at_start": 38.39119338989258,
+          "note": "s:103:7 › log-viewer › log-viewer_should_expandRow_When_rowClicked\n\u001b[1A\u001b[2K[7/7] [chromium] › log-viewer.spec.ts:124:7 › log-viewer › log-viewer_should_showSearchAsExpandable_When_mobileViewport\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1475770798\n\u001b[1A\u001b[2K  7 passed (21.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/login-static-assets.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 60.753647907,
+          "load_at_start": 5.61,
+          "mem_available_gb_at_start": 38.13690948486328,
+          "note": "[chromium] › login-static-assets.spec.ts:165:7 › login page static assets (Bun only, PR 7b) › every static asset is 2xx with no redirect, and every requested path is exempt or allowlisted\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-476812162\n\u001b[1A\u001b[2K  1 skipped\n  1 passed (56.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/mobile-navigation.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 69.67282749,
+          "load_at_start": 5.97,
+          "mem_available_gb_at_start": 37.43342971801758,
+          "note": "› mobile_should_setBottomNavHeightVar_When_pageLoads\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4183865901\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › mobile-navigation.spec.ts:41:7 › mobile-navigation › mobile_should_scrollSessionList_When_sessionsExist \n  1 skipped\n  1 passed (1.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/mobile-webkit.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.371881769,
+          "load_at_start": 8.9,
+          "mem_available_gb_at_start": 37.3631706237793,
+          "note": "ed: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3719510516\nError: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments.\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3719510516\n\u001b[1A\u001b[2K"
+        }
+      ]
+    },
+    "tests/e2e/multi-window-cross-tab.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 72.381212819,
+          "load_at_start": 16.4,
+          "mem_available_gb_at_start": 34.53934860229492,
+          "note": "indow\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1234834168\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › multi-window-cross-tab.spec.ts:76:7 › multi-window cross-tab (REQ-10) › renaming a window in one tab live-updates the other tab's tab strip via the storage listener \n  2 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/multi-window.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.243573624,
+          "load_at_start": 7.45,
+          "mem_available_gb_at_start": 38.40195846557617,
+          "note": "window button next\n\u001b[1A\u001b[2K[7/7] [chromium] › multi-window.spec.ts:196:7 › multi-window UX acceptance › onboarding hint appears once when second window is created and never reappears after dismissal\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3223078252\n\u001b[1A\u001b[2K  7 passed (21.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/nav-navigation.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.573369857,
+          "load_at_start": 6.84,
+          "mem_available_gb_at_start": 38.428348541259766,
+          "note": "\u003e Review Queue link navigates when session param is in URL\n\u001b[1A\u001b[2K[5/5] [chromium] › nav-navigation.spec.ts:64:7 › nav-navigation › nav-navigation \u003e Sessions link navigates back from unfinished page\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-422584708\n\u001b[1A\u001b[2K  5 passed (16.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/not-found.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 63.290045548,
+          "load_at_start": 6.61,
+          "mem_available_gb_at_start": 38.31435775756836,
+          "note": " shows only when there is history to go back to\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2287317169\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › not-found.spec.ts:19:7 › not found (Next baseline) › an unknown path answers 200 and ends on the recorded page \n  3 skipped\n  1 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-a11y-matrix.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 283.467648902,
+          "load_at_start": 5.44,
+          "mem_available_gb_at_start": 39.0012092590332,
+          "note": "[chromium] › notification-a11y-matrix.spec.ts:126:13 › notification a11y matrix › V2-portrait › axe_should_find_no_serious_violations_in_deck_tray_menu_and_confirm_in_light_scheme \n    [chromium] › notification-a11y-matrix.spec.ts:126:13 › notification a11y matrix › V2-portrait › axe_should_find_no_serious_violations_in_deck_tray_menu_and_confirm_in_dark_scheme \n  14 passed (4.7m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-contrast-over-xterm.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 586.076733635,
+          "load_at_start": 7.29,
+          "mem_available_gb_at_start": 37.26299285888672,
+          "note": "rast-over-xterm.spec.ts:327:11 › contrast over xterm V2-portrait › cyberpunk77: toast deck and tray text, icons and icon controls meet AA over every terminal content mode \n    [chromium] › notification-contrast-over-xterm.spec.ts:327:11 › contrast over xterm V2-portrait › wh40k: toast deck and tray text, icons and icon controls meet AA over every terminal content mode \n  6 passed (9.6m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-inline-actions.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 178.02391398,
+          "load_at_start": 2.86,
+          "mem_available_gb_at_start": 37.6085090637207,
+          "note": "_should_be_legacy\n\u001b[1A\u001b[2K[13/13] [chromium] › notification-inline-actions.spec.ts:251:7 › inline actions (round-trip latency) › approve_round_trip_p95_should_stay_under_one_second_over_20_approvals\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3433323247\n\u001b[1A\u001b[2K  13 passed (2.9m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-tray-bulk.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 78.160448937,
+          "load_at_start": 15.42,
+          "mem_available_gb_at_start": 33.36919403076172,
+          "note": "rvers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4136353531\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › notification-tray-bulk.spec.ts:108:7 › tray bulk actions with seeded decisions (Story 4.4) › clear_informational_should_delete_only_informational_rows_after_undo_window_and_keep_pending_decisions \n  6 passed (1.3m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-tray-handle-drag.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.017374408,
+          "load_at_start": 11.71,
+          "mem_available_gb_at_start": 34.56721496582031,
+          "note": "drag › click_without_movement_should_open_the_tray\n\u001b[1A\u001b[2K[3/3] [chromium] › notification-tray-handle-drag.spec.ts:45:7 › notification tray handle drag › reset_should_restore_the_default_position\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2295426312\n\u001b[1A\u001b[2K  3 passed (23.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-tray-terminal-invariants.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.788713175,
+          "load_at_start": 11.88,
+          "mem_available_gb_at_start": 34.470558166503906,
+          "note": "ith_esc\n\u001b[1A\u001b[2K[2/2] [chromium] › notification-tray-terminal-invariants.spec.ts:95:7 › tray leaves the terminal untouched › tray_should_animate_only_transform_and_use_no_backdrop_filter\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3654232548\n\u001b[1A\u001b[2K  1 skipped\n  1 passed (18.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-tray-variants.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 181.518905073,
+          "load_at_start": 11.73,
+          "mem_available_gb_at_start": 34.67302322387695,
+          "note": "ants.spec.ts:103:9 › notification tray variants › V1 desktop › tray_should_show_offline_banner_and_disable_dismiss_when_the_watch_stream_drops \n    [chromium] › notification-tray-variants.spec.ts:301:9 › notification tray variants › V2 portrait › entry_should_be_one_visible_element_in_every_frame_once_it_exists_and_hold_its_anchor_across_state_changes \n  10 skipped\n  1 passed (3.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notification-triage-walkthrough.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 29.379184938,
+          "load_at_start": 10.83,
+          "mem_available_gb_at_start": 35.61213684082031,
+          "note": "on triage walkthrough › triage_burst_should_reach_an_empty_deck_within_the_tap_budget_when_6_info_3_approvals_1_failure\n{\"walkthrough\":\"burst-to-empty-deck\",\"taps\":1,\"budget\":5,\"decisionsLeftPinned\":4}\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1207955925\n\u001b[1A\u001b[2K  1 passed (27.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/notifications-needs-decision.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 80.354813954,
+          "load_at_start": 11.49,
+          "mem_available_gb_at_start": 35.46928405761719,
+          "note": "never a false All caught up\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2472332098\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › notifications-needs-decision.spec.ts:191:7 › notifications-needs-decision › header count and BottomNav bell badge match within one poll cycle \n  11 passed (1.3m)\n"
+        }
+      ]
+    },
+    "tests/e2e/notifications-responsive.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 28.234543023,
+          "load_at_start": 11.41,
+          "mem_available_gb_at_start": 35.680938720703125,
+          "note": "stead of overflowing at 375px\n\u001b[1A\u001b[2K[5/5] [chromium] › notifications-responsive.spec.ts:118:7 › notifications-responsive › notification list scrolls vertically when content exceeds viewport height\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1611944438\n\u001b[1A\u001b[2K  5 passed (26.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/omnibar-backlog-compose.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 37.640240177,
+          "load_at_start": 11.46,
+          "mem_available_gb_at_start": 35.670475006103516,
+          "note": "es too\n\u001b[1A\u001b[2K[10/10] [chromium] › omnibar-backlog-compose.spec.ts:110:9 › Omnibar backlog compose widget — V2-portrait › creation-mode footer buttons stay inside the viewport and do not overlap\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1338205491\n\u001b[1A\u001b[2K  10 passed (34.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/omnibar-backlog-intent-confirm.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 79.900006643,
+          "load_at_start": 12.37,
+          "mem_available_gb_at_start": 34.86458969116211,
+          "note": "ew-form-chromium-retry1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3183118050\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › omnibar-backlog-intent-confirm.spec.ts:8:7 › Omnibar Backlog Intent Intake Confirmation › typing backlog: prefix opens the LLM intent review form \n"
+        }
+      ]
+    },
+    "tests/e2e/onboarding-hook-install.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 31.669122769,
+          "load_at_start": 12.75,
+          "mem_available_gb_at_start": 34.637481689453125,
+          "note": "o show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › onboarding-hook-install.spec.ts:29:7 › onboarding-hook-install › e2e:hooks-install - offers hook install on the final onboarding step\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-562107953\n\u001b[1A\u001b[2K  1 passed (30.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/one-off-session.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 228.89371318,
+          "load_at_start": 14.26,
+          "mem_available_gb_at_start": 34.82744216918945,
+          "note": "ion in creation panel \n    [chromium] › one-off-session.spec.ts:22:7 › one-off session creation › hides path input when one-off is selected \n    [chromium] › one-off-session.spec.ts:36:7 › one-off session creation › creation panel stays visible while typing session name \n    [chromium] › one-off-session.spec.ts:59:7 › one-off session creation › creates session with one_off flag \n"
+        }
+      ]
+    },
+    "tests/e2e/pathname-probe.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 20.351476507,
+          "load_at_start": 6.18,
+          "mem_available_gb_at_start": 36.5087890625,
+          "note": "ble=true usePathnameIsExactlyReviewQueue=false (slash-observed=true)\nafter back to /history: location.pathname=/history floatingButtonVisible=true usePathnameIsExactlyReviewQueue=n/a (slash-observed=n/a)\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2008184674\n\u001b[1A\u001b[2K  1 passed (18.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/paused-session-ux.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.420782977000002,
+          "load_at_start": 6.6,
+          "mem_available_gb_at_start": 36.43342590332031,
+          "note": "ession-ux › paused-session-ux_should_dimRow_When_sessionIsPaused\n\u001b[1A\u001b[2K[4/4] [chromium] › paused-session-ux.spec.ts:84:8 › paused-session-ux › paused-session-ux_should_showResumeButton_When_rowIsPaused\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1538810274\n\u001b[1A\u001b[2K  4 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/pi-session.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.044065804,
+          "load_at_start": 6.49,
+          "mem_available_gb_at_start": 36.74095153808594,
+          "note": " to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › pi-session.spec.ts:39:7 › pi session creation › creates a session with the pi preset and the created session's program field is pi\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2477800759\n\u001b[1A\u001b[2K  1 passed (21.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/pipeline-mode-stage-executors.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.506309329,
+          "load_at_start": 7.01,
+          "mem_available_gb_at_start": 36.58961868286133,
+          "note": "uishing stage and field type\n\u001b[1A\u001b[2K[7/7] [chromium] › pipeline-mode-stage-executors.spec.ts:325:7 › pipeline-mode-stage-executors › stage executor table uses semantic table and th scope=col markup\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1711496818\n\u001b[1A\u001b[2K  7 passed (21.5s)\n"
+        }
+      ]
+    },
+    "tests/e2e/plan-gate.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 17.994486893,
+          "load_at_start": 6,
+          "mem_available_gb_at_start": 36.762962341308594,
+          "note": "[1A\u001b[2K[1/1] [chromium] › plan-gate.spec.ts:44:7 › Plan Gate › e2e:plan-gate-blocks-spawn-until-approved-or-skipped - Spawn Session is disabled for a ready item until the plan is approved or skipped\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4264615634\n\u001b[1A\u001b[2K  1 passed (16.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/plan-review.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.843636049,
+          "load_at_start": 5.8,
+          "mem_available_gb_at_start": 36.57832336425781,
+          "note": "ed reason visible and shows an error toast when RejectPlan fails\n\u001b[1A\u001b[2K[4/4] [chromium] › plan-review.spec.ts:214:7 › plan-review › surfaces a working Regenerate action after changes are requested\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1635744617\n\u001b[1A\u001b[2K  4 passed (21.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/push-click-handoff.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 21.646439011,
+          "load_at_start": 6.5,
+          "mem_available_gb_at_start": 36.038204193115234,
+          "note": "andoff.spec.ts:19:7 › Push click handoff › tp3_should_route_without_load_event\n\u001b[1A\u001b[2K[2/2] [chromium] › push-click-handoff.spec.ts:48:7 › Push click handoff › foreign_origin_message_is_ignored\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2995893486\n\u001b[1A\u001b[2K  2 passed (20.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/remote-workspaces.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.125982976,
+          "load_at_start": 6.84,
+          "mem_available_gb_at_start": 36.20195770263672,
+          "note": "d-basepath-WWQoLR\n\n\u001b[1A\u001b[2K[2/2] [chromium] › remote-workspaces.spec.ts:97:7 › remote-workspaces › creates a session on the configured remote via the Omnibar remote selector and shows the host badge\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1694205882\n\u001b[1A\u001b[2K  2 passed (28.5s)\n"
+        }
+      ]
+    },
+    "tests/e2e/repo-path-picker-parity.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 110.902732164,
+          "load_at_start": 7.54,
+          "mem_available_gb_at_start": 36.4257926940918,
+          "note": "spec.ts:168:7 › repo path picker parity — Parent Directory field › T-E2E-RPP-001: history suggestion appears and selecting it fills the field in 2 actions \n    [chromium] › repo-path-picker-parity.spec.ts:263:7 › repo path picker parity — Existing Worktree Path fallback field › T-E2E-RPP-002: history suggestion appears and selecting it fills the field in 2 actions \n  6 passed (1.8m)\n"
+        }
+      ]
+    },
+    "tests/e2e/review-queue-priority-tiers.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 71.341844258,
+          "load_at_start": 8.14,
+          "mem_available_gb_at_start": 35.6447868347168,
+          "note": "ext.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2476553059\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › review-queue-priority-tiers.spec.ts:130:7 › review-queue-priority-tiers › idle session shows on Sessions list chip and is absent from Review Queue simultaneously \n  3 passed (1.2m)\n"
+        }
+      ]
+    },
+    "tests/e2e/review-queue-severity.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 21.635461939,
+          "load_at_start": 15.71,
+          "mem_available_gb_at_start": 35.288482666015625,
+          "note": "ould narrow to Critical items within two clicks\n\u001b[1A\u001b[2K[4/4] [chromium] › review-queue-severity.spec.ts:121:7 › review-queue-severity › should restore the unfiltered queue with a single Clear click\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2104328729\n\u001b[1A\u001b[2K  4 passed (19.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/review-queue.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 61.015792019,
+          "load_at_start": 15.37,
+          "mem_available_gb_at_start": 35.3275260925293,
+          "note": "re Backend) › keyboard navigation with [ and ] keys\n\u001b[1A\u001b[2K[11/11] [chromium] › review-queue.spec.ts:200:7 › Advanced Review Queue Tests (Require Backend) › WebSocket real-time updates\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-688155923\n\u001b[1A\u001b[2K  4 skipped\n  7 passed (58.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/route-focus-and-announce.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 95.071649675,
+          "load_at_start": 11.58,
+          "mem_available_gb_at_start": 34.956939697265625,
+          "note": "2 failed\n    [chromium] › route-focus-and-announce.spec.ts:25:7 › route focus and announcements (Next baseline) › clicking the History nav link announces the new title in a live region \n    [chromium] › route-focus-and-announce.spec.ts:47:7 › route focus and announcements (Next baseline) › skip link: Tab reaches it, Enter keeps the path and sets the hash \n  6 skipped\n  1 passed (1.6m)\n"
+        }
+      ]
+    },
+    "tests/e2e/route-smoke.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 76.031548802,
+          "load_at_start": 7.75,
+          "mem_available_gb_at_start": 34.84210205078125,
+          "note": "\u001b[1A\u001b[2K[89/90] [chromium] › route-smoke.spec.ts:52:11 › route smoke › loads /workflows cleanly\n\u001b[1A\u001b[2K[90/90] [chromium] › route-smoke.spec.ts:52:11 › route smoke › loads /workflows/ cleanly\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2803210537\n\u001b[1A\u001b[2K  90 passed (1.1m)\n"
+        }
+      ]
+    },
+    "tests/e2e/route-titles.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 48.624475296,
+          "load_at_start": 7.47,
+          "mem_available_gb_at_start": 34.95537185668945,
+          "note": "s › hard load of /workflows has the fixture title\n\u001b[1A\u001b[2K[43/43] [chromium] › route-titles.spec.ts:41:7 › route titles › client-side click navigation lands on the fixture title for every nav link\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-997852813\n\u001b[1A\u001b[2K  43 passed (42.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/rule-builder-ci-passing.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.492739712,
+          "load_at_start": 7.74,
+          "mem_available_gb_at_start": 34.93534469604492,
+          "note": "equireCiPassingTrue_When_CheckboxCheckedAndSaved\n\u001b[1A\u001b[2K[2/2] [chromium] › rule-builder-ci-passing.spec.ts:66:7 › rule-builder-ci-passing › RuleBuilder_should_RevertCheckboxState_When_FormCancelled\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1610556644\n\u001b[1A\u001b[2K  2 passed (17.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/rules-yaml-import.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 35.652303169,
+          "load_at_start": 8.03,
+          "mem_available_gb_at_start": 34.62278366088867,
+          "note": "les-yaml-import › rules-yaml-import \u003e duplicate overwrite mode\n\u001b[1A\u001b[2K[8/8] [chromium] › rules-yaml-import.spec.ts:244:7 › rules-yaml-import › rules-yaml-import \u003e empty state has explanatory text\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1271854247\n\u001b[1A\u001b[2K  8 passed (33.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-blocked-reason-copy.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.489294909,
+          "load_at_start": 10.81,
+          "mem_available_gb_at_start": 35.12509536743164,
+          "note": "ed-reason-copy.spec.ts:72:7 › scroll-forward blocked reason copy — UNSUPPORTED_STREAMING_PATH (UX-AC-4 case 2) › UNSUPPORTED_STREAMING_PATH renders fixed copy with no viewer claim and no badge pulse\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3713311782\n\u001b[1A\u001b[2K  2 passed (23.6s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-blocked-toast-keyboard.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.26825582,
+          "load_at_start": 11.25,
+          "mem_available_gb_at_start": 34.45176315307617,
+          "note": "A\u001b[2K[2/2] [chromium] › scroll-forward-blocked-toast-keyboard.spec.ts:50:7 › scroll-forward blocked toast keyboard dismissal (UX-AC-10) › Blocked toast dismiss button should be dismissible via Space\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1199233164\n\u001b[1A\u001b[2K  2 passed (28.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-contrast.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 34.350278349,
+          "load_at_start": 10.55,
+          "mem_available_gb_at_start": 34.75513458251953,
+          "note": "ium] › scroll-forward-contrast.spec.ts:37:9 › scroll-forward contrast (UX-AC-11) › loading pill, banner, blocked toast, and no-more-history line have zero axe color-contrast violations in dark theme\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2970754458\n\u001b[1A\u001b[2K  2 passed (32.4s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-live-region-announcements.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.85580902,
+          "load_at_start": 9.95,
+          "mem_available_gb_at_start": 34.854610443115234,
+          "note": "e-region-announcements.spec.ts:59:7 › scroll-forward live-region announcements (UX-AC-9, automated) › each outcome transition should announce exactly once via a role=\"status\" aria-live=\"polite\" region\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2551954605\n\u001b[1A\u001b[2K  1 passed (22.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-multi-client-recovery.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 26.920616419,
+          "load_at_start": 9.9,
+          "mem_available_gb_at_start": 34.64613723754883,
+          "note": "\ufffd\ufffd scroll-forward-multi-client-recovery.spec.ts:26:7 › scroll-forward multi-client recovery (UX-AC-3) › closing the second tab followed by one retry scroll should succeed with no reload or retry button\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-463315180\n\u001b[1A\u001b[2K  1 passed (25.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-no-dead-ends.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 40.188380904,
+          "load_at_start": 8.32,
+          "mem_available_gb_at_start": 34.739566802978516,
+          "note": ", no reload required\n\u001b[1A\u001b[2K[3/3] [chromium] › scroll-forward-no-dead-ends.spec.ts:70:7 › scroll-forward no dead ends (UX-AC-7) › stalled-loading pill exposes a clickable Cancel, no reload required\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1173097876\n\u001b[1A\u001b[2K  3 passed (38.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-outcome-signals-distinct.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.465067733,
+          "load_at_start": 7.67,
+          "mem_available_gb_at_start": 34.40839767456055,
+          "note": "orward-outcome-signals-distinct.spec.ts:100:7 › scroll-forward outcome signals — NO_CAPABILITY baseline (UX-AC-6) › flag-off scroll-up is a silent no-op, matching NO_CAPABILITY’s defensive baseline\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-911397672\n\u001b[1A\u001b[2K  4 passed (28.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-outcome-visible.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.179506457,
+          "load_at_start": 8.09,
+          "mem_available_gb_at_start": 36.098052978515625,
+          "note": ")\n\n\u001b[1A\u001b[2K[1/1] [chromium] › scroll-forward-outcome-visible.spec.ts:23:7 › scroll-forward outcome visible (UX-AC-1) › scroll-up gesture should reveal the outcome affordance with no additional click\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3055124617\n\u001b[1A\u001b[2K  1 passed (17.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-return-to-live.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.814251257,
+          "load_at_start": 9.01,
+          "mem_available_gb_at_start": 36.0681037902832,
+          "note": "K[1/1] [chromium] › scroll-forward-return-to-live.spec.ts:31:7 › scroll-forward return to live (UX-AC-2) › scrolling down from forwarded history should return to the live tail without an exit button\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3846111636\n\u001b[1A\u001b[2K  1 passed (17.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-same-user-two-tabs.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.368078575,
+          "load_at_start": 8.87,
+          "mem_available_gb_at_start": 36.61669921875,
+          "note": "croll-forward-same-user-two-tabs.spec.ts:31:7 › scroll-forward same-user two tabs (REQ-3b) › two BrowserContexts authenticated as the same user should still block scroll-forwarding while both are open\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2357833412\n\u001b[1A\u001b[2K  1 passed (23.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-stalled-loading-cancel.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 29.352253977,
+          "load_at_start": 9.89,
+          "mem_available_gb_at_start": 34.473045349121094,
+          "note": " [chromium] › scroll-forward-stalled-loading-cancel.spec.ts:39:7 › scroll-forward stalled loading cancel (UX-AC-5) › a stalled forward request should surface a Cancel action after the timeout window\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2700779684\n\u001b[1A\u001b[2K  1 passed (27.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-forward-unsupported-path-honest-copy.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.970158798,
+          "load_at_start": 8.34,
+          "mem_available_gb_at_start": 35.89406967163086,
+          "note": "ll-forward-unsupported-path-honest-copy.spec.ts:28:7 › scroll-forward unsupported-path honest copy (UX-AC-8) › UNSUPPORTED_STREAMING_PATH toast should contain no retry affordance or false viewer claim\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1094670812\n\u001b[1A\u001b[2K  1 passed (17.3s)\n"
+        }
+      ]
+    },
+    "tests/e2e/scroll-policy.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 54.000386139,
+          "load_at_start": 9.61,
+          "mem_available_gb_at_start": 33.798309326171875,
+          "note": " recorded Next baseline\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2059790849\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › scroll-policy.spec.ts:33:7 › scroll policy (Next baseline) › switching the Up Next tab leaves scroll and the history length unchanged \n  1 skipped\n  2 passed (52.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-actions-steer-focus.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 68.939278963,
+          "load_at_start": 8.69,
+          "mem_available_gb_at_start": 34.840728759765625,
+          "note": "text.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1338496035\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-actions-steer-focus.spec.ts:98:7 › session-actions-steer-focus › moving focus to Cancel before disabling the input keeps Escape and Tab working while a steer is in flight \n"
+        }
+      ]
+    },
+    "tests/e2e/session-artifacts.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 68.909756248,
+          "load_at_start": 6.97,
+          "mem_available_gb_at_start": 35.8044319152832,
+          "note": "ession--ec55a-b-visible-in-session-detail-chromium-retry1/error-context.md\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3251059670\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-artifacts.spec.ts:5:7 › session-artifacts › T-E2E-ARTIFACTS-001 Artifacts tab visible in session detail \n"
+        }
+      ]
+    },
+    "tests/e2e/session-auto-approve.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.496977718,
+          "load_at_start": 5.93,
+          "mem_available_gb_at_start": 32.78913116455078,
+          "note": " session creation › creates session with auto_approve flag\n\u001b[1A\u001b[2K[3/3] [chromium] › session-auto-approve.spec.ts:70:8 › auto-approve session creation › shows badge on created session\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3019278785\n\u001b[1A\u001b[2K  1 skipped\n  2 passed (23.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-board-view.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 63.879128876,
+          "load_at_start": 7.12,
+          "mem_available_gb_at_start": 35.22935485839844,
+          "note": "ssionUnchanged_When_moveToCompleteCancelled\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-746668481\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-board-view.spec.ts:59:7 › session-board-view › session-board-view_should_toggleBackToList_When_bKeyboardShortcutPressed \n  4 passed (1.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-completion-summary.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 44.301882039,
+          "load_at_start": 7.47,
+          "mem_available_gb_at_start": 34.95793151855469,
+          "note": "\u001b[1A\u001b[2K[1/1] [chromium] › session-completion-summary.spec.ts:36:7 › session-completion-summary › session-completion-summary_should_showTrivialFallbackAndCopyMarkdown_When_oneOffSessionEndsNaturally\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2567365450\n\u001b[1A\u001b[2K  1 passed (42.8s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-create-directory.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 397.686357811,
+          "load_at_start": 7.76,
+          "mem_available_gb_at_start": 34.79975509643555,
+          "note": "ectory session creation › sends directory session type in payload \n    [chromium] › session-create-directory.spec.ts:76:7 › directory session creation › CreateSession request carries a bounded Connect-Timeout-Ms header \n    [chromium] › session-create-directory.spec.ts:103:7 › directory session creation › Create button recovers when CreateSession fails instead of staying grayed out \n"
+        }
+      ]
+    },
+    "tests/e2e/session-create-existing-worktree.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 414.237941622,
+          "load_at_start": 17.95,
+          "mem_available_gb_at_start": 34.67661666870117,
+          "note": "e session creation › submit is disabled when worktree path is empty \n    [chromium] › session-create-existing-worktree.spec.ts:59:7 › existing worktree session creation › sends existing worktree type with worktree path in payload \n    [chromium] › session-create-existing-worktree.spec.ts:91:7 › existing worktree session creation › falls back to manual entry when ListWorktrees hangs \n"
+        }
+      ]
+    },
+    "tests/e2e/session-create-new-project.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 616.786180807,
+          "load_at_start": 16.26,
+          "mem_available_gb_at_start": 36.842132568359375,
+          "note": "ion dialog when directory path does not exist \n    [chromium] › session-create-new-project.spec.ts:143:7 › directory mode path confirmation › T-E2E-NP-010: cancelling the confirmation dialog closes it without creating session \n    [chromium] › session-create-new-project.spec.ts:161:7 › directory mode path confirmation › T-E2E-NP-011: confirming sends request with createIfMissing=true \n"
+        }
+      ]
+    },
+    "tests/e2e/session-create-new-worktree.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 125.496279051,
+          "load_at_start": 11.3,
+          "mem_available_gb_at_start": 37.72165298461914,
+          "note": "Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-423134930\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › session-create-new-worktree.spec.ts:19:7 › new worktree session creation › new worktree is the default selection \n    [chromium] › session-create-new-worktree.spec.ts:60:7 › new worktree session creation › sends new worktree type with branch in payload \n  3 passed (2.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-creation-async.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 120.474320196,
+          "load_at_start": 20.51,
+          "mem_available_gb_at_start": 37.183414459228516,
+          "note": "ly fires one retry\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-612934124\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-creation-async.spec.ts:354:7 › async session creation (Epic 5.3: failure toast) › dismissing the toast leaves the Failed card intact \n  1 skipped\n  9 passed (1.9m)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-detail-backlog-panel.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 22.428631989,
+          "load_at_start": 23.32,
+          "mem_available_gb_at_start": 36.55002975463867,
+          "note": "ium] › session-detail-backlog-panel.spec.ts:91:8 › Session detail backlog panel › archiving the linked item elsewhere shows a terminal state in the embedded panel instead of stale action buttons (UX AC #16)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-751306560\n\u001b[1A\u001b[2K  3 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/session-lifecycle.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.798914179,
+          "load_at_start": 21.04,
+          "mem_available_gb_at_start": 36.606197357177734,
+          "note": "sion Lifecycle › e2e:session-resume - Session status filter works\n\u001b[1A\u001b[2K[7/7] [chromium] › session-lifecycle.spec.ts:61:7 › Session Lifecycle › e2e:session-delete - Session management page loads\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-4074870637\n\u001b[1A\u001b[2K  7 passed (23.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-list-collapse-groups.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 120.092787349,
+          "load_at_start": 17.26,
+          "mem_available_gb_at_start": 36.05659866333008,
+          "note": "ler/.cache/tmp/ssq-s14/work/srv-3117819684\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › session-list-collapse-groups.spec.ts:100:7 › session-list-collapse-groups › collapsed state persists across page reload (AC 3) \n    [chromium] › session-list-collapse-groups.spec.ts:121:7 › session-list-collapse-groups › no collapse toggle is rendered when grouping strategy is None (AC 6) \n  2 passed (2.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-list-density.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 60.716581573,
+          "load_at_start": 17.54,
+          "mem_available_gb_at_start": 34.96141815185547,
+          "note": "dable_when_column_narrowed_to_260px\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1319522221\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-list-density.spec.ts:184:7 › session-list-density › interactive_elements_should_be_keyboard_reachable_with_visible_focus_ring \n  6 passed (58.0s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-notes.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.425570498,
+          "load_at_start": 11.82,
+          "mem_available_gb_at_start": 38.826698303222656,
+          "note": "instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n\n\u001b[1A\u001b[2K[1/1] [chromium] › session-notes.spec.ts:7:7 › session-notes › should_PersistNoteAndBadgeAcrossPageReload\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1744083920\n\u001b[1A\u001b[2K  1 passed (23.5s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-pin.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 124.778589678,
+          "load_at_start": 10.89,
+          "mem_available_gb_at_start": 36.54080581665039,
+          "note": "ver...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3305589464\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › session-pin.spec.ts:17:7 › session-pin › pin moves the session into the Pinned section, survives reload, and unpin restores it \n    [chromium] › session-pin.spec.ts:40:7 › session-pin › rolls back the optimistic pin when the RPC fails \n"
+        }
+      ]
+    },
+    "tests/e2e/session-program-change.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 124.132132748,
+          "load_at_start": 7.29,
+          "mem_available_gb_at_start": 39.56920623779297,
+          "note": " up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2870579852\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › session-program-change.spec.ts:19:7 › session-program-change › overflow menu Change Program pre-fills the current program \n    [chromium] › session-program-change.spec.ts:32:7 › session-program-change › changing program via the overflow menu saves and updates the session list \n"
+        }
+      ]
+    },
+    "tests/e2e/session-tag-provenance.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 47.563830532,
+          "load_at_start": 10.08,
+          "mem_available_gb_at_start": 37.90069580078125,
+          "note": " › AC5: tag pill contrast meets WCAG AA in light theme\n\u001b[1A\u001b[2K[8/8] [chromium] › session-tag-provenance.spec.ts:195:9 › session-tag-provenance › AC5: tag pill contrast meets WCAG AA in dark theme\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2325581227\n\u001b[1A\u001b[2K  8 passed (44.9s)\n"
+        }
+      ]
+    },
+    "tests/e2e/session-tag-removal-confirmation.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 88.164595268,
+          "load_at_start": 19.33,
+          "mem_available_gb_at_start": 37.675071716308594,
+          "note": "le with correct focus movement\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2619234741\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › session-tag-removal-confirmation.spec.ts:165:7 › session-tag-removal-confirmation › AC12: Keep and Escape fully cancel with no side effects \n  6 passed (1.4m)\n"
+        }
+      ]
+    },
+    "tests/e2e/shell-tabs.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 107.526381034,
+          "load_at_start": 23.24,
+          "mem_available_gb_at_start": 39.9970817565918,
+          "note": ".\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1839630224\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › shell-tabs.spec.ts:97:7 › shell-tabs › shell-tabs_should_openNewShellDialog_When_ctrlTPressed \n    [chromium] › shell-tabs.spec.ts:169:7 › shell-tabs › shell-tabs_should_openNewShellDialog_When_actionMenuSpawnShellClicked \n  2 passed (1.8m)\n"
+        }
+      ]
+    },
+    "tests/e2e/slack-notifications.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.383032237,
+          "load_at_start": 13.93,
+          "mem_available_gb_at_start": 39.59725570678711,
+          "note": "› surfaces slack error text inline on failed test-send\n\u001b[1A\u001b[2K[9/9] [chromium] › slack-notifications.spec.ts:262:7 › slack-notifications › is fully operable via keyboard alone in visual tab order\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3676615123\n\u001b[1A\u001b[2K  9 passed (27.7s)\n"
+        }
+      ]
+    },
+    "tests/e2e/smoke.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 131.593027858,
+          "load_at_start": 13.59,
+          "mem_available_gb_at_start": 38.14802551269531,
+          "note": "› Smoke Tests › review queue page loads successfully ───────────\n    [chromium] › smoke.spec.ts:33:7 › Smoke Tests › home page loads successfully ───────────────────\n    [chromium] › smoke.spec.ts:41:7 › Smoke Tests › navigation header is present ───────────────────\n  90 passed (2.0m)\n"
+        }
+      ]
+    },
+    "tests/e2e/stale-chunk-guard.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 20.731919318,
+          "load_at_start": 11.76,
+          "mem_available_gb_at_start": 38.690338134765625,
+          "note": "nibar text survives a 404 chunk: banner shown, no reload\n\u001b[1A\u001b[2K[2/2] [chromium] › stale-chunk-guard.spec.ts:49:7 › stale chunk recovery (Bun only) › a 404 chunk with no unsaved input reloads exactly once\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-3487082470\n\u001b[1A\u001b[2K  2 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/stuck-auto-merge.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 34.254436316,
+          "load_at_start": 12.13,
+          "mem_available_gb_at_start": 38.806888580322266,
+          "note": "merge_line_should_show_last_tried_omit_link_without_repo_url_and_keep_retry_focus \n    [chromium] › stuck-auto-merge.spec.ts:204:9 › stuck auto-merge @ mobile-360x800 › preflight_notification_should_appear_in_notification_list_and_be_removable \n    [chromium] › stuck-auto-merge.spec.ts:241:9 › stuck auto-merge @ mobile-360x800 › stuck_list_failure_should_not_render_an_auto_merge_line \n"
+        }
+      ]
+    },
+    "tests/e2e/tagging-rules-crud.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 25.707085941,
+          "load_at_start": 11.11,
+          "mem_available_gb_at_start": 40.3716926574707,
+          "note": " offers Try again with no orphaned row; Cancel returns with no partial row \n    [chromium] › tagging-rules-crud.spec.ts:160:7 › tagging-rules-crud › Surface 6: fire-count column reuses approval-rule tooltip verbatim, no shaming styling, no new route \n    [chromium] › tagging-rules-crud.spec.ts:188:7 › tagging-rules-crud › Surface 6: fire count increments after the rule actually fires \n"
+        }
+      ]
+    },
+    "tests/e2e/tagging-rules-regex-validation.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.761960976,
+          "load_at_start": 10.09,
+          "mem_available_gb_at_start": 40.28438186645508,
+          "note": "hows inline error on blur, before any Save click \n    [chromium] › tagging-rules-regex-validation.spec.ts:59:7 › tagging-rules-regex-validation › AC20: error is programmatically associated via aria-invalid/aria-describedby \n    [chromium] › tagging-rules-regex-validation.spec.ts:76:7 › tagging-rules-regex-validation › AC21: correcting the pattern clears error state in the same render \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-file-drop.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.497125024,
+          "load_at_start": 9.26,
+          "mem_available_gb_at_start": 40.89228439331055,
+          "note": "p.spec.ts:33:7 › terminal:file-drop › shows the drop overlay while a file is dragged over and hides it on leave \n    [chromium] › terminal-file-drop.spec.ts:43:7 › terminal:file-drop › ignores pane-reorder drags (no Files in dataTransfer) \n    [chromium] › terminal-file-drop.spec.ts:50:7 › terminal:file-drop › dropping a file uploads it via /v1/upload-image and clears the overlay \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-flickering.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.885417057,
+          "load_at_start": 12.52,
+          "mem_available_gb_at_start": 40.28595733642578,
+          "note": "updates with RAF \n    [chromium] › terminal-flickering.spec.ts:142:7 › Terminal Flickering Fix › should reset state correctly \n    [chromium] › terminal-flickering.spec.ts:166:7 › Terminal Flickering Fix › should expose test API for external verification \n    [chromium] › terminal-flickering.spec.ts:185:7 › Terminal Flickering Fix › should complete full test cycle automatically \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-hub-path.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.993957749,
+          "load_at_start": 10.35,
+          "mem_available_gb_at_start": 39.196022033691406,
+          "note": "e bounded wait as the legacy path\n\u001b[1A\u001b[2K[2/2] [chromium] › terminal-hub-path.spec.ts:67:7 › terminal hub-owned path (PathHubOwned) › resize settles to one final size without an intermediate flicker frame\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1334357625\n\u001b[1A\u001b[2K  2 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-mobile-overflow.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.592817841,
+          "load_at_start": 9.21,
+          "mem_available_gb_at_start": 39.98454666137695,
+          "note": "    [chromium] › terminal-mobile-overflow.spec.ts:59:7 › mobile toolbar overflow › clicking Less hides the overflow row \n    [chromium] › terminal-mobile-overflow.spec.ts:70:7 › mobile toolbar overflow › secondary buttons are hidden in toolbar on mobile \n    [chromium] › terminal-mobile-overflow.spec.ts:79:7 › mobile toolbar overflow › overflow row is hidden on desktop viewport \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-resize.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 26.910548988,
+          "load_at_start": 8.56,
+          "mem_available_gb_at_start": 39.9458122253418,
+          "note": "es the resizing overlay \n    [chromium] › terminal-resize.spec.ts:58:7 › terminal resize › terminal stays connected after resize \n    [chromium] › terminal-resize.spec.ts:71:7 › terminal resize › resize via viewport change cycles through RESIZING overlay \n    [chromium] › terminal-resize.spec.ts:96:7 › terminal resize › no duplicate lines in terminal after resize (dom renderer) \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-resync-banner.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.795808364,
+          "load_at_start": 14.17,
+          "mem_available_gb_at_start": 39.521244049072266,
+          "note": "ner_should_RemainHidden_When_BackgroundedTerminalWasNotSwitchedTo \n    [chromium] › terminal-resync-banner.spec.ts:142:7 › terminal-resync-banner › reconnectingBanner_should_SelfClearOrEscalateToHardFail_When_ResyncNeverStaysStuckPending \n    [chromium] › terminal-resync-banner.spec.ts:204:7 › terminal-resync-banner › hardFailBanner_should_ShowRetryAndReattemptConnection_When_Clicked \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-resync-feature-flags.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 31.112810287,
+          "load_at_start": 12.37,
+          "mem_available_gb_at_start": 39.81795883178711,
+          "note": "WithReadableLabel_When_OperatorNavigatesAndClicks \n    [chromium] › terminal-resync-feature-flags.spec.ts:74:7 › terminal-resync-feature-flags › featureFlagsPage_should_ReflectToggleOrShowError_When_FlagToggled \n    [chromium] › terminal-resync-feature-flags.spec.ts:102:7 › terminal-resync-feature-flags › featureFlagsPage_should_ShowActionableAlertAndAllowRefresh_When_SetFlagRpcFails \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-resync-stagger.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.387234338,
+          "load_at_start": 17.53,
+          "mem_available_gb_at_start": 38.99052047729492,
+          "note": "\ufffd\ufffd─────────────\n\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1747956783\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › terminal-resync-stagger.spec.ts:96:7 › terminal-resync-stagger › staggerCoordinator_should_FireResyncImmediatelyWithNoJitter_When_StaggerFlagOff \n"
+        }
+      ]
+    },
+    "tests/e2e/terminal-ws-pool.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 27.442551671,
+          "load_at_start": 15,
+          "mem_available_gb_at_start": 40.78879928588867,
+          "note": "Stream_should_UsePerStreamSocket_When_PoolFlagIsOff (retry #1)\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-2916084422\n\u001b[1A\u001b[2K  1 failed\n    [chromium] › terminal-ws-pool.spec.ts:63:7 › terminal-ws-pool › terminalStream_should_UseSharedMuxSocket_When_PoolFlagIsOn \n  1 did not run\n"
+        }
+      ]
+    },
+    "tests/e2e/theme-background.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 24.410005222,
+          "load_at_start": 18.37,
+          "mem_available_gb_at_start": 38.05857467651367,
+          "note": "d.spec.ts:22:9 › theme-background › theme-background \u003e /history has non-white background under wh40k theme \n    [chromium] › theme-background.spec.ts:22:9 › theme-background › theme-background \u003e /history has non-white background under clean theme \n    [chromium] › theme-background.spec.ts:42:7 › theme-background › theme-background \u003e /logs has non-white background under dark theme \n"
+        }
+      ]
+    },
+    "tests/e2e/theme-fouc.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.705083945,
+          "load_at_start": 15.16,
+          "mem_available_gb_at_start": 40.049224853515625,
+          "note": "tion (Next baseline) › font variable classes survive every theme \n    [chromium] › theme-fouc.spec.ts:98:7 › theme FOUC prevention (Next baseline) › a custom: theme applies its class and CSS variables before first paint \n    [chromium] › theme-fouc.spec.ts:112:7 › theme FOUC prevention (Next baseline) › an unknown stored theme degrades to clean and the page stays usable \n  3 skipped\n"
+        }
+      ]
+    },
+    "tests/e2e/toast-stack-mobile.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.928122641,
+          "load_at_start": 13.75,
+          "mem_available_gb_at_start": 38.993282318115234,
+          "note": "hip_row_when_move_all_on_a_phone \n    [chromium] › toast-stack-mobile.spec.ts:157:9 › toast stack (phone) › V4 portrait with the keyboard open › toast_stack_should_show_only_a_40px_strip_and_keep_textarea_focused_when_keyboard_open \n    [chromium] › toast-stack-mobile.spec.ts:179:9 › toast stack (phone) › V3 landscape › toast_stack_should_cap_1_and_max_height_40pct_when_landscape \n"
+        }
+      ]
+    },
+    "tests/e2e/toast-stack.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.509765991,
+          "load_at_start": 12.13,
+          "mem_available_gb_at_start": 40.688899993896484,
+          "note": "_and_frames_unchanged_when_toasts_arrive_move_all_and_undo \n    [chromium] › toast-stack.spec.ts:154:7 › toast stack over a terminal (desktop) › deck_should_sit_at_least_16px_left_of_the_open_tray_and_stay_visible \n    [chromium] › toast-stack.spec.ts:175:7 › toast stack over a terminal (desktop) › deck_should_avoid_the_cursor_cell_and_the_scrollbar_when_the_cursor_is_on_the_last_row \n"
+        }
+      ]
+    },
+    "tests/e2e/touch-targets.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.589507904,
+          "load_at_start": 10.56,
+          "mem_available_gb_at_start": 40.1109504699707,
+          "note": "ets — session detail (mobile) › mobile keyboard keys are ≥44×44px \n    [chromium] › touch-targets.spec.ts:239:7 › Touch targets — window tab strip (mobile) › WindowTabStrip tab, plus, and close controls meet the 44x44 minimum on mobile viewport \n    [chromium] › touch-targets.spec.ts:260:7 › Touch targets — desktop (1280×800) › new session button is ≥44×44px on desktop \n"
+        }
+      ]
+    },
+    "tests/e2e/triage-question-answer.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.31971978,
+          "load_at_start": 11.33,
+          "mem_available_gb_at_start": 40.1317024230957,
+          "note": "7:7 › triage-question-answer › keeps the answer visible and surfaces an error when re-triage is already in flight \n    [chromium] › triage-question-answer.spec.ts:242:7 › triage-question-answer › returns focus to the Answer toggle when Cancel is pressed \n    [chromium] › triage-question-answer.spec.ts:268:7 › triage-question-answer › keeps Submit disabled until an answer is typed \n"
+        }
+      ]
+    },
+    "tests/e2e/triage-related-work.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.560335516,
+          "load_at_start": 9.35,
+          "mem_available_gb_at_start": 39.37884521484375,
+          "note": "ssq-s14/work/srv-1102935023\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › triage-related-work.spec.ts:49:7 › triage-related-work › e2e:triage-related-work - Find related past work surfaces prior sessions \n    [chromium] › triage-related-work.spec.ts:84:7 › triage-related-work › e2e:triage-related-work - Activating a result card opens the session in a new tab without disturbing the triage panel \n"
+        }
+      ]
+    },
+    "tests/e2e/triggers-panel.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 24.796880679,
+          "load_at_start": 10.04,
+          "mem_available_gb_at_start": 39.92414855957031,
+          "note": "54:7 › triggers-panel › triggers-panel_should_reflectToggleLive_When_enableDisableClicked \n    [chromium] › triggers-panel.spec.ts:90:7 › callback-settings › callback-settings_should_roundTripMaskedConfiguredBadge_When_validUrlSaved \n    [chromium] › triggers-panel.spec.ts:124:7 › callback-settings › callback-settings_should_rejectSSRFTargetWithVisibleError_When_savingLoopbackUrl \n"
+        }
+      ]
+    },
+    "tests/e2e/unfinished-work.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 39.573650613,
+          "load_at_start": 9.66,
+          "mem_available_gb_at_start": 39.52766036987305,
+          "note": "› unfinished-work.spec.ts:314:7 › unfinished-work › unfinished-work \u003e scan completed event updates last-scanned timestamp \n    [chromium] › unfinished-work.spec.ts:321:7 › unfinished-work › unfinished-work \u003e nav badge links to unfinished page \n    [chromium] › unfinished-work.spec.ts:330:7 › unfinished-work › unfinished-work \u003e Reattach Session button navigates to session detail \n"
+        }
+      ]
+    },
+    "tests/e2e/up-next-tabs.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 30.582123098,
+          "load_at_start": 14.07,
+          "mem_available_gb_at_start": 38.72416305541992,
+          "note": "abs › upNext_should_SelectStuckAndKeepStoredTab_When_ItemDeepLinkThenWorktreesClickedAndReloaded \n    [chromium] › up-next-tabs.spec.ts:209:7 › Up Next tabs › upNext_should_MoveFocusByArrowHomeEndAndSelectOnEnter_When_TabListFocused \n    [chromium] › up-next-tabs.spec.ts:236:9 › Up Next tabs › narrow screen › upNext_should_HaveNoHorizontalOverflowAt320px_When_PRsPanelNotConnected \n"
+        }
+      ]
+    },
+    "tests/e2e/ux-error-exits.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 52.453963904,
+          "load_at_start": 11.54,
+          "mem_available_gb_at_start": 39.986106872558594,
+          "note": "ould_offer_an_enabled_exit_control \n    [chromium] › ux-error-exits.spec.ts:866:7 › ux_ac55_6.3-create-fails_should_offer_an_enabled_exit_control \n    [chromium] › ux-error-exits.spec.ts:866:7 › ux_ac55_6.3-cap-exceeded_should_offer_an_enabled_exit_control \n    [chromium] › ux-error-exits.spec.ts:866:7 › ux_ac55_6.3-time-in-past_should_offer_an_enabled_exit_control \n  2 passed (51.1s)\n"
+        }
+      ]
+    },
+    "tests/e2e/vcs-diff-parity.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 23.346355339,
+          "load_at_start": 10.13,
+          "mem_available_gb_at_start": 39.50358581542969,
+          "note": "ium] › vcs-diff-parity.spec.ts:138:7 › vcs-diff-parity › the ? overlay lists the diff shortcuts \n    [chromium] › vcs-diff-parity.spec.ts:150:7 › vcs-diff-parity › clicking a file in the VCS tab shows its diff inline and Back restores the list \n    [chromium] › vcs-diff-parity.spec.ts:166:7 › vcs-diff-parity › Show more lines and Expand all re-request the diff with more context \n"
+        }
+      ]
+    },
+    "tests/e2e/vcs-widget.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.247738658,
+          "load_at_start": 9,
+          "mem_available_gb_at_start": 39.731571197509766,
+          "note": "DurableSnapshotPresent \n    [chromium] › vcs-widget.spec.ts:199:9 › vcs-widget › Backlog item detail (durable snapshot) › VcsWidget_should_RenderNoHistoryCapturedCopy_When_ShippedSnapshotAtUnset \n    [chromium] › vcs-widget.spec.ts:307:9 › vcs-widget › Unfinished item detail (compact mode) › VcsWidget_should_RenderAggregateStatsAndCommitsWithNoPerFileRows_When_CompactModeExpanded \n"
+        }
+      ]
+    },
+    "tests/e2e/viewport-meta.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 26.859264589,
+          "load_at_start": 9.15,
+          "mem_available_gb_at_start": 39.07908630371094,
+          "note": " meta viewport and html lang on /settings \n    [chromium] › viewport-meta.spec.ts:21:9 › viewport meta › meta viewport and html lang on /review-queue \n    [chromium] › viewport-meta.spec.ts:21:9 › viewport meta › meta viewport and html lang on /rules \n    [chromium] › viewport-meta.spec.ts:30:7 › viewport meta › bottom nav resolves env(safe-area-inset-bottom) padding at 390x844 \n"
+        }
+      ]
+    },
+    "tests/e2e/visual-regression.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 24.626249466,
+          "load_at_start": 8.4,
+          "mem_available_gb_at_start": 38.916229248046875,
+          "note": "stapler/.cache/tmp/ssq-s14/work/srv-4241030989\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › visual-regression.spec.ts:28:5 › session list empty state ─────────────────────────\n    [chromium] › visual-regression.spec.ts:40:5 › omnibar open ─────────────────────────────────────\n"
+        }
+      ]
+    },
+    "tests/e2e/website-demos.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.878774858,
+          "load_at_start": 15.26,
+          "mem_available_gb_at_start": 37.7044792175293,
+          "note": "rted: /home/tstapler/.cache/tmp/ssq-s14/work/srv-366339412\nError: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments.\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-366339412\n\u001b[1A\u001b[2K"
+        }
+      ]
+    },
+    "tests/e2e/window-keepalive.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 20.759260383,
+          "load_at_start": 13.87,
+          "mem_available_gb_at_start": 37.98995590209961,
+          "note": "s14/work/srv-777853257\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › window-keepalive.spec.ts:54:7 › window keep-alive: hidden windows stay mounted but inert › hiddenWindow_should_BeInertDisplayNoneAndUnreachableByTab_When_KeepAliveOn \n    [chromium] › window-keepalive.spec.ts:76:7 › window keep-alive: hidden windows stay mounted but inert › keypress_should_BeHandledOnce_When_TwoWindowsMounted \n"
+        }
+      ]
+    },
+    "tests/e2e/window-switch-a11y.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 29.359724159,
+          "load_at_start": 14.38,
+          "mem_available_gb_at_start": 41.58975601196289,
+          "note": "nimation_When_ReducedMotion_reduce \n    [chromium] › window-switch-a11y.spec.ts:158:9 › window switch: highlight, focus, announcement, tabpanel › switch_should_RunNoTransitionOrAnimation_When_ReducedMotion_no-preference \n    [chromium] › window-switch-a11y.spec.ts:177:7 › window switch on a coarse pointer › touchSwitch_should_NotFocusTerminalAndMeet44pxTargets_When_TapOnCoarsePointer \n"
+        }
+      ]
+    },
+    "tests/e2e/worker-server-isolation.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 19.616097706,
+          "load_at_start": 12,
+          "mem_available_gb_at_start": 42.345069885253906,
+          "note": "] › worker-server-isolation.spec.ts:53:9 › worker server pool isolation › session created on own server is invisible to the other servers (d)\nisolation probe=d slot=0 baseUrl=http://localhost:44897\n\n\n🧹 Cleaning up test servers...\n\nStopping test server...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-1112086789\n\u001b[1A\u001b[2K  6 passed (18.2s)\n"
+        }
+      ]
+    },
+    "tests/e2e/workflow-cron-schedule.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 20.580597059,
+          "load_at_start": 11.28,
+          "mem_available_gb_at_start": 41.91868591308594,
+          "note": "awCronText_When_powerUserTypesInAdvancedMode \n    [chromium] › workflow-cron-schedule.spec.ts:36:7 › workflow-cron-schedule-input › workflow-cron-schedule-input_should_buildCronFromDropdowns_When_userHasNoCronKnowledge \n    [chromium] › workflow-cron-schedule.spec.ts:51:7 › workflow-cron-schedule-input › workflow-cron-schedule-input_should_blockSubmit_When_advancedExpressionIsInvalid \n"
+        }
+      ]
+    },
+    "tests/e2e/workspace-management.spec.ts": {
+      "state": "done",
+      "attempts": [
+        {
+          "exit": 0,
+          "wall_seconds": 18.54051643,
+          "load_at_start": 12.56,
+          "mem_available_gb_at_start": 41.84042739868164,
+          "note": "...\n✅ Test server stopped\n✅ Cleaned up test directory: /home/tstapler/.cache/tmp/ssq-s14/work/srv-73228377\n\u001b[1A\u001b[2K  2 failed\n    [chromium] › workspace-management.spec.ts:14:7 › Workspace Management › e2e:workspace-list - Workspace information is accessible \n    [chromium] › workspace-management.spec.ts:30:7 › Workspace Management › e2e:workspace-switch - Review queue page loads \n"
+        }
+      ]
+    }
+  }
+}

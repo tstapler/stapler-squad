@@ -17,7 +17,9 @@ Measurements not available from measured.json (S6/S10 timings, re-costed CU)
 come from a JSON file (--inputs, default spike-measurements.json beside
 spike-results.yaml). Keys: s10_second_run_job_s, unconverted_jobs_s,
 s10_cold_run_s, s6_first_cold_s, s6_second_cold_s, make_cold_median_s,
-recosted_cu_m; midpoint: mid_t1_ratio, mid_second_cold_s, mid_first_cold_s,
+recosted_cu_m, e2e_selected_share_median (spike S14: median selected-spec
+share of the replay, 1.0 when selection narrows nothing; unset means S14 has no number and s = 1.0);
+midpoint: mid_t1_ratio, mid_second_cold_s, mid_first_cold_s,
 mid_edit_test_s, baseline_edit_test_s.
 """
 import argparse
