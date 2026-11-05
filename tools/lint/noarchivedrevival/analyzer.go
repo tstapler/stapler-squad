@@ -47,6 +47,7 @@ var lifecycleFiles = []string{
 	"server/services/session_federation.go",
 	"server/services/session_federation_terminal.go",
 	"server/services/session_federation_dial.go",
+	"server/services/federated_watch_aggregator.go",
 }
 
 func isLifecycleFile(filename string) bool {
