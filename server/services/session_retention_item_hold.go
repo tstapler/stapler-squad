@@ -87,6 +87,8 @@ type itemHoldTracker struct {
 	mu       sync.Mutex
 	reported map[string]struct{}
 	overMax  []ItemPRHold
+	// reportedTotal is this tracker's own tally (the process counter is shared).
+	reportedTotal int
 }
 
 // observe takes this cycle's holds, logs and counts the newly over-max ones, and
@@ -104,6 +106,7 @@ func (t *itemHoldTracker) observe(holds []ItemPRHold, now time.Time) {
 		current[h.ItemID] = struct{}{}
 		if _, done := t.reported[h.ItemID]; !done {
 			itemPRHoldOverMax.inc()
+			t.reportedTotal++
 			log.Warn("session retention sweeper: item-direct PR hold exceeded max age; session kept (fail closed)",
 				"item", h.ItemID, "session", h.SessionUUID, "held_since", h.Since)
 		}

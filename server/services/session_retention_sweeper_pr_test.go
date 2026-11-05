@@ -291,16 +291,17 @@ func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelea
 		open := session.PRView{State: session.PRStateOpen, AttachedAt: attached}
 		return map[string]session.ItemGuardView{"item-h": {Direct: []session.PRView{open}}}, nil
 	}
-	before := ItemPRHoldOverMaxCount()
+	globalBefore := ItemPRHoldOverMaxCount()
 
 	sweeper.sweep(context.Background())
-	assert.Equal(t, before, ItemPRHoldOverMaxCount(), "held 30m: below the 1h line")
+	assert.Zero(t, sweeper.holds.reportedTotal, "held 30m: below the 1h line")
 	assert.Empty(t, sweeper.OverMaxItemPRHolds())
 
 	base = base.Add(2 * time.Hour)
 	sweeper.sweep(context.Background())
 	sweeper.sweep(context.Background())
-	assert.Equal(t, before+1, ItemPRHoldOverMaxCount(), "counted once per (item, window), not per cycle")
+	assert.Equal(t, 1, sweeper.holds.reportedTotal, "counted once per (item, window), not per cycle")
+	assert.GreaterOrEqual(t, ItemPRHoldOverMaxCount(), globalBefore+1)
 	require.Len(t, sweeper.OverMaxItemPRHolds(), 1)
 	assert.Equal(t, "item-h", sweeper.OverMaxItemPRHolds()[0].ItemID)
 	assert.True(t, hasStoredTitle(t, fix, "held"), "fail-closed forever: surfacing never releases the session")
