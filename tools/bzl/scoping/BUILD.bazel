@@ -15,6 +15,7 @@ go_library(
         "relocate.go",
         "replay.go",
         "t9.go",
+        "touch.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/scoping",
     visibility = ["//visibility:private"],
@@ -41,6 +42,7 @@ go_test(
         "move_test.go",
         "relocate_test.go",
         "scoping_test.go",
+        "touch_test.go",
     ],
     embed = [":scoping_lib"],
 )

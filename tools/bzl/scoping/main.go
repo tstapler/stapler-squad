@@ -5,6 +5,7 @@
 //	scoping move      --from D --to D --files a.go,..  git mv a cluster into a new package and re-point references
 //	scoping relocate  --dir D --to f.go --decls a,T.m  move declarations between files of one package (no package change)
 //	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
+//	scoping touch     [--commits N] [--files a,b|--per-file]  T9b gain of moving files (changes that touch only them)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
 //	scoping budget    [--file F] [--base REF]   per-package size/import caps (ratchet); --init a,b prints caps from the tree
@@ -109,26 +110,10 @@ func measure(root string, commits int, base *Report, ref string) (*Report, error
 	if err != nil {
 		return nil, err
 	}
-	if base != nil && base.LogRefSHA != "" {
-		ref = base.LogRefSHA
-	}
-	refSHA, err := git(root, "rev-parse", ref)
+	changes, res, refSHA, err := historyWindow(root, m, commits, base, ref)
 	if err != nil {
 		return nil, err
 	}
-	logOut, err := git(root, "log", ref, fmt.Sprintf("-%d", commits), "--name-only", "--pretty=@@%H")
-	if err != nil {
-		return nil, err
-	}
-	res := Resolver{Model: m}
-	if base != nil && base.CommitSHA != "" {
-		diff, err := git(root, "diff", "-M", "--name-status", base.CommitSHA, "HEAD")
-		if err != nil {
-			return nil, err
-		}
-		res.Renames = ParseRenames(diff)
-	}
-	changes := ParseGitLog(strings.NewReader(logOut))
 	w500 := Replay(m, res, changes)
 	w100 := Replay(m, res, changes[:min(100, len(changes))])
 	prs, err := loadPRs(root)
@@ -137,7 +122,7 @@ func measure(root string, commits int, base *Report, ref string) (*Report, error
 	}
 	target, merged, npr := PRMedians(m, res, prs)
 	r := &Report{
-		CommitSHA: strings.TrimSpace(head), LogRefSHA: strings.TrimSpace(refSHA), NChanges: w500.NChanges,
+		CommitSHA: strings.TrimSpace(head), LogRefSHA: refSHA, NChanges: w500.NChanges,
 		GoTouchingMedian: merged, T9aTestLOCShare500: w500.TestLOCShare,
 		T9bUniversalTouch100: w100.UniversalTouch, T9bUniversalTouch500: w500.UniversalTouch,
 		T9cMeanLibLOCShare: w500.LibLOCShare, T9dServicesLOC: m.LOC["server/services"], T9dSessionLOC: m.LOC["session"],
@@ -345,10 +330,37 @@ func main() {
 		os.Exit(runBudget(os.Args[2:], os.Stdout))
 	case "boundaries":
 		os.Exit(runBoundaries(os.Args[2:], os.Stdout))
+	case "touch":
+		os.Exit(runTouch(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+// historyWindow reads the replayed commits and the rename map that carries their paths into the current tree. A stored
+// baseline pins both the history ref and the tree the renames start from.
+func historyWindow(root string, m *Model, commits int, base *Report, ref string) ([]Change, Resolver, string, error) {
+	if base != nil && base.LogRefSHA != "" {
+		ref = base.LogRefSHA
+	}
+	refSHA, err := git(root, "rev-parse", ref)
+	if err != nil {
+		return nil, Resolver{}, "", err
+	}
+	logOut, err := git(root, "log", ref, fmt.Sprintf("-%d", commits), "--name-only", "--pretty=@@%H")
+	if err != nil {
+		return nil, Resolver{}, "", err
+	}
+	res := Resolver{Model: m}
+	if base != nil && base.CommitSHA != "" {
+		diff, err := git(root, "diff", "-M", "--name-status", base.CommitSHA, "HEAD")
+		if err != nil {
+			return nil, Resolver{}, "", err
+		}
+		res.Renames = ParseRenames(diff)
+	}
+	return ParseGitLog(strings.NewReader(logOut)), res, strings.TrimSpace(refSHA), nil
 }
