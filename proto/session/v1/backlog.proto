@@ -317,6 +317,10 @@ message BacklogItem {
   // claiming_host_id is the HostID of the host that created this item from an
   // external issue. Empty for items without an external_url.
   string claiming_host_id = 46;
+  // pull_requests is the item's derived PR set (item-direct plus current round).
+  repeated SessionPullRequest pull_requests = 47;
+  // pr_holds explains cleanup holds. Detail responses only, never list responses.
+  repeated PrHold pr_holds = 48;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency

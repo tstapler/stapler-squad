@@ -766,6 +766,9 @@ message ListSessionsRequest {
   // When true, return only hidden (system/background) sessions, regardless of
   // include_hidden. Used by the tray's Background activity section.
   bool hidden_only = 9;
+
+  // Only sessions with a non-orphan link to this PR. Unset means no filter.
+  PullRequestRef pr = 10;
 }
 
 message ListSessionsResponse {
@@ -1523,6 +1526,8 @@ message GetPRInfoResponse {
 message GetPRCommentsRequest {
   // Session identifier (must be a PR session)
   string id = 1;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 2;
 }
 
 message GetPRCommentsResponse {
@@ -1535,6 +1540,8 @@ message PostPRCommentRequest {
   string id = 1;
   // Comment body (required)
   string body = 2;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 3;
 }
 
 message PostPRCommentResponse {
@@ -1549,6 +1556,8 @@ message MergePRRequest {
   string id = 1;
   // Merge method: "merge", "squash", or "rebase" (default: "merge")
   optional string method = 2;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 3;
 }
 
 message MergePRResponse {
@@ -1561,6 +1570,8 @@ message MergePRResponse {
 message ClosePRRequest {
   // Session identifier (must be a PR session)
   string id = 1;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 2;
 }
 
 message ClosePRResponse {
