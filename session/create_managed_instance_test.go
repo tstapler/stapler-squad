@@ -40,7 +40,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 	require.NoError(t, err)
 	require.NotNil(t, instance)
 	assert.Equal(t, "cmi-happy-path", instance.Title)
-	assert.False(t, instance.started.Load(), "CreateManagedInstance must not start the instance")
+	assert.False(t, instance.Started(), "CreateManagedInstance must not start the instance")
 
 	// Persisted: round-trips through LoadInstances.
 	loaded, err := storage.ListInstanceData()

@@ -31,7 +31,7 @@ func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
 	inst := makeTestInstance("test-session")
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 
-	assert.Equal(t, uuid, inst.claudeSession.ConversationUUID)
+	assert.Equal(t, uuid, inst.GetClaudeSession().ConversationUUID)
 	assert.Equal(t, histPath, inst.HistoryFilePath)
 }
 
@@ -61,7 +61,7 @@ func TestHistoryLinker_AlreadyLinked_NoUpdate(t *testing.T) {
 	linker.correlateSession(inst, false)
 
 	// force=false must skip already-linked sessions; UUID must be unchanged.
-	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID)
+	assert.Equal(t, originalUUID, inst.GetClaudeSession().ConversationUUID)
 }
 
 // TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear is a regression
@@ -100,7 +100,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 
 	// force=true must re-detect and update to the newer UUID.
 	require.True(t, inst.HasClaudeSession())
-	assert.Equal(t, newUUID, inst.claudeSession.ConversationUUID,
+	assert.Equal(t, newUUID, inst.GetClaudeSession().ConversationUUID,
 		"force=true should update UUID after /clear created a new conversation")
 }
 
@@ -311,7 +311,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 	linker.correlateSession(inst, false)
 
 	require.True(t, inst.HasClaudeSession(), "instance should be linked after correlateSession")
-	assert.Equal(t, worktreeUUID, inst.claudeSession.ConversationUUID,
+	assert.Equal(t, worktreeUUID, inst.GetClaudeSession().ConversationUUID,
 		"must use the worktree-path UUID, not the base-repo UUID")
 }
 
@@ -357,7 +357,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 	linker.correlateSession(inst, true)
 
 	// The paused session's UUID must be unchanged.
-	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+	assert.Equal(t, originalUUID, inst.GetClaudeSession().ConversationUUID,
 		"paused session UUID must not be overwritten by a newer session's JSONL file")
 }
 
@@ -391,7 +391,7 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 	linker := NewHistoryLinker(detector, nil)
 	linker.correlateSession(inst, true)
 
-	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+	assert.Equal(t, originalUUID, inst.GetClaudeSession().ConversationUUID,
 		"hibernated session UUID must not be overwritten by a newer session's JSONL file")
 }
 
@@ -427,7 +427,7 @@ func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.
 	linker := NewHistoryLinker(detector, nil)
 	linker.correlateSession(inst, true)
 
-	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+	assert.Equal(t, originalUUID, inst.GetClaudeSession().ConversationUUID,
 		"stopped session UUID must not be overwritten by a newer session's JSONL file")
 }
 
@@ -457,5 +457,5 @@ func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *te
 	linker.correlateSession(inst, false)
 
 	require.True(t, inst.HasClaudeSession())
-	assert.Equal(t, sessionUUID, inst.claudeSession.ConversationUUID)
+	assert.Equal(t, sessionUUID, inst.GetClaudeSession().ConversationUUID)
 }

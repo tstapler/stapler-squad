@@ -22,7 +22,7 @@ func newOwnerAndUnlinked(t *testing.T, ownerStatus Status, archived bool, calls 
 	}
 	owner.SetHistoryInfo("conv-u", "/projects/p/conv-u.jsonl")
 	waiting := &Instance{Title: "waiting", Path: t.TempDir(), Status: Running, Program: "claude"}
-	waiting.processManager = panePIDCountingPM{calls: calls}
+	waiting.SetProcessManagerForTest(panePIDCountingPM{calls: calls})
 	linker.SetInstances([]*Instance{owner, waiting})
 	return linker, waiting
 }
@@ -145,7 +145,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_ArchivedActiveOwnerAndNoSess
 	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	at := time.Now()
 	owner := &Instance{Title: "owner", Path: t.TempDir(), Status: Running, ArchivedAt: &at}
-	owner.processManager = panePIDCountingPM{calls: &calls}
+	owner.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	owner.SetHistoryInfo("conv-u", "/projects/p/conv-u.jsonl")
 	linker.SetInstances([]*Instance{owner})
 
@@ -165,7 +165,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_FleetIsLinkedClaudePlusO
 		inst.Program = "claude"
 	}
 	aider := &Instance{Title: "aider", Path: t.TempDir(), Status: Running, Program: "aider"}
-	aider.processManager = panePIDCountingPM{calls: &calls}
+	aider.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	linker.SetInstances(append(insts, aider))
 
 	linker.handleHistoryFileEvent("/projects/p/uuid-" + insts[3].Title + ".jsonl")
@@ -180,7 +180,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_OwnerNotLiveAndNoSessionIsUn
 	var calls atomic.Int64
 	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	owner := &Instance{Title: "owner", Path: t.TempDir(), Status: Stopped}
-	owner.processManager = panePIDCountingPM{calls: &calls}
+	owner.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	owner.SetHistoryInfo("conv-u", "/projects/p/conv-u.jsonl")
 	linker.SetInstances([]*Instance{owner})
 
@@ -197,7 +197,7 @@ func TestHistoryLinker_Watcher_should_SkipForLiveOwnerAndScanForNewFile(t *testi
 	dir := t.TempDir()
 	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	owner := &Instance{Title: "owner", Path: t.TempDir(), Status: Running}
-	owner.processManager = panePIDCountingPM{calls: &calls}
+	owner.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	owner.SetHistoryInfo("conv-u", filepath.Join(dir, "conv-u.jsonl"))
 	linker.SetInstances([]*Instance{owner})
 

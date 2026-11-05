@@ -43,9 +43,9 @@ func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionI
 	var releaseOnce sync.Once
 	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
 	t.Cleanup(releasePane) // unblock slow even if an assertion fails first
-	slow.processManager = pm
+	slow.SetProcessManagerForTest(pm)
 	fast := &Instance{Title: "fast", Path: "/repo/slowio", Status: Running}
-	fast.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+	fast.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 	f.linker.SetInstances([]*Instance{slow, fast})
 
 	slowDone := make(chan struct{})
@@ -76,7 +76,7 @@ func TestHistoryLinker_Correlate_should_LinkConversationToExactlyOneSession_When
 		insts := make([]*Instance, n)
 		for i := range insts {
 			insts[i] = &Instance{Title: "racer-" + string(rune('a'+i)), Path: "/repo/race", Status: Running}
-			insts[i].processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+			insts[i].SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 		}
 		f.linker.SetInstances(insts)
 
@@ -106,7 +106,7 @@ func TestHistoryLinker_Commit_should_NotDoubleLink_When_SiblingClaimsBetweenDete
 	f := newLinkerFixture(t, "/repo/commit")
 	path := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/commit", Status: Running}
-	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 	b := &Instance{Title: "b", Path: "/repo/commit", Status: Running}
 	f.linker.SetInstances([]*Instance{a, b})
 
@@ -130,7 +130,7 @@ func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(
 	f.write(t, claimOwnStart, "{}", 5*time.Second)
 	newest := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/reselect", Status: Running}
-	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 	b := &Instance{Title: "b", Path: "/repo/reselect", Status: Running}
 	f.linker.SetInstances([]*Instance{a, b})
 
@@ -185,7 +185,7 @@ func TestHistoryLinker_Correlate_should_RecordMiss_When_SiblingOwnsOnlyCandidate
 	f := newLinkerFixture(t, "/repo/miss")
 	path := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/miss", Status: Running}
-	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 	sibling := &Instance{Title: "b", Path: "/repo/miss", Status: Running}
 	f.linker.SetInstances([]*Instance{a, sibling})
 
@@ -264,7 +264,7 @@ func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
 	var releaseOnce sync.Once
 	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
 	t.Cleanup(releasePane)
-	inst.processManager = pm
+	inst.SetProcessManagerForTest(pm)
 	f.linker.SetInstances([]*Instance{inst})
 
 	var wg sync.WaitGroup
