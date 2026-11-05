@@ -122,4 +122,5 @@ func (f *scanFindings) finish() {
 		f.records = append(f.records, commandRecord(call, ""))
 	}
 	f.pending = nil
+	f.redactFindings()
 }
