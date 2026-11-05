@@ -5,14 +5,16 @@ import type { LeafPane } from "@/lib/pane/paneTypes";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 
+const mockOnRetryNowSession = jest.fn().mockResolvedValue(true);
 jest.mock("@/lib/contexts/CockpitActionsContext", () => ({
-  useCockpitActions: () => ({}),
+  useCockpitActions: () => ({ onRetryNowSession: mockOnRetryNowSession }),
 }));
 
 // SessionActionsOverflow needs SessionServiceContext, which is irrelevant to the
 // badge behavior under test here — stub it out rather than standing up that provider.
+const mockOverflow = jest.fn((_props: { onRetryNow?: (id: string) => Promise<boolean | void> }) => null);
 jest.mock("@/components/sessions/SessionActionsOverflow", () => ({
-  SessionActionsOverflow: () => null,
+  SessionActionsOverflow: (props: { onRetryNow?: (id: string) => Promise<boolean | void> }) => mockOverflow(props),
 }));
 
 const mockUsePaneContext = jest.fn(() => ({ backlogIndex: new Map<string, BacklogIndexEntry>() }));
@@ -71,5 +73,16 @@ describe("PaneHeader — backlog-origin badge", () => {
     renderHeader({ pane: detailPane, sessions: [session] });
 
     expect(screen.getByTestId("backlog-origin-badge")).toBeInTheDocument();
+  });
+});
+
+describe("PaneHeader — retry now wiring", () => {
+  it("forwards the cockpit's onRetryNowSession to the session actions overflow menu", () => {
+    const session = { id: "s1", title: "Session One" } as Session;
+    const pane: LeafPane = { ...listPane, viewKind: "session-detail", sessionId: "s1" };
+    renderHeader({ pane, sessions: [session] });
+    const props = mockOverflow.mock.calls[0][0];
+    void props.onRetryNow?.("s1");
+    expect(mockOnRetryNowSession).toHaveBeenCalledWith("s1");
   });
 });

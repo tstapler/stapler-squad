@@ -1126,6 +1126,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); setIsRetryConfirmOpen(true); }}
                   aria-label={`Retry session ${session.title} now`}
+                  data-testid="session-retry-now-menuitem"
                 >
                   <span aria-hidden="true">🔁</span> Retry now
                 </button>

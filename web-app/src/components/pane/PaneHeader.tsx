@@ -70,6 +70,7 @@ export function PaneHeader({
               onResume={() => cockpit.onResumeSession(session)}
               onDelete={() => cockpit.onDeleteSession(session.id)}
               onRestart={(id) => cockpit.onRestartSession(id)}
+              onRetryNow={(id) => cockpit.onRetryNowSession(id)}
               onClone={() => cockpit.onCloneSession(session.id)}
               onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
