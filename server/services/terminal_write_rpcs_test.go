@@ -126,7 +126,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"ListTriggerFireEvents", "ListWorkflows", "ListWorkspaceTargets", "ListWorktrees", "LogClientEvents",
 		"LogUserInteraction", "MarkNotificationRead", "MergeDatabase", "MergePR", "PinSession", "PostPRComment",
 		"PreviewDestinationPath", "ProbeProgram", "PruneHiddenSessionNotifications", "QueryEscapeAnalytics", "ReadFileRange",
-		"PickFanoutWinner", "ReclassifySessionTags", "ReloadClaudeSettingsRules", "RenameSession", "RescanSessionArtifacts", "ResolveApproval",
+		"PickFanoutWinner", "PinSessionPullRequest", "RefreshSessionPullRequests", "DetachSessionPullRequest", "AttachSessionPullRequest", "ReclassifySessionTags", "ReloadClaudeSettingsRules", "RenameSession", "RescanSessionArtifacts", "ResolveApproval",
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
 		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",

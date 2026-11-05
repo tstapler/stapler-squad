@@ -920,6 +920,39 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 	return err
 }
 
+// DetachSessionPR deletes the session's link to ref and writes its tombstone in
+// one transaction (the user's "Not mine").
+func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	_, err := s.repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
+func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	err := s.repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// ClearSessionPRTombstone removes the session's tombstone for ref, if any.
+func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	return s.repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
+}
+
 // ListPRMirrors returns the stored legacy PR columns by session uuid.
 func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
 	return s.repo.ListPRMirrors(ctx)
@@ -1601,6 +1634,23 @@ func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []stri
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// ListSessionPRViewsByUUIDs returns each session's PR links joined to their
+// states as row data (no live Instance needed). Sessions without links are absent.
+func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+	return s.repo.ListBySessionUUIDs(ctx, uuids)
+}
+
+// ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
+// from one data path; see ItemGuardView.
+func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {
+	return s.repo.ListItemGuardViews(ctx, itemIDs)
+}
+
+// ListItemIDsBySessionUUIDs returns every item id of each session uuid.
+func (s *Storage) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
+	return s.repo.ListItemIDsBySessionUUIDs(ctx, uuids)
 }
 
 // ListItemSessionsBySessionUUIDs batches GetItemSessionBySessionUUID: one query for all UUIDs.

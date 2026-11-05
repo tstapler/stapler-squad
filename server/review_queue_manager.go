@@ -550,8 +550,8 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 	if inst == nil {
 		return
 	}
-	if inst.Snapshot().GitHub.GitHubPRURL != "" {
-		return // already has a PR — nothing to do
+	if _, _, hasPR := session.ExistingPRForCreate(inst.Snapshot(), inst.Snapshot().Branch); hasPR {
+		return // an open PR already exists on this branch — nothing to do
 	}
 	stableID := inst.GetStableID()
 	if stableID == "" {
@@ -590,7 +590,7 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 		// window between the synchronous check above and this goroutine
 		// actually running — e.g. a human clicking the manual "Create PR"
 		// button for this same session during the DB lookups just above.
-		if inst.GitHubPRURL != "" {
+		if _, _, hasPR := session.ExistingPRForCreate(inst.Snapshot(), inst.Snapshot().Branch); hasPR {
 			return
 		}
 

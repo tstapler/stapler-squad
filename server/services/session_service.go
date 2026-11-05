@@ -90,6 +90,9 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
+	prRefs prRefsSeams
+
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
 	guardedSteer guardedSteerState

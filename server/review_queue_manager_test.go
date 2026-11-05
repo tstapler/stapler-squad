@@ -1767,3 +1767,56 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 		})
 	}
 }
+
+func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    session.PRState
+		head     string
+		wantRuns bool
+	}{
+		{"merged PR on an earlier branch lets a new one be created", session.PRStateMerged, "feat-a", true},
+		{"merged PR on this branch does not block either", session.PRStateMerged, "feat-b", true},
+		{"open PR on another branch does not block", session.PRStateOpen, "feat-a", true},
+		{"open PR on this branch short-circuits", session.PRStateOpen, "feat-b", false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+			fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
+			mgr.SetOneShotRunner(fake)
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title: "auto-create item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+			})
+			require.NoError(t, err)
+			sessionUUID := fmt.Sprintf("dddd1111-2222-3333-4444-55556666777%d", i)
+			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+			require.NoError(t, err)
+
+			inst := &session.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
+			ref, err := session.NewPRRef("", "acme", "widgets", 11)
+			require.NoError(t, err)
+			require.NoError(t, inst.AttachPR(ref, session.AttachSourceBranchDiscovery,
+				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
+			poller.SetInstances([]*session.Instance{inst})
+
+			mgr.OnItemAdded(&session.ReviewItem{
+				SessionID: "multi-pr-session", SessionName: "multi-pr-session",
+				Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now(),
+			})
+
+			if !tc.wantRuns {
+				assertNeverInvoked(t, fake, "an open PR on the current branch must short-circuit")
+				return
+			}
+			deadline := time.After(3 * time.Second)
+			for fake.callCount() == 0 {
+				select {
+				case <-deadline:
+					t.Fatal("timed out waiting for the one-shot PR runner")
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+		})
+	}
+}

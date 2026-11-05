@@ -228,3 +228,41 @@ func ProjectLegacyPRMirror(prs []PRView, currentBranch string) (LegacyPRMirror, 
 	}
 	return LegacyPRMirror{Number: active.Ref.Number(), URL: url, Terminal: PRsAllTerminal(prs, 0)}, true
 }
+
+// OpenPROnBranch returns the newest non-terminal PR whose head branch is branch.
+// Create-PR short-circuits only on such a PR, so a session whose PRs are all
+// terminal (or sit on other branches) may open another. An empty branch matches
+// nothing: the caller then creates, and GitHub itself rejects a duplicate.
+func OpenPROnBranch(prs []PRView, branch string) (PRView, bool) {
+	if branch == "" {
+		return PRView{}, false
+	}
+	best := newestPR(prs, func(v PRView) bool { return !v.Terminal() && v.HeadBranch == branch })
+	if best == nil {
+		return PRView{}, false
+	}
+	return *best, true
+}
+
+// WebURL is the stored URL, or the canonical github.com-style URL built from the ref.
+func (v PRView) WebURL() string {
+	if v.URL != "" {
+		return v.URL
+	}
+	ref := github.ParsedGitHubRef{
+		Type: github.RefTypePR, Host: v.Ref.Host(), Owner: v.Ref.Owner(), Repo: v.Ref.Repo(), PRNumber: v.Ref.Number(),
+	}
+	return ref.HTMLURL()
+}
+
+// ExistingPRForCreate is what create-PR treats as "this branch already has a PR".
+// With links it is OpenPROnBranch; a session with no links keeps the legacy
+// single-PR scalar check, so flag-off behavior is unchanged.
+func ExistingPRForCreate(snap *InstanceSnapshot, branch string) (url string, number int, ok bool) {
+	g := snap.GitHub
+	if len(g.PRs) > 0 {
+		v, found := OpenPROnBranch(g.PRs, branch)
+		return v.WebURL(), v.Ref.Number(), found
+	}
+	return g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRURL != ""
+}

@@ -83,6 +83,11 @@ func (s *SessionService) ListSessions(
 		}
 	}
 
+	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
+	if err != nil {
+		return nil, err
+	}
+
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	var hiddenManaged []hiddenOutcomeEntry
@@ -122,6 +127,10 @@ func (s *SessionService) ListSessions(
 
 		// Filter by workflow_id when specified
 		if req.Msg.WorkflowId != nil && *req.Msg.WorkflowId != "" && inst.WorkflowID != *req.Msg.WorkflowId {
+			continue
+		}
+
+		if hasPRFilter && !instanceHasPR(inst, prFilter) {
 			continue
 		}
 
