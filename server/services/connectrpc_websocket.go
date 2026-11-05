@@ -3341,6 +3341,12 @@ func logCurrentPaneFailure(what, sessionID, resyncID string, err error) error {
 		}
 		return nil
 	}
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		// Pane exists but has no live process (exited, or restored without a screen); a
+		// resyncing client re-asks every frame, so log once per interval, not per request.
+		logPaneNotLive("[streamViaControlMode] "+what, sessionID, err)
+		return nil
+	}
 	log.Error("[streamViaControlMode] failed to handle "+what, "session", sessionID, "resync_id", resyncID, "err", err)
 	return nil
 }

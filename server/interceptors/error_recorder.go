@@ -2,6 +2,7 @@ package interceptors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 
@@ -40,14 +41,19 @@ func NewErrorRecorderInterceptor(registry ErrorRecorder) connect.UnaryIntercepto
 						attribute.String("rpc.procedure", req.Spec().Procedure),
 					))
 				}
-				// SQLite error registry (new)
-				if registry != nil {
-					registry.Record(ctx, err, req.Spec().Procedure)
+				// A client that went away is not a server fault, and its ctx is
+				// already dead so the INSERT below would fail with "context canceled".
+				if registry != nil && !isClientCancel(err) {
+					registry.Record(context.WithoutCancel(ctx), err, req.Spec().Procedure)
 				}
 			}
 			return resp, err
 		}
 	}
+}
+
+func isClientCancel(err error) bool {
+	return errors.Is(err, context.Canceled) || connect.CodeOf(err) == connect.CodeCanceled
 }
 
 func captureStack(maxFrames int) string {

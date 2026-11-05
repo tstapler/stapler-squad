@@ -84,3 +84,13 @@ func logSessionGone(site, sessionID string, err error) {
 	}
 	log.Debug(site+": session gone (suppressed repeat)", "session", sessionID, "err", err)
 }
+
+// logPaneNotLive is logSessionGone's counterpart for a pane that exists but has no live
+// process: Warn once per interval per session, Debug for repeats.
+func logPaneNotLive(site, sessionID string, err error) {
+	if goneLogThrottle.allow("notlive:"+sessionID, time.Now()) {
+		log.Warn(site+": pane not live", "session", sessionID, "err", err)
+		return
+	}
+	log.Debug(site+": pane not live (suppressed repeat)", "session", sessionID, "err", err)
+}
