@@ -228,7 +228,10 @@ func annotate(kind string, err error) error {
 // (or already had), so the caller should retry once. Only a refused dial qualifies: EACCES and
 // every other error are returned as they are.
 func (s *selectingTransport) failover(ctx context.Context, from string, err error) bool {
-	if err == nil || !(isDialRefused(err) || (from == transportUnix && isSocketUnusable(err))) {
+	if err == nil {
+		return false
+	}
+	if !isDialRefused(err) && (from != transportUnix || !isSocketUnusable(err)) {
 		return false
 	}
 	if cur := s.Active(); cur != from {
