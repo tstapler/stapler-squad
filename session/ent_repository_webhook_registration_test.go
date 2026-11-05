@@ -43,11 +43,11 @@ func baseReconcileInput(scope WebhookScope, requestID string) WebhookReconcileIn
 func countRows(t *testing.T, r *EntRepository) (workflows, registrations, ledger int) {
 	t.Helper()
 	ctx := context.Background()
-	w, err := r.client.Workflow.Query().Count(ctx)
+	w, err := r.Client.Workflow.Query().Count(ctx)
 	require.NoError(t, err)
-	g, err := r.client.WebhookRegistration.Query().Count(ctx)
+	g, err := r.Client.WebhookRegistration.Query().Count(ctx)
 	require.NoError(t, err)
-	l, err := r.client.WebhookRequestLedger.Query().Count(ctx)
+	l, err := r.Client.WebhookRequestLedger.Query().Count(ctx)
 	require.NoError(t, err)
 	return w, g, l
 }
@@ -270,7 +270,7 @@ func TestReconcileWebhookRegistration_should_RefuseAndLeaveOwnerUntouched_When_F
 func TestReconcileWebhookRegistration_should_NeverAdoptOrModify_When_SlugBelongsToUserManagedWorkflow(t *testing.T) {
 	r := NewTestEntRepository(t)
 	ctx := context.Background()
-	user, err := r.client.Workflow.Create().
+	user, err := r.Client.Workflow.Create().
 		SetSlug("gh-signal-main").SetName("user's own").SetCommand("user command").
 		SetTargetDirectory("/home/user").Save(ctx)
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ func TestReconcileWebhookRegistration_should_NeverAdoptOrModify_When_SlugBelongs
 	_, err = r.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-1"))
 
 	assert.ErrorIs(t, err, ErrWebhookSlugUnavailable)
-	after, err := r.client.Workflow.Get(ctx, user.ID)
+	after, err := r.Client.Workflow.Get(ctx, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "user's own", after.Name)
 	assert.Equal(t, "user command", after.Command)
@@ -324,7 +324,7 @@ func TestReconcileWebhookRegistration_should_ReportOrphaned_When_WorkflowWasDele
 	ctx := context.Background()
 	res, err := r.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-1"))
 	require.NoError(t, err)
-	require.NoError(t, r.client.Workflow.DeleteOneID(res.Registration.WorkflowID).Exec(ctx))
+	require.NoError(t, r.Client.Workflow.DeleteOneID(res.Registration.WorkflowID).Exec(ctx))
 
 	upd := baseReconcileInput(scopeA, "req-2")
 	upd.ExpectedVersion = 1
@@ -412,7 +412,7 @@ func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAnd
 	require.NoError(t, err)
 	assert.Equal(t, info, *got)
 
-	stored, err := r.client.IntegrationCredential.Query().Only(ctx)
+	stored, err := r.Client.IntegrationCredential.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
 

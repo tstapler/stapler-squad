@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -819,7 +820,7 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	})
 	require.NoError(t, err)
 
-	listener := session.NewBacklogLifecycleListener(backlogStorage)
+	listener := backlog.NewBacklogLifecycleListener(backlogStorage)
 	listener.SetEnabled(true)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, listener, findInstanceFunc("sess-backlog-linked", inst))

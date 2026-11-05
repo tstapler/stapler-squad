@@ -26,7 +26,7 @@ func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidato
 	t.Parallel()
 	got := placeholderAllowList()
 
-	require.Equal(t, recognizedPlaceholders, got,
+	require.Equal(t, RecognizedPlaceholders, got,
 		"ValidatePipelineModeContent's allow-list must equal renderTemplate's recognizedPlaceholders")
 
 	// Also assert it's the literal SAME backing slice, not merely an
@@ -34,7 +34,7 @@ func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidato
 	// gave one function its own copy" regression that require.Equal alone
 	// would miss if the copy happened to start out identical.
 	require.NotEmpty(t, got)
-	require.Same(t, &recognizedPlaceholders[0], &got[0],
+	require.Same(t, &RecognizedPlaceholders[0], &got[0],
 		"placeholderAllowList() must return the literal shared recognizedPlaceholders slice, not a copy")
 }
 

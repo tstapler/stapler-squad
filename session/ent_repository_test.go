@@ -674,7 +674,7 @@ func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
 
 	// Install interceptor that counts ent Query (SELECT) operations.
 	var selectCount int32
-	repo.client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
+	repo.Client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
 		return ssent.QuerierFunc(func(ctx context.Context, q ssent.Query) (ssent.Value, error) {
 			atomic.AddInt32(&selectCount, 1)
 			return next.Query(ctx, q)
@@ -709,7 +709,7 @@ func TestUpdateSessionMetadata_SingleStatement(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, sess))
 
 	var selectCount int32
-	repo.client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
+	repo.Client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
 		return ssent.QuerierFunc(func(ctx context.Context, q ssent.Query) (ssent.Value, error) {
 			atomic.AddInt32(&selectCount, 1)
 			return next.Query(ctx, q)
@@ -812,7 +812,7 @@ func TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.client.TaggingRule.Create().
+	created, err := repo.Client.TaggingRule.Create().
 		SetRuleID("schema-test-rule").
 		SetName("Schema test rule").
 		SetBranchPattern("^(bugfix|fix)/").
@@ -824,7 +824,7 @@ func TestTaggingRuleSchema_should_CreateTableWithAllFields_When_SchemaCreateRuns
 		Save(ctx)
 	require.NoError(t, err)
 
-	fetched, err := repo.client.TaggingRule.Get(ctx, created.ID)
+	fetched, err := repo.Client.TaggingRule.Get(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "schema-test-rule", fetched.RuleID)
 	assert.Equal(t, "Schema test rule", fetched.Name)
@@ -879,22 +879,6 @@ func TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice(
 	ruleCount, err := client.TaggingRule.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 0, ruleCount)
-}
-
-// createTestEntRepository is a thin wrapper around NewTestEntRepository
-// (testing.go) kept so the ~90 existing `repo, cleanup := createTestEntRepository(t)`
-// call sites in this package don't need touching. NewTestEntRepository
-// already registers its own t.Cleanup, so the returned cleanup func is a
-// no-op retained only for call-site compatibility.
-func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
-	repo := NewTestEntRepository(t)
-
-	ctx := context.Background()
-	sessions, err := repo.List(ctx)
-	require.NoError(t, err, "Failed to list sessions")
-	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
-
-	return repo, func() {}
 }
 
 func TestEntRepository_should_PersistPinned_AcrossCreateAndUnrelatedUpdate(t *testing.T) {
@@ -1003,7 +987,7 @@ func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testin
 	require.NoError(t, err)
 
 	injectedErr := errors.New("simulated failure deleting the backlog item")
-	repo.client.BacklogItem.Use(func(next ssent.Mutator) ssent.Mutator {
+	repo.Client.BacklogItem.Use(func(next ssent.Mutator) ssent.Mutator {
 		return hook.BacklogItemFunc(func(ctx context.Context, m *ssent.BacklogItemMutation) (ssent.Value, error) {
 			if m.Op() == ssent.OpDeleteOne {
 				return nil, injectedErr
@@ -1040,7 +1024,7 @@ func TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique(t *testing.T) 
 	ctx := context.Background()
 
 	create := func() error {
-		return repo.client.DeletedItemSessionCost.Create().
+		return repo.Client.DeletedItemSessionCost.Create().
 			SetSessionUUID("dup-session-uuid").
 			SetSessionRole(SessionRoleReview).
 			SetItemID("some-item-id").

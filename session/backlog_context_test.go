@@ -8,7 +8,7 @@ import (
 // UT-034: sanitizeField strips HTML tags.
 func TestSanitizeForContextFile_StripHTML(t *testing.T) {
 	t.Parallel()
-	got := sanitizeField("<b>bold</b>", 1000)
+	got := SanitizeField("<b>bold</b>", 1000)
 	if got != "bold" {
 		t.Errorf("expected %q, got %q", "bold", got)
 	}
@@ -18,7 +18,7 @@ func TestSanitizeForContextFile_StripHTML(t *testing.T) {
 func TestSanitizeForContextFile_TruncatesLongFields(t *testing.T) {
 	t.Parallel()
 	input := strings.Repeat("a", 3000)
-	got := sanitizeField(input, 2000)
+	got := SanitizeField(input, 2000)
 	if len(got) > 2020 {
 		t.Errorf("expected length ≤ 2020, got %d", len(got))
 	}

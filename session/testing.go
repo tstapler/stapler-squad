@@ -153,11 +153,11 @@ func TestBackdateCreationProgress(t *testing.T, storage *Storage, uuid string, w
 // comment) that later ent reads depend on.
 func TestBackdateItemSessionCreatedAt(t *testing.T, storage *Storage, itemSessionID string, when time.Time) error {
 	t.Helper()
-	if storage.repo == nil {
+	if storage.Repo == nil {
 		return fmt.Errorf("TestBackdateItemSessionCreatedAt: storage has no repository")
 	}
 
-	dsn := sqlitedsn.New(storage.repo.dbPath).
+	dsn := sqlitedsn.New(storage.Repo.DbPath).
 		WithWAL().
 		WithBusyTimeout(5000 * time.Millisecond).
 		WithForeignKeysShort().

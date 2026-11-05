@@ -30,13 +30,14 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // livenessDefinitionToProto converts a session.LivenessDefinitionRecord
 // (the no_ent_in_services-lint-compliant DTO — see that type's doc comment)
 // to its proto representation. Nullable ms/count fields not applicable to
 // the record's Kind are left at their proto zero value.
-func livenessDefinitionToProto(row *session.LivenessDefinitionRecord) *sessionv1.LivenessDefinition {
+func livenessDefinitionToProto(row *backlog.LivenessDefinitionRecord) *sessionv1.LivenessDefinition {
 	msg := &sessionv1.LivenessDefinition{
 		Id:        row.ID.String(),
 		StageSlug: row.StageSlug,
@@ -105,24 +106,24 @@ func (s *BacklogService) invalidateLivenessCache(ctx context.Context, id string)
 // which does), so a zero value is indistinguishable from "not set" here —
 // exactly matching how LivenessDefinition.validate() already treats zero
 // kind-specific fields as "not set" for shape-mismatch detection.
-func livenessDefinitionFromCreateRequest(req *sessionv1.CreateLivenessDefinitionRequest) (*session.LivenessDefinition, error) {
-	var opts []session.LivenessDefinitionOption
+func livenessDefinitionFromCreateRequest(req *sessionv1.CreateLivenessDefinitionRequest) (*backlog.LivenessDefinition, error) {
+	var opts []backlog.LivenessDefinitionOption
 	if req.ExpectedDurationMs != 0 {
-		opts = append(opts, session.WithExpectedDuration(time.Duration(req.ExpectedDurationMs)*time.Millisecond))
+		opts = append(opts, backlog.WithExpectedDuration(time.Duration(req.ExpectedDurationMs)*time.Millisecond))
 	}
 	if req.StalenessMarginMs != 0 {
-		opts = append(opts, session.WithStalenessMargin(time.Duration(req.StalenessMarginMs)*time.Millisecond))
+		opts = append(opts, backlog.WithStalenessMargin(time.Duration(req.StalenessMarginMs)*time.Millisecond))
 	}
 	if req.MaxNoProgressDurationMs != 0 {
-		opts = append(opts, session.WithMaxNoProgressDuration(time.Duration(req.MaxNoProgressDurationMs)*time.Millisecond))
+		opts = append(opts, backlog.WithMaxNoProgressDuration(time.Duration(req.MaxNoProgressDurationMs)*time.Millisecond))
 	}
 	if req.CycleThreshold != 0 {
-		opts = append(opts, session.WithCycleThreshold(int(req.CycleThreshold)))
+		opts = append(opts, backlog.WithCycleThreshold(int(req.CycleThreshold)))
 	}
 	if req.CycleLookbackMs != 0 {
-		opts = append(opts, session.WithCycleLookback(time.Duration(req.CycleLookbackMs)*time.Millisecond))
+		opts = append(opts, backlog.WithCycleLookback(time.Duration(req.CycleLookbackMs)*time.Millisecond))
 	}
-	return session.NewLivenessDefinition(session.LivenessKind(req.Kind), opts...)
+	return backlog.NewLivenessDefinition(backlog.LivenessKind(req.Kind), opts...)
 }
 
 // CreateLivenessDefinition registers a new stage/pipeline-mode liveness
@@ -136,9 +137,9 @@ func (s *BacklogService) CreateLivenessDefinition(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("liveness definition storage not available"))
 	}
 
-	mode := session.PipelineModeDefault
+	mode := backlog.PipelineModeDefault
 	if req.Msg.PipelineMode != nil {
-		mode = session.PipelineMode(*req.Msg.PipelineMode)
+		mode = backlog.PipelineMode(*req.Msg.PipelineMode)
 	}
 
 	// Reject a request whose (stage_slug, pipeline_mode) pair already has an
@@ -165,7 +166,7 @@ func (s *BacklogService) CreateLivenessDefinition(
 	}
 	enabled := req.Msg.Enabled
 
-	row, err := s.livenessRepo.Create(ctx, session.LivenessCreateInput{
+	row, err := s.livenessRepo.Create(ctx, backlog.LivenessCreateInput{
 		StageSlug:    req.Msg.StageSlug,
 		PipelineMode: pipelineMode,
 		Definition:   *def,
@@ -203,7 +204,7 @@ func (s *BacklogService) UpdateLivenessDefinition(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid liveness definition id: %w", err))
 	}
 
-	update := session.LivenessUpdateInput{
+	update := backlog.LivenessUpdateInput{
 		Enabled: req.Msg.Enabled,
 	}
 	if req.Msg.ExpectedDurationMs != nil {
@@ -300,9 +301,9 @@ func (s *BacklogService) GetLivenessDefinition(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("liveness definition storage not available"))
 	}
 
-	mode := session.PipelineModeDefault
+	mode := backlog.PipelineModeDefault
 	if req.Msg.PipelineMode != nil {
-		mode = session.PipelineMode(*req.Msg.PipelineMode)
+		mode = backlog.PipelineMode(*req.Msg.PipelineMode)
 	}
 
 	row, err := s.livenessRepo.GetByStageAndMode(ctx, req.Msg.StageSlug, mode)

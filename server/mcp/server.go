@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -40,7 +41,7 @@ func NewCore(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener session.AutoReopenSpawner,
+	autoReopener backlog.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) *mcpserver.MCPServer {
@@ -131,7 +132,7 @@ func NewHTTPHandler(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener session.AutoReopenSpawner,
+	autoReopener backlog.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) *mcpserver.StreamableHTTPServer {
@@ -163,7 +164,7 @@ func RunServer(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener session.AutoReopenSpawner,
+	autoReopener backlog.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) error {

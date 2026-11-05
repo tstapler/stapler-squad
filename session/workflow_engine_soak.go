@@ -151,7 +151,7 @@ func ExpectedEdgesForClass(class CallerClass) []SystemEdge {
 				add(e)
 				continue
 			}
-			for _, from := range builtInStageOrder {
+			for _, from := range BuiltInStageOrder {
 				add(SystemEdge{From: from, To: e.To})
 			}
 		}
@@ -268,7 +268,7 @@ func (e *soakEvaluation) labelWindow() {
 	}
 }
 
-var alarmClasses = map[string]bool{
+var AlarmClasses = map[string]bool{
 	string(ClassGraph): true, string(ClassGateMissing): true, string(ClassGateExtra): true, string(ClassErrorKind): true,
 }
 
@@ -278,7 +278,7 @@ func (e *soakEvaluation) checkAlarms() {
 	counts, seeded := map[string]int64{}, map[string]int64{}
 	for key, n := range e.cl.Divergence {
 		parts := strings.Split(key, "|") // Method|class|config|path
-		if len(parts) != 4 || !alarmClasses[parts[1]] {
+		if len(parts) != 4 || !AlarmClasses[parts[1]] {
 			continue
 		}
 		counts[parts[1]] += n

@@ -224,10 +224,10 @@ func (b DiagnosticBundle) renderSections() string {
 func renderItemSection(in DiagnosticBundleInput) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Title: %s\nStatus: %s\n\nDescription:\n%s\n\nAcceptance Criteria:\n%s\n\nHistory:\n%s",
-		truncateField(in.ItemTitle, 500),
-		truncateField(in.ItemStatus, 100),
+		TruncateField(in.ItemTitle, 500),
+		TruncateField(in.ItemStatus, 100),
 		in.ItemDescription,
-		buildAcChecklist(in.AcCriteria),
+		BuildAcChecklist(in.AcCriteria),
 		renderActivityHistory(in.ActivityHistory),
 	)
 	return wrapDiagnosticSection("item", sb.String())
@@ -239,7 +239,7 @@ func renderActivityHistory(notes []ActivityNoteData) string {
 	}
 	var sb strings.Builder
 	for _, n := range notes {
-		fmt.Fprintf(&sb, "- [%s] %s: %s\n", n.CreatedAt.Format(time.RFC3339), truncateField(n.AuthorSessionTitle, 100), sanitizeField(n.Message, 1000))
+		fmt.Fprintf(&sb, "- [%s] %s: %s\n", n.CreatedAt.Format(time.RFC3339), TruncateField(n.AuthorSessionTitle, 100), SanitizeField(n.Message, 1000))
 	}
 	return sb.String()
 }
@@ -250,7 +250,7 @@ func renderVerdictsSection(verdicts []DiagnosticReviewVerdict) string {
 	}
 	var sb strings.Builder
 	for _, v := range verdicts {
-		fmt.Fprintf(&sb, "- [%s] %s: %s\n", v.CreatedAt.Format(time.RFC3339), v.Outcome, sanitizeField(v.Summary, 2000))
+		fmt.Fprintf(&sb, "- [%s] %s: %s\n", v.CreatedAt.Format(time.RFC3339), v.Outcome, SanitizeField(v.Summary, 2000))
 	}
 	return wrapDiagnosticSection("review_verdicts", sb.String())
 }

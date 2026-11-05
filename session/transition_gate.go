@@ -244,7 +244,7 @@ func (s *Storage) GatedArchive(ctx context.Context, req TransitionRequest) (*Bac
 
 func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
-	return s.repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
+	return s.Repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
 }
 
 // GatedUnarchive decides archived->idea. The write is a compare-and-swap on
@@ -265,7 +265,7 @@ func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest
 	if pre.ExpectedStatus != string(BacklogStatusArchived) {
 		return nil, fmt.Errorf("%w: item is %q, not archived", ErrPreconditionFailed, pre.ExpectedStatus)
 	}
-	return s.repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
+	return s.Repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
 }
 
 // GatedSetPRAndTransition records pr on the item and moves it review->pr_pending
@@ -302,7 +302,7 @@ const reconcileStuckNote = "[auto] Transitioned to review: all work sessions end
 // per item: a denied or raced item is skipped (the gate reports the denial) and
 // never rolls back its siblings. It returns the number moved.
 func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
-	candidates, err := s.repo.FindStuckInProgressCandidates(ctx)
+	candidates, err := s.Repo.FindStuckInProgressCandidates(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -329,7 +329,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 
 func (s *Storage) writeGatedReconcile(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
-	return s.repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
+	return s.Repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
 }
 
 // gateWriter performs the raw write once the engine allowed req.
@@ -441,7 +441,7 @@ func (c *gateCall) reportDenial(ctx context.Context, item *BacklogItemData, v ga
 // writeGated derives the CAS from the decided "from" and calls the raw writer.
 func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
-	return s.repo.rawTransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
+	return s.Repo.RawTransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
 }
 
 // gatePrecondition derives the raw writer's compare-and-swap from the request
@@ -473,7 +473,7 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus,
 	if precondition == nil || precondition.ExpectedStatus == "" {
 		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", ErrInvalidTransitionRequest)
 	}
-	updated, err := s.repo.rawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
+	updated, err := s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
 	if err == nil {
 		RecordEngineBypass(CallerRollback)
 		if g := s.gate.Load(); g != nil {
@@ -491,9 +491,9 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to BacklogStatu
 		err     error
 	)
 	if to == BacklogStatusArchived {
-		updated, err = s.repo.rawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
+		updated, err = s.Repo.rawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
 	} else {
-		updated, err = s.repo.rawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
+		updated, err = s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
 	}
 	if err == nil {
 		RecordEngineBypass(CallerDebug)

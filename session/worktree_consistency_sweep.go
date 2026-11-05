@@ -649,7 +649,7 @@ func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.N
 // false with a nil error means the row already existed (the guard fired) — the caller
 // falls through to the flag path in that case, per Task 1.2.3b.
 func repairWorktreeRow(ctx context.Context, repo *EntRepository, sessionUUID string, wt GitWorktreeData) (created bool, err error) {
-	tx, err := repo.client.Tx(ctx)
+	tx, err := repo.Client.Tx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("repairWorktreeRow: begin transaction: %w", err)
 	}
@@ -904,7 +904,7 @@ func sweep(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func(
 		return
 	}
 
-	deps := resolveFindingDeps{Repo: storage.repo, Notifier: notifier, Backoff: backoff, IsIsolated: config.IsIsolatedInstance()}
+	deps := resolveFindingDeps{Repo: storage.Repo, Notifier: notifier, Backoff: backoff, IsIsolated: config.IsIsolatedInstance()}
 	cache := newWorktreeEntryCache()
 
 	var scanned, repaired, flagged int

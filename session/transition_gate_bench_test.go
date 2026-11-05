@@ -11,10 +11,10 @@ import (
 // Run with `&` per docs/reference/benchmarks.md.
 func BenchmarkGatedTransitionDecision(b *testing.B) {
 	repo := NewTestEntRepository(b)
-	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.client); err != nil {
+	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), NewEntGateSatisfactionRepository(repo.client), nil)
+	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
 	if err != nil {
 		b.Fatal(err)
 	}

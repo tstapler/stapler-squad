@@ -12,7 +12,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 type notificationHandlers struct {
@@ -128,8 +128,8 @@ func (h *notificationHandlers) getNotificationHistory(ctx context.Context, req m
 			SessionID: n.SessionId,
 			Type:      strings.TrimPrefix(n.NotificationType.String(), notificationTypePrefix),
 			Priority:  strings.TrimPrefix(n.Priority.String(), notificationPriorityPrefix),
-			Title:     session.SanitizeForAgentContext(n.Title, 200),
-			Message:   session.SanitizeForAgentContext(n.Message, 500),
+			Title:     backlog.SanitizeForAgentContext(n.Title, 200),
+			Message:   backlog.SanitizeForAgentContext(n.Message, 500),
 			CreatedAt: createdAt,
 			IsRead:    n.IsRead,
 		}

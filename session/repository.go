@@ -814,7 +814,7 @@ type RepositoryOption func(interface{}) error
 func WithDatabasePath(path string) RepositoryOption {
 	return func(r interface{}) error {
 		if entRepo, ok := r.(*EntRepository); ok {
-			entRepo.dbPath = path
+			entRepo.DbPath = path
 			return nil
 		}
 		return nil // No-op for unsupported repository types

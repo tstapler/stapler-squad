@@ -110,7 +110,7 @@ func (e *ConfiguredWorkflowEngine) lookupTimeout() time.Duration {
 // ClearLatches undoes RecordLatchesAfterCommit for the from->to edge; a no-op
 // without a usable Configured engine.
 func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to BacklogStatus) {
-	if cfg, _ := s.enf.usableConfigured(); cfg != nil {
+	if cfg, _ := s.Enf.usableConfigured(); cfg != nil {
 		cfg.ClearLatches(itemID, from, to)
 	}
 }
@@ -147,7 +147,7 @@ func (v engineView) TransitionCommitted(item BacklogItemTransitionInput, to Back
 	if v.mode() != ModeEnforce || v.pol.bypassesOperatorGates(item) {
 		return
 	}
-	if cfg, _ := v.s.enf.usableConfigured(); cfg != nil {
+	if cfg, _ := v.s.Enf.usableConfigured(); cfg != nil {
 		cfg.RecordLatchesAfterCommit(item, to)
 	}
 }

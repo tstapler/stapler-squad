@@ -492,7 +492,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
-	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
+	i.FireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
 }
 
 // IsHotRestoreRecoverable reports whether the instance's current status is

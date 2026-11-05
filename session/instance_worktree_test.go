@@ -130,7 +130,7 @@ func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.
 
 			err = inst.setupFirstTimeWorktree()
 			require.Error(t, err)
-			require.False(t, inst.gitManager.HasWorktree())
+			require.False(t, inst.GitManager.HasWorktree())
 		})
 	}
 }
@@ -169,11 +169,11 @@ func TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbient
 
 	require.NoError(t, inst.setupFirstTimeWorktree())
 
-	require.True(t, inst.gitManager.HasWorktree())
+	require.True(t, inst.GitManager.HasWorktree())
 	// setupFirstTimeWorktree only records the resolved GitWorktree (the actual
 	// `git worktree add` runs later, during the instance's Start() lifecycle) —
 	// so assert on the recorded base commit rather than disk state.
-	require.Equal(t, mainSHA, inst.gitManager.GetWorktree().GetBaseCommitSHA(),
+	require.Equal(t, mainSHA, inst.GitManager.GetWorktree().GetBaseCommitSHA(),
 		"new worktree must branch from origin's default branch, not the ambient checked-out divergent branch")
 	require.NotEmpty(t, inst.GetCreationWarning(), "ambient HEAD divergence must surface a warning, not silent success")
 }
@@ -204,7 +204,7 @@ func TestSetupFirstTimeWorktree_NewWorktree_NoWarning_When_AmbientHEADMatchesBas
 
 	require.NoError(t, inst.setupFirstTimeWorktree())
 
-	require.True(t, inst.gitManager.HasWorktree())
+	require.True(t, inst.GitManager.HasWorktree())
 	require.Empty(t, inst.GetCreationWarning(), "no divergence expected when ambient HEAD already matches the resolved base")
 }
 
@@ -234,8 +234,8 @@ func TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet(t *tes
 
 	_, gitErr := os.Stat(filepath.Join(target, ".git"))
 	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
-	require.True(t, inst.gitManager.HasWorktree(), "expected a worktree to be created off the bootstrapped repo")
-	require.NotEqual(t, target, inst.gitManager.GetWorktreePath(), "worktree must live in a separate directory from the main repo, matching an existing repo's NewWorktree behavior")
+	require.True(t, inst.GitManager.HasWorktree(), "expected a worktree to be created off the bootstrapped repo")
+	require.NotEqual(t, target, inst.GitManager.GetWorktreePath(), "worktree must live in a separate directory from the main repo, matching an existing repo's NewWorktree behavior")
 }
 
 // TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty documents
@@ -259,7 +259,7 @@ func TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty(t *testin
 
 	_, gitErr := os.Stat(filepath.Join(target, ".git"))
 	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
-	require.False(t, inst.gitManager.HasWorktree(), "expected no worktree when no branch was requested")
+	require.False(t, inst.GitManager.HasWorktree(), "expected no worktree when no branch was requested")
 }
 
 // TestSetupFirstTimeWorktree_should_ReturnError_When_SessionTypeUnrecognized
@@ -337,7 +337,7 @@ func TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk(t *test
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
-	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	require.Equal(t, worktreePath, inst.GetEffectiveRootDir())
 }
@@ -356,7 +356,7 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
-	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
 	require.Equal(t, repoPath, ws.ExistingDir, "must fall back to RepoRoot when the worktree path is gone")
@@ -377,7 +377,7 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	worktreePath := git.CanonicalizeWorktreePath(t.TempDir())
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
-	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	// NewGitWorktreeFromStorage canonicalizes worktreePath via
 	// CanonicalizeWorktreePath since the directory exists on disk (e.g. macOS's
@@ -404,7 +404,7 @@ func TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testin
 
 	newSession := func(name string) Workspace {
 		inst := &Instance{Title: name, Path: repoPath, Status: Running}
-		inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
+		inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
 		return inst.Workspace()
 	}
 	first, second := newSession("alpha"), newSession("beta")
@@ -424,7 +424,7 @@ func TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk(t *testing.T) 
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: Running}
-	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
 	require.Equal(t, worktreePath, ws.ActiveDir)
@@ -457,7 +457,7 @@ func TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty(t 
 	repoPath := t.TempDir()
 
 	inst := &Instance{Title: "empty-worktree-path", Path: repoPath, Status: Running}
-	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, ""))
+	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, ""))
 
 	require.Equal(t, repoPath, inst.GetWorkingDirectory())
 	require.Equal(t, inst.GetEffectiveRootDir(), inst.GetWorkingDirectory())

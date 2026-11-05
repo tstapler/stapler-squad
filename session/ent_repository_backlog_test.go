@@ -264,7 +264,7 @@ func TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.client.BacklogItem.Create().
+	created, err := repo.Client.BacklogItem.Create().
 		SetTitle("item created before labels field existed").
 		Save(ctx)
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(
 	// neither field, exactly like TestGetBacklogItem_Labels_ReadsEmptyForPreExistingRow's
 	// pre-existing-row precedent above) reads back PlanRejectionReason == ""
 	// and PlanRejectedAt == nil — ent's zero-value handling, not a panic.
-	preExisting, err := repo.client.BacklogItem.Create().
+	preExisting, err := repo.Client.BacklogItem.Create().
 		SetTitle("item created before plan-rejection fields existed").
 		Save(ctx)
 	require.NoError(t, err)
@@ -400,7 +400,7 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
 	require.NoError(t, err)
 
 	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
@@ -438,7 +438,7 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker ships")
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
@@ -472,7 +472,7 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker is archived")
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusArchived, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusArchived, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
@@ -841,13 +841,13 @@ func TestEntRepositoryBacklog_should_EnforceUniqueConstraint_When_DuplicatePubli
 	defer cleanup()
 	ctx := context.Background()
 
-	unsetA, err := repo.client.BacklogItem.Create().SetTitle("unset a").Save(ctx)
+	unsetA, err := repo.Client.BacklogItem.Create().SetTitle("unset a").Save(ctx)
 	require.NoError(t, err, "creating a row with public_id unset must succeed")
-	unsetB, err := repo.client.BacklogItem.Create().SetTitle("unset b").Save(ctx)
+	unsetB, err := repo.Client.BacklogItem.Create().SetTitle("unset b").Save(ctx)
 	require.NoError(t, err, "a second row with public_id unset must also succeed — NULL != NULL for uniqueness")
 
-	dataA := backlogItemToData(unsetA)
-	dataB := backlogItemToData(unsetB)
+	dataA := BacklogItemToData(unsetA)
+	dataB := BacklogItemToData(unsetB)
 	if _, ok := dataA.PublicID(); ok {
 		t.Fatalf("PublicID() reported present for row %s created without public_id", unsetA.ID)
 	}
@@ -856,10 +856,10 @@ func TestEntRepositoryBacklog_should_EnforceUniqueConstraint_When_DuplicatePubli
 	}
 
 	const dup = "bl_01JDUPLICATETESTVALUE0001"
-	_, err = repo.client.BacklogItem.Create().SetTitle("dup 1").SetPublicID(dup).Save(ctx)
+	_, err = repo.Client.BacklogItem.Create().SetTitle("dup 1").SetPublicID(dup).Save(ctx)
 	require.NoError(t, err, "first row with an explicit public_id must succeed")
 
-	_, err = repo.client.BacklogItem.Create().SetTitle("dup 2").SetPublicID(dup).Save(ctx)
+	_, err = repo.Client.BacklogItem.Create().SetTitle("dup 2").SetPublicID(dup).Save(ctx)
 	require.Error(t, err, "a second row with the same non-empty public_id must be rejected")
 	assert.True(t, ent.IsConstraintError(err), "expected a unique-constraint violation for duplicate public_id, got: %v", err)
 }
@@ -947,7 +947,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 	})
 	require.NoError(t, err)
 
-	setItem, err := repo.client.BacklogItem.Create().
+	setItem, err := repo.Client.BacklogItem.Create().
 		SetTitle("item with an explicit public_id").
 		SetPublicID("bl_01JMIGRATIONREVERSIBLETEST1").
 		Save(ctx)
@@ -1079,7 +1079,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 	older := time.Now().Add(-1 * time.Hour)
 	newer := time.Now()
 
-	_, err = repo.client.ItemSession.Create().
+	_, err = repo.Client.ItemSession.Create().
 		SetSessionUUID(sharedSessionUUID).
 		SetSessionRole(SessionRoleTriage).
 		SetBacklogItemID(itemID).
@@ -1087,7 +1087,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 		Save(ctx)
 	require.NoError(t, err)
 
-	_, err = repo.client.ItemSession.Create().
+	_, err = repo.Client.ItemSession.Create().
 		SetSessionUUID(sharedSessionUUID).
 		SetSessionRole(SessionRoleWork).
 		SetBacklogItemID(itemID).
@@ -1136,7 +1136,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 	const totalEvents = maxPublishedStatusEvents + 10
 	for i := 0; i < totalEvents; i++ {
 		recordStatusEvent(ctx, statusEventInput{
-			evClient:    repo.client.BacklogStatusEvent,
+			evClient:    repo.Client.BacklogStatusEvent,
 			itemID:      itemID,
 			fromStatus:  string(BacklogStatusIdea),
 			toStatus:    string(BacklogStatusIdea),

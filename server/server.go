@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -1167,7 +1168,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// `h.autoReopener != nil` guard would then read true, and calling
 	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
 	// being skipped.
-	var autoReopener session.AutoReopenSpawner
+	var autoReopener backlog.AutoReopenSpawner
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}

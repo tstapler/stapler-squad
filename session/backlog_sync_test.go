@@ -107,7 +107,7 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 
 	src, err := storage.CreateItemSource(ctx, ItemSourceData{
 		PluginID:    "fake_source",
@@ -165,7 +165,7 @@ func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 
 	src, err := storage.CreateItemSource(ctx, ItemSourceData{
 		PluginID:    "fake_source",
@@ -207,10 +207,10 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["title"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -256,10 +256,10 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["title","description","priority"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestSyncOne_ReturnsErrorForUnregisteredPlugin(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	entSrc.PluginID = "does-not-exist"
@@ -320,7 +320,7 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, src.ID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -336,7 +336,7 @@ func TestSyncOne_FetchErrorPropagates(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -376,7 +376,7 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 	require.NoError(t, sl.SyncByID(ctx, srcA.ID))
 	require.NoError(t, sl.SyncByID(ctx, srcB.ID))
 
-	er := storage.repo
+	er := storage.Repo
 	itemA, err := er.GetBacklogItemByExternalID(ctx, srcA.ID, "1")
 	require.NoError(t, err)
 	require.Equal(t, "Repo A Issue 1", itemA.Title)
@@ -403,7 +403,7 @@ func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 
 	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -607,7 +607,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	entSrc, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := storage.Repo.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 
@@ -673,7 +673,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -708,7 +708,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -758,7 +758,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -806,7 +806,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -841,7 +841,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -877,7 +877,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -913,7 +913,7 @@ func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -947,10 +947,10 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["labels"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -989,7 +989,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1026,10 +1026,10 @@ func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["title","description","priority"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -1069,10 +1069,10 @@ func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["labels"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -1114,10 +1114,10 @@ func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *te
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["title","description","priority","labels"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -1159,7 +1159,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 	require.NoError(t, err)
 	require.Nil(t, created.GitHubSyncedIssueUpdatedAt)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1197,7 +1197,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1234,7 +1234,7 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1297,7 +1297,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1347,7 +1347,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1390,13 +1390,13 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	// Also lock labels — otherwise Labels' own unconditional-under-
 	// BackwardSyncEnabled write (Epic 2.3) would set anyField=true itself,
 	// masking the status-transition-only path under test.
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+	_, err = er.Client.BacklogItem.UpdateOneID(createdUUID).
 		SetUserModifiedFields(`["title","description","priority","labels"]`).
 		Save(ctx)
 	require.NoError(t, err)
@@ -1446,13 +1446,13 @@ func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClai
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 
 	ctx := context.Background()
-	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	src, err := storage.Repo.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, src))
 
-	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-claimed")
+	_, err = storage.Repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-claimed")
 	require.ErrorIs(t, err, ErrNotFound, "claimed-elsewhere item must not be created")
-	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-free")
+	_, err = storage.Repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-free")
 	require.NoError(t, err)
 
 	logs := buf.String()
@@ -1460,7 +1460,7 @@ func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClai
 	require.Contains(t, logs, hostA.ID.String())
 	require.Contains(t, logs, "ext-claimed")
 
-	events, _, err := storage.repo.ListSourceSyncEvents(ctx, sourceID)
+	events, _, err := storage.Repo.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, 1, events[0].ItemsCreated)
@@ -1477,10 +1477,10 @@ func TestSyncOne_should_CreateItem_When_NoForeignClaimLookupWired(t *testing.T) 
 	defer cleanup()
 
 	ctx := context.Background()
-	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	src, err := storage.Repo.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, src))
-	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
+	_, err = storage.Repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
 	require.NoError(t, err)
 }
 
@@ -1491,7 +1491,7 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
 	sl := &SyncLoop{storage: h.storage}
-	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
 	item := h.newItem(t, BacklogStatusIdea)
 
 	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
@@ -1522,7 +1522,7 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
 	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
 	registry := NewPluginRegistry()
 	registry.Register(plugin)
@@ -1532,7 +1532,7 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	require.NoError(t, err)
 	created, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "Issue", Status: string(BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
 	require.NoError(t, err)
-	entSrc, err := h.storage.repo.GetItemSourceByID(ctx, src.ID)
+	entSrc, err := h.storage.Repo.GetItemSourceByID(ctx, src.ID)
 	require.NoError(t, err)
 
 	require.NoError(t, sl.SyncOne(ctx, entSrc))

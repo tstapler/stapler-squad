@@ -216,7 +216,7 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 	require.NoError(t, err)
 
 	// 5. Verify all three ItemSessions exist and have their session UUIDs
-	repo := storage.repo
+	repo := storage.Repo
 
 	fetchedIS1, err := repo.GetItemSession(ctx, is1.ID)
 	require.NoError(t, err)
@@ -272,7 +272,7 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Reload ItemSession, verify AcSnapshot still has the snapshot content
-	repo := storage.repo
+	repo := storage.Repo
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 
@@ -362,12 +362,12 @@ func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
 	require.NoError(t, err)
 
 	// 2. Update LastCommitSha
-	repo := storage.repo
+	repo := storage.Repo
 	testSha := "abc123def456"
 
 	parsedUUID, err := uuid.Parse(createdIS.ID)
 	require.NoError(t, err)
-	_, err = repo.client.ItemSession.UpdateOneID(parsedUUID).
+	_, err = repo.Client.ItemSession.UpdateOneID(parsedUUID).
 		SetLastCommitSha(testSha).
 		Save(ctx)
 	require.NoError(t, err)

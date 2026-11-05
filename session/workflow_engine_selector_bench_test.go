@@ -11,10 +11,10 @@ import (
 // reads. Run with `&` per docs/reference/benchmarks.md.
 func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	repo := NewTestEntRepository(b)
-	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.client); err != nil {
+	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), nil, nil)
+	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), nil, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

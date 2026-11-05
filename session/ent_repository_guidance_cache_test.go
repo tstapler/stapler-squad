@@ -15,7 +15,7 @@ import (
 
 func countGuidanceQueries(repo *EntRepository) *atomic.Int64 {
 	var n atomic.Int64
-	repo.client.GuidanceRequest.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+	repo.Client.GuidanceRequest.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
 		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {
 			n.Add(1)
 			return next.Query(ctx, q)

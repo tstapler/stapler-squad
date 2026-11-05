@@ -52,7 +52,7 @@ import (
 // this file's sibling backfills' discipline.
 func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *EntRepository) error {
 	//nolint:entfullscan idempotent startup backfill canonicalizing every BacklogItem's repo_path; safe to re-run on every startup (see file doc comment).
-	items, err := er.client.BacklogItem.Query().All(ctx)
+	items, err := er.Client.BacklogItem.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring this file's sibling migrations' defensive posture.
@@ -75,7 +75,7 @@ func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *Ent
 		if resolveErr != nil || resolved == item.RepoPath {
 			continue
 		}
-		if _, saveErr := er.client.BacklogItem.UpdateOneID(item.ID).
+		if _, saveErr := er.Client.BacklogItem.UpdateOneID(item.ID).
 			SetRepoPath(resolved).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item repo_path canonicalization: item=%s: %v", item.ID, saveErr)

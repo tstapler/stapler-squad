@@ -110,14 +110,14 @@ func TestNewEntRepository_should_NotReDisableLegitimatelyEnabledTrigger_When_Reo
 	})
 	require.NoError(t, err)
 	require.True(t, created.Enabled)
-	require.NoError(t, first.client.Close())
+	require.NoError(t, first.Client.Close())
 
 	// Second "boot": reopen the SAME database file, simulating a server restart. The
 	// enabled column now already exists, so workflowEnabledColumnPreexisted must return
 	// true and the backfill must be skipped entirely.
 	second, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
-	defer second.client.Close()
+	defer second.Client.Close()
 
 	reloaded, err := NewEntWorkflowRepository(second.GetEntClient()).GetByID(context.Background(), created.ID)
 	require.NoError(t, err)

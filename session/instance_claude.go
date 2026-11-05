@@ -202,7 +202,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 		log.Info("successfully re-attached to claude code session", "session_id", session.ID)
 	} else {
 		// No specific session ID stored, try to find matching sessions by project
-		if i.gitManager.HasWorktree() {
+		if i.GitManager.HasWorktree() {
 			return i.findAndAttachToProjectSession(sessionManager)
 		}
 	}

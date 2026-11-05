@@ -42,7 +42,7 @@ func parseLegacyImportNotes(notes string) (url, number string, ok bool) {
 // updated_at is preserved so recency ordering and CAS preconditions are
 // unaffected. Best-effort per row.
 func runBacklogItemLegacyImportExternalBackfill(ctx context.Context, er *EntRepository) error {
-	rows, err := er.client.BacklogItem.Query().
+	rows, err := er.Client.BacklogItem.Query().
 		Where(
 			backlogitem.NotesHasPrefix(legacyImportNotesPrefix),
 			backlogitem.Or(backlogitem.ExternalURLIsNil(), backlogitem.ExternalURL("")),
@@ -60,7 +60,7 @@ func runBacklogItemLegacyImportExternalBackfill(ctx context.Context, er *EntRepo
 		if !ok {
 			continue
 		}
-		if _, saveErr := er.client.BacklogItem.UpdateOneID(row.ID).
+		if _, saveErr := er.Client.BacklogItem.UpdateOneID(row.ID).
 			SetExternalURL(url).
 			SetExternalID(number).
 			SetUpdatedAt(row.UpdatedAt).

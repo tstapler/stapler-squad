@@ -35,7 +35,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 	require.NoError(t, err)
 
 	// First insert succeeds — the table exists and accepts writes.
-	_, err = repo.client.BacklogStuckState.Create().
+	_, err = repo.Client.BacklogStuckState.Create().
 		SetItemID(itemUUID).
 		SetReason("abandoned_review").
 		Save(ctx)
@@ -44,7 +44,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 	// A second raw (non-upsert) insert with the SAME (item_id, reason) pair
 	// must violate the unique index — proving the index is exactly the
 	// 2-column (item_id, reason) pair, not some other shape.
-	_, err = repo.client.BacklogStuckState.Create().
+	_, err = repo.Client.BacklogStuckState.Create().
 		SetItemID(itemUUID).
 		SetReason("abandoned_review").
 		Save(ctx)
@@ -52,7 +52,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 
 	// A different reason for the same item is NOT a conflict — confirms the
 	// index is the (item_id, reason) pair, not item_id alone.
-	_, err = repo.client.BacklogStuckState.Create().
+	_, err = repo.Client.BacklogStuckState.Create().
 		SetItemID(itemUUID).
 		SetReason("stale_work").
 		Save(ctx)
@@ -78,13 +78,13 @@ func TestBacklogStuckState_should_cascadeDelete_When_ParentItemDeleted(t *testin
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	count, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
 	require.NoError(t, repo.DeleteBacklogItem(ctx, item.ID))
 
-	count, err = repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err = repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "stuck-state rows must be cascade-deleted with their parent item")
 }

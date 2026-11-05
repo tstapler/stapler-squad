@@ -16,6 +16,7 @@ import (
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -126,11 +127,11 @@ func (s *BacklogService) AttachSessionToItem(
 				worktreePath := inst.GetEffectiveRootDir()
 				// Write synchronously under mutex to prevent concurrent write races.
 				s.worktreeMu.Lock()
-				if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
+				if wErr := backlog.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 				}
-				if wErr := session.WriteBacklogContextFile(item, attachPriorSessions, worktreePath); wErr != nil {
+				if wErr := backlog.WriteBacklogContextFile(item, attachPriorSessions, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
 				}
@@ -138,7 +139,7 @@ func (s *BacklogService) AttachSessionToItem(
 				// Capture pre-work HEAD SHA so the review gate can diff base..HEAD
 				// across all commits the agent makes (same as SpawnSessionFromItem step 12b) —
 				// into BaseCommitSha, never LastCommitSha (see SetItemSessionBaseCommit).
-				if baseSHA, shaErr := session.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
+				if baseSHA, shaErr := backlog.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
 					_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 					inst.SetDirBaseSHA(baseSHA)
 				}

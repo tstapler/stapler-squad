@@ -11,7 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 type historyHandlers struct {
@@ -36,7 +36,7 @@ func truncateSearchSnippets(snippets []*sessionv1.SearchSnippet, maxCount, maxLe
 	out := make([]SnippetResult, len(snippets))
 	for i, sn := range snippets {
 		out[i] = SnippetResult{
-			Text:        session.SanitizeForAgentContext(sn.Text, maxLen),
+			Text:        backlog.SanitizeForAgentContext(sn.Text, maxLen),
 			MessageRole: sn.MessageRole,
 		}
 	}

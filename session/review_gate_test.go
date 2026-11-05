@@ -9,6 +9,6 @@ import (
 )
 
 func TestBackfillLockFilePath_SkipsInMemoryDSN(t *testing.T) {
-	require.Empty(t, (&EntRepository{dbPath: ":memory:"}).backfillLockFilePath("x.lock"))
-	require.Equal(t, filepath.Join("/data", "x.lock"), (&EntRepository{dbPath: "/data/sessions.db"}).backfillLockFilePath("x.lock"))
+	require.Empty(t, (&EntRepository{DbPath: ":memory:"}).backfillLockFilePath("x.lock"))
+	require.Equal(t, filepath.Join("/data", "x.lock"), (&EntRepository{DbPath: "/data/sessions.db"}).backfillLockFilePath("x.lock"))
 }

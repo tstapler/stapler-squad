@@ -30,8 +30,8 @@ func newTestHandoffSummaryGenerator(t *testing.T) (*HandoffSummaryGenerator, *en
 	t.Cleanup(cleanup)
 
 	pool := &fakePoolClient{response: "This session made progress on the task.\n\n## Active Task\nImplement the remaining validation logic."}
-	gen := NewHandoffSummaryGenerator(repo.client, pool)
-	return gen, repo.client, pool
+	gen := NewHandoffSummaryGenerator(repo.Client, pool)
+	return gen, repo.Client, pool
 }
 
 // getHandoffRow fetches the HandoffSummary row for sessionID, failing the test
@@ -170,7 +170,7 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 	defer cleanup()
 
 	pool := newBlockingPoolClient()
-	gen := NewHandoffSummaryGenerator(repo.client, pool)
+	gen := NewHandoffSummaryGenerator(repo.Client, pool)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -218,7 +218,7 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 	}
 
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one row exists.
-	rows, err := repo.client.HandoffSummary.Query().All(context.Background())
+	rows, err := repo.Client.HandoffSummary.Query().All(context.Background())
 	if err != nil {
 		t.Fatalf("failed to query handoff summary rows: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails(t *
 	defer cleanup()
 
 	writeErr := errors.New("simulated interim write failure")
-	repo.client.HandoffSummary.Use(func(next ent.Mutator) ent.Mutator {
+	repo.Client.HandoffSummary.Use(func(next ent.Mutator) ent.Mutator {
 		return hook.HandoffSummaryFunc(func(ctx context.Context, m *ent.HandoffSummaryMutation) (ent.Value, error) {
 			if status, ok := m.Status(); ok && status == string(HandoffSummaryStatusGenerating) {
 				return nil, writeErr
@@ -248,7 +248,7 @@ func TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails(t *
 		})
 	})
 
-	gen := NewHandoffSummaryGenerator(repo.client, &fakePoolClient{})
+	gen := NewHandoffSummaryGenerator(repo.Client, &fakePoolClient{})
 
 	release, _, started, err := gen.BeginGeneration(context.Background(), sessionID, "title")
 	if started {
@@ -538,11 +538,11 @@ func TestGenerateAndPersist_TruncatesOversizedHeadAndTailMessages(t *testing.T) 
 	defer cleanup()
 
 	pool := &capturingPoolClient{fakePoolClient: fakePoolClient{response: "A narrative.\n\n## Active Task\nnext step"}}
-	gen := NewHandoffSummaryGenerator(repo.client, pool)
+	gen := NewHandoffSummaryGenerator(repo.Client, pool)
 
 	beginAndGenerate(t, gen, context.Background(), sessionID, "title")
 
-	row := getHandoffRow(t, repo.client, sessionID)
+	row := getHandoffRow(t, repo.Client, sessionID)
 	if row.Status != string(HandoffSummaryStatusReady) {
 		t.Fatalf("expected READY, got %s", row.Status)
 	}
@@ -635,7 +635,7 @@ func TestHandoffSummarySchema_should_DefaultStatusToPending_When_CreatedWithoutE
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.client.HandoffSummary.Create().
+	created, err := repo.Client.HandoffSummary.Create().
 		SetID(uuid.New().String()).
 		SetSessionID("sess-default-status").
 		Save(ctx)
@@ -646,7 +646,7 @@ func TestHandoffSummarySchema_should_DefaultStatusToPending_When_CreatedWithoutE
 		t.Fatalf("expected default status %q, got %q", HandoffSummaryStatusPending, created.Status)
 	}
 
-	reread, err := repo.client.HandoffSummary.Query().Where(handoffsummary.SessionID("sess-default-status")).Only(ctx)
+	reread, err := repo.Client.HandoffSummary.Query().Where(handoffsummary.SessionID("sess-default-status")).Only(ctx)
 	if err != nil {
 		t.Fatalf("failed to reread row: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestHandoffSummarySchema_should_SurviveSessionDeletion_When_NoEdgeExists(t 
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	if _, err := repo.client.HandoffSummary.Create().
+	if _, err := repo.Client.HandoffSummary.Create().
 		SetID(uuid.New().String()).
 		SetSessionID(sessionData.Title).
 		SetStatus(string(HandoffSummaryStatusReady)).
@@ -679,7 +679,7 @@ func TestHandoffSummarySchema_should_SurviveSessionDeletion_When_NoEdgeExists(t 
 		t.Fatalf("failed to delete session: %v", err)
 	}
 
-	row, err := repo.client.HandoffSummary.Query().Where(handoffsummary.SessionID(sessionData.Title)).Only(ctx)
+	row, err := repo.Client.HandoffSummary.Query().Where(handoffsummary.SessionID(sessionData.Title)).Only(ctx)
 	if err != nil {
 		t.Fatalf("expected handoff summary row to survive session deletion, got err: %v", err)
 	}

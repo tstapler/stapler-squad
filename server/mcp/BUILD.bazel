@@ -52,6 +52,7 @@ go_library(
         "//server/services/backlogsvc",
         "//server/wakes",
         "//session",
+        "//session/backlog",
         "//session/domain",
         "//session/git",
         "//session/scrollback",

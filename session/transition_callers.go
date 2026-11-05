@@ -94,9 +94,9 @@ const (
 	fileMCPBacklogPR = "server/mcp/tools_backlog_pr.go"
 	fileMCPDelegate  = "server/mcp/tools_backlog_dependencies.go"
 	fileRemediation  = "session/backlog_remediation.go"
-	fileSessLife     = "session/backlog_lifecycle.go"
-	fileSessLifeArch = "session/backlog_lifecycle_archive.go"
-	fileSessLifePR   = "session/backlog_lifecycle_pr.go"
+	fileSessLife     = "session/backlog/backlog_lifecycle.go"
+	fileSessLifeArch = "session/backlog/backlog_lifecycle_archive.go"
+	fileSessLifePR   = "session/backlog/backlog_lifecycle_pr.go"
 	fileSessSync     = "session/backlog_sync.go"
 	fileJulesPoller  = "session/jules_session_poller.go"
 )

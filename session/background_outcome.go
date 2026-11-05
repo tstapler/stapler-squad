@@ -13,7 +13,7 @@ const (
 // failureEndReasons are the ItemSession.end_reason values that mean the
 // session failed. end_reason is free text from several producers, so this is
 // an allowlist: any value not listed is a non-failure.
-var failureEndReasons = map[string]struct{}{
+var FailureEndReasons = map[string]struct{}{
 	"pool_saturated":         {},
 	"idle":                   {},
 	"timeout":                {},
@@ -33,7 +33,7 @@ var failureEndReasons = map[string]struct{}{
 // nonFailureEndReasons are the known end_reason values that are not failures.
 // It exists so a new producer must be classified deliberately
 // (TestEndReasonClassification_ShouldCoverEveryKnownProducer).
-var nonFailureEndReasons = map[string]struct{}{
+var NonFailureEndReasons = map[string]struct{}{
 	"":                          {},
 	"shutdown":                  {}, // our own restart
 	"jules_completed":           {},
@@ -44,7 +44,7 @@ var nonFailureEndReasons = map[string]struct{}{
 
 // IsFailureEndReason reports whether endReason is on the failure allowlist.
 func IsFailureEndReason(endReason string) bool {
-	_, ok := failureEndReasons[endReason]
+	_, ok := FailureEndReasons[endReason]
 	return ok
 }
 

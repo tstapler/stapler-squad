@@ -221,7 +221,7 @@ func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
 	defer rqp.mu.Unlock()
 	// Stagger this session's dirty-cache TTL so sessions added in a burst
 	// (e.g. bulk startup) don't all run git-status subprocesses simultaneously.
-	instance.gitManager.PrimeDirtyCacheJitter()
+	instance.GitManager.PrimeDirtyCacheJitter()
 	rqp.instances = append(rqp.instances, instance)
 }
 
@@ -549,7 +549,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					})
 					cancel()
 					rqp.removeFromQueue(inst.Title)
-					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
+					inst.FireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
 			case Stopped:
 				// Stopped but tmux session is alive — revive to Active only if
@@ -585,7 +585,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.fireLifecycleEvent(EventStarted, "reconcile-session-revived")
+					inst.FireLifecycleEvent(EventStarted, "reconcile-session-revived")
 				}
 			case Hibernated:
 				// Hibernated sessions intentionally have no tmux session (Hibernate()
@@ -616,7 +616,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.fireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+					inst.FireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
 				}
 			case Crashed:
 				// Crashed sessions intentionally have no tmux session (MarkCrashed
@@ -640,7 +640,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
+					inst.FireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
 			case PermanentlyFailed:
 				// Deliberately not auto-revived even if tmux is alive, unlike

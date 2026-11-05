@@ -47,7 +47,7 @@ func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info Int
 	}
 	token := integrationTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 
-	_, err := r.client.IntegrationCredential.Create().
+	_, err := r.Client.IntegrationCredential.Create().
 		SetPrincipalID(info.PrincipalID).
 		SetTokenSha256(hashIntegrationToken(token)).
 		SetWorkspaceID(info.WorkspaceID).
@@ -68,7 +68,7 @@ func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token 
 	if token == "" {
 		return nil, ErrNotFound
 	}
-	cred, err := r.client.IntegrationCredential.Query().
+	cred, err := r.Client.IntegrationCredential.Query().
 		Where(
 			integrationcredential.TokenSha256(hashIntegrationToken(token)),
 			integrationcredential.RevokedAtIsNil(),
@@ -90,7 +90,7 @@ func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token 
 // RevokeIntegrationCredential disables the principal's credential. Its registrations are
 // left in place; revoking authority is separate from tearing down what it created.
 func (r *EntRepository) RevokeIntegrationCredential(ctx context.Context, principalID string) error {
-	n, err := r.client.IntegrationCredential.Update().
+	n, err := r.Client.IntegrationCredential.Update().
 		Where(integrationcredential.PrincipalID(principalID), integrationcredential.RevokedAtIsNil()).
 		SetRevokedAt(time.Now().UTC()).
 		Save(ctx)

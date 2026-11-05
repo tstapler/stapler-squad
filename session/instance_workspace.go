@@ -309,7 +309,7 @@ func (i *Instance) switchWorktree(vcsClient vcs.VCS, req WorkspaceSwitchRequest,
 
 	// Try to create GitWorktree wrapper for compatibility
 	if gitWt, err := git.NewGitWorktreeFromExisting(targetWorktree.Path, i.Title); err == nil {
-		i.gitManager.worktree = gitWt
+		i.GitManager.Worktree = gitWt
 	}
 
 	result.ChangesHandled = "worktree switch (changes remain in original worktree)"
@@ -410,8 +410,8 @@ func (i *Instance) validatePathSecurity(targetPath string) error {
 
 // getRepoPath returns the repository root path for the session
 func (i *Instance) getRepoPath() string {
-	if i.gitManager.worktree != nil {
-		return i.gitManager.worktree.GetWorktreePath()
+	if i.GitManager.Worktree != nil {
+		return i.GitManager.Worktree.GetWorktreePath()
 	}
 	if i.MainRepoPath != "" {
 		return i.MainRepoPath

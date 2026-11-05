@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -771,7 +772,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if sha, headErr := session.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+			if sha, headErr := backlog.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
 				return sha
 			}
 		}
@@ -779,7 +780,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	if wt.BranchName == "" {
 		return ""
 	}
-	sha, revErr := session.ResolveBranchTip(ctx, repoPath, wt.BranchName)
+	sha, revErr := backlog.ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.WarningLog().Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
 		return ""

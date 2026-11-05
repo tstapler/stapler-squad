@@ -46,17 +46,17 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 		{
 			name: "attempts at cap, no next_remediation_at -> parked (no cold-retry deadline recorded)",
 			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, LastCheckedAt: now},
-			want: remediationSkippedParked,
+			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts over cap (defensive) -> parked",
 			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + 1, LastCheckedAt: now},
-			want: remediationSkippedParked,
+			want: RemediationSkippedParked,
 		},
 		{
 			name: "cold retries spent, deadline in the past -> permanently parked",
 			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
-			want: remediationSkippedParked,
+			want: RemediationSkippedParked,
 		},
 		{
 			name: "one cold retry left, deadline in the past -> granted cold retry",
@@ -69,7 +69,7 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 			// slow automatic heartbeat instead.
 			name: "attempts at cap, cold-retry deadline in the future -> still parked",
 			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &future, LastCheckedAt: now},
-			want: remediationSkippedParked,
+			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts at cap, cold-retry deadline in the past -> granted cold retry",
@@ -84,7 +84,7 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 		{
 			name: "next_remediation_at in the future -> not due",
 			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &future, LastCheckedAt: now},
-			want: remediationSkippedNotDue,
+			want: RemediationSkippedNotDue,
 		},
 		{
 			name: "next_remediation_at in the past -> granted",
@@ -115,7 +115,7 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := evaluateRemediation(tt.row, now, boot)
+			got := EvaluateRemediation(tt.row, now, boot)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -235,7 +235,7 @@ func TestRemediationDue_should_advanceThroughFullScheduleThenPark_When_EachAttem
 			// cold-retry deadline, not remediationBackoffSchedule's last
 			// entry (72h) — that's what makes this row eventually retryable
 			// again on its own.
-			assert.WithinDuration(t, time.Now().Add(remediationColdRetryInterval), *rows[0].NextRemediationAt, 5*time.Second)
+			assert.WithinDuration(t, time.Now().Add(RemediationColdRetryInterval), *rows[0].NextRemediationAt, 5*time.Second)
 		}
 	}
 
@@ -290,7 +290,7 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 		require.Len(t, rows, 1)
 		assert.Equal(t, MaxRemediationAttempts+int32(i)+1, rows[0].RemediationAttempts, "cold retry %d: attempt count must advance past the cap", i)
 		require.NotNil(t, rows[0].NextRemediationAt)
-		assert.WithinDuration(t, time.Now().Add(remediationColdRetryInterval), *rows[0].NextRemediationAt, 5*time.Second, "cold retry %d: deadline must advance another full interval", i)
+		assert.WithinDuration(t, time.Now().Add(RemediationColdRetryInterval), *rows[0].NextRemediationAt, 5*time.Second, "cold retry %d: deadline must advance another full interval", i)
 
 		// A call before the newly-advanced deadline must NOT be due again —
 		// the heartbeat only fires once per interval, not on every tick.
@@ -458,26 +458,4 @@ func TestBulkResetStuckRemediation_should_onlyResetParkedRows_When_OnlyParkedTru
 			assert.Equal(t, int32(2), row.RemediationAttempts, "mid-backoff (not parked) row must be left alone")
 		}
 	}
-}
-
-// backdateNextRemediationAt directly manipulates a row's next_remediation_at
-// via the ent client, bypassing the normal write path — test-only helper for
-// simulating "time has passed" without an actual sleep.
-func backdateNextRemediationAt(t *testing.T, repo *EntRepository, itemID string, reason domain.StuckReason, at time.Time) {
-	t.Helper()
-	applied, err := repo.RecordRemediationAttempt(context.Background(), itemID, reason, currentAttempts(t, repo, itemID, reason), &at)
-	require.NoError(t, err)
-	require.True(t, applied)
-}
-
-// currentAttempts reads back the current remediation_attempts for (itemID,
-// reason) — backdateNextRemediationAt needs it to avoid disturbing the
-// attempt count while only backdating the timer.
-func currentAttempts(t *testing.T, repo *EntRepository, itemID string, reason domain.StuckReason) int32 {
-	t.Helper()
-	rows, err := repo.FindOpenStuckStates(context.Background())
-	require.NoError(t, err)
-	row, ok := findOpenStuckStateFor(rows, itemID, reason)
-	require.True(t, ok)
-	return row.RemediationAttempts
 }

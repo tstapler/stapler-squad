@@ -21,12 +21,12 @@ func TestWebhookManagementTables_should_BeAddedWithoutTouchingExistingWorkflows_
 
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
-	user, err := repo.client.Workflow.Create().
+	user, err := repo.Client.Workflow.Create().
 		SetSlug("users-own-hook").SetName("user's hook").SetCommand("user command").
 		SetTargetDirectory("/home/user").SetTriggerType("webhook").SetWebhookSlug("users-own-hook").
 		SetWebhookSecretEncrypted("user-encrypted-secret").SetEventFilter("push").Save(ctx)
 	require.NoError(t, err)
-	plain, err := repo.client.Workflow.Create().
+	plain, err := repo.Client.Workflow.Create().
 		SetSlug("plain-cron").SetName("cron").SetCommand("c").SetTargetDirectory("/tmp").
 		SetTriggerType("cron").SetCronExpression("0 * * * *").SetCronEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -47,21 +47,21 @@ func TestWebhookManagementTables_should_BeAddedWithoutTouchingExistingWorkflows_
 		require.NoError(t, err, "open attempt %d", attempt)
 
 		for name, count := range map[string]func() (int, error){
-			"webhook_registrations":   func() (int, error) { return upgraded.client.WebhookRegistration.Query().Count(ctx) },
-			"webhook_request_ledgers": func() (int, error) { return upgraded.client.WebhookRequestLedger.Query().Count(ctx) },
-			"integration_credentials": func() (int, error) { return upgraded.client.IntegrationCredential.Query().Count(ctx) },
+			"webhook_registrations":   func() (int, error) { return upgraded.Client.WebhookRegistration.Query().Count(ctx) },
+			"webhook_request_ledgers": func() (int, error) { return upgraded.Client.WebhookRequestLedger.Query().Count(ctx) },
+			"integration_credentials": func() (int, error) { return upgraded.Client.IntegrationCredential.Query().Count(ctx) },
 		} {
 			n, err := count()
 			require.NoError(t, err, "%s must exist after the upgrade", name)
 			assert.Zero(t, n, "%s starts empty", name)
 		}
 
-		got, err := upgraded.client.Workflow.Get(ctx, user.ID)
+		got, err := upgraded.Client.Workflow.Get(ctx, user.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "user-encrypted-secret", got.WebhookSecretEncrypted)
 		assert.Equal(t, "push", got.EventFilter)
 		assert.Equal(t, "webhook", got.TriggerType)
-		cron, err := upgraded.client.Workflow.Get(ctx, plain.ID)
+		cron, err := upgraded.Client.Workflow.Get(ctx, plain.ID)
 		require.NoError(t, err)
 		assert.True(t, cron.CronEnabled)
 
@@ -69,7 +69,7 @@ func TestWebhookManagementTables_should_BeAddedWithoutTouchingExistingWorkflows_
 		// must neither adopt nor modify it.
 		_, err = upgraded.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-after-upgrade"))
 		assert.ErrorIs(t, err, ErrWebhookSlugUnavailable)
-		orphan, err := upgraded.client.Workflow.Get(ctx, managed.Registration.WorkflowID)
+		orphan, err := upgraded.Client.Workflow.Get(ctx, managed.Registration.WorkflowID)
 		require.NoError(t, err)
 		assert.Equal(t, "gh-signal main", orphan.Name)
 

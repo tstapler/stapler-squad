@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -303,7 +304,7 @@ type SessionService struct {
 
 	// backlogLifecycleListener is wired to each newly created session so that
 	// backlog item state transitions fire when the session exits.
-	backlogLifecycleListener *session.BacklogLifecycleListener
+	backlogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// sessionSummaryGenerator is wired to each newly created session (alongside
 	// backlogLifecycleListener, at the same call sites) so that session-completion-

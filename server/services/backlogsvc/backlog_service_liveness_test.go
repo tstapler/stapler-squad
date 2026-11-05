@@ -18,17 +18,18 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // newLivenessTestService builds a *BacklogService wired with a real
 // ent-backed LivenessRepository and a real CachingLivenessEngine constructed
 // over that same repository — mirroring newPipelineModeTestService and how
 // server/dependencies.go wires production (both share one instance).
-func newLivenessTestService(t *testing.T) (*BacklogService, session.LivenessRepository, *session.CachingLivenessEngine) {
+func newLivenessTestService(t *testing.T) (*BacklogService, backlog.LivenessRepository, *backlog.CachingLivenessEngine) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	repo := session.NewEntLivenessRepository(storage.GetEntClient())
-	engine, err := session.NewCachingLivenessEngine(repo)
+	repo := backlog.NewEntLivenessRepository(storage.GetEntClient())
+	engine, err := backlog.NewCachingLivenessEngine(repo)
 	require.NoError(t, err)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetLivenessRepository(repo)
@@ -135,7 +136,7 @@ func TestUpdateLivenessDefinition_should_InvalidateCache_When_UpdateSucceeds(t *
 	require.NoError(t, err)
 	id := createResp.Msg.Item.Id
 
-	before, err := engine.LivenessFor(session.BacklogStatusIdea, session.PipelineMode("sdd"))
+	before, err := engine.LivenessFor(session.BacklogStatusIdea, backlog.PipelineMode("sdd"))
 	require.NoError(t, err)
 	assert.Equal(t, 45*time.Minute, before.ExpectedDuration)
 
@@ -147,7 +148,7 @@ func TestUpdateLivenessDefinition_should_InvalidateCache_When_UpdateSucceeds(t *
 	require.NoError(t, err)
 	assert.Equal(t, newExpectedMs, updateResp.Msg.Item.ExpectedDurationMs)
 
-	after, err := engine.LivenessFor(session.BacklogStatusIdea, session.PipelineMode("sdd"))
+	after, err := engine.LivenessFor(session.BacklogStatusIdea, backlog.PipelineMode("sdd"))
 	require.NoError(t, err)
 	assert.Equal(t, 60*time.Minute, after.ExpectedDuration,
 		"expected the next LivenessFor call to reflect the updated value with no server restart")

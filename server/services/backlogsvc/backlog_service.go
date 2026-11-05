@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -308,7 +309,7 @@ type BacklogService struct {
 	// triagePromptFor/reviewPromptFor/initialPromptFor below and
 	// SpawnSessionFromItem/TriggerTriage's nil-guarded ContentHashFor reads
 	// in backlog_service_triage.go.
-	pipelineEngine session.PipelineEngine
+	pipelineEngine backlog.PipelineEngine
 
 	// pipelineModeRepo backs the PipelineMode CRUD RPCs (Epic 2.2):
 	// CreatePipelineMode/UpdatePipelineMode/DeletePipelineMode/
@@ -328,14 +329,14 @@ type BacklogService struct {
 	// Epic 1.4 may fold this into the constructor once its own
 	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
 	// and return CodeUnavailable.
-	livenessRepo session.LivenessRepository
+	livenessRepo backlog.LivenessRepository
 	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
 	// production) whose in-process cache the CRUD RPC write handlers
 	// invalidate on Create/Update/Delete. Wired post-construction via
 	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
 	// cache invalidation is then a no-op (matching invalidatePipelineCache's
 	// duck-typed no-op-if-unwired shape for pipelineEngine).
-	livenessEngine session.LivenessEngine
+	livenessEngine backlog.LivenessEngine
 
 	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
 	// (Epic 2.7 of backlog-custom-workflow-stages):
@@ -415,21 +416,21 @@ func (s *BacklogService) SetRepoSettingsNonBlockingLookup(l RepoSettingsLookup) 
 // SetLivenessRepository wires the repository backing the LivenessDefinition
 // CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
 // mirroring pipelineModeRepo's nil-guard shape.
-func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+func (s *BacklogService) SetLivenessRepository(repo backlog.LivenessRepository) {
 	s.livenessRepo = repo
 }
 
 // SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
 // CRUD RPC write handlers invalidate on success. nil (the default) makes
 // cache invalidation a no-op.
-func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+func (s *BacklogService) SetLivenessEngine(engine backlog.LivenessEngine) {
 	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
 // wired). Exported for the pointer-equality integration test proving BacklogService and
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
-func (s *BacklogService) PipelineEngine() session.PipelineEngine {
+func (s *BacklogService) PipelineEngine() backlog.PipelineEngine {
 	return s.pipelineEngine
 }
 
@@ -527,7 +528,7 @@ func (s *BacklogService) SetEventBus(b *events.EventBus) {
 // Degradation contract: If creator is nil, RPCs that spawn sessions will return
 // CodeUnimplemented. This is expected in test environments where a real session
 // manager is unavailable.
-func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine session.WorkflowEngine, pipelineEngine session.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
+func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine session.WorkflowEngine, pipelineEngine backlog.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
 	if engine == nil {
 		engine = session.NewDefaultWorkflowEngine()
 	}
@@ -961,9 +962,9 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 // to keep the schema in sync across the MCP tool, headless path, and proto conversion.
 type triageResultJSON struct {
 	Summary             string                     `json:"summary"`
-	Suggestions         []session.TriageSuggestion `json:"suggestions"`
+	Suggestions         []backlog.TriageSuggestion `json:"suggestions"`
 	ClarifyingQuestions []string                   `json:"clarifying_questions,omitempty"`
-	Tasks               []session.TriageTask       `json:"tasks,omitempty"`
+	Tasks               []backlog.TriageTask       `json:"tasks,omitempty"`
 	Iteration           int                        `json:"iteration,omitempty"`
 	Feedback            string                     `json:"feedback,omitempty"`
 }
@@ -1310,8 +1311,8 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		// Scaffolding first: if Cleanup below fails or the path isn't a removable
 		// worktree, the item-pinned /backlog:* files must not outlive the item.
-		_ = session.CleanupSlashCommands(wt.WorktreePath)
-		_ = session.CleanupBacklogContextFile(wt.WorktreePath)
+		_ = backlog.CleanupSlashCommands(wt.WorktreePath)
+		_ = backlog.CleanupBacklogContextFile(wt.WorktreePath)
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
@@ -1460,7 +1461,7 @@ func duplicateRefPending(item *session.BacklogItemData) string {
 	if item.Status != string(session.BacklogStatusReview) {
 		return ""
 	}
-	return session.PendingDuplicateRef(item.ItemSessions)
+	return backlog.PendingDuplicateRef(item.ItemSessions)
 }
 
 // SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the

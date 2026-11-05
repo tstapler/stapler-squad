@@ -40,7 +40,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_CanonicalizeWorkt
 	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
 	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
 
-	created, err := repo.client.BacklogItem.Create().
+	created, err := repo.Client.BacklogItem.Create().
 		SetTitle("item filed from an agent's own worktree").
 		SetStatus("idea").
 		SetRepoPath(worktreeDir).
@@ -49,7 +49,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_CanonicalizeWorkt
 
 	require.NoError(t, runBacklogItemRepoPathCanonicalizationBackfill(ctx, repo))
 
-	migrated, err := repo.client.BacklogItem.Get(ctx, created.ID)
+	migrated, err := repo.Client.BacklogItem.Get(ctx, created.ID)
 	require.NoError(t, err)
 	wantMain, err := filepath.EvalSymlinks(mainDir)
 	require.NoError(t, err)
@@ -94,13 +94,13 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipEmptyAndRelat
 	defer cleanup()
 	ctx := context.Background()
 
-	emptyItem, err := repo.client.BacklogItem.Create().
+	emptyItem, err := repo.Client.BacklogItem.Create().
 		SetTitle("repo-less item").
 		SetStatus("idea").
 		Save(ctx)
 	require.NoError(t, err)
 
-	relativeItem, err := repo.client.BacklogItem.Create().
+	relativeItem, err := repo.Client.BacklogItem.Create().
 		SetTitle("bare-slug repo_path item").
 		SetStatus("idea").
 		SetRepoPath("stapler-squad").
@@ -109,11 +109,11 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipEmptyAndRelat
 
 	require.NoError(t, runBacklogItemRepoPathCanonicalizationBackfill(ctx, repo))
 
-	gotEmpty, err := repo.client.BacklogItem.Get(ctx, emptyItem.ID)
+	gotEmpty, err := repo.Client.BacklogItem.Get(ctx, emptyItem.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "", gotEmpty.RepoPath)
 
-	gotRelative, err := repo.client.BacklogItem.Get(ctx, relativeItem.ID)
+	gotRelative, err := repo.Client.BacklogItem.Get(ctx, relativeItem.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "stapler-squad", gotRelative.RepoPath, "a relative repo_path must be left untouched, not silently resolved via filepath.Abs")
 }
@@ -130,7 +130,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipNonExistentPa
 	ctx := context.Background()
 
 	missingPath := filepath.Join(t.TempDir(), "does-not-exist-anymore")
-	created, err := repo.client.BacklogItem.Create().
+	created, err := repo.Client.BacklogItem.Create().
 		SetTitle("item whose worktree was already cleaned up").
 		SetStatus("idea").
 		SetRepoPath(missingPath).
@@ -139,7 +139,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipNonExistentPa
 
 	require.NoError(t, runBacklogItemRepoPathCanonicalizationBackfill(ctx, repo))
 
-	got, err := repo.client.BacklogItem.Get(ctx, created.ID)
+	got, err := repo.Client.BacklogItem.Get(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, missingPath, got.RepoPath, "a repo_path that no longer exists on disk must be left untouched")
 }

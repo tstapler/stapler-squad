@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -229,7 +230,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
-		if ref := session.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+		if ref := backlog.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
 			items[i].DuplicatePending = true
 			items[i].DuplicateRef = ref
 		}

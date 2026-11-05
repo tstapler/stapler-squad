@@ -107,8 +107,8 @@ func TestEndReasonClassification_ShouldCoverEveryLiteralInSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, found, "scan found no producers; the walker is broken")
 	for r, path := range found {
-		_, fail := failureEndReasons[r]
-		_, non := nonFailureEndReasons[r]
+		_, fail := FailureEndReasons[r]
+		_, non := NonFailureEndReasons[r]
 		assert.Truef(t, fail != non, "literal end_reason %q (%s) must be classified exactly once", r, path)
 	}
 }
@@ -122,7 +122,7 @@ func TestListItemSessionsBySessionUUIDs_should_returnNewestPerUUID_And_loadVerdi
 
 	review, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "u-review", SessionRole: SessionRoleReview})
 	require.NoError(t, err)
-	require.NoError(t, storage.repo.SaveReviewVerdict(ctx, review.ID, ReviewVerdictData{OverallOutcome: "PASS"}))
+	require.NoError(t, storage.Repo.SaveReviewVerdict(ctx, review.ID, ReviewVerdictData{OverallOutcome: "PASS"}))
 	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "u-other", SessionRole: SessionRoleDiagnose})
 	require.NoError(t, err)
 

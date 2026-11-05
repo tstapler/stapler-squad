@@ -77,7 +77,7 @@ func NewClaimIndexRecorder(identity HostIdentity, index *ClaimIndex, gossiper *C
 		return nil, fmt.Errorf("claim recorder requires a valid host identity and a claim index")
 	}
 	if clock == nil {
-		clock = realClock{}
+		clock = RealClock{}
 	}
 	return &ClaimIndexRecorder{identity: identity, index: index, gossiper: gossiper, deepLinkHost: deepLinkHost, clock: clock}, nil
 }

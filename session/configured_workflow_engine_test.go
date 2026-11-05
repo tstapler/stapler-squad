@@ -31,14 +31,14 @@ func TestConfiguredWorkflowEngine_should_MatchDomainValidTransitions_When_Databa
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
 
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly the built-in stage count exists.
 	stages, err := client.BacklogStage.Query().All(ctx)
 	require.NoError(t, err)
-	require.Len(t, stages, len(builtInStageOrder), "expected exactly the 9 built-in stages to be seeded")
+	require.Len(t, stages, len(BuiltInStageOrder), "expected exactly the 9 built-in stages to be seeded")
 
 	idToSlug := make(map[string]BacklogStatus, len(stages))
 	slugSeen := make(map[BacklogStatus]bool, len(stages))
@@ -46,7 +46,7 @@ func TestConfiguredWorkflowEngine_should_MatchDomainValidTransitions_When_Databa
 		idToSlug[s.ID.String()] = BacklogStatus(s.Slug)
 		slugSeen[BacklogStatus(s.Slug)] = true
 	}
-	for _, want := range builtInStageOrder {
+	for _, want := range BuiltInStageOrder {
 		require.True(t, slugSeen[want], "expected built-in stage %q to be seeded", want)
 	}
 
@@ -94,7 +94,7 @@ func TestSeedMigration_should_BeIdempotent_When_RunTwice(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
 	firstStageCount, err := client.BacklogStage.Query().Count(ctx)
@@ -120,7 +120,7 @@ func TestConfiguredWorkflowEngine_should_ReturnEmptyGraph_When_SeedMigrationHasN
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	// Deliberately not calling EnsureBuiltInWorkflowStages — the tables exist
 	// (schema migration always runs) but hold zero rows, the exact
@@ -145,26 +145,6 @@ func TestConfiguredWorkflowEngine_should_ReturnEmptyGraph_When_SeedMigrationHasN
 	require.Empty(t, seededEdges)
 }
 
-// newSeededConfiguredWorkflowEngine seeds the built-in stage graph and
-// returns a ConfiguredWorkflowEngine loaded from it, plus the underlying
-// ent.Client (for tests that need to write additional rows directly, e.g. a
-// simulated operator-added custom transition — standing in for the
-// not-yet-implemented Epic 2.7 CRUD RPCs).
-func newSeededConfiguredWorkflowEngine(t *testing.T) (*ConfiguredWorkflowEngine, *ent.Client) {
-	t.Helper()
-	repo := NewTestEntRepository(t)
-	ctx := context.Background()
-	client := repo.client
-
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
-
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
-	require.NoError(t, err)
-	return engine, client
-}
-
 // TestConfiguredWorkflowEngine_should_MatchDefaultWorkflowEngineByteForByte_When_NoCustomStagesAdded
 // covers Story 2.3.1's Risk Control regression gate: with no custom stages
 // added, ConfiguredWorkflowEngine.CanTransition/AllowedTransitions must agree
@@ -177,8 +157,8 @@ func TestConfiguredWorkflowEngine_should_MatchDefaultWorkflowEngineByteForByte_W
 	def := NewDefaultWorkflowEngine()
 
 	checked := 0
-	for _, from := range builtInStageOrder {
-		for _, to := range builtInStageOrder {
+	for _, from := range BuiltInStageOrder {
+		for _, to := range BuiltInStageOrder {
 			wantAllowed := def.CanTransition(from, to, nil)
 			gotAllowed := configured.CanTransition(from, to, nil)
 			require.Equalf(t, wantAllowed, gotAllowed,
@@ -186,10 +166,10 @@ func TestConfiguredWorkflowEngine_should_MatchDefaultWorkflowEngineByteForByte_W
 			checked++
 		}
 	}
-	require.Equal(t, len(builtInStageOrder)*len(builtInStageOrder), checked)
+	require.Equal(t, len(BuiltInStageOrder)*len(BuiltInStageOrder), checked)
 
 	// AllowedTransitions must also agree, stage by stage.
-	for _, from := range builtInStageOrder {
+	for _, from := range BuiltInStageOrder {
 		require.ElementsMatchf(t, def.AllowedTransitions(from, nil), configured.AllowedTransitions(from, nil),
 			"AllowedTransitions(%s) mismatch", from)
 	}
@@ -548,7 +528,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
@@ -644,7 +624,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("e2e-from").SetName("E2E From").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -664,7 +644,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 	})
 	require.NoError(t, err)
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	require.NoError(t, client.BacklogStage.DeleteOneID(fromStage.ID).Exec(ctx))
@@ -722,7 +702,7 @@ func TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveBu
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	deadEndStage, err := client.BacklogStage.Create().SetSlug("e2e-dead-end").SetName("E2E Dead End").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -849,7 +829,7 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			ctx := context.Background()
 			from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{kind}, []bool{true})
 
-			item, err := NewTestEntRepository(t).client.BacklogItem.Create().
+			item, err := NewTestEntRepository(t).Client.BacklogItem.Create().
 				SetTitle("evaluateGate test item").
 				SetStatus(string(from)).
 				SetPriority(1).
@@ -974,7 +954,7 @@ func newGateWithConfig(t *testing.T, client *ent.Client, engine *ConfiguredWorkf
 func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_CustomGateSkillNoLongerRegistered(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	client := repo.client
+	client := repo.Client
 	stageRepo := NewEntStageConfigRepository(client)
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
@@ -999,7 +979,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Cus
 func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeUnresolvable(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	client := repo.client
+	client := repo.Client
 	stageRepo := NewEntStageConfigRepository(client)
 	pipelineModeRepo := NewEntPipelineModeRepository(client)
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, pipelineModeRepo)
@@ -1024,7 +1004,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_AutomatedReviewPipelineModeRepoUnwired(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	client := repo.client
+	client := repo.Client
 	stageRepo := NewEntStageConfigRepository(client)
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
@@ -1048,7 +1028,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConfigIsValid(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	client := repo.client
+	client := repo.Client
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
@@ -1086,7 +1066,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedReviewPipelineModeIsEmptyOrResolvable(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	client := repo.client
+	client := repo.Client
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
 	pipelineModeRepo := NewEntPipelineModeRepository(client)
@@ -1131,11 +1111,11 @@ func (r *deadlineGateRepo) GetByItemAndGate(ctx context.Context, _, _ uuid.UUID)
 func TestConfiguredWorkflowEngine_StatefulGateFailsClosed_WhenRepoTimesOut(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &deadlineGateRepo{}
-	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
-	from, to := newCustomTransitionWithGates(t, repo.client, engine, []GateKind{GateKindHumanApproval}, []bool{true})
+	from, to := newCustomTransitionWithGates(t, repo.Client, engine, []GateKind{GateKindHumanApproval}, []bool{true})
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
 
 	statuses, err := engine.PendingGates(item, to, nil)
@@ -1151,11 +1131,11 @@ func TestConfiguredWorkflowEngine_StatefulGateFailsClosed_WhenRepoTimesOut(t *te
 func TestConfiguredWorkflowEngine_PendingGatesStructuralOnly_SkipsStatefulKindsWithoutIo(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &deadlineGateRepo{}
-	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
-	from, to := newCustomTransitionWithGates(t, repo.client, engine,
+	from, to := newCustomTransitionWithGates(t, repo.Client, engine,
 		[]GateKind{GateKindStructural, GateKindHumanApproval}, []bool{false, true})
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: oneAcCriterion()}
 

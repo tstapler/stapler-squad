@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 const triageGateNoteAuthor = "Triage gate"
@@ -135,7 +136,7 @@ func (s *BacklogService) recordTriageSkip(ctx context.Context, itemID, reason st
 
 // triageResultInputHash hashes the item as it will look once result's criteria are applied,
 // so a later automatic retriage of the unmodified item matches.
-func triageResultInputHash(item *session.BacklogItemData, result *session.HeadlessTriageResult) string {
+func triageResultInputHash(item *session.BacklogItemData, result *backlog.HeadlessTriageResult) string {
 	criteria := result.AcceptanceCriteria
 	if len(criteria) == 0 {
 		criteria, _ = item.AcceptanceCriteria.Parse()

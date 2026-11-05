@@ -27,7 +27,7 @@ import (
 // GitWorktreeManager protects its own fields directly.
 type GitWorktreeManager struct {
 	mu              deadlock.RWMutex
-	worktree        *git.GitWorktree
+	Worktree        *git.GitWorktree
 	diffStats       *git.DiffStats
 	diffStatsAt     time.Time // last UpdateDiffStats completion; see DiffStatsFresh
 	dirBaseSHA      string
@@ -113,14 +113,14 @@ func (gm *GitWorktreeManager) GetDirBaseSHA() string {
 func (gm *GitWorktreeManager) HasWorktree() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
-	return gm.worktree != nil
+	return gm.Worktree != nil
 }
 
 // GetWorktree returns the underlying GitWorktree (may be nil before Setup).
 func (gm *GitWorktreeManager) GetWorktree() *git.GitWorktree {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
-	return gm.worktree
+	return gm.Worktree
 }
 
 // SetWorktree replaces the underlying GitWorktree. Used during session start
@@ -128,7 +128,7 @@ func (gm *GitWorktreeManager) GetWorktree() *git.GitWorktree {
 func (gm *GitWorktreeManager) SetWorktree(wt *git.GitWorktree) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	gm.worktree = wt
+	gm.Worktree = wt
 }
 
 // PrimeDirtyCacheJitter staggers the dirty-cache TTL by setting the cache

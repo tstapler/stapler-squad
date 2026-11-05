@@ -27,6 +27,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // stageTransitionToProto converts a session.TransitionData to its proto
@@ -114,11 +115,11 @@ func mapTransitionGraphError(err error) error {
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, session.ErrConflict):
 		return connect.NewError(connect.CodeAlreadyExists, err)
-	case errors.Is(err, session.ErrStageDeadEnd),
-		errors.Is(err, session.ErrStageUnreachable):
+	case errors.Is(err, backlog.ErrStageDeadEnd),
+		errors.Is(err, backlog.ErrStageUnreachable):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, session.ErrDisableWouldStrandLiveItems),
-		errors.Is(err, session.ErrDisableSystemRequiredEdge):
+	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems),
+		errors.Is(err, backlog.ErrDisableSystemRequiredEdge):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	default:
 		return connect.NewError(connect.CodeInternal, err)
@@ -146,7 +147,7 @@ func (s *BacklogService) rejectStrandedStatuses(ctx context.Context, tx session.
 		}
 		counts[slug] = n
 	}
-	stranded := session.StrandedStatuses(candidateEdges, counts)
+	stranded := backlog.StrandedStatuses(candidateEdges, counts)
 	if len(stranded) == 0 {
 		return nil
 	}
@@ -162,11 +163,11 @@ type strandedStatusError struct {
 	ids    []string
 }
 
-func (e *strandedStatusError) Unwrap() error { return session.ErrDisableWouldStrandLiveItems }
+func (e *strandedStatusError) Unwrap() error { return backlog.ErrDisableWouldStrandLiveItems }
 
 func (e *strandedStatusError) Error() string {
 	msg := fmt.Sprintf("%v: status %q has %d live item(s) with no allowed outgoing transition",
-		session.ErrDisableWouldStrandLiveItems, e.status, e.count)
+		backlog.ErrDisableWouldStrandLiveItems, e.status, e.count)
 	if len(e.ids) > 0 {
 		msg += " (e.g. " + strings.Join(e.ids, ", ") + "); override_reason is the only exit"
 	}
@@ -178,7 +179,7 @@ func (e *strandedStatusError) Error() string {
 func candidateStatusSlugs(stages []session.StageDefinition) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, st := range session.BuiltInStatuses() {
+	for _, st := range backlog.BuiltInStatuses() {
 		seen[string(st)] = true
 		out = append(out, string(st))
 	}
@@ -238,7 +239,7 @@ func (s *BacklogService) CreateStageTransition(
 		if err != nil {
 			return fmt.Errorf("load graph for validation: %w", err)
 		}
-		w, verr := session.ValidateGraph(stages, transitions)
+		w, verr := backlog.ValidateGraph(stages, transitions)
 		if verr != nil {
 			return verr
 		}
@@ -292,7 +293,7 @@ func (s *BacklogService) UpdateStageTransition(
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		isDisabling := req.Msg.Enabled != nil && !*req.Msg.Enabled && existing.Enabled
 		if isDisabling {
-			if err := session.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+			if err := backlog.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
 				return err
 			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
@@ -317,7 +318,7 @@ func (s *BacklogService) UpdateStageTransition(
 			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
 				return err
 			}
-			if err := session.ValidateDisableTransition(
+			if err := backlog.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
 			); err != nil {
 				return err
@@ -336,7 +337,7 @@ func (s *BacklogService) UpdateStageTransition(
 			// successful update over a failure to compute them.
 			return nil
 		}
-		if w, verr := session.ValidateGraph(stages, transitions); verr != nil {
+		if w, verr := backlog.ValidateGraph(stages, transitions); verr != nil {
 			warnings = []string{verr.Error()}
 		} else {
 			warnings = w
@@ -383,7 +384,7 @@ func (s *BacklogService) DeleteStageTransition(
 
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		if existing.Enabled {
-			if err := session.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+			if err := backlog.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
 				return err
 			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
@@ -408,7 +409,7 @@ func (s *BacklogService) DeleteStageTransition(
 			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
 				return err
 			}
-			if err := session.ValidateDisableTransition(
+			if err := backlog.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
 			); err != nil {
 				return err

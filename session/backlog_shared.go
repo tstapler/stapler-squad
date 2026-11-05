@@ -15,7 +15,7 @@ import (
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
 
 // sanitizeField strips HTML tags and truncates to maxLen with a "[truncated]" suffix.
-func sanitizeField(s string, maxLen int) string {
+func SanitizeField(s string, maxLen int) string {
 	s = htmlTagRe.ReplaceAllString(s, "")
 	if len(s) > maxLen {
 		s = s[:maxLen] + " [truncated]"
@@ -26,7 +26,7 @@ func sanitizeField(s string, maxLen int) string {
 // truncateField truncates to maxLen with a "[truncated]" suffix, without stripping HTML.
 // Use this for structured fields (e.g. title) where the envelope context renders
 // injection payloads inert and stripping content would be destructive.
-func truncateField(s string, maxLen int) string {
+func TruncateField(s string, maxLen int) string {
 	if len(s) > maxLen {
 		return s[:maxLen] + " [truncated]"
 	}
@@ -35,7 +35,7 @@ func truncateField(s string, maxLen int) string {
 
 // buildAcChecklist renders a numbered checklist from AC criteria.
 // pending → "[ ]", done → "[✓]", in_progress → "[✗]"
-func buildAcChecklist(criteria []AcCriterion) string {
+func BuildAcChecklist(criteria []AcCriterion) string {
 	if len(criteria) == 0 {
 		return "(no acceptance criteria)"
 	}
@@ -50,7 +50,7 @@ func buildAcChecklist(criteria []AcCriterion) string {
 		default:
 			marker = "[ ]"
 		}
-		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, sanitizeField(c.Text, 500))
+		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, SanitizeField(c.Text, 500))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -60,7 +60,7 @@ func buildAcChecklist(criteria []AcCriterion) string {
 // review_gate.go) into a typed slice. Malformed or empty input yields a nil slice and no
 // error is fatal to prompt construction — callers should treat a parse failure as "no
 // per-criterion evidence available" rather than aborting.
-func parsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
+func ParsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
 	if raw == "" {
 		return nil, nil
 	}
@@ -106,7 +106,7 @@ const MaxSameSessionReviewAttempts = 3
 // diverge from AutoReopenAfterFailedReview's own decision logic (a real bug
 // caught by TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
 // asserting on the actual respawned prompt, not just the status transition).
-func reviewVerdictSummariesMostRecentFirst(priorSessions []ItemSessionSummary) []ReviewVerdictSummary {
+func ReviewVerdictSummariesMostRecentFirst(priorSessions []ItemSessionSummary) []ReviewVerdictSummary {
 	var out []ReviewVerdictSummary
 	for i := len(priorSessions) - 1; i >= 0; i-- {
 		s := priorSessions[i]
@@ -147,14 +147,14 @@ type Notifier interface {
 // isGateDenial reports whether err is the engine refusing a transition (graph,
 // Configured gate or Default guard) rather than a write failure. The gate has
 // already reported such a denial for a system caller.
-func isGateDenial(err error) bool {
+func IsGateDenial(err error) bool {
 	return errors.Is(err, ErrTransitionNotAllowed) ||
 		errors.Is(err, ErrGateNotSatisfied) ||
 		errors.Is(err, ErrVerdictRequired)
 }
 
 // findOpenStuckStateFor returns the row for (itemID, reason) from rows, if present.
-func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool) {
+func FindOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool) {
 	for _, row := range rows {
 		if row.ItemID == itemID && row.Reason == reason {
 			return row, true
@@ -176,7 +176,7 @@ func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason doma
 // well-formed object is found. A `{` embedded inside an already-successfully-parsed
 // object's string value is never re-examined, since the scan skips forward past
 // the full span the decoder consumed.
-func extractTopLevelJSONObjects(raw string) []string {
+func ExtractTopLevelJSONObjects(raw string) []string {
 	var candidates []string
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '{' {
@@ -197,7 +197,7 @@ func extractTopLevelJSONObjects(raw string) []string {
 // renderTemplate substitutes. Story 2.3.1 (Phase 2) introduces
 // ValidatePipelineModeContent, which must agree with this same allow-list at
 // write time — see plan.md's Domain Glossary entry for renderTemplate.
-var recognizedPlaceholders = []string{
+var RecognizedPlaceholders = []string{
 	"item_id",
 	"item_title",
 	"item_description",
@@ -211,4 +211,4 @@ var recognizedPlaceholders = []string{
 // fallback checks a bouncing item's most recent work-session commit against.
 // Matches server/services/backlog_service_triage.go's prFixMainBranch — kept
 // as an independent constant since this package cannot import server/services.
-const bounceMainBranch = "main"
+const BounceMainBranch = "main"

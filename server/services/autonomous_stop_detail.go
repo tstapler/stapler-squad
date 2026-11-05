@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -40,7 +41,7 @@ func sanitizeStopTail(raw string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
-	if session.RunPreGateSecurityCheck(s) != nil || tailHasSecretLine(s) || vendorTokenRe.MatchString(s) {
+	if backlog.RunPreGateSecurityCheck(s) != nil || tailHasSecretLine(s) || vendorTokenRe.MatchString(s) {
 		return stopTailWithheldMarker
 	}
 

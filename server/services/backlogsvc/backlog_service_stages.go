@@ -22,6 +22,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // stageToProto converts a session.StageData to its proto representation.
@@ -201,7 +202,7 @@ func mapStageStrandingError(ctx context.Context, s *BacklogService, err error) e
 	switch {
 	case errors.Is(err, session.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, session.ErrDisableWouldStrandLiveItems):
+	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems):
 		return connect.NewError(connect.CodeFailedPrecondition, s.withStrandedItemIDs(ctx, err))
 	default:
 		return connect.NewError(connect.CodeInternal, err)

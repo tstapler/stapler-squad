@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -57,51 +56,6 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 	assert.Equal(t, string(ReviewVerdictFail), sessions[0].ReviewVerdict.OverallOutcome)
 }
 
-// newStuckReviewTestItem creates a review-status BacklogItem with a review
-// ItemSession carrying the given verdict outcome. If endReviewSession is true,
-// the review session's EndedAt is set (simulating the review session having
-// exited) — the item then qualifies as "stuck" per FindStuckReviewItems as
-// long as no other active session exists. If withActiveWorkSession is true, a
-// second ItemSession (role=work, EndedAt nil) is attached, simulating rework
-// still in progress — this should exclude the item from FindStuckReviewItems.
-func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcome, endReviewSession, withActiveWorkSession bool) *BacklogItemData {
-	t.Helper()
-	ctx := context.Background()
-
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:              "Stuck review test item",
-		AcceptanceCriteria: `[]`,
-		Priority:           1,
-		Status:             string(BacklogStatusReview),
-	})
-	require.NoError(t, err)
-
-	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "headless-review-" + uuid.New().String(),
-		SessionRole: SessionRoleReview,
-	}, ReviewVerdictData{
-		OverallOutcome: outcome,
-		Summary:        "no diff available",
-	})
-	require.NoError(t, err)
-
-	if endReviewSession {
-		require.NoError(t, storage.UpdateItemSessionEnded(ctx, reviewIS.ID, time.Now()))
-	}
-
-	if withActiveWorkSession {
-		_, err := storage.CreateItemSession(ctx, ItemSessionData{
-			ItemID:      item.ID,
-			SessionUUID: uuid.New().String(),
-			SessionRole: SessionRoleWork,
-		})
-		require.NoError(t, err)
-	}
-
-	return item
-}
-
 // TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless is a
 // regression test for a live-data bug found via manual QA: an item whose
 // AutoReopenAfterFailedReview spawn attempt failed and rolled the status back
@@ -131,7 +85,7 @@ func TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless(t *
 	})
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 	stuck, err := er.FindStuckReviewItems(ctx)
 	require.NoError(t, err)
 
@@ -169,7 +123,7 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 
-	er := storage.repo
+	er := storage.Repo
 
 	// Before backfill: invisible to FindPRPendingItems despite being pr_pending with a URL.
 	before, err := er.FindPRPendingItems(ctx)
@@ -221,7 +175,7 @@ func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo
+	er := storage.Repo
 
 	for _, status := range []BacklogStatus{BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
 		prURL := "https://github.com/tstapler/stapler-squad/pull/900"

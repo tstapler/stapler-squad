@@ -66,9 +66,9 @@ type Clock interface {
 }
 
 // realClock is the default Clock implementation using time.Now.
-type realClock struct{}
+type RealClock struct{}
 
-func (realClock) Now() time.Time { return time.Now() }
+func (RealClock) Now() time.Time { return time.Now() }
 
 // RegistryEntry is one peer's current state in the local Workspace Host
 // Registry: the addresses it last advertised, the public key its identity
@@ -161,7 +161,7 @@ type HostRegistry struct {
 // wall clock and ttl for pruning. Existing persisted entries (if any) are
 // loaded immediately.
 func NewHostRegistry(stateDir string, ttl time.Duration) (*HostRegistry, error) {
-	return NewHostRegistryWithClock(stateDir, ttl, realClock{})
+	return NewHostRegistryWithClock(stateDir, ttl, RealClock{})
 }
 
 // NewHostRegistryWithClock is like NewHostRegistry but with an injectable

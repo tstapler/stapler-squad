@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -97,7 +98,7 @@ func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *tes
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			result := &session.HeadlessTriageResult{Priority: tc.priority, ItemCategory: tc.itemCategory}
+			result := &backlog.HeadlessTriageResult{Priority: tc.priority, ItemCategory: tc.itemCategory}
 			update := &session.BacklogItemUpdate{}
 			applyTriageResultToUpdate(result, update)
 			if tc.wantPriority == nil {
@@ -246,7 +247,7 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 			// Mirrors TriggerTriage: result starts with the raw LLM-controlled
 			// title, then gets overwritten with the sanitized value before
 			// marshaling — see the fix at ~line 2790.
-			result := &session.HeadlessTriageResult{Title: rawTitle}
+			result := &backlog.HeadlessTriageResult{Title: rawTitle}
 			result.Title = sanitizedTitle
 			payloadJSON, err := json.Marshal(result)
 			require.NoError(t, err)
@@ -3311,11 +3312,11 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	})
 	require.NoError(t, err)
 
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
-	wantHash, ok := engine.ContentHashFor(session.PipelineMode("quick"))
+	wantHash, ok := engine.ContentHashFor(backlog.PipelineMode("quick"))
 	require.True(t, ok, "setup: 'quick' must resolve to a content hash")
 	require.NotEmpty(t, wantHash)
 
@@ -3731,7 +3732,7 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 	})
 	require.NoError(t, err)
 
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -3809,7 +3810,7 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 		},
 	})
 	require.NoError(t, err)
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -3853,7 +3854,7 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "claude-sonnet-4-6", sessions[0].ResolvedModel)
 	assert.Empty(t, sessions[0].ResolvedProgram, "no program was explicitly configured on the stage executor, only a model")
-	assert.Equal(t, session.ComputeExecutorHash("", "family:sonnet"), sessions[0].ExecutorSnapshotHash,
+	assert.Equal(t, backlog.ComputeExecutorHash("", "family:sonnet"), sessions[0].ExecutorSnapshotHash,
 		"must hash the RAW pre-ResolveModel model value, never the resolved concrete model ID")
 }
 
@@ -3944,7 +3945,7 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 	})
 	require.NoError(t, err)
 
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -4255,10 +4256,10 @@ func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfError
 // below (Epic 1.4, Story 1.4.2) — always returns the same definition
 // regardless of stage/mode, sufficient for these narrow single-item tests.
 type fakeTriageLivenessEngine struct {
-	def session.LivenessDefinition
+	def backlog.LivenessDefinition
 }
 
-func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ session.PipelineMode) (session.LivenessDefinition, error) {
+func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ backlog.PipelineMode) (backlog.LivenessDefinition, error) {
 	return f.def, nil
 }
 
@@ -4311,8 +4312,8 @@ func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOver
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	svc.livenessEngine = &fakeTriageLivenessEngine{def: session.LivenessDefinition{
-		Kind:             session.LivenessKindDurationBudget,
+	svc.livenessEngine = &fakeTriageLivenessEngine{def: backlog.LivenessDefinition{
+		Kind:             backlog.LivenessKindDurationBudget,
 		ExpectedDuration: 45 * time.Minute,
 		StalenessMargin:  10 * time.Minute,
 	}}
@@ -4357,7 +4358,7 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 		TriagePromptTemplate: "QUICK MODE TRIAGE: {{item_title}}",
 	})
 	require.NoError(t, err)
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -4409,7 +4410,7 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 		},
 	})
 	require.NoError(t, err)
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -4436,7 +4437,7 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	require.NoError(t, listErr)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "claude-haiku-4-5", sessions[0].ResolvedModel)
-	assert.Equal(t, session.ComputeExecutorHash("", "claude-haiku-4-5"), sessions[0].ExecutorSnapshotHash)
+	assert.Equal(t, backlog.ComputeExecutorHash("", "claude-haiku-4-5"), sessions[0].ExecutorSnapshotHash)
 	assert.Empty(t, sessions[0].ConfiguredProgram, "no fallback occurred for the claude program")
 	assert.Empty(t, sessions[0].ExecutorFallbackReason)
 }
@@ -4494,7 +4495,7 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 		TriagePromptTemplate: "QUICK MODE TRIAGE: {{item_title}}",
 	})
 	require.NoError(t, err)
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -4553,7 +4554,7 @@ func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawn
 		InitialPromptTemplate: "QUICK MODE INITIAL PROMPT: {{item_title}}",
 	})
 	require.NoError(t, err)
-	engine, err := session.NewPipelineEngine(pmRepo)
+	engine, err := backlog.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -4634,7 +4635,7 @@ func TestSpawnSessionFromItem_should_UseDefaultInitialPrompt_When_PipelineModeIs
 
 	require.Len(t, creator.calls, 1)
 
-	wantPrompt := session.BuildTokenBudgetedPrompt(preSpawn, nil)
+	wantPrompt := backlog.BuildTokenBudgetedPrompt(preSpawn, nil)
 	assert.Equal(t, wantPrompt, creator.calls[0].prompt,
 		"default PipelineMode must still produce BuildTokenBudgetedPrompt's unmodified output")
 }
@@ -5525,7 +5526,7 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 
 	// Resolve side: a real session.BacklogLifecycleListener's periodic tick,
 	// wired to the real BacklogService exactly as production does it.
-	listener := session.NewBacklogLifecycleListener(storage)
+	listener := backlog.NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(true)
 	listener.SetReworkBlockStaleResolver(svc)
 	listener.ReconcileStuck(ctx)
@@ -6722,7 +6723,7 @@ func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *tes
 		wantReason string
 		wantDetail string
 	}{
-		{"unclassified error records detail", errors.New("dial tcp: connection refused"), session.TriageEndReasonOther, "dial tcp: connection refused"},
+		{"unclassified error records detail", errors.New("dial tcp: connection refused"), backlog.TriageEndReasonOther, "dial tcp: connection refused"},
 		{"classified pool saturation leaves detail empty", headless.ErrPoolSaturated, "pool_saturated", ""},
 		{"classified idle timeout leaves detail empty", headless.ErrIdleTimeout, "idle", ""},
 	}

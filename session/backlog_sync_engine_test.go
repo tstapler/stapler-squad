@@ -36,7 +36,7 @@ func TestSyncLoop_SetWorkflowEngine_UsesInjectedEngineForBackwardSync(t *testing
 		Title: "Issue", Status: string(BacklogStatusReady), ExternalID: "ext-1", SourceID: sourceID,
 	})
 	require.NoError(t, err)
-	entSrc, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := storage.Repo.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 

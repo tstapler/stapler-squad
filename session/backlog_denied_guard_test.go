@@ -25,39 +25,13 @@ import (
 
 // --- fixtures ----------------------------------------------------------------
 
-func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller TransitionCaller, from, to BacklogStatus, reason string) {
-	t.Helper()
-	applied, err := h.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from,
-		domain.FormatTransitionDeniedContext(domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: reason}, "test"))
-	require.NoError(t, err)
-	require.True(t, applied, "the item must be at %s for the denial to anchor", from)
-}
-
 // denLiftGates removes every operator gate, as an approval or a config edit would.
 func denLiftGates(t *testing.T, h *gateHarness) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := h.repo.client.TransitionGate.Delete().Exec(ctx)
+	_, err := h.repo.Client.TransitionGate.Delete().Exec(ctx)
 	require.NoError(t, err)
 	require.NoError(t, h.cfg.InvalidateCache(ctx))
-}
-
-func denBlock(t *testing.T, h *gateHarness, from, to BacklogStatus) {
-	t.Helper()
-	addGateToSeededEdge(t, h.repo.client, h.cfg, from, to, GateKindHumanApproval, nil)
-}
-
-func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []OpenStuckStateData {
-	t.Helper()
-	rows, err := h.storage.FindOpenStuckStates(context.Background())
-	require.NoError(t, err)
-	var out []OpenStuckStateData
-	for _, r := range rows {
-		if r.ItemID == itemID && r.Reason == reason {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // --- predicate ---------------------------------------------------------------
@@ -136,7 +110,7 @@ func TestTransitionDenialHolds_should_Release_When_TheClassIsNoLongerEnforced(t 
 	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 	require.True(t, h.storage.TransitionDenialHolds(ctx, item))
 
-	h.sel.modes = allClasses(ModeShadow)
+	h.sel.Modes = allClasses(ModeShadow)
 
 	assert.False(t, h.storage.TransitionDenialHolds(ctx, item), "rolling the flag back to Shadow frees the item")
 }
@@ -242,6 +216,9 @@ var denDetectorKinds = map[string]denKind{
 	"trigger_chain_reconcile":     denNA,    // fires a chained session; writes no status (chain_firer.go)
 }
 
+// denScanDirs are the directories the guard scans: the session core and the backlog lifecycle package.
+var denScanDirs = []string{".", "backlog"}
+
 func denSourceFile(t *testing.T, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(rel)
@@ -252,7 +229,7 @@ func denSourceFile(t *testing.T, rel string) string {
 func TestEveryStuckDetectorIsClassified(t *testing.T) {
 	t.Parallel()
 	re := regexp.MustCompile(`l\.runStuckDetector\("([^"]+)"`)
-	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog_lifecycle.go"), -1)
+	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog/backlog_lifecycle.go"), -1)
 	names := make([]string, 0, len(matches))
 	for _, m := range matches {
 		names = append(names, m[1])
@@ -268,16 +245,20 @@ func TestEveryStuckDetectorIsClassified(t *testing.T) {
 	assert.Equal(t, classified, names, "every runStuckDetector name needs a kind in denDetectorKinds, and no entry may be stale")
 }
 
-// denCallsTo lists the functions (as Name or Recv.Name) in dir's non-test files
+// denCallsTo lists the functions (as Name or Recv.Name) in the dirs' non-test files
 // that call a method named one of calls.
-func denCallsTo(t *testing.T, dir string, calls ...string) map[string]bool {
+func denCallsTo(t *testing.T, dirs []string, calls ...string) map[string]bool {
 	t.Helper()
 	want := map[string]bool{}
 	for _, c := range calls {
 		want[c] = true
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-	require.NoError(t, err)
+	var files []string
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		files = append(files, matches...)
+	}
 	found := map[string]bool{}
 	fset := token.NewFileSet()
 	for _, f := range files {
@@ -321,7 +302,7 @@ func denFuncName(fn *ast.FuncDecl) string {
 // predicate is reached through exactly the guard helpers, never copied per detector.
 func TestDeniedGuards_should_AllShareOnePredicate(t *testing.T) {
 	t.Parallel()
-	got := denCallsTo(t, ".", "HasOpenTransitionDenied", "OpenTransitionDenial", "TransitionDenialHolds")
+	got := denCallsTo(t, denScanDirs, "HasOpenTransitionDenied", "OpenTransitionDenial", "TransitionDenialHolds")
 	assert.Equal(t, map[string]bool{
 		"Storage.HasOpenTransitionDenied->OpenTransitionDenial":                  true,
 		"Storage.TransitionDenialHolds->OpenTransitionDenial":                    true,
@@ -331,7 +312,7 @@ func TestDeniedGuards_should_AllShareOnePredicate(t *testing.T) {
 
 func TestDetectorLocalGuards_should_CallTheSharedHelper(t *testing.T) {
 	t.Parallel()
-	got := denCallsTo(t, ".", "heldByTransitionDenial")
+	got := denCallsTo(t, denScanDirs, "heldByTransitionDenial")
 	for _, fn := range []string{
 		"BacklogLifecycleListener.respawnReviewGatesWithoutGate",
 		"BacklogLifecycleListener.reconcileUnprocessedReviewVerdicts",

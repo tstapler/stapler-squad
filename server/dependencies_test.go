@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -219,11 +220,11 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
 	}
 
-	backlogCaching, ok := backlogSvcEngine.(*session.CachingPipelineEngine)
+	backlogCaching, ok := backlogSvcEngine.(*backlog.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
 	}
-	listenerCaching, ok := listenerEngine.(*session.CachingPipelineEngine)
+	listenerCaching, ok := listenerEngine.(*backlog.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
 	}

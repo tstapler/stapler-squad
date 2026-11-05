@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -189,7 +190,7 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 
 // SetBacklogLifecycleListener wires the listener to all sessions created via
 // CreateDirectorySession so that backlog state transitions fire on session exit.
-func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
+func (s *SessionService) SetBacklogLifecycleListener(l *backlog.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
 	s.prCreationSvc.SetBacklogLifecycleListener(l)
 }
@@ -198,7 +199,7 @@ func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycle
 // SetBacklogLifecycleListener was never called). Exported for the pointer-equality
 // integration test proving BacklogService and BacklogLifecycleListener share a single
 // PipelineEngine instance (Story 1.5.1) — see server/dependencies_test.go.
-func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycleListener {
+func (s *SessionService) GetBacklogLifecycleListener() *backlog.BacklogLifecycleListener {
 	return s.backlogLifecycleListener
 }
 

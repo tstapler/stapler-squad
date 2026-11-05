@@ -25,7 +25,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	customStage, err := client.BacklogStage.Create().
 		SetSlug("design-review").
@@ -40,7 +40,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	})
 	require.NoError(t, err)
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("design-review"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("design-review"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// The custom stage is later deleted — e.g. an operator removing a
@@ -70,7 +70,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnSortedEnabledDestination
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("triage").SetName("Triage").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnEmptyNonNilSlice_When_St
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	_, err := client.BacklogStage.Create().SetSlug("dead-end").SetName("Dead End").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnNil_When_NoMatchingBackl
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("no-such-slug"))
 	require.Nil(t, got)
@@ -133,7 +133,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("review-a").SetName("Review A").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	})
 	require.NoError(t, err)
 
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
@@ -172,7 +172,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("review-a").SetName("Review A").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
@@ -188,14 +188,14 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	require.NoError(t, err)
 
 	// First entry into review-a: captures the v1 graph (review-a -> review-b-v1).
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// Force a measurable CreatedAt delta between the two matching events.
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Leave review-a, then change its outgoing graph before re-entering.
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	_, err = client.StageTransition.UpdateOne(edgeV1).SetEnabled(false).Save(ctx)
@@ -208,7 +208,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
-	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)

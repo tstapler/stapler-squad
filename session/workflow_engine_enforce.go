@@ -41,7 +41,12 @@ const (
 //
 // The *For methods apply a callPolicy (ADR-007 D3); allowedTransitions is the
 // operator-policy read the seed preview uses.
-type enforceAnswer struct {
+// NewEnforceAnswer pairs the Default engine with the Configured one it is compared against.
+func NewEnforceAnswer(def WorkflowEngine, cfg *ConfiguredWorkflowEngine) EnforceAnswer {
+	return EnforceAnswer{def: def, cfg: cfg}
+}
+
+type EnforceAnswer struct {
 	def WorkflowEngine
 	cfg *ConfiguredWorkflowEngine
 }
@@ -86,11 +91,11 @@ func (p callPolicy) bypassesOperatorGates(item BacklogItemTransitionInput) bool 
 // bypassesGraph reports whether an override frees the graph check: operator
 // class only, non-empty reason, and only toward a known stage so an override
 // cannot write a status that exists nowhere.
-func (a enforceAnswer) bypassesGraph(pol callPolicy, overrideReason string, to BacklogStatus) bool {
+func (a EnforceAnswer) bypassesGraph(pol callPolicy, overrideReason string, to BacklogStatus) bool {
 	return pol.Class == ClassOperator && overrideReason != "" && a.knownStage(to)
 }
 
-func (a enforceAnswer) knownStage(s BacklogStatus) bool {
+func (a EnforceAnswer) knownStage(s BacklogStatus) bool {
 	if cfg, _ := a.usableConfigured(); cfg != nil {
 		return cfg.cache.HasStage(s)
 	}
@@ -103,7 +108,7 @@ func (a enforceAnswer) knownStage(s BacklogStatus) bool {
 
 // usableConfigured returns cfg when it can answer the graph, else the reason
 // it cannot.
-func (a enforceAnswer) usableConfigured() (*ConfiguredWorkflowEngine, FallbackReason) {
+func (a EnforceAnswer) usableConfigured() (*ConfiguredWorkflowEngine, FallbackReason) {
 	switch {
 	case a.cfg == nil:
 		return nil, FallbackCfgNil
@@ -116,7 +121,7 @@ func (a enforceAnswer) usableConfigured() (*ConfiguredWorkflowEngine, FallbackRe
 	}
 }
 
-func (a enforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, snap *StageConfigSnapshot) (bool, FallbackReason) {
+func (a EnforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, snap *StageConfigSnapshot) (bool, FallbackReason) {
 	cfg, reason := a.usableConfigured()
 	var allowed bool
 	if cfg != nil {
@@ -129,11 +134,11 @@ func (a enforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, 
 
 // allowedTransitions unions the non-archive system edges into the base list;
 // archive edges never reach this UI-facing list.
-func (a enforceAnswer) allowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
+func (a EnforceAnswer) allowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
 	return a.allowedTransitionsFor(operatorPolicy, from, snap)
 }
 
-func (a enforceAnswer) allowedTransitionsFor(pol callPolicy, from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
+func (a EnforceAnswer) allowedTransitionsFor(pol callPolicy, from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
 	cfg, reason := a.usableConfigured()
 	var base []BacklogStatus
 	if cfg != nil {
@@ -145,7 +150,7 @@ func (a enforceAnswer) allowedTransitionsFor(pol callPolicy, from BacklogStatus,
 	out := make([]BacklogStatus, 0, len(base)+2)
 	var system []BacklogStatus
 	if !pol.Forwarding {
-		system = systemRequiredTargets(from)
+		system = SystemRequiredTargets(from)
 	}
 	for _, to := range append(base, system...) {
 		if !seen[to] {
@@ -171,7 +176,7 @@ type gateAnswer struct {
 // validateGates runs Default guards first so their sentinels keep precedence,
 // then the Configured operator gates. evalStructuralOnly forbids any
 // GateSatisfactionRepository read (shadow).
-func (a enforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) gateAnswer {
+func (a EnforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) gateAnswer {
 	cfg, reason := a.usableConfigured()
 	if pol.runsDefaultGuards() {
 		if err := a.def.ValidateGates(pol.defaultGuardInput(item), to, nil); err != nil {
@@ -190,7 +195,7 @@ func (a enforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransiti
 
 // pendingGates is Default's guard statuses plus the Configured operator gates
 // (omitted under override or when Configured is unusable).
-func (a enforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) (statuses []GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
+func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) (statuses []GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
 	cfg, reason := a.usableConfigured()
 	if pol.runsDefaultGuards() {
 		statuses, err = a.def.PendingGates(pol.defaultGuardInput(item), to, nil)

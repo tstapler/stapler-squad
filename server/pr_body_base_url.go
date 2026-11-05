@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // prBaseURLSources are the inputs resolvePRBodyBaseURL chooses between.
@@ -23,10 +24,10 @@ type prBaseURLSources struct {
 // is bound beyond loopback. It returns "" when none is available; loopback
 // addresses are never returned.
 func resolvePRBodyBaseURL(src prBaseURLSources) string {
-	if u := session.NonLoopbackBaseURL(src.configured); u != "" {
+	if u := backlog.NonLoopbackBaseURL(src.configured); u != "" {
 		return u
 	}
-	if u := session.NonLoopbackBaseURL(src.remoteHTTPSURL); u != "" {
+	if u := backlog.NonLoopbackBaseURL(src.remoteHTTPSURL); u != "" {
 		return u
 	}
 	if len(src.hostnames) == 0 {
@@ -40,7 +41,7 @@ func resolvePRBodyBaseURL(src prBaseURLSources) string {
 	if ip := net.ParseIP(listenHost); listenHost == "localhost" || (ip != nil && ip.IsLoopback()) {
 		return ""
 	}
-	return session.NonLoopbackBaseURL("http://" + net.JoinHostPort(src.hostnames[0], port))
+	return backlog.NonLoopbackBaseURL("http://" + net.JoinHostPort(src.hostnames[0], port))
 }
 
 // newHostRefResolver returns a resolver for this instance's host ID and first

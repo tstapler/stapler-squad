@@ -34,7 +34,7 @@ func TestStorageSetItemChangePublisher_should_forwardToConcreteEntRepository_Whe
 	publisher := &recordingItemChangePublisher{}
 	storage.SetItemChangePublisher(publisher)
 
-	er := storage.repo
+	er := storage.Repo
 	assert.Same(t, ItemChangePublisher(publisher), er.itemChangePublisher, "SetItemChangePublisher must forward to the concrete *EntRepository's field")
 }
 
@@ -57,7 +57,7 @@ func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testi
 	})
 	require.NoError(t, err)
 
-	updated, err := repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusReview),
 	}, TriggeredBySystem)
 	require.NoError(t, err, "transition must succeed even though no ItemChangePublisher is wired")

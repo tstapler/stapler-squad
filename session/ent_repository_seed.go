@@ -34,8 +34,8 @@ func newSeededEntRepository(db *sql.DB, repo *EntRepository) (*EntRepository, er
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to load seed database: %w", err)
 	}
-	repo.client, repo.driver = newInstrumentedEntClient(db, nil)
-	repo.watchGuidanceWrites(repo.client)
+	repo.Client, repo.driver = newInstrumentedEntClient(db, nil)
+	repo.watchGuidanceWrites(repo.Client)
 	return repo, nil
 }
 

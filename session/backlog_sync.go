@@ -126,7 +126,7 @@ func (sl *SyncLoop) runAllSources(ctx context.Context) {
 			continue
 		}
 		// We need the raw ent.ItemSource for ent field access; call through the ent repo.
-		entSrc, entErr := sl.storage.repo.GetItemSourceByID(ctx, src.ID)
+		entSrc, entErr := sl.storage.Repo.GetItemSourceByID(ctx, src.ID)
 		if entErr != nil {
 			log.ErrorLog().Printf("[SyncLoop] GetItemSourceByID(%s) error: %v", src.ID, entErr)
 			continue
@@ -194,7 +194,7 @@ func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 // enabled sources, this is for an explicit manual/on-demand trigger where the
 // caller already decided to sync this specific source.
 func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
-	entSrc, err := sl.storage.repo.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := sl.storage.Repo.GetItemSourceByID(ctx, sourceID)
 	if err != nil {
 		return fmt.Errorf("SyncByID: %w", err)
 	}
@@ -208,7 +208,7 @@ const maxBackwardSyncPreviewSamples = 5
 // PreviewBackwardSyncImpactByID looks up an ItemSource by ID and previews the
 // impact of enabling backward sync for it — see PreviewBackwardSyncImpact.
 func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID string) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
-	entSrc, err := sl.storage.repo.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := sl.storage.Repo.GetItemSourceByID(ctx, sourceID)
 	if err != nil {
 		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpactByID: %w", err)
 	}
@@ -241,7 +241,7 @@ func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID 
 // possiblyIncomplete is true when the underlying fetch hit its page cap,
 // meaning the count/titles returned are a lower bound, not exhaustive.
 func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.ItemSource) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
-	er := sl.storage.repo
+	er := sl.storage.Repo
 
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {
@@ -317,7 +317,7 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from,
 	switch {
 	case err == nil:
 		return backwardSyncOutcome{updated: 1}
-	case isGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
+	case IsGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
 		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
 		return backwardSyncOutcome{skipped: 1}
 	default:
@@ -347,7 +347,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 	start := time.Now()
 
-	er := sl.storage.repo
+	er := sl.storage.Repo
 
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {

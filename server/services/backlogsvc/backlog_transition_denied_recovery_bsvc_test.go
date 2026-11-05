@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -310,7 +311,7 @@ func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperat
 	h := wireEnforcedGate(t, svc)
 	remove := h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
 	spy := &denTriageSpy{BacklogService: svc}
-	listener := session.NewBacklogLifecycleListener(f.storage)
+	listener := backlog.NewBacklogLifecycleListener(f.storage)
 	listener.SetEnabled(true)
 	listener.SetTriageRespawner(spy)
 	ctx := context.Background()
@@ -353,7 +354,7 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 	workIS, err := svc.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, svc.storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
-	listener := session.NewBacklogLifecycleListener(svc.storage)
+	listener := backlog.NewBacklogLifecycleListener(svc.storage)
 	listener.SetEnabled(true)
 
 	for range 3 {

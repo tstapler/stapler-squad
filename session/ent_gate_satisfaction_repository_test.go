@@ -26,7 +26,7 @@ func newTestGateSatisfactionFixture(t *testing.T) (*EntGateSatisfactionRepositor
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("cas-from-" + uuid.NewString()).SetName("From").Save(ctx)
 	require.NoError(t, err)

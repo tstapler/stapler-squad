@@ -14,8 +14,8 @@ func expandEdge(e SystemEdge) []SystemEdge {
 	if e.From != AnyStatus {
 		return []SystemEdge{e}
 	}
-	out := make([]SystemEdge, 0, len(builtInStageOrder))
-	for _, s := range builtInStageOrder {
+	out := make([]SystemEdge, 0, len(BuiltInStageOrder))
+	for _, s := range BuiltInStageOrder {
 		out = append(out, SystemEdge{From: s, To: e.To})
 	}
 	return out
