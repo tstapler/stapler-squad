@@ -226,22 +226,32 @@ func probeEndpoint(ctx context.Context, network, address string, transport rpcTr
 	}
 }
 
-// unixSocketPath is the control socket of the daemon at cfg.Addr, or "" when it cannot be known.
-// It is the single resolution both the supervisor's probe and the client's fallback use. A socket
-// is only returned when it provably belongs to the same daemon as the address: the shared default
-// daemon's per-user path for the default address, or cfg.SocketPath when it was resolved together
-// with cfg.Addr (see socketPairedWithAddr).
-func unixSocketPath(cfg DaemonConfig) string {
-	if cfg.SocketPath != "" {
-		if socketPairedWithAddr(cfg) {
-			return cfg.SocketPath
-		}
+// ownedSocketPath is the control socket a daemon at cfg is, or may be, listening on: cfg.SocketPath
+// (spawn exports it to tymuxd as TYMUXD_SOCKET_PATH) or the shared default daemon's path for the
+// default address. Unfiltered by address pairing, so it is the right input for the never-kill-a-
+// daemon-whose-socket-answers veto.
+func ownedSocketPath(cfg DaemonConfig) string {
+	if sharedDaemonBlockedInTest(cfg.Addr) {
 		return ""
 	}
-	if cfg.Addr == defaultTymuxdAddr && !sharedDaemonBlockedInTest(cfg.Addr) {
+	if cfg.SocketPath != "" {
+		return cfg.SocketPath
+	}
+	if cfg.Addr == defaultTymuxdAddr {
 		return udsdialer.DefaultSocketPath(os.Getuid()) // not ResolveSocketPath: TYMUXD_SOCKET_PATH names another daemon
 	}
 	return ""
+}
+
+// unixSocketPath is the socket squad may talk to as a fallback for cfg.Addr, or "" when it cannot
+// be proven to belong to the daemon at that address (see socketPairedWithAddr). Used by the client
+// fallback and the Degraded probe; the kill veto uses ownedSocketPath instead.
+func unixSocketPath(cfg DaemonConfig) string {
+	path := ownedSocketPath(cfg)
+	if path != "" && cfg.SocketPath != "" && !socketPairedWithAddr(cfg) {
+		return ""
+	}
+	return path
 }
 
 // socketPairedWithAddr rejects the env-resolved combinations where only one half was overridden,
@@ -266,7 +276,7 @@ func socketPairedWithAddr(cfg DaemonConfig) bool {
 // unixSocketListening reports whether the control socket might be live: anything but a definite
 // refusal (timeout, resource error) counts as listening, like portListening.
 func unixSocketListening(cfg DaemonConfig) bool {
-	path := unixSocketPath(cfg)
+	path := ownedSocketPath(cfg)
 	if path == "" {
 		return false
 	}
