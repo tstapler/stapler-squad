@@ -51,6 +51,8 @@ type FederatedSessions struct {
 	streamClient *http.Client
 	now          func() time.Time
 
+	watch *FederatedWatchAggregator
+
 	mu    sync.RWMutex
 	hosts map[string]*peerSnapshot
 }
@@ -71,6 +73,7 @@ func NewFederatedSessions(identity session.HostIdentity, peers FederationPeers) 
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		now:   time.Now,
+		watch: NewFederatedWatchAggregator(),
 		hosts: map[string]*peerSnapshot{},
 	}
 }
@@ -110,12 +113,17 @@ func (f *FederatedSessions) Refresh(ctx context.Context) {
 
 	// A peer pruned from the registry has left the federation: drop its sessions.
 	f.mu.Lock()
+	var gone []string
 	for id := range f.hosts {
 		if _, ok := liveIDs[id]; !ok {
 			delete(f.hosts, id)
+			gone = append(gone, id)
 		}
 	}
 	f.mu.Unlock()
+	for _, id := range gone {
+		f.watch.Forget(id)
+	}
 }
 
 func (f *FederatedSessions) refreshPeer(ctx context.Context, peer session.RegistryEntry) {
@@ -127,20 +135,30 @@ func (f *FederatedSessions) refreshPeer(ctx context.Context, peer session.Regist
 			lastErr = err
 			continue
 		}
-		f.mu.Lock()
-		f.hosts[id] = &peerSnapshot{displayName: displayNameFor(peer), sessions: sessions, reachable: true}
-		f.mu.Unlock()
+		f.setSnapshot(id, &peerSnapshot{displayName: displayNameFor(peer), sessions: sessions, reachable: true})
 		return
 	}
 	log.Debug("session_federation.peer_unreachable", "peer", id, "err", lastErr)
-	f.mu.Lock()
-	if prev, ok := f.hosts[id]; ok {
-		prev.reachable = false
-	} else {
-		f.hosts[id] = &peerSnapshot{displayName: displayNameFor(peer)}
+	f.mu.RLock()
+	prev, ok := f.hosts[id]
+	f.mu.RUnlock()
+	stale := &peerSnapshot{displayName: displayNameFor(peer)}
+	if ok {
+		stale = &peerSnapshot{displayName: prev.displayName, sessions: prev.sessions}
 	}
-	f.mu.Unlock()
+	f.setSnapshot(id, stale)
 }
+
+// setSnapshot stores a peer's snapshot and publishes the diff to watchers.
+func (f *FederatedSessions) setSnapshot(hostID string, snap *peerSnapshot) {
+	f.mu.Lock()
+	f.hosts[hostID] = snap
+	f.mu.Unlock()
+	f.watch.Observe(hostID, tagPeerSessions(hostID, snap))
+}
+
+// Watch exposes peer session change events for WatchSessions.
+func (f *FederatedSessions) Watch() *FederatedWatchAggregator { return f.watch }
 
 func displayNameFor(peer session.RegistryEntry) string {
 	if len(peer.AdvertisedAddress) > 0 {
@@ -188,15 +206,20 @@ func (f *FederatedSessions) Sessions() []*sessionv1.Session {
 	sort.Strings(hostIDs)
 	var out []*sessionv1.Session
 	for _, hostID := range hostIDs {
-		snap := f.hosts[hostID]
-		for _, s := range snap.sessions {
-			tagged := proto.Clone(s).(*sessionv1.Session)
-			tagged.Id = session.FederatedSessionID{HostID: hostID, SessionID: s.Id}.String()
-			tagged.HostId = hostID
-			tagged.HostDisplayName = snap.displayName
-			tagged.HostStale = !snap.reachable
-			out = append(out, tagged)
-		}
+		out = append(out, tagPeerSessions(hostID, f.hosts[hostID])...)
+	}
+	return out
+}
+
+func tagPeerSessions(hostID string, snap *peerSnapshot) []*sessionv1.Session {
+	out := make([]*sessionv1.Session, 0, len(snap.sessions))
+	for _, s := range snap.sessions {
+		tagged := proto.Clone(s).(*sessionv1.Session)
+		tagged.Id = session.FederatedSessionID{HostID: hostID, SessionID: s.Id}.String()
+		tagged.HostId = hostID
+		tagged.HostDisplayName = snap.displayName
+		tagged.HostStale = !snap.reachable
+		out = append(out, tagged)
 	}
 	return out
 }
@@ -254,4 +277,40 @@ func (f *FederatedSessions) Session(id string) (*sessionv1.Session, bool) {
 		}
 	}
 	return nil, false
+}
+
+// filteredByWatch applies WatchSessions' category/status filters to the mirror.
+func (f *FederatedSessions) filteredByWatch(req *sessionv1.WatchSessionsRequest) []*sessionv1.Session {
+	var out []*sessionv1.Session
+	for _, s := range f.Sessions() {
+		if sessionMatchesWatch(s, req) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func sessionMatchesWatch(s *sessionv1.Session, req *sessionv1.WatchSessionsRequest) bool {
+	if s == nil || s.Hidden {
+		return false
+	}
+	if req.CategoryFilter != nil && *req.CategoryFilter != "" && s.Category != *req.CategoryFilter {
+		return false
+	}
+	if req.StatusFilter != nil && *req.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED && s.Status != *req.StatusFilter {
+		return false
+	}
+	return true
+}
+
+// peerEventMatches filters a peer event; deletions always pass so a session that
+// stopped matching (or vanished) is removed client-side.
+func peerEventMatches(e *sessionv1.SessionEvent, req *sessionv1.WatchSessionsRequest) bool {
+	switch ev := e.Event.(type) {
+	case *sessionv1.SessionEvent_SessionCreated:
+		return sessionMatchesWatch(ev.SessionCreated.Session, req)
+	case *sessionv1.SessionEvent_SessionUpdated:
+		return sessionMatchesWatch(ev.SessionUpdated.Session, req)
+	}
+	return true
 }
