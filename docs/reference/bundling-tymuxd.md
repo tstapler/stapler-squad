@@ -180,6 +180,10 @@ registered for it at all, regardless of the flag — `StopTymuxd()` has no
 ownership check beyond a PID file, so stopping a daemon this process doesn't
 own could kill one a sibling process still depends on.
 
+### Unix-socket fallback (TCP listener down)
+
+If tymuxd's TCP listener dies but its Unix control socket still answers, stapler-squad's tymux client (`session/tymux/transport_select.go`) switches every RPC, including a new Attach dial, to that socket and re-probes TCP every 30s; Attach streams already open are not migrated and reconnect through the same choice. Only the socket that belongs to this instance's daemon is used (`STAPLER_SQUAD_INSTANCE`-scoped path, or the shared default daemon's per-user path). The supervisor treats this as degraded, not failed: it reuses the daemon, never kills it, and logs one `[tymux] degraded: tymuxd TCP listener is down` warning per 10 minutes. Watch `tymux_daemon_degraded` (1 while degraded), `tymux_transport{transport}` and `tymux_transport_transitions_total{from,to}`. The fix for the underlying dead listener is to restart tymuxd at a time when its panes can be interrupted.
+
 ## Upgrading and downgrading the running daemon
 
 A running `tymuxd` keeps serving until it is replaced, so a new build that embeds a
