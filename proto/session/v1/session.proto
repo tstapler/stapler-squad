@@ -1559,10 +1559,21 @@ message PostPRCommentResponse {
 message MergePRRequest {
   // Session identifier (must be a PR session)
   string id = 1;
-  // Merge method: "merge", "squash", or "rebase" (default: "merge")
-  optional string method = 2;
+  // Deprecated: use merge_method. Legacy string: "merge", "squash", or "rebase".
+  // Honored only when merge_method is unspecified.
+  optional string method = 2 [deprecated = true];
   // Target PR; unset means the session's active PR.
   PullRequestRef pr = 3;
+  // Merge method; wins over the legacy method string when set. Unspecified
+  // falls back to method, then to MERGE.
+  MergeMethod merge_method = 4;
+}
+
+enum MergeMethod {
+  MERGE_METHOD_UNSPECIFIED = 0;
+  MERGE_METHOD_MERGE = 1;
+  MERGE_METHOD_SQUASH = 2;
+  MERGE_METHOD_REBASE = 3;
 }
 
 message MergePRResponse {
