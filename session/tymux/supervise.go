@@ -139,19 +139,51 @@ func checkDaemonHealthy(ctx context.Context, cfg DaemonConfig) bool {
 type daemonProbeResult int
 
 const (
-	daemonProbeNotListening daemonProbeResult = iota // connection refused / no socket: definitively down
+	daemonProbeNotListening daemonProbeResult = iota // connection refused: definitively down
+	daemonProbeNoSocketFile                          // internal to probeDaemon, never returned: the socket file does not exist (ENOENT)
 	daemonProbeUnhealthy                             // something answered, but not as tymuxd
 	daemonProbeBusy                                  // accepted the connection but did not answer in time: inconclusive
+	daemonProbeAccessDenied                          // alive, but the kernel (EACCES/EPERM) or the daemon (Unauthenticated/PermissionDenied) refuses this user: never killed, never "wedged"
 	daemonProbeDegraded                              // the Unix control socket is down but the deprecated TCP listener answers: usable via the fallback
 	daemonProbeHealthy                               // answered GetServerInfo over the primary transport (the Unix socket; TCP when no socket is known)
 )
 
 // probeDaemon probes the Unix control socket first, the transport squad prefers. A socket that
-// answers is Healthy: squad does not need TCP. Only when the socket is definitively not listening
-// (or answers as something else) does it try TCP, and a TCP listener that answers is reported as
-// daemonProbeDegraded so the monitor surfaces that squad is on the unauthenticated fallback. With
-// no known socket for the address, TCP alone decides.
+// answers is Healthy: squad does not need TCP. Only when the socket is not listening (or answers
+// as something else) does it try TCP, and a TCP listener that answers is reported as
+// daemonProbeDegraded when the socket file exists but refuses (the control socket died) so the
+// monitor surfaces that squad is on the unauthenticated fallback. When no socket file exists the
+// daemon is older than the socket (or has not created it yet): TCP answering is plain Healthy.
+// With no known socket for the address, TCP alone decides.
 func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
+	path := unixSocketPath(cfg)
+	noSocketFile := false
+	if path != "" {
+		unix, unixHTTP := newUnixTransport(path)
+		defer unixHTTP.CloseIdleConnections()
+		switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
+		case daemonProbeHealthy, daemonProbeBusy, daemonProbeAccessDenied:
+			return unixResult // a silent or forbidden socket is inconclusive: never killed, TCP not consulted
+		case daemonProbeNoSocketFile:
+			noSocketFile = true
+		}
+		if ctx.Err() != nil {
+			return daemonProbeNotListening
+		}
+	}
+	result := probeTCP(ctx, cfg)
+	if path == "" || result != daemonProbeHealthy {
+		return result
+	}
+	if noSocketFile {
+		logOnce("nosocket|"+path, log.Info, "[tymux] tymuxd has no Unix control socket (older daemon?); using TCP", "socket", path, "addr", cfg.Addr)
+		return daemonProbeHealthy
+	}
+	return daemonProbeDegraded
+}
+
+// probeTCP probes the TCP listener only.
+func probeTCP(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 	addr := cfg.Addr
 	if sharedDaemonBlockedInTest(addr) {
 		addr = deadLoopbackAddr
@@ -160,25 +192,26 @@ func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 	if err != nil {
 		return daemonProbeNotListening
 	}
-	path := unixSocketPath(cfg)
-	if path != "" {
-		unix, unixHTTP := newUnixTransport(path)
-		defer unixHTTP.CloseIdleConnections()
-		switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
-		case daemonProbeHealthy, daemonProbeBusy:
-			return unixResult // a silent socket is inconclusive, never killed, and TCP is not consulted
-		}
-		if ctx.Err() != nil {
-			return daemonProbeNotListening
-		}
-	}
 	tcp := newTCPTransport(addr)
 	defer tcp.closeIdle()
-	result := probeEndpoint(ctx, "tcp", hostPort, tcp)
-	if path != "" && result == daemonProbeHealthy {
-		return daemonProbeDegraded
+	return probeEndpoint(ctx, "tcp", hostPort, tcp)
+}
+
+// onceLogged remembers which diagnoses were already logged this episode; a Healthy probe of the
+// same endpoint clears its keys so a recurrence logs again.
+var onceLogged sync.Map
+
+func logOnce(key string, emit func(string, ...any), msg string, args ...any) {
+	if _, dup := onceLogged.LoadOrStore(key, struct{}{}); dup {
+		return
 	}
-	return result
+	emit(msg, args...)
+}
+
+func clearOnce(address string) {
+	for _, kind := range []string{"denied", "nosocket"} {
+		onceLogged.Delete(kind + "|" + address)
+	}
 }
 
 // dialFn is the seam probeEndpoint, portListening and unixSocketListening dial through.
@@ -203,6 +236,14 @@ func probeEndpoint(ctx context.Context, network, address string, transport rpcTr
 		if ctx.Err() != nil {
 			return daemonProbeNotListening
 		}
+		if network == "unix" && errors.Is(err, syscall.ENOENT) {
+			return daemonProbeNoSocketFile
+		}
+		if isAccessDenied(err) {
+			logOnce("denied|"+address, log.Warn, "[tymux] daemon probe: permission denied connecting to tymuxd; it is alive and left running, but this user may not use it",
+				"network", network, "address", address, "err", err)
+			return daemonProbeAccessDenied
+		}
 		if dialRefused(network, err) {
 			log.Warn("[tymux] daemon probe: nothing listening", "network", network, "address", address, "err", err)
 			return daemonProbeNotListening
@@ -217,9 +258,14 @@ func probeEndpoint(ctx context.Context, network, address string, transport rpcTr
 	_, err = transport.GetServerInfo(healthCtx, connect.NewRequest(&v1.GetServerInfoRequest{}))
 	switch {
 	case err == nil:
+		clearOnce(address)
 		return daemonProbeHealthy
 	case ctx.Err() != nil:
 		return daemonProbeUnhealthy
+	case connect.CodeOf(err) == connect.CodeUnauthenticated || connect.CodeOf(err) == connect.CodePermissionDenied:
+		logOnce("denied|"+address, log.Warn, "[tymux] daemon probe: tymuxd rejected our credentials; it is alive and left running, but this client is not authorized",
+			"network", network, "address", address, "err", err)
+		return daemonProbeAccessDenied
 	case errors.Is(healthCtx.Err(), context.DeadlineExceeded) || connect.CodeOf(err) == connect.CodeDeadlineExceeded:
 		log.Warn("[tymux] daemon probe: no answer before the timeout, treating as busy", "network", network, "address", address, "timeout", daemonProbeTimeout)
 		return daemonProbeBusy

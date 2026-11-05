@@ -108,7 +108,7 @@ func TestUDSDefault_BothListenersUp_TrafficUsesOnlyTheSocket(t *testing.T) {
 	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()))
 }
 
-func TestUDSDefault_SocketGone_FallsBackToTCP_AndSupervisorSeesDegraded(t *testing.T) {
+func TestUDSDefault_SocketGone_FallsBackToTCP_AndSupervisorTreatsItAsNoSocket(t *testing.T) {
 	d := startTestDaemon(t, newPaneService(1, 1))
 	useDaemonEnv(t, d)
 	tr := NewRealTransport(d.addr)
@@ -119,7 +119,7 @@ func TestUDSDefault_SocketGone_FallsBackToTCP_AndSupervisorSeesDegraded(t *testi
 	require.NoError(t, err)
 	require.Equal(t, transportTCP, tr.(*selectingTransport).Active())
 	require.Positive(t, d.tcpHits.Load())
-	require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), ResolveDaemonConfig()))
+	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()), "no socket file: an older daemon, not degraded")
 }
 
 func TestUDSDefault_SocketDeniesAccess_HardErrorNoTCP(t *testing.T) {

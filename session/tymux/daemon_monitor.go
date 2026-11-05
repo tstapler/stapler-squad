@@ -16,6 +16,7 @@ type daemonMonitor struct {
 	threshold            int
 	needed               func() bool
 	healthy              func(context.Context, DaemonConfig) bool
+	tcpUp                func(context.Context, DaemonConfig) bool              // nil: no TCP-liveness signal
 	probe                func(context.Context, DaemonConfig) daemonProbeResult // preferred over healthy when set; lets the monitor tell Busy from Healthy
 	ensure               func(context.Context, DaemonConfig) (TymuxdReady, error)
 	onSpawn              func()
@@ -51,7 +52,7 @@ func MonitorDaemon(ctx context.Context, cfg DaemonConfig, needed func() bool, on
 func newDaemonMonitor(needed func() bool, onSpawn func()) daemonMonitor {
 	return daemonMonitor{
 		interval: 5 * time.Second, maxBackoff: time.Minute, threshold: daemonMonitorThreshold,
-		probe: probeDaemon, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
+		probe: probeDaemon, tcpUp: func(ctx context.Context, cfg DaemonConfig) bool { return probeTCP(ctx, cfg) == daemonProbeHealthy }, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
 	}
 }
 
@@ -134,10 +135,45 @@ func (d *degradedTracker) observe(ctx context.Context, cfg DaemonConfig, degrade
 	return true
 }
 
+// tcpListenerTracker publishes tymux_tcp_listener_up and rate-limits the warning. TCP liveness
+// never affects daemon health (squad uses the socket); it only tells the operator that other
+// TCP-only clients of this daemon are about to fail.
+type tcpListenerTracker struct {
+	down     bool
+	lastWarn time.Time
+}
+
+// observe records whether the TCP listener answers and reports whether it emitted the warning.
+func (t *tcpListenerTracker) observe(ctx context.Context, cfg DaemonConfig, up bool, now time.Time) bool {
+	recordTCPListenerUp(ctx, up)
+	if up {
+		*t = tcpListenerTracker{}
+		return false
+	}
+	if t.down && now.Sub(t.lastWarn) < daemonDegradedWarnEvery {
+		return false
+	}
+	t.down, t.lastWarn = true, now
+	log.Warn("[tymux] tymuxd TCP listener is down; other TCP-only clients of this daemon will fail (squad itself uses the Unix control socket)", "addr", cfg.Addr)
+	return true
+}
+
+// observeTCP updates the TCP-liveness signal for a tick whose daemon probe returned result. A
+// Degraded result already proves TCP answers; a dead daemon is the health gauge's business.
+func (m daemonMonitor) observeTCP(ctx context.Context, cfg DaemonConfig, result daemonProbeResult, t *tcpListenerTracker) {
+	switch {
+	case result == daemonProbeDegraded:
+		t.observe(ctx, cfg, true, time.Now())
+	case result >= daemonProbeBusy && m.tcpUp != nil:
+		t.observe(ctx, cfg, m.tcpUp(ctx, cfg), time.Now())
+	}
+}
+
 func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 	owned := false
 	var wedge wedgeTracker
 	var degraded degradedTracker
+	var tcp tcpListenerTracker
 	defer recordDaemonDegraded(context.Background(), false, 0) // never leave a stale 1 behind
 	failures := 0
 	delay := m.interval
@@ -166,6 +202,7 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 			m.onWedged()
 		}
 		degraded.observe(ctx, cfg, result == daemonProbeDegraded, time.Now())
+		m.observeTCP(ctx, cfg, result, &tcp)
 		healthy := result >= daemonProbeBusy
 		if healthy {
 			if failures > 0 {

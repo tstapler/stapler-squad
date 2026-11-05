@@ -114,13 +114,9 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		cfg := DaemonConfig{Addr: srv.URL, SocketPath: answeringUnixSocket(t)}
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg), "the socket decides; TCP is not consulted")
 	})
-	t.Run("missing unix socket with TCP answering is degraded, still usable", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		grpcOKServer(t, ln)
-		cfg := DaemonConfig{Addr: "http://" + ln.Addr().String(), SocketPath: missingSocketPath(t)}
-		require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), cfg), "not Healthy: the monitor must see squad is on the TCP fallback")
-		require.True(t, checkDaemonHealthy(context.Background(), cfg), "the client falls back to TCP")
+	t.Run("missing unix socket file with TCP answering is an older daemon: healthy, not degraded", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: tcpAnswering(t), SocketPath: missingSocketPath(t)}
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg))
 	})
 	t.Run("missing unix socket and dead TCP is not listening", func(t *testing.T) {
 		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: missingSocketPath(t)}
@@ -233,6 +229,9 @@ func TestDialErrors_OnlyRefusalMeansDown(t *testing.T) {
 			wantProbe := daemonProbeBusy
 			if tc.wantDown {
 				wantProbe = daemonProbeNotListening
+			}
+			if tc.name == "unix missing socket" {
+				wantProbe = daemonProbeNoSocketFile // still "down" for the kill veto below, but told apart for the supervisor
 			}
 			require.Equal(t, wantProbe, probeEndpoint(context.Background(), tc.network, "addr", nil))
 			if tc.network == "tcp" {

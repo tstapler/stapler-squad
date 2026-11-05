@@ -102,7 +102,9 @@ var (
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
 	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
-		metric.WithDescription("1 while tymuxd's TCP listener is down but its Unix control socket answers (sessions use the fallback), otherwise 0"))
+		metric.WithDescription("1 while tymuxd's Unix control socket is down but its deprecated TCP listener answers (sessions are on the unauthenticated fallback), otherwise 0"))
+	tcpListenerUpGauge = mustInt64Gauge("tymux_tcp_listener_up",
+		metric.WithDescription("1 while tymuxd's deprecated TCP listener answers, 0 when it does not. Informational: squad uses the Unix control socket, but other TCP-only clients of the daemon depend on it. Not part of daemon health"))
 	daemonDegradedSecondsGauge = mustFloat64Gauge("tymux_daemon_degraded_seconds",
 		metric.WithDescription("Seconds the current degraded episode (Unix control socket down, TCP fallback answering) has lasted, 0 when not degraded"),
 		metric.WithUnit("s"))
@@ -122,6 +124,14 @@ func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
 	}
 	daemonHealthyGauge.Record(ctx, value)
 	daemonFailureGauge.Record(ctx, int64(failures))
+}
+
+func recordTCPListenerUp(ctx context.Context, up bool) {
+	value := int64(0)
+	if up {
+		value = 1
+	}
+	tcpListenerUpGauge.Record(ctx, value)
 }
 
 func recordDaemonDegraded(ctx context.Context, degraded bool, lasted time.Duration) {
