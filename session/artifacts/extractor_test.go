@@ -125,3 +125,22 @@ func TestExtractFromBashCommand_GHPRCreate_BodyBeforeTitle(t *testing.T) {
 		t.Fatalf("unexpected detail: %q", artifact.Detail)
 	}
 }
+
+func TestExtractor_ShouldKeepHost_WhenGHEPullURL(t *testing.T) {
+	t.Parallel()
+	f := scanLines(toolResultLine(t, "2026-11-04T10:00:00Z", "x",
+		"see https://ghe.acme.io/acme/app/pull/5 and https://GitHub.com/acme/app/pull/6"))
+	prs := prRecords(f)
+	if len(prs) != 2 {
+		t.Fatalf("want 2 PR records, got %#v", f.records)
+	}
+	if prs[0].Host != "ghe.acme.io" || prs[0].Owner != "acme" || prs[0].Repo != "app" || prs[0].Number != 5 {
+		t.Fatalf("GHE record: %#v", prs[0])
+	}
+	if prs[1].Host != "github.com" {
+		t.Fatalf("host must be normalized, got %q", prs[1].Host)
+	}
+	if len(f.prURLs) != 2 || f.prURLs[0] != "https://ghe.acme.io/acme/app/pull/5" {
+		t.Fatalf("v1 pr_urls: %v", f.prURLs)
+	}
+}

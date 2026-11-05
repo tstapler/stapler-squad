@@ -5,11 +5,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/github"
 )
 
 var (
-	// GitHub PR URL: https://github.com/<owner>/<repo>/pull/<number>
-	rePRURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+	// PR URL on github.com or a GitHub Enterprise host: https://<host>/<owner>/<repo>/pull/<number>
+	rePRURL = regexp.MustCompile(`(?i)https://[a-z0-9.-]+(?::\d+)?/[\w.-]+/[\w.-]+/pull/\d+`)
 	// 40-hex commit SHA — only when following a git output keyword to avoid false positives
 	// (npm hashes, Docker digests, TLS fingerprints all match bare \b[0-9a-f]{40}\b)
 	reCommitSHA = regexp.MustCompile(`(?i)(?:^|\b)commit\s+([0-9a-f]{40})\b`)
@@ -101,5 +103,5 @@ func parsePRURL(raw string) (PRRecord, bool) {
 	if err != nil {
 		return PRRecord{}, false
 	}
-	return PRRecord{Host: u.Host, Owner: parts[0], Repo: parts[1], Number: n}, true
+	return PRRecord{Host: github.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
 }
