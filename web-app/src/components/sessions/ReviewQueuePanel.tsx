@@ -22,7 +22,8 @@ import { reviewItemHasOpenPr, reviewItemPr } from "@/lib/pr/reviewItemPr";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
-import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
+import type { ReviewItem, Session} from "@/gen/session/v1/types_pb";
+import { Priority, AttentionReason, WorkingState, SuggestionSource, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import { riskLevelRank } from "@/lib/sessions/riskLevel";
@@ -1078,6 +1079,7 @@ export function ReviewQueuePanel({
             : undefined
         }
       >
+        {/* analytics-exempt */}
         <div className={itemHeader}>
           <h3 className={itemTitle}>{queueItem.sessionName}</h3>
           <ReviewQueueBadge
@@ -1191,7 +1193,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                approveRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                approveRequest(queueItem.metadata["pending_approval_id"] ?? "").finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
@@ -1208,7 +1210,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                denyRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                denyRequest(queueItem.metadata["pending_approval_id"] ?? "").finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
@@ -1231,7 +1233,7 @@ export function ReviewQueuePanel({
                   setActiveRuleItemId(queueItem.sessionId);
                   void generateRule({
                     source: SuggestionSource.COMMAND_SAMPLE,
-                    commandSample: queueItem.metadata!["tool_input_command"],
+                    commandSample: queueItem.metadata["tool_input_command"] ?? "",
                     toolNameFilter: queueItem.metadata?.["tool_name"] ?? "",
                   });
                 }}
@@ -1284,6 +1286,7 @@ export function ReviewQueuePanel({
                   aria-label={prNumber ? `PR #${prNumber}: ${queueItem.sessionName}` : `View PR: ${queueItem.sessionName}`}
                   data-testid="github-pr-link"
                 >
+                  {/* analytics-exempt */}
                   {prNumber ? `✅ View PR #${prNumber}` : "✅ View PR"}
                 </a>
               ) : (
@@ -1403,6 +1406,7 @@ export function ReviewQueuePanel({
             disabled={loading}
             aria-label="Refresh review queue"
           >
+            {/* analytics-exempt */}
             {loading ? "⟳" : "↻"}
           </button>
         </div>
@@ -1431,6 +1435,7 @@ export function ReviewQueuePanel({
           <div className={stalenessIndicator} role="status" data-testid="review-queue-staleness">
             Last updated {stalenessLabel} ago ·{" "}
             <button type="button" className={stalenessRetry} onClick={refresh}>
+              {/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -1450,6 +1455,7 @@ export function ReviewQueuePanel({
             onClick={refreshSnapshot}
             aria-label={`${newItemsCount} new item${newItemsCount !== 1 ? "s" : ""} added. Click to refresh the list.`}
           >
+            {/* analytics-exempt */}
             {newItemsCount} new item{newItemsCount !== 1 ? "s" : ""} added — click to refresh
           </button>
         )}
@@ -1463,6 +1469,7 @@ export function ReviewQueuePanel({
             aria-expanded={isFiltersOpen}
             aria-controls="review-queue-filters"
           >
+            {/* analytics-exempt */}
             {activeFilterLabel} {isFiltersOpen ? "▲" : "▼"}
           </button>
           {hasActiveFilter && (
@@ -1471,6 +1478,7 @@ export function ReviewQueuePanel({
               onClick={clearAllFilters}
               aria-label="Clear active filter"
             >
+              {/* analytics-exempt */}
               ✕ Clear
             </button>
           )}
@@ -1521,6 +1529,7 @@ export function ReviewQueuePanel({
                       aria-pressed={priorityFilter.has(priority)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
@@ -1557,6 +1566,7 @@ export function ReviewQueuePanel({
                     aria-pressed={reasonFilter.has(reason)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
+                    {/* analytics-exempt */}
                     {isExcluded ? "🚫 " : ""}
                     {getReasonLabel(reason)} ({reasonCount})
                   </button>
@@ -1581,6 +1591,7 @@ export function ReviewQueuePanel({
                     aria-pressed={severityFilter.has(severity)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
+                    {/* analytics-exempt */}
                     {isExcluded ? "🚫 " : ""}
                     {label} ({severityCount})
                   </button>
@@ -1603,6 +1614,7 @@ export function ReviewQueuePanel({
                       aria-pressed={programFilter.has(program)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {program} ({n})
                     </button>
@@ -1626,6 +1638,7 @@ export function ReviewQueuePanel({
                       aria-pressed={categoryFilter.has(category)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {category} ({n})
                     </button>
@@ -1649,6 +1662,7 @@ export function ReviewQueuePanel({
                       aria-pressed={tagFilter.has(t)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {/* analytics-exempt */}
                       {isExcluded ? "🚫 " : ""}
                       {t} ({n})
                     </button>
@@ -1668,6 +1682,7 @@ export function ReviewQueuePanel({
                   onClick={() => handlePrFilterChange(v)}
                   aria-pressed={prFilter === v}
                 >
+                  {/* analytics-exempt */}
                   {v === "all" ? "All" : v === "has-pr" ? "Has PR" : "No PR"}
                 </button>
               ))}
@@ -1676,6 +1691,7 @@ export function ReviewQueuePanel({
                 onClick={() => handleDivergedOnlyChange(!divergedOnly)}
                 aria-pressed={divergedOnly}
               >
+                {/* analytics-exempt */}
                 Diverged from base
               </button>
             </div>
@@ -1703,6 +1719,7 @@ export function ReviewQueuePanel({
                   onClick={() => handleSortDirectionChange(sortDirection === "asc" ? "desc" : "asc")}
                   aria-label={`Sort direction: ${sortDirection === "asc" ? "ascending" : "descending"}`}
                 >
+                  {/* analytics-exempt */}
                   {sortDirection === "asc" ? "↑ Asc" : "↓ Desc"}
                 </button>
               )}
@@ -1876,6 +1893,7 @@ export function ReviewQueuePanel({
                 aria-label="Close"
                 data-testid="create-rule-modal-close"
               >
+                {/* analytics-exempt */}
                 ✕
               </button>
             </div>

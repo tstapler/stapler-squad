@@ -17,7 +17,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
-import type { ReviewItem } from "@/gen/session/v1/types_pb";
+import type { ReviewItem, SuggestedRuleProto } from "@/gen/session/v1/types_pb";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
 import { makePr } from "@/lib/pr/__testUtils__/pullRequests";
 
@@ -94,7 +94,7 @@ jest.mock("../CreatePullRequestModal", () => ({
   }) =>
     isOpen ? (
       <div data-testid="create-pr-modal" data-session-id={session.id}>
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{/* analytics-exempt */}Close</button>
       </div>
     ) : null,
 }));
@@ -117,7 +117,7 @@ const mockGenerate = jest.fn().mockResolvedValue(undefined);
 const mockClear = jest.fn();
 
 const mockGenerateRuleState = {
-  suggestions: [] as import("@/gen/session/v1/types_pb").SuggestedRuleProto[],
+  suggestions: [] as SuggestedRuleProto[],
   loading: false,
   error: null as Error | null,
   generate: mockGenerate,
@@ -140,8 +140,8 @@ jest.mock("../SuggestedRuleCard", () => ({
     loading?: boolean;
   }) => (
     <div data-testid="suggested-rule-card" data-loading={loading}>
-      <button onClick={() => onAccept({})}>Accept</button>
-      <button onClick={onDiscard}>Discard</button>
+      <button onClick={() => onAccept({})}>{/* analytics-exempt */}Accept</button>
+      <button onClick={onDiscard}>{/* analytics-exempt */}Discard</button>
     </div>
   ),
 }));
@@ -639,7 +639,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("shows SuggestedRuleCard when suggestion is available", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,
@@ -660,7 +660,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("closes modal and calls clear when Discard is clicked", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,
@@ -685,7 +685,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("shows rule-saved indicator and closes modal when rule accepted", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,

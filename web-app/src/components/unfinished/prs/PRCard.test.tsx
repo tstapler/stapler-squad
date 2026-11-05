@@ -204,6 +204,11 @@ describe("PRCard nudge", () => {
   const RUN = LinkedSessionStatus.RUNNING;
   const PAUSE = LinkedSessionStatus.PAUSED;
   const nudge = () => screen.queryByTestId("pr-nudge-42");
+  const nudgeOrThrow = () => {
+    const el = nudge();
+    if (!el) throw new Error("nudge button not rendered");
+    return el;
+  };
 
   it("prCard_should_ShowNudgeOnlyWhenNudgeableAndRunnableSession_When_GreenDraftChangesRequestedOnlyPausedOnly", () => {
     const linked = [session("fix-ci", RUN, 200)];
@@ -243,7 +248,7 @@ describe("PRCard nudge", () => {
 
   it("prCard_should_MoveFocusToStatusRegionNotBody_When_FocusedNudgeButtonDisappears", () => {
     const { rerender } = render(<PRCard pr={failingPR()} />);
-    act(() => nudge()!.focus());
+    act(() => nudgeOrThrow().focus());
     expect(document.activeElement).toBe(nudge());
 
     rerender(<PRCard pr={failingPR({ checkConclusion: "success" })} />);
@@ -264,8 +269,8 @@ describe("PRCard nudge", () => {
   it("prCard_should_KeepFocusOnLiveElement_When_NudgeCompletesOrListRefreshes", async () => {
     const client = fakeNudgeClient({ outcome: NudgeOutcome.DELIVERED });
     const { rerender } = render(<PRCard pr={failingPR()} nudgeClient={client} />);
-    act(() => nudge()!.focus());
-    await act(async () => void fireEvent.click(nudge()!));
+    act(() => nudgeOrThrow().focus());
+    await act(async () => void fireEvent.click(nudgeOrThrow()));
     expect(document.activeElement).toBe(nudge());
     rerender(<PRCard pr={failingPR()} nudgeClient={client} />);
     expect(document.activeElement).toBe(nudge());

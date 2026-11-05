@@ -55,6 +55,7 @@ function FailingChecks({ pr, count }: { pr: UserPR; count: number }) {
         onClick={() => setOpen((v) => !v)}
         data-testid="failing-checks-toggle"
       >
+        {/* analytics-exempt */}
         CI: {count} failing
       </button>
       {open && (

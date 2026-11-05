@@ -1,4 +1,4 @@
-import {
+import type {
   PaneState,
   PaneAction,
   PaneNode,
@@ -108,8 +108,8 @@ export function paneReducer(state: PaneState, action: PaneAction): PaneState {
 
       // Step 1: clear the source pane (atomic — uses the immutable replaceNode chain)
       let newRoot = state.root;
-      if (sourcePaneId) {
-        const sourceLeaf = findLeaf(newRoot, sourcePaneId)!;
+      const sourceLeaf = sourcePaneId ? findLeaf(newRoot, sourcePaneId) : undefined;
+      if (sourcePaneId && sourceLeaf) {
         newRoot = replaceNode(newRoot, sourcePaneId, { ...sourceLeaf, sessionId: null });
       }
 
@@ -218,8 +218,8 @@ export function paneReducer(state: PaneState, action: PaneAction): PaneState {
       const sourcePaneId = sourceLeaf?.id ?? null;
 
       let newRoot = state.root;
-      if (sourcePaneId && sourcePaneId !== paneId) {
-        const src = findLeaf(newRoot, sourcePaneId)!;
+      const src = sourcePaneId && sourcePaneId !== paneId ? findLeaf(newRoot, sourcePaneId) : undefined;
+      if (sourcePaneId && src) {
         newRoot = replaceNode(newRoot, sourcePaneId, { ...src, sessionId: null });
       }
 
