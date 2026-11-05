@@ -115,7 +115,7 @@ func (s *BacklogService) gateOutcome(ctx context.Context, sessions []session.Ite
 		return session.CleanupOutcome{}, false
 	}
 	path := session.CleanupPathFrom(ctx)
-	if set.Block(path, itemID, time.Now()) {
+	if set.Block(path, itemID, block.Reason, time.Now()) {
 		session.RecordCleanupBlocked(path)
 		log.WarningLog().Printf("[cleanupGate] path=%s item=%s worktree removal blocked: %s", path, itemID, block.Reason)
 	}

@@ -156,9 +156,9 @@ func TestBlockedSet_ShouldDedupeFirstBlock_AndReportCountAndAge(t *testing.T) {
 	t.Parallel()
 	b := NewBlockedSet()
 	t0 := prTestEpoch
-	assert.True(t, b.Block("sweep", "i1", t0))
-	assert.False(t, b.Block("sweep", "i1", t0.Add(time.Minute)), "second tick: counter unchanged")
-	assert.True(t, b.Block("archive_rpc", "i1", t0.Add(2*time.Minute)), "a different path counts separately")
+	assert.True(t, b.Block("sweep", "i1", "r", t0))
+	assert.False(t, b.Block("sweep", "i1", "r", t0.Add(time.Minute)), "second tick: counter unchanged")
+	assert.True(t, b.Block("archive_rpc", "i1", "r", t0.Add(2*time.Minute)), "a different path counts separately")
 	assert.Equal(t, 1, b.Count("sweep"))
 	items := b.Items()
 	require.Len(t, items, 1)

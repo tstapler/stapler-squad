@@ -71,6 +71,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 	h.writeItemSessions(ctx, &sb, itemID)
 	h.writeActivityNotes(ctx, &sb, itemID)
 	h.writePullRequestSet(ctx, &sb, item)
+	h.writeBlockedCleanup(&sb, itemID)
 
 	if session.BacklogStatus(item.Status) == session.BacklogStatusPRPending && item.PrNumber > 0 {
 		h.writeCICrossCheck(ctx, &sb, item)
@@ -367,4 +368,21 @@ func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) m
 		}
 	}
 	return out
+}
+
+// writeBlockedCleanup lists a done/archived item whose worktree cleanup the gate is
+// withholding, with the holding owner and how long it has been blocked (the same set
+// behind ssq_cleanup_gate_blocked_items). Nothing is written when the item is clear.
+func (h *backlogHandlers) writeBlockedCleanup(sb *strings.Builder, itemID string) {
+	if h.backlogSvc == nil {
+		return
+	}
+	for _, b := range h.backlogSvc.BlockedCleanups() {
+		if b.ItemID != itemID {
+			continue
+		}
+		fmt.Fprintf(sb, "\n## Worktree cleanup blocked\nBlocked for %s (path %s): %s\n",
+			time.Since(b.Since).Round(time.Minute), b.Path, session.SanitizeForAgentContext(b.Reason, 400))
+		return
+	}
 }

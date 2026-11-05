@@ -248,23 +248,30 @@ func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string
 // log line fire once per newly blocked pair and the gauge reports the current size.
 type BlockedSet struct {
 	mu      sync.Mutex
-	entries map[string]map[string]time.Time // path -> item id -> first blocked at
+	entries map[string]map[string]blockedEntry // path -> item id -> entry
+}
+
+type blockedEntry struct {
+	since  time.Time
+	reason string
 }
 
 // NewBlockedSet returns an empty set.
-func NewBlockedSet() *BlockedSet { return &BlockedSet{entries: map[string]map[string]time.Time{}} }
+func NewBlockedSet() *BlockedSet { return &BlockedSet{entries: map[string]map[string]blockedEntry{}} }
 
 // Block records the pair and reports whether it is newly blocked.
-func (b *BlockedSet) Block(path, itemID string, now time.Time) (first bool) {
+func (b *BlockedSet) Block(path, itemID, reason string, now time.Time) (first bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.entries[path] == nil {
-		b.entries[path] = map[string]time.Time{}
+		b.entries[path] = map[string]blockedEntry{}
 	}
-	if _, ok := b.entries[path][itemID]; ok {
+	if cur, ok := b.entries[path][itemID]; ok {
+		cur.reason = reason
+		b.entries[path][itemID] = cur
 		return false
 	}
-	b.entries[path][itemID] = now
+	b.entries[path][itemID] = blockedEntry{since: now, reason: reason}
 	return true
 }
 
@@ -290,9 +297,9 @@ func (b *BlockedSet) Items() []BlockedItem {
 	defer b.mu.Unlock()
 	seen := map[string]BlockedItem{}
 	for path, m := range b.entries {
-		for id, at := range m {
-			if cur, ok := seen[id]; !ok || at.Before(cur.Since) {
-				seen[id] = BlockedItem{ItemID: id, Path: path, Since: at}
+		for id, e := range m {
+			if cur, ok := seen[id]; !ok || e.since.Before(cur.Since) {
+				seen[id] = BlockedItem{ItemID: id, Path: path, Since: e.since, Reason: e.reason}
 			}
 		}
 	}
@@ -308,5 +315,6 @@ func (b *BlockedSet) Items() []BlockedItem {
 type BlockedItem struct {
 	ItemID string
 	Path   string
+	Reason string // names the holding owners
 	Since  time.Time
 }
