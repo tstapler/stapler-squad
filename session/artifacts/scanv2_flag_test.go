@@ -88,8 +88,9 @@ func TestScanV2Flag_ShouldRescanFromTop_WhenFlagOn(t *testing.T) {
 func TestScanV2Flag_ShouldStopEnqueueing_WhenFlippedOffMidRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	var paths []string
-	for _, n := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
+	names := []string{"a.jsonl", "b.jsonl", "c.jsonl"}
+	paths := make([]string, 0, len(names))
+	for _, n := range names {
 		p := filepath.Join(dir, n)
 		appendLines(t, p, "PR https://github.com/o/r/pull/1")
 		paths = append(paths, p)

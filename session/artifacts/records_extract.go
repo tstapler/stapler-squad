@@ -58,8 +58,8 @@ func (f *scanFindings) addCommandRecords(command string, ts time.Time) {
 
 // commandSegments splits shell words on command separators.
 func commandSegments(words []string) [][]string {
-	var segs [][]string
-	var cur []string
+	segs := make([][]string, 0, 1)
+	cur := make([]string, 0, len(words))
 	for _, w := range words {
 		switch w {
 		case "&&", "||", ";", "|":
