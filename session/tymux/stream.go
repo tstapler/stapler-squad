@@ -472,9 +472,10 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 }
 
 // ReconnectLoop keeps transport outages recoverable with capped backoff until
-// Close or DetachSafely interrupts it. Confirmed pane loss is terminal; an
-// unconfirmed NotFound retains the bounded reconciliation budget. The returned
-// reason is authoritative so callers do not race a later closing-state read.
+// Close or DetachSafely interrupts it, so a permanently dead daemon keeps the
+// session reconnecting. Confirmed pane loss is terminal; an unconfirmed
+// NotFound retains the bounded reconciliation budget. The returned reason is
+// authoritative so callers do not race a later closing-state read.
 func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
 	recordReconnect(cause)
 	sessionID := s.GetSessionIdentifier()
