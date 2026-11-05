@@ -42,7 +42,7 @@ func TestRecords_ShouldRoundTripEveryKind(t *testing.T) {
 	}
 }
 
-func TestRecords_ShouldDropStrayFieldsAtTheParsePoint(t *testing.T) {
+func TestArtifactRecord_ShouldDropStrayField_AndSkipUnknownKind_Stray(t *testing.T) {
 	t.Parallel()
 	r, err := ParseRecord([]byte(`{"kind":"commit","host":"x","sha":"abc1234","subject":"s"}`))
 	if err != nil {
@@ -58,7 +58,7 @@ func TestRecords_ShouldDropStrayFieldsAtTheParsePoint(t *testing.T) {
 	}
 }
 
-func TestRecords_ShouldSkipUnknownKindWithCountedWarning(t *testing.T) {
+func TestArtifactRecord_ShouldDropStrayField_AndSkipUnknownKind_Unknown(t *testing.T) {
 	before := UnknownRecordsSkipped()
 	var l RecordList
 	if err := json.Unmarshal([]byte(`[{"kind":"unknown"},{"kind":"plan_doc","path":"a.md"},{"nokind":1}]`), &l); err != nil {
@@ -83,7 +83,7 @@ type preChangeBlob struct {
 	ScanState       ScanState         `json:"scan_state,omitempty"`
 }
 
-func TestBlobV2_ShouldBeReadableByThePreChangeDecoder(t *testing.T) {
+func TestBlobV2_ShouldBeReadableByV1Decoder_WhenWrittenByThisVersion(t *testing.T) {
 	t.Parallel()
 	b := &SessionArtifactsBlob{
 		PRURLs: []string{"https://github.com/acme/app/pull/12"}, CommitSHAs: []string{"1a2b3c4"},
@@ -103,7 +103,7 @@ func TestBlobV2_ShouldBeReadableByThePreChangeDecoder(t *testing.T) {
 	}
 }
 
-func TestBlobV1_ShouldLoadWithoutRecords(t *testing.T) {
+func TestBlobV1_ShouldLoadAndKeepPRURLs_WhenStoredBeforeV2(t *testing.T) {
 	t.Parallel()
 	var b SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(`{"pr_urls":["https://github.com/a/b/pull/1"],"scan_offset_bytes":5}`), &b); err != nil {
