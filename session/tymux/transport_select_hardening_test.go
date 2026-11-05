@@ -47,19 +47,37 @@ func TestSelectingTransport_ReprobeSeesEPERM_SwitchesBackToUnixSoTheErrorSurface
 	require.Equal(t, tcpCalls, tcp.calls.Load())
 }
 
-// A socket path that can never work (a non-directory component, as for an over-long sun_path)
-// must fall back to TCP instead of failing permanently with TCP never tried.
+// A socket path that can never work must fall back to TCP instead of failing permanently with TCP
+// never tried. ENAMETOOLONG is unreachable here: sun_path (104/108) is shorter than NAME_MAX, so an
+// over-long path surfaces as EINVAL, which this covers.
 func TestSelectingTransport_BrokenSocketPath_FallsBackToTCP(t *testing.T) {
 	t.Parallel()
-	file := filepath.Join(t.TempDir(), "afile")
-	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	unix, _ := newUnixTransport(filepath.Join(file, "d.sock"))
-	tcp := &fakeEndpoint{}
-	s := selecting.NewFromTransports(unix, tcp, selecting.Options{})
+	brokenPaths := map[string]func(t *testing.T) string{
+		"ENOTDIR": func(t *testing.T) string {
+			file := filepath.Join(t.TempDir(), "afile")
+			require.NoError(t, os.WriteFile(file, nil, 0o600))
+			return filepath.Join(file, "d.sock")
+		},
+		"ELOOP": func(t *testing.T) string {
+			dir := t.TempDir()
+			require.NoError(t, os.Symlink(filepath.Join(dir, "b"), filepath.Join(dir, "a")))
+			require.NoError(t, os.Symlink(filepath.Join(dir, "a"), filepath.Join(dir, "b")))
+			return filepath.Join(dir, "a", "d.sock")
+		},
+		"EINVAL (over-long sun_path)": func(*testing.T) string { return overlongSocketPath() },
+	}
+	for name, mk := range brokenPaths {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			unix, _ := newUnixTransport(mk(t))
+			tcp := &fakeEndpoint{}
+			s := selecting.NewFromTransports(unix, tcp, selecting.Options{})
 
-	require.NoError(t, list(t, s))
-	require.Equal(t, selecting.TCP, s.Active())
-	require.Positive(t, tcp.calls.Load())
+			require.NoError(t, list(t, s))
+			require.Equal(t, selecting.TCP, s.Active())
+			require.Positive(t, tcp.calls.Load())
+		})
+	}
 }
 
 func TestSharedTransportFor_ConcurrentFirstCallersBuildOnce(t *testing.T) {
