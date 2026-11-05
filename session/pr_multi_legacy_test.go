@@ -195,3 +195,19 @@ func TestRefresher_ShouldMakeNoCalls_WhenRefresherOffScopeSet(t *testing.T) {
 	p.checkAllSessions()
 	assert.Equal(t, 1, client.callsFor(12), "back on, the next tick polls")
 }
+
+// Flag off, one active open PR: the legacy loop and the refresher each make one
+// conditional GET per interval, so at most two requests per PR.
+func TestRefresher_ShouldBoundFetchesToTwoPerPR_WhenLegacyLoopAlsoRuns(t *testing.T) {
+	client := &recordingPRClient{}
+	p, storage := newRowPoller(t, client)
+	inst := newPRTestInstance(t)
+	inst.Status = Active
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	seedStateRow(t, storage.repo, SessionPROwner(inst.UUID), prRefN(t, 12), PRInitial{State: PRStateOpen})
+	p.SetInstances([]*Instance{inst})
+
+	p.checkAllSessions()
+
+	assert.LessOrEqual(t, client.callsFor(12), 2)
+}

@@ -555,3 +555,24 @@ func TestPollerMutex_ShouldBeFreeDuringInFlightPoll(t *testing.T) {
 	close(client.release)
 	<-done
 }
+
+func TestRepoMetadataProbe_ShouldUseConditionalRequestWithHostToken_WhenCountedCandidate404(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	var gotPath, gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	withGhBaseURL(t, ts)
+	ref, err := github.NewRepoRefWithHost("acme", "app", "")
+
+	probe, err2 := realGHClient{}.ProbeRepo(context.Background(), ref)
+
+	if err != nil || err2 != nil {
+		t.Fatalf("setup/probe error: %v / %v", err, err2)
+	}
+	if gotPath != "/repos/acme/app" || gotAuth != "Bearer fake-token" || probe.Status != http.StatusOK {
+		t.Errorf("probe hit %q with auth %q status %d, want /repos/acme/app with the host token", gotPath, gotAuth, probe.Status)
+	}
+}
