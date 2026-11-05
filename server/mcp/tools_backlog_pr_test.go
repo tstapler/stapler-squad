@@ -80,3 +80,33 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 		assert.Equal(t, 42, fetched.PrNumber)
 	})
 }
+
+func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNumber(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	n := 21
+	url := "https://github.com/tstapler/stapler-squad/pull/21"
+	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	h := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	args := reportPRArgs(item.ID, map[string]interface{}{"replaces_pr_number": float64(99), "override_reason": "bad PR"})
+	result, err := h.reportPRCreated(ctx, makeToolReq(args))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Equal(t, ErrInvalidArgument, m["error"].(map[string]interface{})["code"])
+
+	// The tracked number passes the replaces check and reaches the old reassignment
+	// guard, which still demands override_reason.
+	args = reportPRArgs(item.ID, map[string]interface{}{"replaces_pr_number": float64(21)})
+	result, err = h.reportPRCreated(ctx, makeToolReq(args))
+	require.NoError(t, err)
+	m = parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Contains(t, m["error"].(map[string]interface{})["message"], "requires override_reason")
+}
