@@ -292,9 +292,9 @@ func ownedSocketPath(cfg DaemonConfig) string {
 	return ""
 }
 
-// unixSocketPath is the socket squad may talk to as a fallback for cfg.Addr, or "" when it cannot
-// be proven to belong to the daemon at that address (see socketPairedWithAddr). Used by the client
-// fallback and the Degraded probe; the kill veto uses ownedSocketPath instead.
+// unixSocketPath is the socket squad may talk to as its primary transport for cfg.Addr, or "" when
+// it cannot be proven to belong to the daemon at that address (see socketPairedWithAddr) or does
+// not fit sun_path. Used by the client selector and the probe; the kill veto uses ownedSocketPath.
 func unixSocketPath(cfg DaemonConfig) string {
 	path := ownedSocketPath(cfg)
 	if path != "" && cfg.SocketPath != "" && !socketPairedWithAddr(cfg) {

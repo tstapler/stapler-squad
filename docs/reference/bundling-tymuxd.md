@@ -182,13 +182,32 @@ own could kill one a sibling process still depends on.
 
 ### Transport: Unix control socket first, TCP fallback
 
-stapler-squad's tymux client (`session/tymux/transport_select.go`) talks to tymuxd over its Unix control socket by default: the daemon authenticates socket peers (SO_PEERCRED), while its TCP listener on `127.0.0.1:7419` is deprecated and unauthenticated. One selector is shared by every session of a daemon, so a switch is logged once, not per session.
+stapler-squad's tymux client (`session/tymux/transport_select.go`) talks to tymuxd over its Unix control socket by default: the daemon authenticates socket peers (SO_PEERCRED), while its TCP listener on `127.0.0.1:7419` is deprecated and unauthenticated. One selector is shared by every session of a daemon (keyed by address and socket path), so a switch is logged once, not per session.
 
-- **Fallback.** A call refused on the socket (`ENOENT`/`ECONNREFUSED`) moves to TCP if TCP answers; the choice is sticky and the socket is re-probed every 30s by one caller at a time. Attach streams already open are not migrated and reconnect through the same choice.
-- **`EACCES` is a hard error.** If the kernel denies `connect()` on the socket, a daemon is listening and does not authorize this user; the client returns `ErrTymuxdSocketAccessDenied` and never falls back to TCP (same rule as upstream `udsdialer.DialWithFallback`).
+- **Fallback.** A call refused on the socket (`ENOENT`/`ECONNREFUSED`) moves to TCP if TCP answers, and a call refused on TCP moves back only after the socket answers a probe. The choice is sticky; the socket is re-probed every 30s by one caller at a time, bounded to 500ms. Attach streams already open are not migrated and reconnect through the same choice.
+- **`EACCES`/`EPERM` are hard errors.** If the kernel denies `connect()` on the socket, a daemon is listening and does not authorize this user; the client returns `ErrTymuxdSocketAccessDenied` and never falls back to TCP (same rule as upstream `udsdialer.DialWithFallback`). A re-probe that sees EACCES/EPERM while sticky on TCP switches back to the socket so the error surfaces.
+- **Overlong socket path.** A path over the platform `sun_path` limit (104 on macOS, 108 on Linux, including the NUL) can never be dialed (`EINVAL`). Squad logs one Warn naming the path and uses TCP only for that daemon; an `EINVAL` seen at dial time also falls back, loudly.
 - **Which socket.** Only the socket that belongs to this instance's daemon is used (`STAPLER_SQUAD_INSTANCE`-scoped path, or the shared default daemon's per-user path). With no paired socket the client is TCP-only.
-- **Supervisor.** A daemon whose socket answers is healthy, whatever TCP is doing. "Degraded" now means the reverse: the socket is down but TCP answers, so squad is on the unauthenticated fallback. The supervisor reuses the daemon, never kills it (any live socket or TCP listener vetoes a stop), and logs one `[tymux] degraded: tymuxd Unix control socket is not answering` warning per 10 minutes. Watch `tymux_daemon_degraded` (1 while degraded), `tymux_transport{transport}` and `tymux_transport_transitions_total{from,to}`.
-- **Follow-up.** tymuxd has `--disable-tcp-loopback` (`TYMUXD_DISABLE_TCP_LOOPBACK`) to run socket-only. Squad does not set it: older or already-running daemons and other TCP-only clients still need the listener.
+- **Supervisor classification** (`probeDaemon`, socket first):
+
+  | Socket | TCP | Result | Meaning |
+  |---|---|---|---|
+  | answers | any | Healthy | squad does not need TCP |
+  | no socket file (`ENOENT`) | answers | Healthy, one Info "no Unix control socket (older daemon?)" | daemon predates the socket or has not created it |
+  | socket file exists, refuses (`ECONNREFUSED`) | answers | Degraded, Warn every 10 min | the control socket died; squad is on the unauthenticated fallback |
+  | accepts but silent | any | Busy | inconclusive, never killed; reported as wedged only after 10 min |
+  | `EACCES`/`EPERM`, or a `Unauthenticated`/`PermissionDenied` reply | not consulted | AccessDenied | alive, never killed, never "wedged"; one Warn with the socket path and the permission diagnosis |
+  | no socket file or refused | refused | NotListening | down |
+
+  Any live socket or TCP listener still vetoes stopping the daemon. Watch `tymux_daemon_degraded` (1 while Degraded), `tymux_tcp_listener_up`, `tymux_transport{daemon,transport}` and `tymux_transport_transitions_total{daemon,from,to}`.
+- **TCP liveness is informational.** The monitor probes the TCP listener once per tick (only while sessions need the daemon) and publishes `tymux_tcp_listener_up`. It never affects health; a Warn every 10 minutes says other TCP-only clients of the daemon will fail while it is down.
+- **Follow-up: `--disable-tcp-loopback`.** tymuxd has `--disable-tcp-loopback` (`TYMUXD_DISABLE_TCP_LOOPBACK`) to run socket-only. Squad does not set it, and enabling it later breaks things that are still keyed on the TCP port:
+  - `waitPortFree`/`stopListener` (`session/tymux/version.go`) would see the port "free" immediately, skip the SIGKILL escalation and race the respawn.
+  - The `portListening`-based squatter and "control socket unresponsive" classification in `EnsureDaemonRunning` would misfire.
+  - Any process that grabs `127.0.0.1:7419` becomes an unauthenticated squatter that squad's TCP fallback could reach.
+  - Every TCP-only client of the daemon stops working.
+
+  Re-key those checks on the socket first (socket-gone, not port-free) before turning it on.
 
 ## Upgrading and downgrading the running daemon
 

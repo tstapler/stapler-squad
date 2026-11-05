@@ -2,6 +2,7 @@ package tymux
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -143,28 +144,50 @@ func TestUDSDefault_SocketDeniesAccess_HardErrorNoTCP(t *testing.T) {
 // to an in-process connect server; run in the background per docs/reference/benchmarks.md:
 //
 //	go test -run '^$' -bench BenchmarkTransportRoundTrip -benchmem -count=5 ./session/tymux &
+//
+// Caveats: the server is an in-process Go connect handler, not the Rust tymuxd; the client is
+// sequential on one connection per transport; both transports are warmed first and the order of
+// the sub-benchmarks alternates per RPC so run order does not favor either transport.
 func BenchmarkTransportRoundTrip(b *testing.B) {
 	d := startTestDaemon(b, newPaneService(50, 200)) // a full 200x50 screen, ~10k cells
 	tcp := newTCPTransport(d.addr)
 	unix, _ := newUnixTransport(d.sock)
 	ctx := context.Background()
-	for _, tc := range []struct {
+	info := func(tr rpcTransport) error {
+		_, err := tr.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{}))
+		return err
+	}
+	capture := func(tr rpcTransport) error {
+		_, err := tr.CapturePane(ctx, connect.NewRequest(&v1.CapturePaneRequest{}))
+		return err
+	}
+	for _, tr := range []rpcTransport{tcp, unix} {
+		for range 200 {
+			if err := errors.Join(info(tr), capture(tr)); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	type variant struct {
 		name string
 		tr   rpcTransport
-	}{{"tcp", tcp}, {"unix", unix}} {
-		b.Run("GetServerInfo/"+tc.name, func(b *testing.B) {
-			for range b.N {
-				if _, err := tc.tr.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{})); err != nil {
-					b.Fatal(err)
+	}
+	for _, rpc := range []struct {
+		name  string
+		call  func(rpcTransport) error
+		order []variant
+	}{
+		{"GetServerInfo", info, []variant{{"tcp", tcp}, {"unix", unix}}},
+		{"CapturePane", capture, []variant{{"unix", unix}, {"tcp", tcp}}},
+	} {
+		for _, v := range rpc.order {
+			b.Run(rpc.name+"/"+v.name, func(b *testing.B) {
+				for range b.N {
+					if err := rpc.call(v.tr); err != nil {
+						b.Fatal(err)
+					}
 				}
-			}
-		})
-		b.Run("CapturePane/"+tc.name, func(b *testing.B) {
-			for range b.N {
-				if _, err := tc.tr.CapturePane(ctx, connect.NewRequest(&v1.CapturePaneRequest{})); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
+			})
+		}
 	}
 }
