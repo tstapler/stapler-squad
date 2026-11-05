@@ -106,7 +106,7 @@ type callerRule struct {
 var stateWriterRules = []callerRule{
 	{
 		method:  "UpdatePullRequestState",
-		allowed: []string{"session/pr_status_poller.go", "session/storage.go" /* the Storage wrapper's own delegation */},
+		allowed: []string{"session/pr_status_poller.go", "session/pr_state_poller.go" /* the poll core, split out of the poller */, "session/storage.go" /* the Storage wrapper's own delegation */},
 		why:     "invariant I1: the PR status poller is the only writer of PullRequestState state columns",
 	},
 	{
