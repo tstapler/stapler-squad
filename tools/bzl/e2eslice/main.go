@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -42,6 +43,8 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 	onlyManaged := fs.Bool("only-managed", false, "select/replay: treat only manifest specs as existing (partial-manifest sample runs)")
 	groupSize := fs.Int("group-size", 0, "override specs per target (1 measures per-spec share on a sample)")
 	group := fs.String("group", "", "specs-of: target name")
+	gran := fs.String("granularity", "line", "select-synth: package|file|line")
+	capsDir := fs.String("caps", "", "replay-fine: directory of per-spec e2ecapture JSON")
 	check := fs.Bool("check", false, "gen-build: fail if the committed file differs")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -154,6 +157,56 @@ func run(args []string, stdin io.Reader, out, errw io.Writer) int {
 		}
 		st := replay(cs, sel.Select)
 		emit(st)
+	case "replay-fine":
+		caps, err := loadFineCaptures(R(*capsDir))
+		if err != nil {
+			return fail(err)
+		}
+		globs, err := loadGlobs(R(*gp))
+		if err != nil {
+			return fail(err)
+		}
+		specs, err := listSpecs(*root, e2eDir)
+		if err != nil {
+			return fail(err)
+		}
+		cs, err := gitLog(*root, *rev, *n)
+		if err != nil {
+			return fail(err)
+		}
+		var res []FineStats
+		for _, g := range []Granularity{GranPackage, GranFile, GranLine, GranLineStrict} {
+			res = append(res, replayFine(cs, newFineSelector(caps, specs, globs, g, gitHunks(*root))))
+		}
+		emit(res)
+	case "select-synth":
+		// select-synth -caps DIR -granularity G FILE[:A-B]...: the specs a synthetic one-file diff selects.
+		caps, err := loadFineCaptures(R(*capsDir))
+		if err != nil {
+			return fail(err)
+		}
+		globs, err := loadGlobs(R(*gp))
+		if err != nil {
+			return fail(err)
+		}
+		specs, err := listSpecs(*root, e2eDir)
+		if err != nil {
+			return fail(err)
+		}
+		var files []string
+		hunks := map[string][]Line{}
+		for _, a := range rest {
+			f, rng, _ := strings.Cut(a, ":")
+			files = append(files, f)
+			if lo, hi, ok := strings.Cut(rng, "-"); ok {
+				l, _ := strconv.Atoi(lo)
+				h, _ := strconv.Atoi(hi)
+				hunks[f] = append(hunks[f], Line{l, h})
+			}
+		}
+		fs := newFineSelector(caps, specs, globs, Granularity(*gran), func(string, []string) map[string][]Line { return hunks })
+		s := fs.Select(Commit{SHA: "synthetic", Files: files})
+		emit(map[string]any{"all": s.All, "specs": s.Hit})
 	case "list-groups", "specs-of":
 		sel, err := buildSelector(*root, *mp, *gp, "none", false)
 		if err != nil {

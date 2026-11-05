@@ -134,6 +134,8 @@ type Selection struct {
 	Specs     []string // specs inside the selected groups
 	Unmanaged []string
 	Total     int
+	PerSpec   int      // replay-fine: specs hit before group widening
+	Hit       []string // replay-fine: the specs hit before group widening, sorted
 }
 
 // Share is the fraction of specs that run (1.0 when everything is selected).

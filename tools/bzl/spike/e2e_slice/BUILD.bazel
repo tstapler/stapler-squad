@@ -1,0 +1,27 @@
+# gazelle:ignore
+# Throwaway targets for the S14 semantic checks (Task 0.15d); see tools/bzl/e2esemantic.
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "lib",
+    srcs = ["lib.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/spike/e2e_slice",
+    visibility = ["//visibility:private"],
+)
+
+# A declared slice (inside.txt, lib.go) and a constant binary path passed with --test_env=E2E_BIN.
+go_test(
+    name = "slice_test",
+    srcs = ["slice_test.go"],
+    data = ["inside.txt"],
+    embed = [":lib"],
+)
+
+go_test(
+    name = "failing_test",
+    srcs = ["failing_test.go"],
+    embed = [":lib"],
+    gotags = ["s14_failing"],
+    tags = ["manual"],
+)

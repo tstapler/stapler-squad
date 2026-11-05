@@ -90,6 +90,11 @@ func median(sorted []float64) float64 {
 
 // replay runs sel over each relevant commit and summarises the selected-spec share.
 func replay(commits []Commit, sel func(files []string) Selection) ReplayStats {
+	return replayCommits(commits, func(c Commit) Selection { return sel(c.Files) })
+}
+
+// replayCommits is replay for selectors that need the commit itself (line-level selection reads its diff).
+func replayCommits(commits []Commit, sel func(c Commit) Selection) ReplayStats {
 	st := ReplayStats{Commits: len(commits), ByTopDir: map[string]int{}}
 	var shares []float64
 	all := 0
@@ -107,7 +112,7 @@ func replay(commits []Commit, sel func(files []string) Selection) ReplayStats {
 		for d := range dirs {
 			st.ByTopDir[d]++
 		}
-		s := sel(c.Files)
+		s := sel(c)
 		if s.All {
 			all++
 		}
