@@ -107,6 +107,8 @@ service SessionService {
   rpc RefreshSessionPullRequests(RefreshSessionPullRequestsRequest) returns (RefreshSessionPullRequestsResponse) {}
   rpc DetachSessionPullRequest(DetachSessionPullRequestRequest) returns (DetachSessionPullRequestResponse) {}
   rpc AttachSessionPullRequest(AttachSessionPullRequestRequest) returns (AttachSessionPullRequestResponse) {}
+  // Item-scoped detach: the release for an item-direct PR hold. UI-only.
+  rpc DetachItemPullRequest(DetachItemPullRequestRequest) returns (DetachItemPullRequestResponse) {}
 
   // SendNotification allows tmux sessions to send notifications to the server.
   // Notifications are broadcast to all connected clients (web UI and TUI).
@@ -1559,10 +1561,21 @@ message PostPRCommentResponse {
 message MergePRRequest {
   // Session identifier (must be a PR session)
   string id = 1;
-  // Merge method: "merge", "squash", or "rebase" (default: "merge")
-  optional string method = 2;
+  // Deprecated: use merge_method. Legacy string: "merge", "squash", or "rebase".
+  // Honored only when merge_method is unspecified.
+  optional string method = 2 [deprecated = true];
   // Target PR; unset means the session's active PR.
   PullRequestRef pr = 3;
+  // Merge method; wins over the legacy method string when set. Unspecified
+  // falls back to method, then to MERGE.
+  MergeMethod merge_method = 4;
+}
+
+enum MergeMethod {
+  MERGE_METHOD_UNSPECIFIED = 0;
+  MERGE_METHOD_MERGE = 1;
+  MERGE_METHOD_SQUASH = 2;
+  MERGE_METHOD_REBASE = 3;
 }
 
 message MergePRResponse {
@@ -1628,6 +1641,15 @@ message AttachSessionPullRequestRequest {
 message AttachSessionPullRequestResponse {
   repeated SessionPullRequest pull_requests = 1;
 }
+
+// DetachItemPullRequestRequest removes pr from this backlog item only (its
+// item-direct link) and blocks automatic re-attachment. Session links are untouched.
+message DetachItemPullRequestRequest {
+  string item_id = 1;
+  PullRequestRef pr = 2;
+}
+
+message DetachItemPullRequestResponse {}
 
 // SendNotificationRequest allows tmux sessions to send notifications.
 message SendNotificationRequest {

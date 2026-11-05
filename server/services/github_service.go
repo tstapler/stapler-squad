@@ -258,10 +258,7 @@ func (gs *GitHubService) MergePR(
 		return nil, err
 	}
 
-	method := "merge"
-	if req.Msg.Method != nil && *req.Msg.Method != "" {
-		method = *req.Msg.Method
-	}
+	method := resolveMergeMethod(req.Msg)
 
 	if err := instance.MergePR(ctx, target, method); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("failed to merge PR: %w", err)))
@@ -271,6 +268,23 @@ func (gs *GitHubService) MergePR(
 		Success: true,
 		Message: fmt.Sprintf("PR merged successfully for session '%s' using method '%s'", req.Msg.Id, method),
 	}), nil
+}
+
+// resolveMergeMethod prefers the typed merge_method, then the deprecated
+// legacy method string (passed through unvalidated, as before), then "merge".
+func resolveMergeMethod(req *sessionv1.MergePRRequest) string {
+	switch req.GetMergeMethod() {
+	case sessionv1.MergeMethod_MERGE_METHOD_MERGE:
+		return "merge"
+	case sessionv1.MergeMethod_MERGE_METHOD_SQUASH:
+		return "squash"
+	case sessionv1.MergeMethod_MERGE_METHOD_REBASE:
+		return "rebase"
+	}
+	if m := req.GetMethod(); m != "" { //nolint:staticcheck // deprecated legacy field, intentionally still honored
+		return m
+	}
+	return "merge"
 }
 
 // ClosePR closes the PR without merging for a session.

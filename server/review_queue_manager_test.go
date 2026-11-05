@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -1819,4 +1820,46 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 			}
 		})
 	}
+}
+
+// autoCreatePRSessionWithOpenPR sets up an AutoCreatePR-enabled session whose
+// Branch is empty and which already holds an open PR for branch feature-x.
+func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *session.ReviewItem) {
+	t.Helper()
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title: "empty-branch item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	if gitInit {
+		out, gerr := exec.Command("git", "-C", dir, "init", "-q", "-b", "feature-x").CombinedOutput()
+		require.NoError(t, gerr, string(out))
+	}
+	ref, err := session.NewPRRef("", "acme", "widgets", 1)
+	require.NoError(t, err)
+	inst := &session.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
+		PRs: []session.PRView{{Ref: ref, State: session.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
+	poller.SetInstances([]*session.Instance{inst})
+	return mgr, fake, &session.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now()}
+}
+
+func TestMaybeAutoCreatePR_ShouldFallBackToCheckedOutBranch_WhenSnapshotBranchEmpty(t *testing.T) {
+	mgr, fake, item := autoCreatePRSessionWithOpenPR(t, true, "eeee1111-2222-3333-4444-555566667777")
+	mgr.OnItemAdded(item)
+	mgr.wg.Wait()
+	require.Zero(t, fake.callCount(), "the open PR on the checked-out branch must be seen, not a duplicate created")
+}
+
+func TestMaybeAutoCreatePR_ShouldNotCreate_WhenBranchUnknownAndSessionHoldsPRs(t *testing.T) {
+	mgr, fake, item := autoCreatePRSessionWithOpenPR(t, false, "ffff1111-2222-3333-4444-555566667777")
+	mgr.OnItemAdded(item)
+	mgr.wg.Wait()
+	require.Zero(t, fake.callCount(), "an unknown branch cannot prove no PR exists: fail closed")
 }

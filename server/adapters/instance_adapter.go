@@ -138,7 +138,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrPriority:      inst.GitHubPRPriority,
 		GithubApprovedCount:   int32(inst.GitHubApprovedCount),   //#nosec G115 -- PR review count, always small
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount), //#nosec G115 -- PR review count, always small
-		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		GithubCheckConclusion: snap.ActiveCheckConclusion(),
 		GithubChecks:          checksToProto(inst.GitHubChecks),
 		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
 		GithubMergeable:       inst.GitHubMergeable,

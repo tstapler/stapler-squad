@@ -266,3 +266,13 @@ func ExistingPRForCreate(snap *InstanceSnapshot, branch string) (url string, num
 	}
 	return g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRURL != ""
 }
+
+// ActiveCheckConclusion is the CI conclusion of the session's active PR. The
+// GitHubCheckConclusion scalar is not mirrored per PR, so with several PRs it can
+// describe a merged one; it is used only when the session has no links.
+func (s *InstanceSnapshot) ActiveCheckConclusion() string {
+	if active := ActivePR(s.GitHub.PRs, s.Branch); active != nil {
+		return active.CheckConclusion
+	}
+	return s.GitHub.GitHubCheckConclusion
+}

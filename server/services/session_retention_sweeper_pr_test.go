@@ -272,5 +272,58 @@ func TestRetentionSweeper_ShouldIssueBoundedQueries_WhenManySessions(t *testing.
 	}
 	sweeper, fake := newPRSweeper(fix)
 	sweeper.sweep(context.Background())
-	assert.Equal(t, 1, fake.viewCall, "one bulk link read per cycle, never one per session")
+	assert.Equal(t, 1+5, fake.viewCall, "one bulk link read per cycle plus one single-uuid re-check per session about to be deleted; none for skipped sessions")
+}
+
+func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelease(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "held", "u-held")
+	sweeper, fake := newPRSweeper(fix)
+	base := time.Now()
+	sweeper.now = func() time.Time { return base }
+	fake.itemIDs = func(map[string][]string) (map[string][]string, error) {
+		return map[string][]string{"u-held": {"item-h"}}, nil
+	}
+	attached := base.Add(-30 * time.Minute)
+	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
+		open := session.PRView{State: session.PRStateOpen, AttachedAt: attached}
+		return map[string]session.ItemGuardView{"item-h": {Direct: []session.PRView{open}}}, nil
+	}
+	globalBefore := ItemPRHoldOverMaxCount()
+
+	sweeper.sweep(context.Background())
+	assert.Zero(t, sweeper.holds.reportedTotal, "held 30m: below the 1h line")
+	assert.Empty(t, sweeper.OverMaxItemPRHolds())
+
+	base = base.Add(2 * time.Hour)
+	sweeper.sweep(context.Background())
+	sweeper.sweep(context.Background())
+	assert.Equal(t, 1, sweeper.holds.reportedTotal, "counted once per (item, window), not per cycle")
+	assert.GreaterOrEqual(t, ItemPRHoldOverMaxCount(), globalBefore+1)
+	require.Len(t, sweeper.OverMaxItemPRHolds(), 1)
+	assert.Equal(t, "item-h", sweeper.OverMaxItemPRHolds()[0].ItemID)
+	assert.True(t, hasStoredTitle(t, fix, "held"), "fail-closed forever: surfacing never releases the session")
+}
+
+func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "raced", "u-race")
+	sweeper, fake := newPRSweeper(fix)
+	calls := 0
+	fake.views = func(m map[string][]session.PRView) (map[string][]session.PRView, error) {
+		calls++
+		if calls > 1 { // a report_pr_created lands after the cycle prefilter
+			m["u-race"] = []session.PRView{{State: session.PRStateOpen}}
+		}
+		return m, nil
+	}
+
+	sweeper.sweep(context.Background())
+
+	assert.True(t, hasStoredTitle(t, fix, "raced"), "evidence re-read right before delete: the new open PR holds the session")
+	assert.GreaterOrEqual(t, calls, 2, "the per-session re-check ran")
 }

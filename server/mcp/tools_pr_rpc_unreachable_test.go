@@ -13,12 +13,13 @@ import (
 )
 
 // uiOnlyPRRPCs are the PR-set mutations a dispatched agent must never reach:
-// they are the operator's decisions. Append DetachItemPullRequest when it lands.
+// they are the operator's decisions.
 var uiOnlyPRRPCs = map[string]string{
 	"PinSessionPullRequest":      "pin_session_pull_request",
 	"RefreshSessionPullRequests": "refresh_session_pull_requests",
 	"DetachSessionPullRequest":   "detach_session_pull_request",
 	"AttachSessionPullRequest":   "attach_session_pull_request",
+	"DetachItemPullRequest":      "detach_item_pull_request",
 }
 
 func TestMCPTools_ShouldNotRouteToPRMutatingRPCs(t *testing.T) {
