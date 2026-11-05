@@ -2,6 +2,8 @@ package tymux
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +15,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
@@ -308,4 +311,124 @@ func TestRealTransport_UnixOnlyDaemon_RPCsSucceedOverSocket(t *testing.T) {
 	n, err := countLiveSessions(context.Background(), cfg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
+}
+
+func transportGauge(t *testing.T, kind string) int64 {
+	t.Helper()
+	m := collectMetric(t, "tymux_transport")
+	require.NotNil(t, m)
+	g, ok := m.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	for _, dp := range g.DataPoints {
+		if v, ok := dp.Attributes.Value("transport"); ok && v.AsString() == kind {
+			return dp.Value
+		}
+	}
+	return -1
+}
+
+func transitionTotal(t *testing.T) int64 {
+	t.Helper()
+	m := collectMetric(t, "tymux_transport_transitions_total")
+	if m == nil {
+		return 0
+	}
+	var total int64
+	for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+		total += dp.Value
+	}
+	return total
+}
+
+// Only the long-lived session transport owns tymux_transport and the transition counter; a
+// one-shot probe (version checks, live-session counts) must not touch them. Not parallel: it
+// reads process-global instruments.
+func TestProbeTransport_DoesNotTouchSessionTransportMetrics(t *testing.T) {
+	addr := closedAddr(t)
+	sock := answeringUnixSocket(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "")
+	t.Setenv("TYMUXD_ADDR", addr)
+	t.Setenv("TYMUXD_SOCKET_PATH", sock)
+
+	recordTransportActive(transportUnix) // the session transport's state
+	before := transitionTotal(t)
+
+	probe, release := newProbeTransport(addr)
+	defer release()
+	_, err := probe.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
+	require.NoError(t, err, "the probe still falls back to the socket")
+
+	require.EqualValues(t, 1, transportGauge(t, transportUnix), "probe construction must not reset the gauge to tcp")
+	require.EqualValues(t, 0, transportGauge(t, transportTCP))
+	require.Equal(t, before, transitionTotal(t), "probe fallback must not count as a session transition")
+}
+
+func TestSocketPathForAddr_AddrAndSocketMustComeFromOneResolution(t *testing.T) {
+	const custom = "http://127.0.0.1:19999"
+	for _, tc := range []struct {
+		name                  string
+		instance, addr, sock  string
+		queryAddr             string // "" = the resolved addr
+		wantSocket, wantEmpty bool
+	}{
+		{name: "instance-derived pair", instance: "uds-c1", wantSocket: true},
+		{name: "default addr forced under a named instance", instance: "uds-c2", addr: defaultTymuxdAddr, wantEmpty: true},
+		{name: "custom addr under a named instance gets no instance socket", instance: "uds-c3", addr: custom, wantEmpty: true},
+		{name: "explicit addr and socket together", addr: custom, sock: "/tmp/pair.sock", wantSocket: true},
+		{name: "custom socket with the default addr", sock: "/tmp/other.sock", wantEmpty: true},
+		{name: "custom socket queried for a different addr", addr: custom, sock: "/tmp/pair.sock", queryAddr: "http://127.0.0.1:9", wantEmpty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("STAPLER_SQUAD_INSTANCE", tc.instance)
+			t.Setenv("TYMUXD_ADDR", tc.addr)
+			t.Setenv("TYMUXD_SOCKET_PATH", tc.sock)
+			t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+			rc := ResolveDaemonConfig()
+			q := tc.queryAddr
+			if q == "" {
+				q = rc.Addr
+			}
+			client := socketPathForAddr(q)
+			if tc.wantEmpty {
+				require.Empty(t, client)
+			} else {
+				require.NotEmpty(t, client)
+			}
+			if tc.queryAddr == "" {
+				require.Equal(t, unixSocketPath(rc), client, "supervisor probe and client resolve the socket identically")
+			}
+		})
+	}
+}
+
+// A real connect client against a dead TCP port: Send may only report io.EOF, with the real
+// error on Receive. The selector must still see the refusal when only Send is called.
+func TestSelectingTransport_RealClientDeadTCP_SendAloneTriggersFailover(t *testing.T) {
+	t.Parallel()
+	unix := &fakeEndpoint{}
+	sel := newSelectingTransport(newTCPTransport(closedAddr(t)), unix, "http://x")
+
+	stream := sel.Attach(context.Background())
+	err := stream.Send(&v1.AttachRequest{})
+
+	require.Error(t, err)
+	require.False(t, errors.Is(err, io.EOF), "the real dial error, not a bare io.EOF, reaches the caller: %v", err)
+	require.Equal(t, transportUnix, sel.Active())
+}
+
+// One failed attempt plus one redial must fit ReconnectLoop's budget.
+func TestReconnect_DeadTCPThenSocket_SecondDialSucceeds(t *testing.T) {
+	t.Parallel()
+	unix := &fakeEndpoint{}
+	sel := newSelectingTransport(newTCPTransport(closedAddr(t)), unix, "http://x")
+	s := NewTymuxGRPCSession(sel).(*tymuxGRPCSession)
+
+	_, _, err := s.dialAttach(context.Background(), "p1")
+	require.ErrorIs(t, err, ErrTymuxdUnreachable)
+	require.GreaterOrEqual(t, s.reconnectMaxAttempts, 2)
+
+	stream, first, err := s.dialAttach(context.Background(), "p1")
+	require.NoError(t, err)
+	require.NotNil(t, stream)
+	require.NotNil(t, first)
 }

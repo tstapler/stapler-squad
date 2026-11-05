@@ -170,6 +170,12 @@ func newH2CClient() *http.Client {
 // control socket (socketPathForAddr), the result also falls back to that socket
 // while TCP is refused; see selectingTransport.
 func NewRealTransport(addr string) rpcTransport {
+	return newRealTransport(addr, false)
+}
+
+// newRealTransport builds the transport; quiet selects the one-shot-probe variant that leaves
+// the session transport's process-global metrics alone.
+func newRealTransport(addr string, quiet bool) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
@@ -182,6 +188,9 @@ func NewRealTransport(addr string) rpcTransport {
 		return tcp
 	}
 	unix, unixHTTP := newUnixTransport(sock)
+	if quiet {
+		return newQuietSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+	}
 	return newSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
 }
 
@@ -195,7 +204,7 @@ func newTCPTransport(addr string) *grpcTransport {
 // newProbeTransport is NewRealTransport for one-shot calls: the returned
 // release func must be deferred, or each probe leaks a connection to tymuxd.
 func newProbeTransport(addr string) (rpcTransport, func()) {
-	t := NewRealTransport(addr)
+	t := newRealTransport(addr, true)
 	if c, ok := t.(interface{ closeIdle() }); ok {
 		return t, c.closeIdle
 	}
