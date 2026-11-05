@@ -32,6 +32,10 @@ const daemonMonitorThreshold = 6
 // busy daemon under load is indistinguishable from a wedged one, and killing it destroys every pane.
 const daemonWedgedAfter = 10 * time.Minute
 
+// daemonDegradedWarnEvery rate-limits the "TCP listener down, using the control socket" warning:
+// the state can last for hours, and the transport selector already logs each switch.
+const daemonDegradedWarnEvery = 10 * time.Minute
+
 // neededCacheTTL spares the persisted-session query the monitor's 5s tick would otherwise repeat.
 const neededCacheTTL = 15 * time.Second
 
@@ -105,9 +109,36 @@ func (w *wedgeTracker) observe(ctx context.Context, cfg DaemonConfig, result dae
 	return true
 }
 
+// degradedTracker publishes the degraded gauges and rate-limits the warning for one monitor.
+type degradedTracker struct {
+	since, lastWarn time.Time
+}
+
+// observe records the current state and reports whether it emitted the warning.
+func (d *degradedTracker) observe(ctx context.Context, cfg DaemonConfig, degraded bool, now time.Time) bool {
+	if !degraded {
+		*d = degradedTracker{}
+		recordDaemonDegraded(ctx, false, 0)
+		return false
+	}
+	if d.since.IsZero() {
+		d.since = now
+	}
+	recordDaemonDegraded(ctx, true, now.Sub(d.since))
+	if !d.lastWarn.IsZero() && now.Sub(d.lastWarn) < daemonDegradedWarnEvery {
+		return false
+	}
+	d.lastWarn = now
+	log.Warn("[tymux] degraded: tymuxd TCP listener is down, sessions are using its Unix control socket; the daemon is left running",
+		"addr", cfg.Addr, "degraded_for", now.Sub(d.since).Round(time.Second))
+	return true
+}
+
 func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 	owned := false
 	var wedge wedgeTracker
+	var degraded degradedTracker
+	defer recordDaemonDegraded(context.Background(), false, 0) // never leave a stale 1 behind
 	failures := 0
 	delay := m.interval
 	for {
@@ -122,6 +153,7 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 			return
 		}
 		if m.needed != nil && !m.needed() {
+			degraded.observe(ctx, cfg, false, time.Now())
 			failures = 0
 			delay = m.interval
 			continue
@@ -133,6 +165,7 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 		if wedge.observe(ctx, cfg, result, time.Now()) && m.onWedged != nil {
 			m.onWedged()
 		}
+		degraded.observe(ctx, cfg, result == daemonProbeDegraded, time.Now())
 		healthy := result >= daemonProbeBusy
 		if healthy {
 			if failures > 0 {

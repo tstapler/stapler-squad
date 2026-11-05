@@ -53,6 +53,7 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + svcPkgPath + ".StartVerdictSteering":                     "subscribes for backlog item changes only; ignores notifications",
 	"consumer: " + svcPkgPath + ".WatchUnfinishedWork":                      "converts only the unfinished-work event types (convertUnfinishedEvent); other types, notifications included, are dropped",
 	"consumer: " + svcPkgPath + ".waitForEvent":                             "generic wait for a caller-supplied match predicate on a session transition; forwards nothing to a client",
+	"consumer: " + svcPkgPath + ".wireWriterUpgrade":                        "terminal read-only upgrade; reacts only to session-updated/archived events for its own instance, forwards nothing",
 	"consumer: " + svcPkgPath + ".watchBacklogItems":                        "backlog item stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".watchWorkflows":                           "workflow stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".start":                                    "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
