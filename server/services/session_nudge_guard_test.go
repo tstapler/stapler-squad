@@ -9,28 +9,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-type fakeGuardClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
-
-func (c *fakeGuardClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *fakeGuardClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
-}
-
-func newTestGuard() (*sessionNudgeGuard, *fakeGuardClock) {
-	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	return &sessionNudgeGuard{now: clk.Now}, clk
+func newTestGuard() (*SessionNudgeGuard, *svctest.FakeGuardClock) {
+	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	return &SessionNudgeGuard{now: clk.Now}, clk
 }
 
 func TestTryBegin_should_ReturnBusyThenOKAfterRelease_When_SecondAttemptWhileInFlight(t *testing.T) {
@@ -161,6 +145,6 @@ func TestTryBegin_should_SweepRecordOlderThan10Minutes_When_NextTryBegin(t *test
 }
 
 func TestReasonSetSignature_should_BeOrderAndDuplicateInsensitive(t *testing.T) {
-	assert.Equal(t, reasonSetSignature("A", "B"), reasonSetSignature("B", "A", "A"))
-	assert.NotEqual(t, reasonSetSignature("A"), reasonSetSignature("A", "B"))
+	assert.Equal(t, ReasonSetSignature("A", "B"), ReasonSetSignature("B", "A", "A"))
+	assert.NotEqual(t, ReasonSetSignature("A"), ReasonSetSignature("A", "B"))
 }

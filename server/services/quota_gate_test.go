@@ -14,47 +14,11 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	quotalog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
-// fakeResultsWithUsage builds a single fake ParseResult with one in-window
-// (1h ago) turn totaling exactly usedTokens across Input+Output+CacheCreation+CacheRead.
-func fakeResultsWithUsage(usedTokens int64) []*tokens.ParseResult {
-	return []*tokens.ParseResult{
-		{
-			TurnTimeline: []tokens.TurnStats{
-				{Timestamp: time.Now().Add(-time.Hour), Input: usedTokens},
-			},
-		},
-	}
-}
-
-// countingFeatureController is a call-count-tracking test double for
-// FeatureController, distinct from fakeFeatureController (feature_flags_test.go)
-// which only tracks bool flags, not counts — several QuotaGate regression
-// tests need to assert exact call counts across multiple Reconcile ticks.
-type countingFeatureController struct {
-	enabled      bool
-	enableCalls  int
-	disableCalls int
-}
-
-func (c *countingFeatureController) Enable(_ context.Context) error {
-	c.enableCalls++
-	c.enabled = true
-	return nil
-}
-
-func (c *countingFeatureController) Disable() error {
-	c.disableCalls++
-	c.enabled = false
-	return nil
-}
-
-func (c *countingFeatureController) IsEnabled() bool { return c.enabled }
-
-func newTestQuotaGate(cfg config.QuotaConfig, store *fakeTokenStore, poller *mockInstancePoller, ctrl *countingFeatureController, bus *events.EventBus) *QuotaGate {
+func newTestQuotaGate(cfg config.QuotaConfig, store *svctest.FakeTokenStore, poller *svctest.MockInstancePoller, ctrl *svctest.CountingFeatureController, bus *events.EventBus) *QuotaGate {
 	return NewQuotaGate(func() config.QuotaConfig { return cfg }, store, poller, ctrl, bus)
 }
 
@@ -90,9 +54,9 @@ func TestRateLimitAggregate_should_ReportNotRecent_When_NoEventRecorded(t *testi
 
 func TestNewQuotaGate_should_ReturnZeroStateGate_When_Constructed(t *testing.T) {
 	t.Parallel()
-	store := &fakeTokenStore{}
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{}
+	store := &svctest.FakeTokenStore{}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{}
 	bus := events.NewEventBus(10)
 
 	qg := newTestQuotaGate(config.QuotaConfig{}, store, poller, ctrl, bus)
@@ -108,9 +72,9 @@ func TestNewQuotaGate_should_ReturnZeroStateGate_When_Constructed(t *testing.T) 
 
 func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *testing.T) {
 	t.Parallel()
-	store := &fakeTokenStore{}
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	store := &svctest.FakeTokenStore{}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -120,8 +84,8 @@ func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *tes
 
 	qg.Reconcile(context.Background())
 
-	if ctrl.disableCalls != 1 {
-		t.Errorf("disableCalls = %d, want 1", ctrl.disableCalls)
+	if ctrl.DisableCalls != 1 {
+		t.Errorf("disableCalls = %d, want 1", ctrl.DisableCalls)
 	}
 	if !qg.IsPausedByQuota() {
 		t.Error("IsPausedByQuota() = false, want true")
@@ -130,9 +94,9 @@ func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *tes
 
 func TestReconcile_should_RequireConsecutiveTicksBeforePausingOrResuming_When_SoftThresholdCrossed(t *testing.T) {
 	t.Parallel()
-	store := &fakeTokenStore{results: nil} // no usage data; budget below drives PctRemaining via computeHeadroom
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	store := &svctest.FakeTokenStore{Results: nil} // no usage data; budget below drives PctRemaining via computeHeadroom
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -141,24 +105,24 @@ func TestReconcile_should_RequireConsecutiveTicksBeforePausingOrResuming_When_So
 	cfg.AssumedWindowTokenBudget = 1000
 
 	// Drive PctRemaining to 10.0 (below the 20.0 threshold): budget=1000, used=900.
-	store.results = fakeResultsWithUsage(900)
+	store.Results = svctest.FakeResultsWithUsage(900)
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 
 	qg.Reconcile(context.Background())
-	if ctrl.disableCalls != 0 {
-		t.Fatalf("disableCalls after 1st below-threshold tick = %d, want 0", ctrl.disableCalls)
+	if ctrl.DisableCalls != 0 {
+		t.Fatalf("disableCalls after 1st below-threshold tick = %d, want 0", ctrl.DisableCalls)
 	}
 
 	qg.Reconcile(context.Background())
-	if ctrl.disableCalls != 1 {
-		t.Fatalf("disableCalls after 2nd consecutive below-threshold tick = %d, want 1", ctrl.disableCalls)
+	if ctrl.DisableCalls != 1 {
+		t.Fatalf("disableCalls after 2nd consecutive below-threshold tick = %d, want 1", ctrl.DisableCalls)
 	}
 }
 
 func TestReconcile_should_ResumeAfterConsecutiveTicksAboveMargin_When_PausedByQuota(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: false}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: false}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -167,7 +131,7 @@ func TestReconcile_should_ResumeAfterConsecutiveTicksAboveMargin_When_PausedByQu
 	cfg.ConsecutiveTicksToResume = 3
 	cfg.AssumedWindowTokenBudget = 1000
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(0)} // 100% headroom, well above 35 threshold
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(0)} // 100% headroom, well above 35 threshold
 
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	qg.state.pausedByQuota = true
@@ -176,20 +140,20 @@ func TestReconcile_should_ResumeAfterConsecutiveTicksAboveMargin_When_PausedByQu
 
 	qg.Reconcile(context.Background())
 	qg.Reconcile(context.Background())
-	if ctrl.enableCalls != 0 {
-		t.Fatalf("enableCalls after 2 healthy ticks = %d, want 0 (need 3 consecutive)", ctrl.enableCalls)
+	if ctrl.EnableCalls != 0 {
+		t.Fatalf("enableCalls after 2 healthy ticks = %d, want 0 (need 3 consecutive)", ctrl.EnableCalls)
 	}
 
 	qg.Reconcile(context.Background())
-	if ctrl.enableCalls != 1 {
-		t.Fatalf("enableCalls after 3rd consecutive healthy tick = %d, want 1", ctrl.enableCalls)
+	if ctrl.EnableCalls != 1 {
+		t.Fatalf("enableCalls after 3rd consecutive healthy tick = %d, want 1", ctrl.EnableCalls)
 	}
 }
 
 func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultipleResumeEligibleTicks(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: false}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: false}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -199,7 +163,7 @@ func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultip
 	cfg.AssumedWindowTokenBudget = 1000
 	cfg.RateLimitWindowMinutes = 30
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(0)} // healthy headroom every tick
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(0)} // healthy headroom every tick
 
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	qg.state.pausedByQuota = true
@@ -210,8 +174,8 @@ func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultip
 	for i := 0; i < 5; i++ {
 		qg.Reconcile(context.Background())
 	}
-	if ctrl.enableCalls != 0 {
-		t.Fatalf("enableCalls while hard signal active = %d, want 0 across all 5 ticks", ctrl.enableCalls)
+	if ctrl.EnableCalls != 0 {
+		t.Fatalf("enableCalls while hard signal active = %d, want 0 across all 5 ticks", ctrl.EnableCalls)
 	}
 
 	// Clear the hard signal (older than the window) and run a fresh consecutive run.
@@ -222,36 +186,36 @@ func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultip
 	for i := 0; i < 3; i++ {
 		qg.Reconcile(context.Background())
 	}
-	if ctrl.enableCalls != 1 {
-		t.Errorf("enableCalls after hard signal clears + fresh consecutive run = %d, want 1", ctrl.enableCalls)
+	if ctrl.EnableCalls != 1 {
+		t.Errorf("enableCalls after hard signal clears + fresh consecutive run = %d, want 1", ctrl.EnableCalls)
 	}
 }
 
 func TestReconcile_should_NeverAutoResume_When_BacklogWasManuallyDisabled(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: false} // manually disabled, pausedByQuota stays false
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: false} // manually disabled, pausedByQuota stays false
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 1000
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(0)}
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(0)}
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 
 	for i := 0; i < 10; i++ {
 		qg.Reconcile(context.Background())
 	}
 
-	if ctrl.enableCalls != 0 {
-		t.Errorf("enableCalls = %d, want 0 (pausedByQuota is false — a manual disable must never be auto-resumed)", ctrl.enableCalls)
+	if ctrl.EnableCalls != 0 {
+		t.Errorf("enableCalls = %d, want 0 (pausedByQuota is false — a manual disable must never be auto-resumed)", ctrl.EnableCalls)
 	}
 }
 
 func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQuotaStillLow(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: false}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: false}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -260,7 +224,7 @@ func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQu
 	cfg.ManualOverrideGraceMinutes = 10
 	cfg.AssumedWindowTokenBudget = 1000
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(900)} // 10% remaining, below threshold
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(900)} // 10% remaining, below threshold
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	qg.state.pausedByQuota = true
 	vFalse := false
@@ -268,12 +232,12 @@ func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQu
 	qg.state.lastPauseNotifyAt = time.Now().Add(-2 * time.Minute) // inside normal 5-min cooldown
 
 	// Simulate a manual re-enable via the toggle, bypassing QuotaGate.
-	ctrl.enabled = true
+	ctrl.Enabled = true
 
 	qg.Reconcile(context.Background()) // provenance detects the external change
 	qg.Reconcile(context.Background()) // 2nd consecutive below-threshold tick re-pauses
 
-	if ctrl.disableCalls == 0 {
+	if ctrl.DisableCalls == 0 {
 		t.Fatal("disableCalls = 0, want at least 1 (re-pause after manual re-enable)")
 	}
 	if qg.state.lastPauseNotifyAt.Before(time.Now().Add(-time.Second)) {
@@ -310,16 +274,16 @@ func TestForegroundSessionActive_should_ReturnFalse_When_OnlyBacklogOwnedSession
 
 func TestShouldThrottleForeground_should_ExpireAfterDelay_When_NoForegroundActivityObservedForFullWindow(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{Instances: []*session.Instance{
 		{Category: "", Status: session.Active},
 	}}
-	ctrl := &countingFeatureController{enabled: true}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.ForegroundThrottleDelaySeconds = 300
 
-	store := &fakeTokenStore{}
+	store := &svctest.FakeTokenStore{}
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 
 	qg.Reconcile(context.Background())
@@ -333,7 +297,7 @@ func TestShouldThrottleForeground_should_ExpireAfterDelay_When_NoForegroundActiv
 	qg.foregroundThrottleUntil = time.Now().Add(-time.Second)
 	qg.mu.Unlock()
 
-	poller.instances = nil
+	poller.Instances = nil
 	qg.Reconcile(context.Background())
 	if qg.ShouldThrottleForeground() {
 		t.Error("ShouldThrottleForeground() = true after the delay window with no foreground activity, want false")
@@ -352,7 +316,7 @@ func TestNotifyPaused_should_IncludeObservedAndThresholdValues_When_SoftThreshol
 	ch, id := bus.Subscribe(subCtx)
 	defer bus.Unsubscribe(id)
 
-	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, bus)
+	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, bus)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.PauseBelowHeadroomPct = 20.0
 
@@ -382,7 +346,7 @@ func TestNotifyPaused_should_SuppressRepeatedNotification_When_AlreadyPausedWith
 	ch, id := bus.Subscribe(subCtx)
 	defer bus.Unsubscribe(id)
 
-	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, bus)
+	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, bus)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	qg.state.lastPauseNotifyAt = time.Now().Add(-2 * time.Minute) // inside 5-min cooldown
 	// manualOverrideAt left zero — no grace-window bypass.
@@ -405,7 +369,7 @@ func TestNotifyResumed_should_NeverIncludeETAOrCountdown_When_ResumeTransitionFi
 	ch, id := bus.Subscribe(subCtx)
 	defer bus.Unsubscribe(id)
 
-	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, bus)
+	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, bus)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 
 	qg.notifyResumed(cfg, HeadroomEstimate{PctRemaining: 42.0})
@@ -439,12 +403,12 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 	ch, id := bus.Subscribe(subCtx)
 	defer bus.Unsubscribe(id)
 
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, poller, ctrl, bus)
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, poller, ctrl, bus)
 	qg.recordRateLimitEvent(time.Now())
 
 	qg.Reconcile(context.Background())
@@ -477,21 +441,21 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 // behavior: Disable() fires exactly once per pause.
 func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{Instances: []*session.Instance{
 		{Category: "", Status: session.Active},
 	}}
-	ctrl := &countingFeatureController{enabled: true}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, poller, ctrl, bus)
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, poller, ctrl, bus)
 	qg.recordRateLimitEvent(time.Now())
 
 	qg.Reconcile(context.Background())
 
-	if ctrl.disableCalls != 1 {
-		t.Fatalf("disableCalls = %d, want exactly 1", ctrl.disableCalls)
+	if ctrl.DisableCalls != 1 {
+		t.Fatalf("disableCalls = %d, want exactly 1", ctrl.DisableCalls)
 	}
 }
 
@@ -505,8 +469,8 @@ func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(
 // requiring a fresh ConsecutiveTicksToPause run.
 func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
@@ -516,7 +480,7 @@ func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *test
 
 	// Drive one below-threshold tick first, leaving a stale consecutiveBelow==1
 	// (not yet enough to trigger the soft-threshold pause on its own).
-	store := &fakeTokenStore{results: fakeResultsWithUsage(900)} // 10% remaining
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(900)} // 10% remaining
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	qg.Reconcile(context.Background())
 	qg.mu.Lock()
@@ -537,8 +501,8 @@ func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *test
 	if below != 0 || above != 0 {
 		t.Errorf("consecutiveBelow=%d consecutiveAbove=%d after hard-override disable, want both 0", below, above)
 	}
-	if ctrl.disableCalls != 1 {
-		t.Fatalf("disableCalls = %d, want 1", ctrl.disableCalls)
+	if ctrl.DisableCalls != 1 {
+		t.Fatalf("disableCalls = %d, want 1", ctrl.DisableCalls)
 	}
 }
 
@@ -551,7 +515,7 @@ func TestStatusDetail_should_ReturnEmpty_When_HealthyAndCalibrated(t *testing.T)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 1000 // calibrated, so no "reactive-only mode" text either
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 
 	if got := qg.StatusDetail(); got != "" {
 		t.Errorf("StatusDetail() = %q, want empty (healthy, unthrottled, calibrated)", got)
@@ -563,7 +527,7 @@ func TestStatusDetail_should_MentionHardOverrideReason_When_PausedByHardSignal(t
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.RateLimitWindowMinutes = 30
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 	qg.state.pausedByQuota = true
 	qg.state.lastPauseReason = reasonHardOverride
 
@@ -578,7 +542,7 @@ func TestStatusDetail_should_IncludeObservedAndThresholdPct_When_PausedBySoftThr
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.PauseBelowHeadroomPct = 20.0
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 	qg.state.pausedByQuota = true
 	qg.state.lastPauseReason = reasonSoftThreshold
 	qg.state.lastEstimate = HeadroomEstimate{PctRemaining: 15.0}
@@ -593,7 +557,7 @@ func TestStatusDetail_should_MentionThrottled_When_ForegroundThrottleActive(t *t
 	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 	qg.foregroundThrottleUntil = time.Now().Add(time.Minute)
 
 	got := qg.StatusDetail()
@@ -607,7 +571,7 @@ func TestStatusDetail_should_MentionUncalibrated_When_EnabledWithZeroBudget(t *t
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 0 // the shipped default
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 
 	got := qg.StatusDetail()
 	if !strings.Contains(strings.ToLower(got), "reactive-only") {
@@ -621,14 +585,14 @@ func TestStatusDetail_should_MentionUncalibrated_When_EnabledWithZeroBudget(t *t
 
 func TestReconcile_should_NeverActOrTouchHysteresis_When_Uncalibrated(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	// AssumedWindowTokenBudget left at 0 (default) — the soft signal is inert.
 
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, poller, ctrl, bus)
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, poller, ctrl, bus)
 	// Seed a nonzero counter to prove the uncalibrated path resets it.
 	qg.state.consecutiveBelow = 1
 
@@ -636,8 +600,8 @@ func TestReconcile_should_NeverActOrTouchHysteresis_When_Uncalibrated(t *testing
 		qg.Reconcile(context.Background())
 	}
 
-	if ctrl.disableCalls != 0 || ctrl.enableCalls != 0 {
-		t.Errorf("disableCalls=%d enableCalls=%d, want both 0 — uncalibrated budget must never drive a decision", ctrl.disableCalls, ctrl.enableCalls)
+	if ctrl.DisableCalls != 0 || ctrl.EnableCalls != 0 {
+		t.Errorf("disableCalls=%d enableCalls=%d, want both 0 — uncalibrated budget must never drive a decision", ctrl.DisableCalls, ctrl.EnableCalls)
 	}
 	qg.mu.Lock()
 	below := qg.state.consecutiveBelow
@@ -649,21 +613,21 @@ func TestReconcile_should_NeverActOrTouchHysteresis_When_Uncalibrated(t *testing
 
 func TestReconcile_should_NeverActOrTouchHysteresis_When_TokenStoreIsLoading(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: true}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 1000 // calibrated, but the store is still loading below
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(900), isLoading: true}
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(900), Loading: true}
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	qg.state.consecutiveBelow = 1
 
 	qg.Reconcile(context.Background())
 
-	if ctrl.disableCalls != 0 {
-		t.Errorf("disableCalls = %d, want 0 — a loading token store must never read as artificially healthy or trigger a decision", ctrl.disableCalls)
+	if ctrl.DisableCalls != 0 {
+		t.Errorf("disableCalls = %d, want 0 — a loading token store must never read as artificially healthy or trigger a decision", ctrl.DisableCalls)
 	}
 	qg.mu.Lock()
 	below := qg.state.consecutiveBelow
@@ -680,21 +644,21 @@ func TestReconcile_should_NeverActOrTouchHysteresis_When_TokenStoreIsLoading(t *
 
 func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysChangedAcrossMultipleTicks(t *testing.T) {
 	t.Parallel()
-	poller := &mockInstancePoller{}
-	ctrl := &countingFeatureController{enabled: false}
+	poller := &svctest.MockInstancePoller{}
+	ctrl := &svctest.CountingFeatureController{Enabled: false}
 	bus := events.NewEventBus(10)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 1000
 	cfg.ConsecutiveTicksToPause = 100 // never reached — isolates the provenance behavior alone
 
-	store := &fakeTokenStore{results: fakeResultsWithUsage(0)} // healthy headroom, no pause pressure
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(0)} // healthy headroom, no pause pressure
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
 	v := true
 	qg.state.lastSetEnabled = &v // QuotaGate believes it last left backlog enabled
 
 	// External actor disables backlog directly (never through QuotaGate).
-	ctrl.enabled = false
+	ctrl.Enabled = false
 
 	qg.Reconcile(context.Background())
 	qg.mu.Lock()
@@ -706,7 +670,7 @@ func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysCh
 
 	// Wait long enough that a re-detection (bug) would produce an observably
 	// later timestamp than a correctly-latched-once one.
-	waitClockPast(t, firstOverrideAt, 2*time.Millisecond)
+	svctest.WaitClockPast(t, firstOverrideAt, 2*time.Millisecond)
 	qg.Reconcile(context.Background())
 
 	qg.mu.Lock()
@@ -734,8 +698,8 @@ func captureQuotaSlog(t *testing.T) *quotalog.SyncBuffer {
 func TestQuotaGateReconcile_ResumesBacklogOnce_WhenGateDisabledWhilePaused(t *testing.T) {
 	buf := captureQuotaSlog(t)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault() // Enabled=false: the operator just switched the gate off
-	ctrl := &countingFeatureController{enabled: false}
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, ctrl, events.NewEventBus(1))
+	ctrl := &svctest.CountingFeatureController{Enabled: false}
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, ctrl, events.NewEventBus(1))
 	qg.state.pausedByQuota = true
 	v := false
 	qg.state.lastSetEnabled = &v
@@ -743,8 +707,8 @@ func TestQuotaGateReconcile_ResumesBacklogOnce_WhenGateDisabledWhilePaused(t *te
 	qg.Reconcile(context.Background())
 	qg.Reconcile(context.Background()) // second tick must not re-enable
 
-	if ctrl.enableCalls != 1 {
-		t.Errorf("enableCalls = %d, want 1", ctrl.enableCalls)
+	if ctrl.EnableCalls != 1 {
+		t.Errorf("enableCalls = %d, want 1", ctrl.EnableCalls)
 	}
 	if qg.IsPausedByQuota() {
 		t.Error("pausedByQuota = true after resume, want false")
@@ -755,22 +719,22 @@ func TestQuotaGateReconcile_ResumesBacklogOnce_WhenGateDisabledWhilePaused(t *te
 }
 
 func TestQuotaGateReconcile_LeavesBacklogAlone_WhenGateDisabledAndNotPausedByQuota(t *testing.T) {
-	ctrl := &countingFeatureController{enabled: false} // a human turned it off
-	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &fakeTokenStore{}, &mockInstancePoller{}, ctrl, events.NewEventBus(1))
+	ctrl := &svctest.CountingFeatureController{Enabled: false} // a human turned it off
+	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, ctrl, events.NewEventBus(1))
 
 	qg.Reconcile(context.Background())
 
-	if ctrl.enableCalls != 0 {
-		t.Errorf("enableCalls = %d, want 0 (manual disable must stay disabled)", ctrl.enableCalls)
+	if ctrl.EnableCalls != 0 {
+		t.Errorf("enableCalls = %d, want 0 (manual disable must stay disabled)", ctrl.EnableCalls)
 	}
 }
 
 func TestQuotaGateReconcile_UsesNewBudgetWithoutRestart_WhenConfigUpdatedViaRpc(t *testing.T) {
-	withIsolatedStateDir(t)
-	ctrl := &countingFeatureController{enabled: true}
-	store := &fakeTokenStore{results: fakeResultsWithUsage(4_500_000)} // 10% of a 5M budget remains
+	svctest.WithIsolatedStateDir(t)
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
+	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(4_500_000)} // 10% of a 5M budget remains
 	qg := NewQuotaGate(func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
-		store, &mockInstancePoller{}, ctrl, events.NewEventBus(10))
+		store, &svctest.MockInstancePoller{}, ctrl, events.NewEventBus(10))
 	v := true
 	qg.state.lastSetEnabled = &v
 
@@ -778,8 +742,8 @@ func TestQuotaGateReconcile_UsesNewBudgetWithoutRestart_WhenConfigUpdatedViaRpc(
 	require.NoError(t, err)
 	qg.Reconcile(context.Background())
 	qg.Reconcile(context.Background())
-	if ctrl.disableCalls != 0 {
-		t.Fatalf("disableCalls = %d with no budget set, want 0 (reactive-only)", ctrl.disableCalls)
+	if ctrl.DisableCalls != 0 {
+		t.Fatalf("disableCalls = %d with no budget set, want 0 (reactive-only)", ctrl.DisableCalls)
 	}
 
 	_, err = updateQuota(t, &sessionv1.QuotaSettings{AssumedWindowTokenBudget: proto.Int64(5_000_000)})
@@ -787,8 +751,8 @@ func TestQuotaGateReconcile_UsesNewBudgetWithoutRestart_WhenConfigUpdatedViaRpc(
 	qg.Reconcile(context.Background())
 	qg.Reconcile(context.Background()) // default ConsecutiveTicksToPause = 2
 
-	if ctrl.disableCalls != 1 {
-		t.Errorf("disableCalls = %d after RPC set 5M budget, want 1 (new budget applied without restart)", ctrl.disableCalls)
+	if ctrl.DisableCalls != 1 {
+		t.Errorf("disableCalls = %d after RPC set 5M budget, want 1 (new budget applied without restart)", ctrl.DisableCalls)
 	}
 }
 
@@ -796,7 +760,7 @@ func TestStatusDetail_should_PointToSettingsPage_When_EnabledWithZeroBudget(t *t
 	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
-	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, &svctest.MockInstancePoller{}, &svctest.CountingFeatureController{}, events.NewEventBus(1))
 
 	got := qg.StatusDetail()
 	if strings.Contains(got, "config.json") || !strings.Contains(got, "Settings > Backlog quota") {

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -34,7 +35,7 @@ func TestBuildPRNudgePrompt_should_ListOnlyPresentReasonsWithLinks_When_ChecksAn
 			{AuthorLogin: "rev", Path: "a.go", URL: "https://github.com/acme/api/pull/42#c1"},
 			{AuthorLogin: "rev2", Path: "b.go", URL: "https://github.com/acme/api/pull/42#c2"},
 		},
-		HasMergeConflict: boolPtr(false),
+		HasMergeConflict: svctest.BoolPtr(false),
 	}
 	prompt, reasons := BuildPRNudgePrompt(d)
 	require.Equal(t, []sessionv1.NudgeReason{
@@ -51,7 +52,7 @@ func TestBuildPRNudgePrompt_should_ReturnEmptyReasonsAndPrompt_When_NothingToFix
 	t.Parallel()
 	failing := []githubpkg.FailingCheck{{Name: "lint"}}
 	tests := map[string]githubpkg.PRNudgeDetail{
-		"green":       {Key: nudgeKey(t), State: "open", HasMergeConflict: boolPtr(false)},
+		"green":       {Key: nudgeKey(t), State: "open", HasMergeConflict: svctest.BoolPtr(false)},
 		"unknown":     {Key: nudgeKey(t), State: "open"},
 		"merged":      {Key: nudgeKey(t), State: "merged", FailingChecks: failing},
 		"closed":      {Key: nudgeKey(t), State: "closed", FailingChecks: failing},
@@ -128,7 +129,7 @@ func TestBuildPRNudgePrompt_should_NotContainAnySlashCommandToken_When_AllReason
 			d.UnresolvedThreads = []githubpkg.PRThreadRef{{AuthorLogin: "a", Path: "/etc/x", URL: "https://github.com/acme/api/pull/42"}}
 		}
 		if mask&4 != 0 {
-			d.HasMergeConflict = boolPtr(true)
+			d.HasMergeConflict = svctest.BoolPtr(true)
 		}
 		prompt, reasons := BuildPRNudgePrompt(d)
 		require.NotEmpty(t, reasons, "mask %d", mask)
@@ -161,14 +162,14 @@ func TestBuildPRNudgePrompt_should_NotContainCommentBodyText_When_ThreadFixtureC
 
 func TestBuildPRNudgePrompt_should_ReturnMergeConflictReasonOnly_When_OnlyConflicting(t *testing.T) {
 	t.Parallel()
-	only, reasons := BuildPRNudgePrompt(githubpkg.PRNudgeDetail{Key: nudgeKey(t), State: "open", HasMergeConflict: boolPtr(true)})
+	only, reasons := BuildPRNudgePrompt(githubpkg.PRNudgeDetail{Key: nudgeKey(t), State: "open", HasMergeConflict: svctest.BoolPtr(true)})
 	require.Equal(t, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_MERGE_CONFLICT}, reasons)
 	require.Contains(t, only, "Merge conflict")
 	require.NotContains(t, only, "Failing checks")
 	require.NotContains(t, only, "review threads")
 
 	both, reasons := BuildPRNudgePrompt(githubpkg.PRNudgeDetail{
-		Key: nudgeKey(t), State: "open", HasMergeConflict: boolPtr(true),
+		Key: nudgeKey(t), State: "open", HasMergeConflict: svctest.BoolPtr(true),
 		FailingChecks: []githubpkg.FailingCheck{{Name: "lint"}},
 	})
 	require.Equal(t, []sessionv1.NudgeReason{

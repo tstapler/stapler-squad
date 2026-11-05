@@ -44,7 +44,7 @@ func sanitizeStopTail(raw string) string {
 		return stopTailWithheldMarker
 	}
 
-	s = redactErrorDetail(s)
+	s = RedactErrorDetail(s)
 	return session.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
 }
 

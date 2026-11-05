@@ -75,7 +75,7 @@ func (o SteerOutcome) String() string {
 // guardedSteerState is SessionService's single field for guarded steering.
 // The nil hooks are production behavior; tests inject fakes and a clock.
 type guardedSteerState struct {
-	guard      sessionNudgeGuard
+	guard      SessionNudgeGuard
 	ready      func(*session.Instance) notReadyReason
 	verifyPane func(context.Context, *session.Instance) error
 	write      func(context.Context, *session.Instance, string) error

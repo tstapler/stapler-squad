@@ -8,12 +8,13 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
-	home := withFakeHome(t)
+	home := svctest.WithFakeHome(t)
 
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 
 	// Nothing installed yet.
 	resp, err := svc.GetHookStatus(context.Background(), connect.NewRequest(&sessionv1.GetHookStatusRequest{}))
@@ -39,9 +40,9 @@ func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
 }
 
 func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 
 	// Nothing installed yet.
 	resp, err := svc.GetHookStatus(context.Background(), connect.NewRequest(&sessionv1.GetHookStatusRequest{}))
@@ -53,10 +54,10 @@ func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
 	}
 }
 func TestInstallHooks_MissingBinary_ReportsManualFallback(t *testing.T) {
-	home := withFakeHome(t)
+	home := svctest.WithFakeHome(t)
 	t.Setenv("PATH", filepath.Join(home, "empty-bin")) // ensure ssq-hooks is not discoverable
 
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 
 	resp, err := svc.InstallHooks(context.Background(), connect.NewRequest(&sessionv1.InstallHooksRequest{
 		InstallRules:       true,

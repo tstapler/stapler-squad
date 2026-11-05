@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ func TestExpandPath_TildeSlash(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOME(t *testing.T) {
-	home := withFakeHome(t)
+	home := svctest.WithFakeHome(t)
 
 	got := ExpandPath("$HOME")
 	if got != home {
@@ -44,7 +45,7 @@ func TestExpandPath_DollarHOME(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOMESubdir(t *testing.T) {
-	home := withFakeHome(t)
+	home := svctest.WithFakeHome(t)
 
 	got := ExpandPath("$HOME/subdir")
 	want := filepath.Clean(home + "/subdir")

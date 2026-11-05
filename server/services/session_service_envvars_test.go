@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -15,7 +16,7 @@ import (
 // CreateSessionRequest are propagated to the live instance's EnvVars field.
 func TestCreateSession_ThreadsEnvVars_WhenSetInRequest(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)

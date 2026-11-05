@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -127,7 +128,7 @@ func TestExportRulesToAntigravitySettings_MergesWithoutDuplicates(t *testing.T) 
 
 func TestExportAntigravityRulesFromDB_ExportsToHomeGemini(t *testing.T) {
 	homeDir := t.TempDir()
-	withFakeHomePath(t, homeDir)
+	svctest.WithFakeHomePath(t, homeDir)
 
 	repo, err := session.NewEntRepository(session.WithDatabasePath(":memory:"))
 	require.NoError(t, err)

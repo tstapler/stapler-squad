@@ -6,20 +6,18 @@ package services
 import (
 	"strings"
 	"testing"
-	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // recordsFor keeps only the captured log lines for one session title. captureLogs
 // serializes capturers, not emitters, so other tests' lines can land in the buffer.
-func recordsFor(buf *syncLogBuffer, title string) []string {
+func recordsFor(buf *svctest.SyncLogBuffer, title string) []string {
 	var out []string
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.Contains(line, "session="+title+" ") || strings.HasSuffix(line, "session="+title) {
@@ -39,16 +37,8 @@ func stoppedLines(lines []string) []string {
 	return out
 }
 
-var idleSnapshot = domain.StopSnapshot{
-	CapturedAt:       time.Date(2026, 10, 13, 12, 3, 40, 0, time.UTC),
-	LastActivityAt:   time.Date(2026, 10, 13, 12, 3, 10, 0, time.UTC),
-	Bucket:           domain.BucketSafeIdle,
-	TmuxAlive:        true,
-	ControllerActive: true,
-}
-
 func stallWith(reason domain.StopReason, turns int, tail string) session.AutonomousDriverOutcome {
-	snap := idleSnapshot
+	snap := svctest.IdleSnapshot
 	snap.PaneTail = tail
 	return session.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap, RunID: 7}
 }
@@ -96,7 +86,7 @@ func TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine(t *testing.T) {
 			title := "stall-" + strings.ReplaceAll(t.Name(), "/", "-")
 			f := newCharFixture(t, title, session.SessionRoleWork, session.BacklogStatusInProgress)
 			f.svc.SetAutonomousStuckRespawner(newSignalingRespawner())
-			buf := captureLogs(t)
+			buf := svctest.CaptureLogs(t)
 
 			f.complete(tc.outcome)
 
@@ -132,7 +122,7 @@ func TestCanary_AbsentFromRowNotificationAndLogs(t *testing.T) {
 	title := "stall-canary"
 	f := newCharFixture(t, title, session.SessionRoleWork, session.BacklogStatusInProgress)
 	f.svc.SetAutonomousStuckRespawner(newSignalingRespawner())
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	f.complete(stallWith(domain.StopReasonOrchestratorError, 2, "cloning with "+canaryGHP))
 
@@ -142,21 +132,4 @@ func TestCanary_AbsentFromRowNotificationAndLogs(t *testing.T) {
 	}
 	assert.NotContains(t, strings.Join(recordsFor(buf, title), "\n"), canaryGHP)
 	assert.NotContains(t, buf.String(), canaryGHP)
-}
-
-// OBS-7: the operator read path returns the detail unchanged.
-func TestStuckRowContext_ReturnedByListStuckBacklogItems(t *testing.T) {
-	f := newCharFixture(t, "stop-detail-rpc", session.SessionRoleWork, session.BacklogStatusInProgress)
-	svc := NewBacklogService(f.storage, nil, nil, nil, nil, nil)
-	ctx := t.Context()
-	detail := detailFor(idleSnapshot, 2, domain.StopReasonOrchestratorError)
-
-	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, session.BacklogStatusInProgress, detail)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
-	require.NoError(t, err)
-	require.Len(t, resp.Msg.Items, 1)
-	assert.Equal(t, detail, resp.Msg.Items[0].Context)
 }

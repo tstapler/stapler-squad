@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -72,7 +73,7 @@ type samplerEnv struct {
 
 func newSamplerEnv(t *testing.T, frames ...string) *samplerEnv {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	counts := &mirrorCounts{}
 	e := &samplerEnv{t: t, clock: newManualClock(), storage: storage, counts: counts, pane: &paneScript{frames: frames}}
 	e.mirror = newRealStoreMirror(storage, NewPendingQuestionStore(nil), counts)

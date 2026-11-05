@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -17,7 +17,7 @@ const missingItemUUID = "00000000-0000-0000-0000-000000000000"
 func newDepHandlers(t *testing.T) (*backlogHandlers, *session.Storage) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	return &backlogHandlers{storage: storage, backlogSvc: svc}, storage
 }
 

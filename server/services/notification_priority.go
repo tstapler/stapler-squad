@@ -8,7 +8,7 @@ import sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 // get_notification_history) needs to change. Push delivery then gates on
 // priority == URGENT (server/push/subscriber.go's shouldNotify) — the only quadrant
 // where both axes are true.
-func derivePriority(urgent, important bool) int32 {
+func DerivePriority(urgent, important bool) int32 {
 	switch {
 	case urgent && important:
 		return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT)

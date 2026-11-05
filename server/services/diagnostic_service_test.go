@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -29,7 +30,7 @@ func (f *fakeDiagnosticSpawner) SpawnDiagnosticSession(_ context.Context, item *
 
 func TestAssembleDiagnosticBundle_should_IncludeItemContent_When_ItemExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -50,7 +51,7 @@ func TestAssembleDiagnosticBundle_should_IncludeItemContent_When_ItemExists(t *t
 
 func TestAssembleDiagnosticBundle_should_Error_When_ItemDoesNotExist(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil)
 
 	_, err := svc.AssembleDiagnosticBundle(context.Background(), connect.NewRequest(&sessionv1.AssembleDiagnosticBundleRequest{ItemId: "00000000-0000-0000-0000-000000000001"}))
@@ -63,7 +64,7 @@ func TestAssembleDiagnosticBundle_should_Error_When_ItemDoesNotExist(t *testing.
 // involved — the spawner is faked).
 func TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -91,7 +92,7 @@ func TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds(t *testin
 
 func TestDispatchDiagnose_should_Error_When_SpawnerNotConfigured(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReview)})
@@ -104,7 +105,7 @@ func TestDispatchDiagnose_should_Error_When_SpawnerNotConfigured(t *testing.T) {
 
 func TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoTargetSpecified(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil)
 
 	allowed, reason := svc.evaluateNudgeEligibility(context.Background(), "item-1", sessionv1.StuckReason_STUCK_REASON_BOUNCING, "")
@@ -114,7 +115,7 @@ func TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoTargetSpecified(t 
 
 func TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoStuckReasonSpecified(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil)
 
 	allowed, reason := svc.evaluateNudgeEligibility(context.Background(), "item-1", sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, "sess-1")
@@ -124,7 +125,7 @@ func TestEvaluateNudgeEligibility_should_DisallowNudge_When_NoStuckReasonSpecifi
 
 func TestEvaluateNudgeEligibility_should_DisallowNudge_When_TargetNotLive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil) // no poller/extDiscovery wired
 
 	allowed, reason := svc.evaluateNudgeEligibility(context.Background(), "item-1", sessionv1.StuckReason_STUCK_REASON_BOUNCING, "sess-1")

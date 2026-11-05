@@ -5,7 +5,7 @@
   "method": "AddBacklogItemDependency",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEqualsBlocked",
@@ -20,5 +20,5 @@
     "TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing",
     "TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired"
   ],
-  "lastModified": "2026-08-13T00:07:54.125730877-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

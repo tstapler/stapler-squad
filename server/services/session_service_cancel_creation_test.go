@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -52,7 +53,7 @@ func newCancelTestInstance(t *testing.T, svc *SessionService, storage *session.S
 // GetSession returns NotFound.
 func TestCancelSessionCreation_should_RemoveInstanceAndCleanUp_When_StatusIsCreating(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	newCancelTestInstance(t, svc, storage, "cancel-happy-path", false)
 
@@ -80,7 +81,7 @@ func TestCancelSessionCreation_should_RemoveInstanceAndCleanUp_When_StatusIsCrea
 // cleanly rather than nil-pointer-panicking on the CancelFunc call.
 func TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newCancelTestInstance(t, svc, storage, "cancel-nil-cancelfunc", false)
 
@@ -104,7 +105,7 @@ func TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil(t
 // untouched.
 func TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newCancelTestInstance(t, svc, storage, "cancel-already-active", false)
 	epoch := inst.CreationEpoch()
@@ -133,7 +134,7 @@ func TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActi
 // observes Active and returns FailedPrecondition without touching the
 // instance) — never a torn/inconsistent state. Run with `-race -count=50`.
 func TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipelineSuccess(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newCancelTestInstance(t, svc, storage, "cancel-race-test", true)
 	epoch := inst.CreationEpoch()
@@ -182,7 +183,7 @@ func TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipeli
 // pins the not-found path so a bad ID doesn't silently no-op.
 func TestCancelSessionCreation_should_ReturnNotFound_When_SessionDoesNotExist(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
@@ -198,7 +199,7 @@ func TestCancelSessionCreation_should_ReturnNotFound_When_SessionDoesNotExist(t 
 // the same fast-fail-on-empty-ID convention DeleteSession uses.
 func TestCancelSessionCreation_should_ReturnInvalidArgument_When_IdIsEmpty(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
@@ -222,7 +223,7 @@ func TestCancelSessionCreation_should_ReturnInvalidArgument_When_IdIsEmpty(t *te
 // waiter must observe ErrCreationVanished within roughly one poll interval
 // of the deletion, not hang until its own (much longer) timeout.
 func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_RacingALiveWait(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	newCancelTestInstance(t, svc, storage, "cancel-await-race", true)
 
@@ -267,7 +268,7 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 // handler, before the async cleanup goroutine), mirroring CancelSessionCreation.
 func TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-cancels-creating", false)
@@ -300,7 +301,7 @@ func TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating(t *te
 // has a nil CancelFunc, and DeleteSession must not nil-pointer-panic on it.
 func TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-nil-cancelfunc", false)
@@ -322,7 +323,7 @@ func TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc
 // order) -- harmless once the pipeline has already reached a terminal status.
 func TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-active-session", false)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // stateConfigDir is the isolated state directory withIsolatedStateDir set up.
@@ -40,7 +41,7 @@ func countConfigSyncs(t *testing.T, dir string) *atomic.Int64 {
 }
 
 func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenGlobalFlagIsSet(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	syncs := countConfigSyncs(t, stateConfigDir(t))
 
@@ -51,7 +52,7 @@ func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenGlobalFlagIsSet(t *testing.
 }
 
 func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenScopedFlagIsSetAndCleared(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	syncs := countConfigSyncs(t, stateConfigDir(t))
 
@@ -67,7 +68,7 @@ func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenScopedFlagIsSetAndCleared(t
 // A failed controller costs exactly two fsyncs (persist, then rollback) and
 // leaves the file as it was.
 func TestUpdateFeatureFlag_ShouldFsyncTwiceAndRestoreFile_WhenGlobalControllerFails(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	svc.SetFeatureController("changelog", &fakeFeatureController{failEnable: errors.New("boom")})
 	syncs := countConfigSyncs(t, stateConfigDir(t))
@@ -88,7 +89,7 @@ func TestUpdateFeatureFlag_ShouldFsyncTwiceAndRestoreFile_WhenGlobalControllerFa
 }
 
 func TestUpdateFeatureFlag_ShouldFsyncTwiceAndRestoreFile_WhenScopedControllerFails(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	svc.SetFeatureController(gateFlag, &scopedController{failScope: errors.New("boom")})
 	syncs := countConfigSyncs(t, stateConfigDir(t))
@@ -109,7 +110,7 @@ func TestUpdateFeatureFlag_ShouldFsyncTwiceAndRestoreFile_WhenScopedControllerFa
 }
 
 func TestUpdateFeatureFlag_ShouldPersistValueOnDisk_WhenSavedOnce(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 
 	_, err := mutateFlag(svc, "changelog", setOn, "global")
@@ -135,7 +136,7 @@ func configReadsDuringList(t *testing.T, svc *FeatureFlagService) int64 {
 }
 
 func TestGetFeatureFlags_ShouldReadConfigFileOnce_WhenListingEveryFlag(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	assert.EqualValues(t, 1, configReadsDuringList(t, NewFeatureFlagService()),
 		"config.json is parsed once, not once per flag")
 }

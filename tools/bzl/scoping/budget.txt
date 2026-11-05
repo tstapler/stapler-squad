@@ -3,6 +3,8 @@
 # needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
 session files=316 loc=93592 imports=97
 session/prpoller files=4 loc=1225 imports=5
-server/services files=317 loc=94465 imports=62
+server/services files=300 loc=82443 imports=62
+server/services/backlogsvc files=28 loc=14883 imports=18
+server/services/internal/svctest files=36 loc=1459 imports=17
 server/services/sessionbundle files=4 loc=862 imports=6
 server/services/devtools files=4 loc=501 imports=4

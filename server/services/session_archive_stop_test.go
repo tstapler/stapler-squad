@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -109,7 +110,7 @@ func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title strin
 		}
 	}
 	require.NotNil(t, liveInst)
-	addInstanceToPoller(fix.poller, liveInst)
+	svctest.AddInstanceToPoller(fix.poller, liveInst)
 	return liveInst
 }
 

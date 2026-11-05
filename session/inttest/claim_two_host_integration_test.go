@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -29,7 +30,7 @@ const twoHostIssueURL = "https://github.com/acme/widgets/issues/42"
 type twoHostNode struct {
 	*claimNode
 	storage *session.Storage
-	backlog *services.BacklogService
+	backlog *backlogsvc.BacklogService
 }
 
 // newTwoHostNode builds a host. withGossip=false wires a recorder that never
@@ -49,7 +50,7 @@ func newTwoHostNode(t *testing.T, name string, withGossip bool) *twoHostNode {
 	require.NoError(t, err)
 	storage.SetClaimRecorder(recorder)
 
-	backlog := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlog := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	checker := services.NewLocalClaimChecker(node.index, node.identity.ID, node.registry).SignLookupsWith(node.identity)
 	backlog.SetClaimChecker(checker, checker)
 	return &twoHostNode{claimNode: node, storage: storage, backlog: backlog}

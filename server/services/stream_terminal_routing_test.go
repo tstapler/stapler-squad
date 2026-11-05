@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newRoutingTestService creates a bare SessionService for exercising HTTP
@@ -16,7 +17,7 @@ import (
 // since these tests drive the mux directly via httptest.NewRecorder.
 func newRoutingTestService(t *testing.T) *SessionService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)

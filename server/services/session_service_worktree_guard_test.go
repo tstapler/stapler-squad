@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -62,8 +63,8 @@ func TestUpdateSession_Pause_RefusesWhenWorktreeSharedWithOtherLiveSession(t *te
 	worktree := t.TempDir()
 	sibling := newLiveProbeInstance(t, "guard-sibling-pause-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "server")))
 	target := newWorktreeGuardTarget("guard-target-pause", "uuid-guard-target-pause", worktree)
-	addInstanceToPoller(fix.poller, sibling)
-	addInstanceToPoller(fix.poller, target)
+	svctest.AddInstanceToPoller(fix.poller, sibling)
+	svctest.AddInstanceToPoller(fix.poller, target)
 
 	paused := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
 	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
@@ -87,8 +88,8 @@ func TestUpdateSession_Stop_RefusesWhenWorktreeSharedWithOtherLiveSession(t *tes
 	worktree := t.TempDir()
 	sibling := newLiveProbeInstance(t, "guard-sibling-stop-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "web-app")))
 	target := newWorktreeGuardTarget("guard-target-stop", "uuid-guard-target-stop", worktree)
-	addInstanceToPoller(fix.poller, sibling)
-	addInstanceToPoller(fix.poller, target)
+	svctest.AddInstanceToPoller(fix.poller, sibling)
+	svctest.AddInstanceToPoller(fix.poller, target)
 
 	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
 	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
@@ -115,8 +116,8 @@ func TestUpdateSession_Pause_AllowsWhenNoOtherLiveSessionInsideWorktree(t *testi
 	worktree := t.TempDir()
 	elsewhere := newLiveProbeInstance(t, "guard-elsewhere-"+t.Name(), t.TempDir())
 	target := newWorktreeGuardTarget("guard-target-alone", "uuid-guard-target-alone", worktree)
-	addInstanceToPoller(fix.poller, elsewhere)
-	addInstanceToPoller(fix.poller, target)
+	svctest.AddInstanceToPoller(fix.poller, elsewhere)
+	svctest.AddInstanceToPoller(fix.poller, target)
 
 	paused := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
 	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
@@ -142,8 +143,8 @@ func TestDeleteSession_RefusesWhenWorktreeSharedWithOtherLiveSession(t *testing.
 	worktree := t.TempDir()
 	sibling := newLiveProbeInstance(t, "guard-sibling-delete-"+t.Name(), mustMkdirSiblingCwd(t, filepath.Join(worktree, "session")))
 	target := newWorktreeGuardTarget("guard-target-delete", "uuid-guard-target-delete", worktree)
-	addInstanceToPoller(fix.poller, sibling)
-	addInstanceToPoller(fix.poller, target)
+	svctest.AddInstanceToPoller(fix.poller, sibling)
+	svctest.AddInstanceToPoller(fix.poller, target)
 	require.NoError(t, fix.storage.AddInstance(target))
 
 	_, err := fix.svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
@@ -180,8 +181,8 @@ func TestDeleteSession_AllowsWhenNoOtherLiveSessionInsideWorktree(t *testing.T) 
 	worktree := t.TempDir()
 	elsewhere := newLiveProbeInstance(t, "guard-elsewhere-delete-"+t.Name(), t.TempDir())
 	target := newWorktreeGuardTarget("guard-target-delete-alone", "uuid-guard-target-delete-alone", worktree)
-	addInstanceToPoller(fix.poller, elsewhere)
-	addInstanceToPoller(fix.poller, target)
+	svctest.AddInstanceToPoller(fix.poller, elsewhere)
+	svctest.AddInstanceToPoller(fix.poller, target)
 	require.NoError(t, fix.storage.AddInstance(target))
 
 	// Force: the fixture's worktree is a bare temp dir, so the dirty check can't run and an

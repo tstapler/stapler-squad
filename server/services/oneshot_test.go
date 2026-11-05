@@ -12,6 +12,7 @@ import (
 	connect "connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -97,7 +98,7 @@ func TestExtractPRURL_NotFound(t *testing.T) {
 
 func TestBatchCreateSessions_SemaphoreLimitsConcurrency(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -140,7 +141,7 @@ func TestBatchCreateSessions_SemaphoreLimitsConcurrency(t *testing.T) {
 func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
 	t.Parallel()
 	// Verify that the server caps MaxConcurrency at 3 even if caller requests more.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -171,7 +172,7 @@ func TestBatchCreateSessions_MaxConcurrencyEnforced(t *testing.T) {
 
 func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -186,7 +187,7 @@ func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
 }
 
 func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	// Without a poller FindLiveInstance is always nil, so DeleteSession would
 	// skip Destroy() and leave the created session's SessionDriver polling
@@ -198,7 +199,7 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	// the real "claude" binary (and everything it starts: MCP tool subprocesses,
 	// subagents) as an orphaned, unbounded background process.
 	testDir := t.TempDir()
-	withIsolatedStateDirPath(t, testDir)
+	svctest.WithIsolatedStateDirPath(t, testDir)
 	if err := os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644); err != nil {
 		t.Fatalf("write config.json: %v", err)

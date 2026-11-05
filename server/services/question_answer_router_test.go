@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -72,7 +73,7 @@ func (e *routerEnv) addVisible(title string, tweak ...func(*session.Instance)) (
 	for _, f := range tweak {
 		f(inst)
 	}
-	addInstanceToPoller(e.fix.poller, inst)
+	svctest.AddInstanceToPoller(e.fix.poller, inst)
 	return inst, pm
 }
 

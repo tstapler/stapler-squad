@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -34,7 +35,7 @@ func addCreatingSession(t *testing.T, storage *session.Storage, title, uuid stri
 // persisted row and the in-memory actor state in one commitTerminalStatus call.
 func TestCommitTerminalStatus_should_UpdatePersistedAndInMemory_When_EpochMatches(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "commit-terminal-match", "uuid-commit-match")
 
 	applied := commitTerminalStatus(context.Background(), storage, inst, 0, session.Active, "")
@@ -54,7 +55,7 @@ func TestCommitTerminalStatus_should_UpdatePersistedAndInMemory_When_EpochMatche
 // in-memory TryForceStatusIfEpoch call must never even be attempted.
 func TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "commit-terminal-stale", "uuid-commit-stale")
 
 	// The persisted row's creation_epoch defaults to 0; present a stale captured
@@ -81,7 +82,7 @@ func TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale(t *tes
 // never see this row as a stale-candidate at all.
 func TestCommitTerminalStatus_should_NeverProduceStaleLookingButLiveSession_When_CrashBetweenPersistAndInMemorySync(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	addCreatingSession(t, storage, "commit-terminal-crash", "uuid-commit-crash")
 
 	// Model the crash: the durable persist succeeds, but the process is killed

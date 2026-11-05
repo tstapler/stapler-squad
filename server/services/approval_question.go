@@ -83,7 +83,7 @@ func (h *ApprovalHandler) knownSession(sessionUUID string) bool {
 }
 
 // questionAttribution is how a question's sender was identified.
-type questionAttribution struct {
+type QuestionAttribution struct {
 	// uuid is the session a verified proof vouches for ("" when none verified);
 	// when set it is the attribution and the title header is ignored.
 	uuid string
@@ -91,26 +91,26 @@ type questionAttribution struct {
 	cause string
 }
 
-func (h *ApprovalHandler) attributeQuestion(r *http.Request, headerResolvedID string) questionAttribution {
+func (h *ApprovalHandler) attributeQuestion(r *http.Request, headerResolvedID string) QuestionAttribution {
 	value := r.Header.Get(hookProofHeader)
 	proofs := h.hookProofs()
 	switch {
 	case value == "" || proofs == nil:
 		if headerResolvedID == "" || headerResolvedID == "unknown" {
-			return questionAttribution{cause: replyCausePathOnly}
+			return QuestionAttribution{cause: replyCausePathOnly}
 		}
-		return questionAttribution{cause: replyCauseNoProof}
+		return QuestionAttribution{cause: replyCauseNoProof}
 	}
 	id, ok := proofs.Verify(value)
 	if !ok || !h.knownSession(id) {
-		return questionAttribution{cause: replyCauseBadProof}
+		return QuestionAttribution{cause: replyCauseBadProof}
 	}
-	return questionAttribution{uuid: id}
+	return QuestionAttribution{uuid: id}
 }
 
 // registerQuestion parses the payload, registers a replyable entry when the
 // proof verified and the shape is single, and returns the notification metadata.
-func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribution, asked AskedQuestion, hookCallID string) map[string]string {
+func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribution, asked AskedQuestion, hookCallID string) map[string]string {
 	meta := map[string]string{metaQuestionShape: string(asked.Shape)}
 	cause := qa.cause
 	if asked.Shape != QuestionShapeSingle {

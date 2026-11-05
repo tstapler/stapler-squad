@@ -18,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -305,7 +306,7 @@ func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_Path
 // deterministic AlreadyGone branch and asserting the persisted
 // SuspendedProcessRecord is cleaned up as a result.
 func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveCheckerReportsProcessGone(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	suspended, err := session.NewSuspendedProcessStore()
 	require.NoError(t, err)
 	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
@@ -339,7 +340,7 @@ func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveC
 // regressed and the client-supplied PID were used instead,
 // ResumeOriginalProcess would fail (ESRCH) and resumed would be false.
 func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordExists(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	suspended, err := session.NewSuspendedProcessStore()
 	require.NoError(t, err)
 

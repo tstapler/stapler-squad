@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -45,9 +46,9 @@ func (p *fakeStateUpdaterPlugin) PostIssueComment(_ context.Context, _ session.P
 
 func TestForwardSync_should_UpdateStatePostCommentAndWriteWatermark_ForStateUpdaterPlugin(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, "fake_linear", true, "In Review")
-	item := createForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_linear", true, "In Review")
+	item := svctest.CreateForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
 	ts := time.Date(2019, 3, 14, 9, 26, 53, 0, time.UTC)
 	fake := &fakeStateUpdaterPlugin{pluginID: "fake_linear", updatedAt: ts}
 	registry := session.NewPluginRegistry()
@@ -65,9 +66,9 @@ func TestForwardSync_should_UpdateStatePostCommentAndWriteWatermark_ForStateUpda
 
 func TestForwardSync_should_RecordFailureAndSkipComment_When_UpdateIssueStateFails(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, "fake_linear", true, "Shipped")
-	item := createForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_linear", true, "Shipped")
+	item := svctest.CreateForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
 	fake := &fakeStateUpdaterPlugin{pluginID: "fake_linear", updateErr: fmt.Errorf(`no workflow state named "Shipped" found`)}
 	registry := session.NewPluginRegistry()
 	registry.Register(fake)
@@ -83,9 +84,9 @@ func TestForwardSync_should_RecordFailureAndSkipComment_When_UpdateIssueStateFai
 
 func TestForwardSync_should_RecordFailureAndSkipUpdate_When_TargetStateEmpty(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, "fake_linear", true, "")
-	item := createForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_linear", true, "")
+	item := svctest.CreateForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
 	fake := &fakeStateUpdaterPlugin{pluginID: "fake_linear"}
 	registry := session.NewPluginRegistry()
 	registry.Register(fake)

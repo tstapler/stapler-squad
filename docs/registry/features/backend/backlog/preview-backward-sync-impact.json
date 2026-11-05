@@ -5,7 +5,7 @@
   "method": "PreviewBackwardSyncImpact",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_sources_preview.go",
+  "handlerFile": "server/services/backlogsvc/backlog_sources_preview.go",
   "tested": true,
   "testIds": [
     "TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems",
@@ -14,5 +14,5 @@
     "TestPreviewBackwardSyncImpact_ReturnsInvalidArgumentWhenSourceIDEmpty",
     "TestPreviewBackwardSyncImpact_ReturnsNotFoundForMissingSource"
   ],
-  "lastModified": "2026-08-03T15:45:15.018520417-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

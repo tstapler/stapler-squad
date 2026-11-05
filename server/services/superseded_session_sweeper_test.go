@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -44,18 +45,18 @@ func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []tim
 // older must be archived.
 func TestSupersededSessionSweeper_should_ArchiveOlderRound_When_NewerRoundExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	itemID, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
 	older, newer := uuids[0], uuids[1]
 
-	stopper := &mockSessionStopper{}
+	stopper := &svctest.MockSessionStopper{}
 	sweeper := NewSupersededSessionSweeper(storage, stopper)
 	sweeper.sweep(t.Context())
 
-	assert.Contains(t, stopper.archivedUUIDs, older, "the older round must be archived")
-	assert.NotContains(t, stopper.archivedUUIDs, newer, "the current round must be left untouched")
+	assert.Contains(t, stopper.ArchivedUUIDs, older, "the older round must be archived")
+	assert.NotContains(t, stopper.ArchivedUUIDs, newer, "the current round must be left untouched")
 
 	_ = itemID
 }
@@ -65,18 +66,18 @@ func TestSupersededSessionSweeper_should_ArchiveOlderRound_When_NewerRoundExists
 // never be archived out from under a user still attached to it.
 func TestSupersededSessionSweeper_should_SkipLiveSuperseded_When_SessionStillAttached(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
 	older, newer := uuids[0], uuids[1]
 
-	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{older: true}}
+	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{older: true}}
 	sweeper := NewSupersededSessionSweeper(storage, stopper)
 	sweeper.sweep(t.Context())
 
-	assert.NotContains(t, stopper.archivedUUIDs, older, "a live/attached superseded session must not be archived")
-	assert.NotContains(t, stopper.archivedUUIDs, newer)
+	assert.NotContains(t, stopper.ArchivedUUIDs, older, "a live/attached superseded session must not be archived")
+	assert.NotContains(t, stopper.ArchivedUUIDs, newer)
 }
 
 // TestSupersededSessionSweeper_should_ConvergeOnPreExistingStaleRows is AC5's
@@ -86,7 +87,7 @@ func TestSupersededSessionSweeper_should_SkipLiveSuperseded_When_SessionStillAtt
 // active" within a single sweep tick.
 func TestSupersededSessionSweeper_should_ConvergeOnPreExistingStaleRows(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{
@@ -98,14 +99,14 @@ func TestSupersededSessionSweeper_should_ConvergeOnPreExistingStaleRows(t *testi
 	})
 	current := uuids[len(uuids)-1]
 
-	stopper := &mockSessionStopper{}
+	stopper := &svctest.MockSessionStopper{}
 	sweeper := NewSupersededSessionSweeper(storage, stopper)
 	sweeper.sweep(t.Context()) // one tick
 
 	for _, uuid := range uuids[:len(uuids)-1] {
-		assert.Contains(t, stopper.archivedUUIDs, uuid, "every pre-existing stale round must converge within one tick")
+		assert.Contains(t, stopper.ArchivedUUIDs, uuid, "every pre-existing stale round must converge within one tick")
 	}
-	assert.NotContains(t, stopper.archivedUUIDs, current)
+	assert.NotContains(t, stopper.ArchivedUUIDs, current)
 }
 
 // TestSupersededSessionSweeper_should_JoinCleanly_When_ContextCancelled is
@@ -118,10 +119,10 @@ func TestSupersededSessionSweeper_should_JoinCleanly_When_ContextCancelled(t *te
 	// to the sweeper as a leak -- same ordering rationale as
 	// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil in
 	// session_service_test.go.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	baseline := goleak.IgnoreCurrent()
 
-	stopper := &mockSessionStopper{}
+	stopper := &svctest.MockSessionStopper{}
 	sweeper := NewSupersededSessionSweeper(storage, stopper)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,20 +143,20 @@ func TestSupersededSessionSweeper_should_JoinCleanly_When_ContextCancelled(t *te
 }
 
 type liveCheckCounter struct {
-	*mockSessionStopper
+	*svctest.MockSessionStopper
 	liveChecks []string
 }
 
 func (c *liveCheckCounter) IsSessionLive(uuid string) bool {
 	c.liveChecks = append(c.liveChecks, uuid)
-	return c.mockSessionStopper.IsSessionLive(uuid)
+	return c.MockSessionStopper.IsSessionLive(uuid)
 }
 
 // Archived sessions stay superseded forever; re-checking each one every tick
 // cost two session queries apiece (11k+ in 36 minutes on the live service).
 func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionChecks(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
@@ -165,9 +166,9 @@ func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionCh
 		SetUUID(archivedUUID).SetArchivedAt(now).Save(t.Context())
 	require.NoError(t, err)
 
-	stopper := &liveCheckCounter{mockSessionStopper: &mockSessionStopper{}}
+	stopper := &liveCheckCounter{MockSessionStopper: &svctest.MockSessionStopper{}}
 	NewSupersededSessionSweeper(storage, stopper).sweep(t.Context())
 
 	assert.Equal(t, []string{pendingUUID}, stopper.liveChecks, "the archived session must not be re-checked")
-	assert.Equal(t, []string{pendingUUID}, stopper.archivedUUIDs, "the unarchived superseded session is still archived")
+	assert.Equal(t, []string{pendingUUID}, stopper.ArchivedUUIDs, "the unarchived superseded session is still archived")
 }

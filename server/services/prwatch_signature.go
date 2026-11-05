@@ -19,11 +19,11 @@ const (
 func (k PRWatchKind) reasonName() (string, bool) {
 	switch k {
 	case PRWatchKindCI:
-		return reasonNameFailingChecks, true
+		return ReasonNameFailingChecks, true
 	case PRWatchKindComment:
-		return reasonNameUnresolvedThreads, true
+		return ReasonNameUnresolvedThreads, true
 	case PRWatchKindReview:
-		return reasonNameChangesRequested, true
+		return ReasonNameChangesRequested, true
 	}
 	return "", false
 }
@@ -39,5 +39,5 @@ func PRWatchGuardSignature(pr githubpkg.LinkKey, kinds ...PRWatchKind) string {
 			names = append(names, n)
 		}
 	}
-	return guardSignature(pr, reasonSetSignature(dropSubsumedChangesRequested(names)...))
+	return GuardSignature(pr, ReasonSetSignature(DropSubsumedChangesRequested(names)...))
 }

@@ -17,6 +17,7 @@ go_test(
         "//proto/session/v1:sessionv1_go",
         "//server/auth",
         "//server/services",
+        "//server/services/backlogsvc",
         "//session",
         "//session/internal/peeraddr",
         "@com_connectrpc_connect//:connect",

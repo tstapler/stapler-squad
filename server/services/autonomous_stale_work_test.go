@@ -6,7 +6,6 @@ package services
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,12 +15,12 @@ import (
 )
 
 func (f *stallNudgeFixture) inspect(state domain.ObservedState) StaleWorkDisposition {
-	f.svc.autonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot { return snapshotFor(state) }
+	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot { return snapshotFor(state) }
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	if err != nil {
 		panic(err)
 	}
-	return f.svc.autonomousSvc.InspectStaleWork(context.Background(), f.inst.UUID, item)
+	return f.svc.AutonomousSvc.InspectStaleWork(context.Background(), f.inst.UUID, item)
 }
 
 func TestInspectStaleWork_should_nudgeOnlyIdlePrompt_When_AnyObservedState(t *testing.T) {
@@ -69,60 +68,21 @@ func TestInspectStaleWork_should_respawn_When_NudgeNotAllowed(t *testing.T) {
 
 func TestInspectStaleWork_should_skip_When_StallRecoveryLive(t *testing.T) {
 	f := newStallNudgeFixture(t, "stale-recovery-live", session.BacklogStatusInProgress, true, true)
-	_, release := f.svc.autonomousSvc.beginRecovery(f.title)
+	_, release := f.svc.AutonomousSvc.beginRecovery(f.title)
 	defer release()
 	captured := false
-	f.svc.autonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot {
+	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot {
 		captured = true
 		return snapshotFor(domain.ObservedIdlePrompt)
 	}
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
 
-	got := f.svc.autonomousSvc.InspectStaleWork(context.Background(), f.inst.UUID, item)
+	got := f.svc.AutonomousSvc.InspectStaleWork(context.Background(), f.inst.UUID, item)
 
 	assert.Equal(t, StaleWorkSkipped, got)
 	assert.Zero(t, f.nudger.callCount())
 	assert.False(t, captured, "a live recovery owns the pane; do not even capture")
-}
-
-type fakeStaleInspector struct{ result StaleWorkDisposition }
-
-func (f fakeStaleInspector) InspectStaleWork(context.Context, string, *session.BacklogItemData) StaleWorkDisposition {
-	return f.result
-}
-
-func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesOrSkips(t *testing.T) {
-	for name, disp := range map[string]StaleWorkDisposition{"nudged": StaleWorkNudged, "skipped": StaleWorkSkipped, "respawn": StaleWorkRespawn} {
-		t.Run(name, func(t *testing.T) {
-			storage := createTestStorage(t)
-			creator := &mockSessionCreator{}
-			svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
-			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-uuid": true}}
-			svc.SetSessionStopper(stopper)
-			svc.SetStaleWorkInspector(fakeStaleInspector{result: disp})
-			repoPath := t.TempDir()
-			initGitRepoWithCommit(t, repoPath)
-			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
-			_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
-			require.NoError(t, err)
-			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
-			require.NoError(t, err)
-
-			require.NoError(t, svc.RemediateStaleWorkSession(t.Context(), itemID))
-
-			sessions, err := storage.ListItemSessions(t.Context(), itemID)
-			require.NoError(t, err)
-			restarted := disp == StaleWorkRespawn
-			assert.Equal(t, restarted, slices.Contains(stopper.killedPaneUUIDs, "stale-uuid"))
-			assert.Equal(t, restarted, len(creator.calls) == 1)
-			for _, is := range sessions {
-				if is.SessionUUID == "stale-uuid" {
-					assert.Equal(t, restarted, is.EndedAt != nil)
-				}
-			}
-		})
-	}
 }
 
 func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegistered(t *testing.T) {
@@ -141,7 +101,7 @@ func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegi
 func TestRecordDeadPane_should_writeStuckRow_When_WorkSessionLive(t *testing.T) {
 	f := newStallNudgeFixture(t, "dead-pane-row", session.BacklogStatusInProgress, true, true)
 
-	f.svc.autonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
+	f.svc.AutonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
 
 	assert.Contains(t, f.rowContext(t), "stop_reason=dead_pane state=crashed action=respawned")
 	assert.Zero(t, f.nudger.callCount(), "a dead pane is never nudged")
@@ -161,7 +121,7 @@ func TestRecordDeadPane_should_storeSanitizedTail_When_SnapshotCarriesPaneTail(t
 			snap := snapshotFor(domain.ObservedCrashed)
 			snap.PaneTail = tc.tail
 
-			f.svc.autonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snap, domain.ObservedCrashed)
+			f.svc.AutonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snap, domain.ObservedCrashed)
 
 			got := f.rowContext(t)
 			assert.Contains(t, got, tc.want)
@@ -175,7 +135,7 @@ func TestRecordDeadPane_should_storeSanitizedTail_When_SnapshotCarriesPaneTail(t
 func TestRecordDeadPane_should_beNoop_When_SessionHasNoLiveWorkItemSession(t *testing.T) {
 	f := newStallNudgeFixture(t, "dead-pane-noop", session.BacklogStatusInProgress, true, true)
 
-	f.svc.autonomousSvc.RecordDeadPane("unlinked-uuid", f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
+	f.svc.AutonomousSvc.RecordDeadPane("unlinked-uuid", f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
 
 	open, err := f.storage.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)

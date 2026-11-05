@@ -47,7 +47,7 @@ func (s *SessionService) scanLeaseWedges(now time.Time, include func(*session.In
 		s.eventBus.Publish(events.NewNotificationEvent(
 			snap.UUID, snap.Title, fmt.Sprintf("lease-wedge-%s-%d", snap.UUID, w.AcquisitionID),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-			derivePriority(true, false), // medium: not urgent, so never pushed
+			DerivePriority(true, false), // medium: not urgent, so never pushed
 			leaseWedgeTitle, leaseWedgeBody, meta,
 		))
 		if s.deliveryGate != nil {

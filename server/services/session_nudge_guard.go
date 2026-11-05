@@ -43,7 +43,7 @@ type nudgeRecord struct {
 // the manual nudge and PR-fix auto-steer map their own reason vocabulary onto
 // these names; guardSignature adds the PR so the same problem set dedupes across
 // the two paths only for the same PR.
-func reasonSetSignature(names ...string) string {
+func ReasonSetSignature(names ...string) string {
 	seen := make(map[string]struct{}, len(names))
 	uniq := make([]string, 0, len(names))
 	for _, n := range names {
@@ -59,7 +59,7 @@ func reasonSetSignature(names ...string) string {
 // guardSignature is the duplicate-window key: the PR (empty when unknown) plus
 // the reason set. A session linked to two PRs must not treat a nudge for the
 // second PR as a repeat of the first.
-func guardSignature(pr githubpkg.LinkKey, reasonSet string) string {
+func GuardSignature(pr githubpkg.LinkKey, reasonSet string) string {
 	return string(pr) + "|" + reasonSet
 }
 
@@ -72,14 +72,14 @@ func guardSignature(pr githubpkg.LinkKey, reasonSet string) string {
 // A mutex rather than atomics: the in-flight check, duplicate-window check and
 // in-flight mark must be one atomic step across two maps, and the critical
 // section is a few map operations with no I/O. The zero value is ready to use.
-type sessionNudgeGuard struct {
+type SessionNudgeGuard struct {
 	mu       sync.Mutex
 	inflight map[string]struct{}
 	last     map[string]nudgeRecord
 	now      func() time.Time // injected in tests; nil means time.Now
 }
 
-func (g *sessionNudgeGuard) clock() time.Time {
+func (g *SessionNudgeGuard) clock() time.Time {
 	if g.now != nil {
 		return g.now()
 	}
@@ -92,7 +92,7 @@ func (g *sessionNudgeGuard) clock() time.Time {
 // For GuardBusy, GuardDuplicate and GuardCoolingDown, release is a safe no-op. id is
 // Instance.GetStableID() on every call path so the manual and automatic
 // callers share one key.
-func (g *sessionNudgeGuard) TryBegin(id, sig string) (release func(success bool), outcome GuardOutcome) {
+func (g *SessionNudgeGuard) TryBegin(id, sig string) (release func(success bool), outcome GuardOutcome) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -122,13 +122,13 @@ func (g *sessionNudgeGuard) TryBegin(id, sig string) (release func(success bool)
 
 // abandon releases id's in-flight claim without recording anything, for a
 // claim that never reached the PTY (not ready). The holder must not also call release.
-func (g *sessionNudgeGuard) abandon(id string) {
+func (g *SessionNudgeGuard) abandon(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.inflight, id)
 }
 
-func (g *sessionNudgeGuard) finish(id, sig string, success bool) {
+func (g *SessionNudgeGuard) finish(id, sig string, success bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -144,7 +144,7 @@ func (g *sessionNudgeGuard) finish(id, sig string, success bool) {
 }
 
 // evictLocked drops records past their TTL, then the oldest records beyond the hard cap.
-func (g *sessionNudgeGuard) evictLocked(now time.Time) {
+func (g *SessionNudgeGuard) evictLocked(now time.Time) {
 	for id, rec := range g.last {
 		if now.Sub(rec.at) > nudgeRecordTTL {
 			delete(g.last, id)
@@ -160,4 +160,9 @@ func (g *sessionNudgeGuard) evictLocked(now time.Time) {
 		}
 		delete(g.last, oldestID)
 	}
+}
+
+// NewSessionNudgeGuardWithClock builds a nudge guard whose clock is injected, for tests of other packages.
+func NewSessionNudgeGuardWithClock(now func() time.Time) *SessionNudgeGuard {
+	return &SessionNudgeGuard{now: now}
 }

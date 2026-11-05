@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -17,7 +18,7 @@ import (
 func setupReviewQueueServiceWithT(t *testing.T) *ReviewQueueService {
 	t.Helper()
 	queue := session.NewReviewQueue()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	return NewReviewQueueService(queue, storage, bus)

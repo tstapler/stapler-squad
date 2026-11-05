@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -62,7 +63,7 @@ func TestInjectHooksConfigAllTypes(t *testing.T) {
 			t.Errorf("event %s not found in hooks", exp.eventKey)
 			continue
 		}
-		var groups []hookMatcherGroup
+		var groups []HookMatcherGroup
 		if err := json.Unmarshal(raw, &groups); err != nil {
 			t.Errorf("parse %s groups: %v", exp.eventKey, err)
 			continue
@@ -111,7 +112,7 @@ func TestInjectHooksConfigPreservesUserHooks(t *testing.T) {
 	if !ok {
 		t.Fatal("PreToolUse not found")
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(raw, &groups); err != nil {
 		t.Fatalf("parse PreToolUse groups: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestInjectHooksIdempotent(t *testing.T) {
 	if !ok {
 		t.Fatal("PermissionRequest not found")
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(prRaw, &groups); err != nil {
 		t.Fatalf("parse PermissionRequest: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresen
 		t.Fatalf("parse hooks: %v", err)
 	}
 
-	var postToolGroups []hookMatcherGroup
+	var postToolGroups []HookMatcherGroup
 	if err := json.Unmarshal(hooksMap["PostToolUse"], &postToolGroups); err != nil {
 		t.Fatalf("parse PostToolUse groups: %v", err)
 	}
@@ -405,7 +406,7 @@ func TestInjectHooksConfig_should_InjectBothHooks_When_OneEndpointIsAPrefixOfAno
 		if !ok {
 			t.Fatalf("iteration %d: PostToolUse key missing entirely from hooks", i)
 		}
-		var groups []hookMatcherGroup
+		var groups []HookMatcherGroup
 		if err := json.Unmarshal(postToolRaw, &groups); err != nil {
 			t.Fatalf("iteration %d: parse PostToolUse groups: %v", i, err)
 		}
@@ -525,7 +526,7 @@ func Test_InjectHooksConfig_should_TargetRelaySocket_When_WithRemoteHookTargetPa
 	if !ok {
 		t.Fatal("PermissionRequest not found")
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(prRaw, &groups); err != nil {
 		t.Fatalf("parse PermissionRequest groups: %v", err)
 	}
@@ -572,7 +573,7 @@ func Test_InjectHooksConfig_should_ProduceByteIdenticalLocalCommand_When_NoRemot
 	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
 		t.Fatalf("parse hooks: %v", err)
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
 		t.Fatalf("parse PermissionRequest groups: %v", err)
 	}
@@ -611,7 +612,7 @@ func Test_InjectHooksConfig_should_LeaveOtherHookTypesOnHTTP_When_WithRemoteHook
 	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
 		t.Fatalf("parse hooks: %v", err)
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(hooksMap["Stop"], &groups); err != nil {
 		t.Fatalf("parse Stop groups: %v", err)
 	}
@@ -647,7 +648,7 @@ func Test_WithRemoteHookTarget_should_BeNoOp_When_SocketPathEmpty(t *testing.T) 
 	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
 		t.Fatalf("parse hooks: %v", err)
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
 		t.Fatalf("parse PermissionRequest groups: %v", err)
 	}
@@ -683,7 +684,7 @@ func Test_InjectHooksConfig_should_BeIdempotent_When_RemoteTargetCalledTwice(t *
 	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
 		t.Fatalf("parse hooks: %v", err)
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(hooksMap["PermissionRequest"], &groups); err != nil {
 		t.Fatalf("parse PermissionRequest groups: %v", err)
 	}
@@ -722,7 +723,7 @@ func TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice(t *testing.T) {
 		t.Fatalf("parse hooks: %v", err)
 	}
 	if raw, ok := hooksMap["PostToolUse"]; ok {
-		var groups []hookMatcherGroup
+		var groups []HookMatcherGroup
 		_ = json.Unmarshal(raw, &groups)
 		for _, g := range groups {
 			for _, h := range g.Hooks {
@@ -764,7 +765,7 @@ func TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection(t *test
 // Hooks injected before require_local_auth existed are upgraded in place with the
 // header file argument instead of being duplicated or left unauthenticated.
 func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_HeaderFileAppears(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	tmpDir := t.TempDir()
 	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
 		t.Fatalf("first inject: %v", err)
@@ -782,7 +783,7 @@ func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_Header
 	top := readSettings(t, tmpDir)
 	var hooksMap map[string]json.RawMessage
 	_ = json.Unmarshal(top["hooks"], &hooksMap)
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	_ = json.Unmarshal(hooksMap["PermissionRequest"], &groups)
 	if len(groups) != 1 || len(groups[0].Hooks) != 1 {
 		t.Fatalf("hook duplicated or lost: %+v", groups)

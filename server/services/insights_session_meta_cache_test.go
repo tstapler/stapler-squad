@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -47,20 +48,20 @@ func TestWatchInsights_should_ScanBacklogOncePerBurst(t *testing.T) {
 	t.Parallel()
 	const events = 40
 	ch := make(chan *tokens.ParseResult, events)
-	store := &fakeTokenStore{subscribeCh: ch}
-	reader := &fakeBacklogReader{}
+	store := &svctest.FakeTokenStore{SubscribeCh: ch}
+	reader := &svctest.FakeBacklogReader{}
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, reader)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runWatchInsights(ctx, svc, sender)
 	for range events {
-		ch <- newResult("u", "claude-sonnet-4", "/p", 1, 1, 0, time.Now())
+		ch <- svctest.NewResult("u", "claude-sonnet-4", "/p", 1, 1, 0, time.Now())
 	}
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= events+1 }, 5*time.Second, 5*time.Millisecond)
 
-	assert.Equal(t, 1, reader.calls, "backlog scans for %d events", events)
-	requireCleanReturn(t, cancel, done)
+	assert.Equal(t, 1, reader.Calls, "backlog scans for %d events", events)
+	svctest.RequireCleanReturn(t, cancel, done)
 }
 
 func TestSessionMetaCache_should_NotFailWaiters_When_FirstCallerCancels(t *testing.T) {

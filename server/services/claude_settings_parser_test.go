@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func writeSettingsFile(t *testing.T, path, content string) {
@@ -20,7 +21,7 @@ func writeSettingsFile(t *testing.T, path, content string) {
 
 func TestLoadClaudeSettingsRulesDetailed_AllPathsValid_ReturnsPerPathRules(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git log*)"]}}`)
 
@@ -43,7 +44,7 @@ func TestLoadClaudeSettingsRulesDetailed_AllPathsValid_ReturnsPerPathRules(t *te
 // RulesDetailed only ever converted Allow into rules, silently dropping every deny entry.
 func TestLoadClaudeSettingsRulesDetailed_DenyEntries_ProducesAutoDenyRules(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git push*)"],"deny":["Bash(git push --force*)"]}}`)
 
@@ -74,7 +75,7 @@ func TestLoadClaudeSettingsRulesDetailed_DenyEntries_ProducesAutoDenyRules(t *te
 
 func TestLoadClaudeSettingsRulesDetailed_AllPathsMissingOrUnreadable_ReturnsEmptyResultsNoError(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 
 	results := LoadClaudeSettingsRulesDetailed("")
 
@@ -90,7 +91,7 @@ func TestLoadClaudeSettingsRulesDetailed_AllPathsMissingOrUnreadable_ReturnsEmpt
 
 func TestLoadClaudeSettingsRulesDetailed_OneMalformedPath_ReturnsErrForThatPathOnly(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
@@ -121,7 +122,7 @@ func TestLoadClaudeSettingsRulesDetailed_OneMalformedPath_ReturnsErrForThatPathO
 
 func TestLoadClaudeSettingsRules_FlattensDetailedResults_IgnoringErrors(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
@@ -177,7 +178,7 @@ func TestResolveSettingsPathOrOriginal_NonexistentPath_FallsBackToOriginal(t *te
 // file's rules would be loaded (and counted) twice.
 func TestLoadClaudeSettingsRulesDetailed_ProjectDirEqualsHomeDir_DedupesToSinglePathEntry(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)"]}}`)
 

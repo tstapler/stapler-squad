@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -30,7 +31,7 @@ import (
 // pauses/resumes BacklogController.IsEnabled()".
 func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateLimitDetectionFires(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(16)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -46,7 +47,7 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 	}
 	require.NoError(t, storage.AddInstance(inst))
 
-	backlogCtrl := &countingFeatureController{enabled: true}
+	backlogCtrl := &svctest.CountingFeatureController{Enabled: true}
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.RateLimitWindowMinutes = 30
@@ -57,8 +58,8 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 
 	quotaGate := NewQuotaGate(
 		func() config.QuotaConfig { return cfg },
-		&fakeTokenStore{},
-		&mockInstancePoller{instances: []*session.Instance{inst}},
+		&svctest.FakeTokenStore{},
+		&svctest.MockInstancePoller{Instances: []*session.Instance{inst}},
 		backlogCtrl,
 		eventBus,
 	)
@@ -69,8 +70,8 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 
 	quotaGate.Reconcile(context.Background())
 
-	if backlogCtrl.disableCalls != 1 {
-		t.Fatalf("smoke test FAILED: disableCalls = %d, want 1 after a real onRateLimitDetected call", backlogCtrl.disableCalls)
+	if backlogCtrl.DisableCalls != 1 {
+		t.Fatalf("smoke test FAILED: disableCalls = %d, want 1 after a real onRateLimitDetected call", backlogCtrl.DisableCalls)
 	}
 	if !quotaGate.IsPausedByQuota() {
 		t.Fatal("smoke test FAILED: IsPausedByQuota() = false after a real rate-limit detection, want true")
@@ -86,8 +87,8 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 		quotaGate.Reconcile(context.Background())
 	}
 
-	if backlogCtrl.enableCalls != 1 {
-		t.Fatalf("smoke test FAILED: enableCalls = %d, want 1 once the rate-limit window elapses and headroom is healthy", backlogCtrl.enableCalls)
+	if backlogCtrl.EnableCalls != 1 {
+		t.Fatalf("smoke test FAILED: enableCalls = %d, want 1 once the rate-limit window elapses and headroom is healthy", backlogCtrl.EnableCalls)
 	}
 	if quotaGate.IsPausedByQuota() {
 		t.Fatal("smoke test FAILED: IsPausedByQuota() = true after resume, want false")

@@ -92,3 +92,15 @@ the plan describes (70 and 60 declarations) before any of this can start.
 Final tree: `scoping t9` prints T9a PASS, T9b FAIL (universal touch 70.97% against 61%), T9c PASS, T9d FAIL (`server/services`
 91,713 and `session` 90,866 LOC against 72,000), T9e PASS. T9b and T9d need the unexecuted Tier B moves: the plan's bound of
 72,000 LOC is only reachable with `server/services` p0 and p2 and `session` p0, p1 and p2 all moved.
+
+## Epic 13 continuation 2 (branch `sdd/bazel-epic13-tierb2`)
+
+| Step | Decision | T9a test share | T9c lib share | Universal touch | `server/services` / `session` LOC | Inversions |
+|---|---|---|---|---|---|---|
+| parent (after `session/prpoller`) | | 0.4434 | 0.3896 | 0.7097 | 91,713 / 90,866 | 0 |
+| tierB `server/services` p0 (real cluster, `github_user_*` stays in core) | executed (83318702b): SC1 0 core uses; SC6 passes (lib -0.44 pp, test -0.43 pp, universal -2.0 pp) | 0.4391 | 0.3852 | 0.6895 | 77,709 / 90,866 | 0 |
+| tierB `session` p0, p1 | not attempted this pass | | | | | |
+| tierB `session` p2 | rejected: moving needs an injected or init-registered migration list, which changes which of the 86 `NewEntRepository` call sites run migrations | | | | | |
+| `importer`, `session` p4 | not re-measured this pass | | | | | |
+
+Method notes: `scoping closure` (declaration-level cut of staying tests that use a cluster), `scoping peel` (cluster declarations the staying code uses that do not need the anchor type), `scoping move` reporting stay-behind test helpers as twins. Hand work needed after the codemod: exported `TransitionWithGuard` and `HasUnresolvedBlockers` (core jules guard interface), a nudge-guard clock constructor, backlogsvc copies of five fixtures, and path-keyed guards (workflow bypass inventory and strict, terminal-write pins, `TransitionCallers`, wake-polling map, source-scanning data deps). Test function names are unchanged (3752 before and after; the grep also sees one raw-string line `func TestQualified` and a second `TestMain`).

@@ -42,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -214,7 +215,7 @@ func newRemoteSessionFixture(t *testing.T, srv *remoteSessionTestSSHServer) *rem
 	keyring.MockInit()
 
 	testDir := t.TempDir()
-	withIsolatedStateDirPath(t, testDir)
+	svctest.WithIsolatedStateDirPath(t, testDir)
 
 	repoPath := t.TempDir()
 	initRemoteSessionTestRepo(t, repoPath)
@@ -294,7 +295,7 @@ func remoteTmuxCommand(serverSocket string, args ...string) string {
 // must reject the request before attempting to dial anything.
 func TestCreateSession_RemoteTarget_UnknownRemoteName_ReturnsInvalidArgument(t *testing.T) {
 	testDir := t.TempDir()
-	withIsolatedStateDirPath(t, testDir)
+	svctest.WithIsolatedStateDirPath(t, testDir)
 	require.NoError(t, config.SaveConfig(&config.Config{}))
 
 	fix := setupForkTestFixture(t)

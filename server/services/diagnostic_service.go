@@ -123,7 +123,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 
 	nudgeAllowed, nudgeDisallowedReason := d.evaluateNudgeEligibility(ctx, item.ID, req.Msg.StuckReason, req.Msg.NudgeTargetSessionUuid)
 
-	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, string(fromProtoStuckReason(req.Msg.StuckReason)), nudgeAllowed, nudgeDisallowedReason)
+	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, string(FromProtoStuckReason(req.Msg.StuckReason)), nudgeAllowed, nudgeDisallowedReason)
 	inst, spawnErr := d.spawner.SpawnDiagnosticSession(ctx, item, prompt)
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dispatch diagnostic session: %w", spawnErr))
@@ -158,7 +158,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 	if stuckReason == sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED {
 		return false, "no stuck reason specified — nudge cap cannot be evaluated"
 	}
-	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, fromProtoStuckReason(stuckReason))
+	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, FromProtoStuckReason(stuckReason))
 	if err != nil {
 		return false, fmt.Sprintf("could not evaluate nudge eligibility: %v", err)
 	}

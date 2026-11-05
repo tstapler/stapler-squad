@@ -380,7 +380,7 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 	if err := ctxDoneError(ctx); err != nil {
 		return nil, err
 	}
-	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, nudgeSignature(key, reasons), prompt)
+	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, NudgeSignature(key, reasons), prompt)
 	switch outcome {
 	case SteerDelivered:
 		if t := s.nudgeTracker(); t != nil {
@@ -440,18 +440,18 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 
 // Canonical reason names shared with PR-fix auto-steer's duplicate key.
 const (
-	reasonNameMergeConflict = "MERGE_CONFLICT"
+	ReasonNameMergeConflict = "MERGE_CONFLICT"
 )
 
 // nudgeSignature keys the duplicate window by PR and canonical reason set, the
 // same key PR-fix auto-steer derives for the same PR, so the two paths dedupe
 // each other without conflating two PRs linked to one session.
-func nudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
+func NudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
 	names := make([]string, 0, len(reasons))
 	for _, r := range reasons {
 		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
 	}
-	return guardSignature(pr.Key(), reasonSetSignature(names...))
+	return GuardSignature(pr.Key(), ReasonSetSignature(names...))
 }
 
 func nudgeReasonNames(reasons []sessionv1.NudgeReason) string {

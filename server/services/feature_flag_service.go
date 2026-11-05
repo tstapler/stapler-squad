@@ -26,7 +26,7 @@ const piSupportFlagName = config.FeaturePiSupport
 // CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
 // so the flag name can't drift between where it's declared and where it's
 // read.
-const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
+const SddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 
 // blockApprovalOnCIFailureFlagName is shared between knownFeatureFlags below and
 // ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
@@ -36,14 +36,14 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // workspacePeersNudgeFlagName is shared between knownFeatureFlags below and
 // workspacePeersBlockFor below so the flag name can't drift between where it's declared and
 // where it's read.
-const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+const WorkspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
 // backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
-const backlogFlagName = "backlog"
+const BacklogFlagName = "backlog"
 
 // BacklogFlagEnabled reports the live state of the backlog flag, read per request.
 func BacklogFlagEnabled() bool {
-	return config.LoadConfig().GetFeatureFlag(backlogFlagName)
+	return config.LoadConfig().GetFeatureFlag(BacklogFlagName)
 }
 
 // programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
@@ -165,8 +165,8 @@ const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForward
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
 // drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
 // them from drifting on how the nudge is rendered.
-func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
-	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(WorkspacePeersNudgeFlagName) {
 		return ""
 	}
 	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
@@ -254,7 +254,7 @@ var knownFeatureFlags = []struct {
 		description: "Use the mmap-backed pack-index loader for the /unfinished scanner's git storage (session/unfinished/gogitstore) instead of the copy-based loader. See session/unfinished/design/mmap-activation-runbook.md before enabling.",
 	},
 	{
-		name:        sddDefaultPipelineFlagName,
+		name:        SddDefaultPipelineFlagName,
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
 	{
@@ -270,7 +270,7 @@ var knownFeatureFlags = []struct {
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},
 	{
-		name:        workspacePeersNudgeFlagName,
+		name:        WorkspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 	{
@@ -278,7 +278,7 @@ var knownFeatureFlags = []struct {
 		description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
-		name:        crossHostClaimDedupFlagName,
+		name:        CrossHostClaimDedupFlagName,
 		description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{

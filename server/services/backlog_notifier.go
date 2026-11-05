@@ -33,7 +33,7 @@ func (n *EventBusNotifier) Notify(itemID, title, message string, notificationTyp
 	// record was lost).
 	n.Bus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
-		notificationType, derivePriority(urgent, important),
+		notificationType, DerivePriority(urgent, important),
 		title, message,
 		map[string]string{"item_id": itemID},
 	))
@@ -50,7 +50,7 @@ func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notif
 	}
 	n.Bus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
-		notificationType, derivePriority(urgent, important),
+		notificationType, DerivePriority(urgent, important),
 		title, message,
 		map[string]string{},
 	))
@@ -73,7 +73,7 @@ func (n *EventBusNotifier) NotifyDecision(itemID, title, message string, schema 
 	}
 	n.Bus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
-		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), derivePriority(true, true),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), DerivePriority(true, true),
 		title, message,
 		meta,
 	))
@@ -100,7 +100,7 @@ func (n *EventBusNotifier) NotifyAutoRemediating(itemID, title, message string, 
 	}
 	n.Bus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
-		notificationType, derivePriority(urgent, important),
+		notificationType, DerivePriority(urgent, important),
 		title, message,
 		map[string]string{"item_id": itemID, pkgevents.MetadataKeyAutoRemediating: "true"},
 	))

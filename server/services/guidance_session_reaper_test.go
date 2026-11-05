@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -41,7 +42,7 @@ type reaperFixture struct {
 
 func newReaperFixture(t *testing.T, ends fakeSessionEnds) *reaperFixture {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	counts := &mirrorCounts{}
 	mirror := newRealStoreMirror(storage, NewPendingQuestionStore(nil), counts)
 	f := &reaperFixture{storage: storage, mirror: mirror, counts: counts}

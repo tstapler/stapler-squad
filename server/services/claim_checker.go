@@ -59,17 +59,17 @@ type CrossHostClaimChecker interface {
 
 // unimplementedClaimChecker is the nil-checker default: everything is unclaimed,
 // so single-host behavior is unchanged.
-type unimplementedClaimChecker struct{}
+type UnimplementedClaimChecker struct{}
 
-func (unimplementedClaimChecker) CheckClaim(context.Context, string) (ClaimVerdict, error) {
+func (UnimplementedClaimChecker) CheckClaim(context.Context, string) (ClaimVerdict, error) {
 	return NewUnclaimedVerdict(), nil
 }
 
-func (unimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVerdict, error) {
+func (UnimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVerdict, error) {
 	return NewUnclaimedVerdict(), nil
 }
 
-func (unimplementedClaimChecker) ListForeignClaims() []session.ClaimRecord { return nil }
+func (UnimplementedClaimChecker) ListForeignClaims() []session.ClaimRecord { return nil }
 
 // ClaimDisputeResolver clears the local Disputed flag on a claim.
 type ClaimDisputeResolver interface {

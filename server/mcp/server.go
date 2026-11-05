@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
@@ -40,7 +41,7 @@ func NewCore(
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener session.AutoReopenSpawner,
-	backlogSvc *services.BacklogService,
+	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
@@ -131,7 +132,7 @@ func NewHTTPHandler(
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener session.AutoReopenSpawner,
-	backlogSvc *services.BacklogService,
+	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) *mcpserver.StreamableHTTPServer {
 	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck)
@@ -163,7 +164,7 @@ func RunServer(
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener session.AutoReopenSpawner,
-	backlogSvc *services.BacklogService,
+	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 ) error {
 	log.Info("mcp server starting on stdio transport")

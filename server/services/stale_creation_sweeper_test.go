@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -47,10 +48,10 @@ func backdateCreationProgress(t *testing.T, storage *session.Storage, uuid strin
 }
 
 func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsThreshold(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "sweeper-flip", "uuid-sweeper-flip")
 	inst.SetCreationProgress("Cloning repository...")
 	require.NoError(t, storage.UpdateInstance(inst))
@@ -89,10 +90,10 @@ func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsT
 }
 
 func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "sweeper-fresh", "uuid-sweeper-fresh")
 	inst.SetCreationProgress("Cloning repository...")
 	require.NoError(t, storage.UpdateInstance(inst))
@@ -124,10 +125,10 @@ func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(
 // task and on backdateCreationProgress's doc comment for why only the clock is
 // fast-forwarded afterward, not the row's existence.
 func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRestart(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "sweeper-restart-orphan", "uuid-sweeper-restart-orphan")
 
 	// Real phase-transition persistence call (mirrors setPhase in
@@ -173,10 +174,10 @@ func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRes
 // must still go stale on schedule, using CreatedAt as the baseline instead of the
 // zero-valued CreationProgressUpdatedAt.
 func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateEverRecorded(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	inst := &session.Instance{
 		Title:     "sweeper-never-updated",
 		UUID:      "uuid-sweeper-never-updated",
@@ -207,10 +208,10 @@ func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateE
 // no failure reason, or Failed/Stale), never a mix of the two or a status stuck
 // at Creating.
 func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePipelineSuccess(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	// A real live-actor instance (session.NewInstance + session.NewLiveInstance,
 	// mirroring CreateManagedInstance's construction path -- Task 2.1.1a) is

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -25,7 +26,7 @@ func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSess
 	ts := newLeaseTerminalService(t, hidden.inst)
 	ts.SetGuardsFlag(e.fix.svc.guards)
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		e.setGuards(setting.(bool))
 		_, err := ts.WriteToSession(t.Context(), writeToSessionReq("bkf-guards-hidden"))
 		return err == nil
@@ -38,7 +39,7 @@ func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T)
 	e.fix.svc.wireReplyFlag()
 	replies := 0
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		require.NoError(t, flagUpdateCtx(t.Context(), e.fix.svc.featureFlagSvc, hiddenSessionReplyFlagName, setting.(bool)))
 		replies++
 		return e.replyOK("1", "bkf-reply-"+string(rune('a'+replies))).Outcome
@@ -50,7 +51,7 @@ func TestConfigSurfaceProof_TerminalWriteLease_ChangesLeaseExclusivity(t *testin
 	svc := newGatedFlagService(t)
 	inst := &session.Instance{UUID: "bkf-lease"}
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		require.NoError(t, flagUpdateCtx(t.Context(), svc.featureFlagSvc, terminalWriteLeaseFlagName, setting.(bool)))
 		first, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
 		require.True(t, ok)
@@ -65,7 +66,7 @@ func TestConfigSurfaceProof_HiddenSessionGate_ChangesDeliveryGateCache(t *testin
 	svc := newGatedFlagService(t)
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		require.NoError(t, gateFlagUpdate(svc, t.Context(), setting.(bool)))
 		return svc.DeliveryGate().Flags().Enabled()
 	}, false, true)
@@ -79,7 +80,7 @@ func TestConfigSurfaceProof_TerminalResyncFlags_ChangeResyncOptions(t *testing.T
 		terminalResyncCorrelationIDFlagName:              func(o ResyncOptions) bool { return o.EchoResyncID },
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertConfigChangesBehavior(t, func(setting any) any {
+			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
 				return field(currentResyncOptions())
 			}, false, true)
@@ -91,7 +92,7 @@ func TestConfigSurfaceProof_TerminalResyncCompression_ChangesEnvelopeFlag(t *tes
 	set := bkfFlagWriter(t)
 	largeContent := bytes.Repeat([]byte("resync-payload-filler-"), 100)
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(terminalResyncCompressionFlagName, setting.(bool))
 		stream, clientConn, cleanup := createTestWebSocketPair(t)
 		defer cleanup()
@@ -110,7 +111,7 @@ func TestConfigSurfaceProof_TerminalAppScrollbackForwardingClaude_ChangesScrollb
 	inst := session.NewStartedInstanceForTest(t, "bkf-scroll", &replyPM{})
 	inst.Program = "claude"
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(config.FeatureAppScrollForwardingClaude, setting.(bool))
 		result, err := scrollbackResultForRequest(scrollbackRequestParams{
 			writer:          testWriter(),

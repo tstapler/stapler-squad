@@ -834,6 +834,7 @@ go_test(
         "//jules:types.go",
         "//server/mcp:go_sources",
         "//server/services:go_sources",
+        "//server/services/backlogsvc:go_sources",
         "//session/detection:testdata",
         "//session/domain:go_sources",
         "//session/testdata:all",

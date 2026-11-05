@@ -5,11 +5,11 @@
   "method": "SnoozeStuckItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_stuck.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_stuck.go",
   "tested": true,
   "testIds": [
     "TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called",
     "TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing"
   ],
-  "lastModified": "2026-07-14T05:58:45.926116979-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

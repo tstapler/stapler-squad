@@ -3,3 +3,4 @@
 session/prpoller !server
 server/services/sessionbundle !server/web
 server/services/devtools !server/web
+server/services/backlogsvc !server/web

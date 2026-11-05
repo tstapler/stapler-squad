@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -35,7 +36,7 @@ type fakeNudger struct {
 	steers   []steerCall
 	outcome  SteerOutcome
 	err      error
-	guard    *sessionNudgeGuard
+	guard    *SessionNudgeGuard
 	inWrite  chan struct{} // closed on first write entry when non-nil
 	holdOpen chan struct{} // writes block until closed when non-nil
 	onSteer  func()
@@ -449,7 +450,7 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGenericBusyCopy_When_NoStatusSource(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
 	fix.svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { writes++; return nil }
 	fix.svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error { return nil }
@@ -516,7 +517,7 @@ func TestNudgeSessionForPR_should_ReturnNothingToFixWithZeroSteers_When_OnlyChan
 func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliveredOneBusyOnSimultaneousCalls(t *testing.T) {
 	f := newNudgeFixture(t)
 	guardClock := newFakeNudgeClock()
-	f.nudger.guard = &sessionNudgeGuard{now: guardClock.Now}
+	f.nudger.guard = &SessionNudgeGuard{now: guardClock.Now}
 
 	first, err := f.call("fix-ci")
 	require.NoError(t, err)
@@ -529,7 +530,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 	// Double-click race: the first call is held inside the write; the second arrives meanwhile.
 	g := newNudgeFixture(t)
-	g.nudger.guard = &sessionNudgeGuard{now: newFakeNudgeClock().Now}
+	g.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
 	g.nudger.inWrite = make(chan struct{})
 	g.nudger.holdOpen = make(chan struct{})
 	done := make(chan *sessionv1.NudgeSessionForPRResponse, 1)
@@ -549,7 +550,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSessionNudgeGuardAndFakePRNudger(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.nudger.guard = &sessionNudgeGuard{now: newFakeNudgeClock().Now}
+	f.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
 
 	for i := 0; i < 3; i++ {
 		_, err := f.call("fix-ci")
@@ -563,7 +564,7 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
 	verifyErr := errors.New("pane ownership mismatch")
 	fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }

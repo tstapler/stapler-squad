@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "boundaries.go",
         "budget.go",
+        "closure.go",
         "deps.go",
         "golist.go",
         "main.go",
@@ -35,6 +36,7 @@ go_test(
     srcs = [
         "boundaries_test.go",
         "budget_test.go",
+        "closure_test.go",
         "deps_test.go",
         "move_test.go",
         "relocate_test.go",

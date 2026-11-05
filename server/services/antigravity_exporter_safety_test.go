@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -105,7 +106,7 @@ func TestExportRulesToAntigravitySettings_should_WriteOwnerOnlyFile(t *testing.T
 // under the lock, so the last export to write reflects the last database change.
 func TestExportAntigravityRulesFromDB_should_NotResurrectDeletedRule_When_ExportsOverlap(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 
 	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(t.TempDir(), "rules.db")))
 	require.NoError(t, err)

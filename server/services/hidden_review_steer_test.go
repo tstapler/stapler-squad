@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -37,7 +38,7 @@ type steerTarget struct {
 
 func newSteerEnv(t *testing.T) *steerEnv {
 	t.Helper()
-	withIsolatedStateDir(t) // flag flips persist to the config file
+	svctest.WithIsolatedStateDir(t) // flag flips persist to the config file
 	fix := setupForkTestFixture(t)
 	lg, warns := newLogCapture()
 	mfs := newMemFS()
@@ -64,7 +65,7 @@ func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...f
 	for _, f := range tweak {
 		f(inst)
 	}
-	addInstanceToPoller(e.fix.poller, inst)
+	svctest.AddInstanceToPoller(e.fix.poller, inst)
 	tgt := &steerTarget{inst: inst, pm: pm}
 	if role != "" {
 		tgt.itemSession = e.linkRow(inst, role)

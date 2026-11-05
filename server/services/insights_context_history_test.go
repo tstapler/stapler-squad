@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -24,7 +25,7 @@ func newContextHistorySvc(t *testing.T) (*InsightsService, *contexthistory.Recor
 	t.Cleanup(func() { _ = repo.Close() })
 	store := contexthistory.NewStore(repo.GetEntClient())
 
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
 	svc.SetContextHistoryStore(store)
 	return svc, contexthistory.NewRecorder(store, func(string) int { return 100 }, 0)
 }
@@ -77,7 +78,7 @@ func TestContextHistoryRPCs_ReturnSeriesRankingAndCompactionStats(t *testing.T) 
 func TestContextHistoryRPCs_UnavailableAndInvalid(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	bare := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
+	bare := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
 	_, err := bare.GetContextHistory(ctx, connect.NewRequest(&sessionv1.GetContextHistoryRequest{ConversationId: "x"}))
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -50,7 +51,7 @@ func richCompletionItem(t *testing.T, id string) *session.BacklogItemData {
 
 func newTestReviewer(t *testing.T, call CompletionReviewCall, mem MemoryStore) *completionReviewer {
 	t.Helper()
-	return &completionReviewer{storage: newForwardSyncTestStorage(t), call: call, memory: mem, enabled: func() bool { return true }}
+	return &completionReviewer{storage: svctest.NewForwardSyncTestStorage(t), call: call, memory: mem, enabled: func() bool { return true }}
 }
 
 func doneEvent(item *session.BacklogItemData, kind events.BacklogChangeKind, newStatus string) *events.Event {

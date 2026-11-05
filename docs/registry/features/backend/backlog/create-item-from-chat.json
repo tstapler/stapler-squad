@@ -5,7 +5,7 @@
   "method": "CreateBacklogItemFromChat",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_chat.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_chat.go",
   "tested": true,
   "testIds": [
     "TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_NoExistingItemId",
@@ -14,5 +14,5 @@
     "TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem",
     "TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrReadyStatus"
   ],
-  "lastModified": "2026-08-13T21:24:31.779060385-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

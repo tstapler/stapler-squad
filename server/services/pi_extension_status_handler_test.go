@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,7 @@ import (
 // Story 2.1.2's "no warning" branch: with nothing installed at
 // ~/.pi/agent/extensions/ssq-approval.ts, the endpoint reports installed=false.
 func TestHandlePiExtensionStatus_ShouldReportFalse_WhenExtensionFileAbsent(t *testing.T) {
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	svc := NewPiExtensionStatusService()
 	req := httptest.NewRequest(http.MethodGet, "/api/pi-extension-status", nil)
@@ -37,7 +38,7 @@ func TestHandlePiExtensionStatus_ShouldReportFalse_WhenExtensionFileAbsent(t *te
 // disk, the endpoint reports installed=true.
 func TestHandlePiExtensionStatus_ShouldReportTrue_WhenExtensionFilePresent(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 
 	extDir := filepath.Join(home, ".pi", "agent", "extensions")
 	if err := os.MkdirAll(extDir, 0o755); err != nil {
