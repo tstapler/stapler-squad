@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -32,6 +34,19 @@ var _ PRSetReader = (*EntRepository)(nil)
 // ItemPRs implements PRSetReader over the repository.
 func (r *EntRepository) ItemPRs(ctx context.Context, item *ent.BacklogItem) ([]PRView, error) {
 	return deriveItemPRs(ctx, r, item.ID.String(), item.PrURL, item.PrNumber)
+}
+
+// ItemPRsByID is ItemPRs for callers holding only the item id (string UUID).
+func (r *EntRepository) ItemPRsByID(ctx context.Context, itemID string) ([]PRView, error) {
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("item prs: invalid item id %q: %w", itemID, err)
+	}
+	item, err := r.client.BacklogItem.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("item prs: load item %s: %w", itemID, err)
+	}
+	return r.ItemPRs(ctx, item)
 }
 
 // workSessionNewer orders work sessions newest first: created_at, then the larger id.

@@ -295,3 +295,19 @@ func TestItemPRs_ShouldStillReturnItemDirect_WhenSessionLinkBroken(t *testing.T)
 	f.link(ItemPROwner(f.itemID), 21, PRStateOpen)
 	assert.Equal(t, []int{21}, f.numbers(), "no ItemSession rows at all")
 }
+
+func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionDerivedPR(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 30)
+	s := f.session(SessionRoleWork)
+	f.link(SessionPROwner(s), 30, PRStateOpen)
+	for run := 0; run < 2; run++ {
+		_, err := f.repo.runPRBackfill(context.Background(), nil)
+		require.NoError(t, err)
+		direct, err := f.repo.ListByItem(context.Background(), f.itemID)
+		require.NoError(t, err)
+		assert.Empty(t, direct, "run %d: a session-derived PR gets no item-direct link", run)
+	}
+	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, PRStateOpen)
+	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves the set when the next round links #31")
+}
