@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -82,6 +83,10 @@ type PRStatusPoller struct {
 	// Intended for EventBus notification; injected from the server layer.
 	onUpdated func(*Instance)
 
+	// multiPRScope reports whether a session_multi_pr reader scope is effective.
+	// A field so tests can pin scopes without a config file; production reads the live config.
+	multiPRScope func(scope string) bool
+
 	// authState stores pollerAuthResult atomically; readers are lock-free.
 	authState atomic.Value //nolint:exhaustruct
 
@@ -111,14 +116,15 @@ func NewPRStatusPoller(storage *Storage) *PRStatusPoller {
 }
 
 // NewPRStatusPollerWithConfig creates a poller with custom configuration.
-func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) *PRStatusPoller {
+func NewPRStatusPollerWithConfig(storage *Storage, cfg PRStatusPollerConfig) *PRStatusPoller {
 	return &PRStatusPoller{
 		instances:     make([]*Instance, 0),
 		storage:       storage,
-		config:        config,
+		config:        cfg,
 		etagCache:     github.NewETagCache(),
 		ghClient:      realGHClient{},
 		noPRPollAfter: make(map[string]time.Time),
+		multiPRScope:  config.SessionMultiPR,
 	}
 }
 
