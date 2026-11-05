@@ -282,7 +282,7 @@ func TestMergeAndPersist_DedupsRepeatedCommands(t *testing.T) {
 		func(string) (string, error) { return string(raw), nil },
 		func(string) (string, bool) { return "s", true },
 	)
-	blob := ae.mergeAndPersist("s", 1, nil, nil, nil, []CommandArtifact{cmd})
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: []CommandArtifact{cmd}}, false)
 	if len(blob.Commands) != 1 {
 		t.Fatalf("commands = %v, want the repeat dropped", blob.Commands)
 	}

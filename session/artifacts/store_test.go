@@ -256,7 +256,7 @@ func TestMergeAndPersist_ExternalURLCapAt50(t *testing.T) {
 	for i := range newURLs {
 		newURLs[i] = fmt.Sprintf("https://new.com/%d", i)
 	}
-	blob := ae.mergeAndPersist("s", 999, nil, nil, newURLs, nil)
+	blob := ae.mergeAndPersist("s", 999, &scanFindings{externalURLs: newURLs}, false)
 	if len(blob.ExternalURLs) != maxExternalURLs {
 		t.Fatalf("expected %d external URLs after cap, got %d", maxExternalURLs, len(blob.ExternalURLs))
 	}
@@ -366,7 +366,7 @@ func TestMerge_ShouldKeepLastFifty_WhenSixtyURLs(t *testing.T) {
 		func(string) (string, error) { return "", nil },
 		func(string) (string, bool) { return "s", true },
 	)
-	blob := ae.mergeAndPersist("s", 1, nil, nil, urls, nil)
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{externalURLs: urls}, false)
 	if len(blob.ExternalURLs) != maxExternalURLs {
 		t.Fatalf("got %d urls, want %d", len(blob.ExternalURLs), maxExternalURLs)
 	}
@@ -386,7 +386,7 @@ func TestMerge_ShouldKeepNewestCommands_WhenOverMaxCommands(t *testing.T) {
 		func(string) (string, error) { return "", nil },
 		func(string) (string, bool) { return "s", true },
 	)
-	blob := ae.mergeAndPersist("s", 1, nil, nil, nil, cmds)
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: cmds}, false)
 	if len(blob.Commands) != maxCommands {
 		t.Fatalf("got %d commands, want %d", len(blob.Commands), maxCommands)
 	}

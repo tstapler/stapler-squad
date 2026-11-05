@@ -22,23 +22,28 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 		return // file may have been deleted
 	}
 	prev, known := ae.tracked(filePath)
-	if known && prev.Unchanged(fi) && prev.verified {
+	rescanAll := known && ae.stale(prev) && ae.scanV2()
+	if known && prev.Unchanged(fi) && prev.verified && !rescanAll {
 		return
 	}
 	title, sub, ok := ae.ownerOf(filePath)
 	if !ok {
 		return
 	}
-	pos := prev.Position
-	if known && prev.owner != "" && prev.owner != title {
-		pos = scanstate.Position{} // a different session now owns the file: scan it all
+	pos, version := prev.Position, ae.scanVersion
+	switch {
+	case !known || rescanAll || (prev.owner != "" && prev.owner != title):
+		// First sight, the flagged version bump, or a different session now owns the file: scan it all.
+		pos = scanstate.Position{}
+	default:
+		version = normalizeVersion(prev.version) // incremental: the file's older bytes keep their version
 	}
-	ae.scanFrom(filePath, fi, title, sub, pos)
+	ae.scanFrom(filePath, fi, title, sub, pos, version)
 }
 
 // scanFrom scans filePath from pos (or the top if pos no longer fits the file)
 // and commits the findings; a read error records the scan as failed.
-func (ae *ArtifactExtractor) scanFrom(filePath string, fi os.FileInfo, title string, sub bool, pos scanstate.Position) {
+func (ae *ArtifactExtractor) scanFrom(filePath string, fi os.FileInfo, title string, sub bool, pos scanstate.Position, version int) {
 	f, err := os.Open(filePath) // #nosec G304 -- filePath comes from HistoryLinker's filesystem watch of ~/.claude/projects, an enumerated existing conversation file path, not external request input
 	if err != nil {
 		return
@@ -69,7 +74,7 @@ func (ae *ArtifactExtractor) scanFrom(filePath string, fi os.FileInfo, title str
 		ae.markFailed(filePath, title)
 		return
 	}
-	ae.commitScan(filePath, title, sub, start == 0, newOffset, newPos, &found)
+	ae.commitScan(filePath, title, sub, start == 0, newOffset, newPos, version, &found)
 }
 
 // commitScan persists a scan's findings. Incremental scans that found nothing
@@ -77,15 +82,15 @@ func (ae *ArtifactExtractor) scanFrom(filePath string, fi os.FileInfo, title str
 // (then the empty result is persisted so the tab can say "none found"); a scan
 // from the top always persists so its timestamp is fresh. Subagent scans never
 // persist emptiness or touch the parent's stored offset.
-func (ae *ArtifactExtractor) commitScan(filePath, title string, sub, full bool, newOffset int64, newPos scanstate.Position, found *scanFindings) {
+func (ae *ArtifactExtractor) commitScan(filePath, title string, sub, full bool, newOffset int64, newPos scanstate.Position, version int, found *scanFindings) {
 	if found.empty() && (sub || (!full && ae.stateRecorded(title))) {
-		ae.setPosition(filePath, title, newPos)
+		ae.setPosition(filePath, title, newPos, version)
 		return
 	}
 	if sub {
 		newOffset = keepOffset
 	}
-	blob := ae.mergeAndPersist(title, newOffset, found.prURLs, found.commitSHAs, found.externalURLs, found.commands)
+	blob := ae.mergeAndPersist(title, newOffset, found, full && !sub && version == ae.scanVersion)
 	encoded, err := json.Marshal(blob)
 	if err != nil {
 		log.Warn("[ArtifactExtractor] marshal failed", "session", title, "err", err)
@@ -98,7 +103,7 @@ func (ae *ArtifactExtractor) commitScan(filePath, title string, sub, full bool, 
 		return
 	}
 	ae.verified.Store(title, struct{}{})
-	ae.setPosition(filePath, title, newPos)
+	ae.setPosition(filePath, title, newPos, version)
 	ae.OnScanComplete(title, blob)
 }
 

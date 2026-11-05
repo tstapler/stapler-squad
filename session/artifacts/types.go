@@ -13,7 +13,22 @@ type SessionArtifactsBlob struct {
 	// ScanState distinguishes "scanned, found nothing" from "never scanned".
 	// Empty in blobs written before it existed; read it through State().
 	ScanState ScanState `json:"scan_state,omitempty"`
+	// ScanVersion is the extractor version that last scanned the whole transcript;
+	// absent (0) means version 1. Read it through Version().
+	ScanVersion int `json:"scan_version,omitempty"`
 }
+
+// ScanVersion is the current extractor version. Raising it rescans every
+// transcript from the top, but only once the artifact_scan_v2 flag is on.
+const ScanVersion = 1
+
+// legacyScanVersion is what a blob or position written before versions existed means.
+const legacyScanVersion = 1
+
+// Version returns the extractor version recorded in the blob.
+func (b *SessionArtifactsBlob) Version() int { return normalizeVersion(b.ScanVersion) }
+
+func normalizeVersion(v int) int { return max(v, legacyScanVersion) }
 
 // ScanState is the outcome of the last transcript scan for a session. The
 // wire values match the proto SessionArtifacts.scan_state strings.

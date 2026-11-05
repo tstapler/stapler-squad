@@ -1898,7 +1898,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Wire ArtifactExtractor to extract PR links, commits, and URLs from JSONL history.
 		// Uses historyLinker.Instances() for live instance snapshots so sessions created
 		// after startup are included in lookupTitle and OnScanComplete.
-		artifactOpts := []artifacts.Option{artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay))}
+		artifactOpts := []artifacts.Option{
+			artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay)),
+			artifacts.WithScanV2Flag(func() bool { return config.LoadConfig().ArtifactScanV2Enabled() }),
+		}
 		if entClient := storage.GetEntClient(); entClient != nil {
 			artifactOpts = append(artifactOpts, artifacts.WithStateStore(scanstate.NewStore(entClient).Consumer("artifacts")))
 		}

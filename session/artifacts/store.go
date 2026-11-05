@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +23,9 @@ const keepOffset int64 = -1
 const (
 	maxScannerTokenSize = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
 
-	flushInterval = 5 * time.Second
-	flushBatch    = 200
+	flushInterval        = 5 * time.Second
+	staleRecheckInterval = time.Minute
+	flushBatch           = 200
 )
 
 // StateStore persists scan positions across restarts. *scanstate.Scoped implements it.
@@ -68,6 +70,15 @@ type ArtifactExtractor struct {
 	// This keeps ArtifactExtractor testable without a live event bus.
 	OnScanComplete func(title string, blob *SessionArtifactsBlob)
 
+	// scanVersion is the version this process scans at; a position recorded at a
+	// lower one is stale and is rescanned from the top only while scanV2 is true.
+	scanVersion int
+	// scanV2 reads the live artifact_scan_v2 flag each time it decides to enqueue
+	// or to rescan from the top, so flipping it off stops further rescans.
+	scanV2 func() bool
+	// v2Every is how often a running process re-checks scanV2 for stale transcripts.
+	v2Every time.Duration
+
 	cancelFunc context.CancelFunc
 }
 
@@ -85,6 +96,9 @@ func NewArtifactExtractor(
 		positions:      make(map[string]trackedPos),
 		restored:       make(map[string]struct{}),
 		flushEvery:     flushInterval,
+		scanVersion:    ScanVersion,
+		scanV2:         func() bool { return false },
+		v2Every:        staleRecheckInterval,
 		storeFn:        storeFn,
 		readFn:         readFn,
 		lookupTitle:    lookupTitle,
@@ -117,6 +131,12 @@ func WithQueueConfig(c scanqueue.Config) Option {
 	return func(_ *ArtifactExtractor, qc *scanqueue.Config) { *qc = c }
 }
 
+// WithScanV2Flag sets the live reader of the artifact_scan_v2 kill switch. Without
+// it the version-bump rescan never runs.
+func WithScanV2Flag(enabled func() bool) Option {
+	return func(ae *ArtifactExtractor, _ *scanqueue.Config) { ae.scanV2 = enabled }
+}
+
 // QueueStats reports scan-queue activity (enqueued, coalesced, processed).
 func (ae *ArtifactExtractor) QueueStats() scanqueue.Stats { return ae.queue.Stats() }
 
@@ -139,20 +159,44 @@ type trackedPos struct {
 	// was recorded, so an unchanged file needs no re-check. Positions persisted
 	// before scan states existed lack it and are re-checked once.
 	verified bool
+	// version is the extractor version the file was last scanned from the top at;
+	// 0 (positions persisted before versions existed) means legacy version 1.
+	version int
 }
 
-const verifiedMarker = "\x00verified"
+const (
+	verifiedMarker = "\x00verified"
+	versionMarker  = "\x00v"
+)
 
+// encodeOwner serializes owner[+verified][+version]; a legacy version is omitted
+// so rows written before versions existed round-trip unchanged.
 func encodeOwner(t trackedPos) []byte {
+	s := t.owner
 	if t.verified {
-		return []byte(t.owner + verifiedMarker)
+		s += verifiedMarker
 	}
-	return []byte(t.owner)
+	if v := normalizeVersion(t.version); v > legacyScanVersion {
+		s += versionMarker + strconv.Itoa(v)
+	}
+	return []byte(s)
 }
 
-func decodeOwner(state []byte) (owner string, verified bool) {
-	owner, verified = strings.CutSuffix(string(state), verifiedMarker)
-	return owner, verified
+func decodeOwner(state []byte) (owner string, verified bool, version int) {
+	owner = string(state)
+	version = legacyScanVersion
+	if i := strings.LastIndex(owner, versionMarker); i >= 0 {
+		if v, err := strconv.Atoi(owner[i+len(versionMarker):]); err == nil {
+			owner, version = owner[:i], normalizeVersion(v)
+		}
+	}
+	owner, verified = strings.CutSuffix(owner, verifiedMarker)
+	return owner, verified, version
+}
+
+// stale reports whether t was scanned by an older extractor than this process runs.
+func (ae *ArtifactExtractor) stale(t trackedPos) bool {
+	return normalizeVersion(t.version) < ae.scanVersion
 }
 
 func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
@@ -167,8 +211,8 @@ func (ae *ArtifactExtractor) tracked(filePath string) (trackedPos, bool) {
 	return t, ok
 }
 
-func (ae *ArtifactExtractor) setPosition(filePath, owner string, p scanstate.Position) {
-	t := trackedPos{Position: p, owner: owner, verified: ae.stateVerified(owner)}
+func (ae *ArtifactExtractor) setPosition(filePath, owner string, p scanstate.Position, version int) {
+	t := trackedPos{Position: p, owner: owner, verified: ae.stateVerified(owner), version: version}
 	ae.posMu.Lock()
 	ae.positions[filePath] = t
 	delete(ae.restored, filePath) // freshly scanned: not a stale restored row
@@ -202,8 +246,8 @@ func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
 		if ok && cur.Offset > rec.Offset {
 			continue
 		}
-		owner, verified := decodeOwner(rec.State)
-		ae.positions[path] = trackedPos{Position: rec.Position, owner: owner, verified: verified}
+		owner, verified, version := decodeOwner(rec.State)
+		ae.positions[path] = trackedPos{Position: rec.Position, owner: owner, verified: verified, version: version}
 		ae.restored[path] = struct{}{}
 	}
 	ae.posMu.Unlock()
@@ -223,6 +267,7 @@ func (ae *ArtifactExtractor) Start(ctx context.Context, historyDir string) {
 	go func() {
 		ae.restoreState(ctx)
 		ae.walkAndEnqueue(ctx, historyDir)
+		ae.watchScanV2(ctx)
 	}()
 }
 
@@ -261,7 +306,7 @@ func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
 		}
 		var blob SessionArtifactsBlob
 		if err := json.Unmarshal([]byte(raw), &blob); err == nil && blob.ScanOffsetBytes > 0 {
-			ae.positions[inst.HistoryFilePath] = trackedPos{Position: scanstate.Position{Offset: blob.ScanOffsetBytes}}
+			ae.positions[inst.HistoryFilePath] = trackedPos{Position: scanstate.Position{Offset: blob.ScanOffsetBytes}, version: blob.Version()}
 		}
 	}
 }
@@ -283,8 +328,8 @@ func (ae *ArtifactExtractor) titleLock(title string) *sync.Mutex {
 func (ae *ArtifactExtractor) mergeAndPersist(
 	title string,
 	newOffset int64,
-	newPRURLs, newCommitSHAs, newExternalURLs []string,
-	newCommands []CommandArtifact,
+	found *scanFindings,
+	fromTop bool,
 ) *SessionArtifactsBlob {
 	mu := ae.titleLock(title)
 	mu.Lock()
@@ -300,13 +345,18 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 	if newOffset == keepOffset {
 		newOffset = existing.ScanOffsetBytes
 	}
+	version := existing.Version()
+	if fromTop {
+		version = ae.scanVersion
+	}
 	blob := &SessionArtifactsBlob{
-		PRURLs:          dedup(append(existing.PRURLs, newPRURLs...)),
-		CommitSHAs:      dedup(append(existing.CommitSHAs, newCommitSHAs...)),
-		ExternalURLs:    capNewest(dedup(append(existing.ExternalURLs, newExternalURLs...)), maxExternalURLs),
-		Commands:        capNewest(dedupCommands(append(existing.Commands, newCommands...)), maxCommands),
+		PRURLs:          dedup(append(existing.PRURLs, found.prURLs...)),
+		CommitSHAs:      dedup(append(existing.CommitSHAs, found.commitSHAs...)),
+		ExternalURLs:    capNewest(dedup(append(existing.ExternalURLs, found.externalURLs...)), maxExternalURLs),
+		Commands:        capNewest(dedupCommands(append(existing.Commands, found.commands...)), maxCommands),
 		ScanOffsetBytes: newOffset,
 		LastScannedAt:   time.Now().UTC(),
+		ScanVersion:     version,
 	}
 	blob.ScanState = ScanStateNoneFound
 	if blob.HasData() {
@@ -332,7 +382,9 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 			ae.posMu.Lock()
 			delete(ae.restored, path)
 			ae.posMu.Unlock()
-			ae.queue.EnqueueBackfill(path)
+			if !ae.skipStaleBackfill(d, path) {
+				ae.queue.EnqueueBackfill(path)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -347,6 +399,56 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 	}
 	if walkClean && ctx.Err() == nil {
 		ae.dropUnseenRestored(ctx)
+	}
+}
+
+// skipStaleBackfill reports whether the walk should leave path alone: it was last
+// scanned by an older extractor, nothing was appended since, and the flag that
+// allows the version-bump rescan is off. A changed file is still enqueued; its
+// scan resumes incrementally rather than from the top.
+func (ae *ArtifactExtractor) skipStaleBackfill(d fs.DirEntry, path string) bool {
+	t, ok := ae.tracked(path)
+	if !ok || !ae.stale(t) || ae.scanV2() {
+		return false
+	}
+	fi, err := d.Info()
+	return err == nil && t.Unchanged(fi)
+}
+
+// watchScanV2 re-checks the flag every v2Every until ctx ends, so turning
+// artifact_scan_v2 on in a running process starts the paced backfill.
+func (ae *ArtifactExtractor) watchScanV2(ctx context.Context) {
+	if ae.v2Every <= 0 {
+		return
+	}
+	t := time.NewTicker(ae.v2Every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ae.enqueueStale()
+		}
+	}
+}
+
+// enqueueStale queues every stale tracked transcript for the version-bump rescan,
+// reading the flag before each path so turning it off stops further enqueues.
+func (ae *ArtifactExtractor) enqueueStale() {
+	ae.posMu.Lock()
+	var paths []string
+	for p, t := range ae.positions {
+		if ae.stale(t) {
+			paths = append(paths, p)
+		}
+	}
+	ae.posMu.Unlock()
+	for _, p := range paths {
+		if !ae.scanV2() {
+			return
+		}
+		ae.queue.EnqueueBackfill(p)
 	}
 }
 
