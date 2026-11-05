@@ -92,6 +92,7 @@ func currentPRList(inst *session.Instance) []*sessionv1.SessionPullRequest {
 
 // PinSessionPullRequest pins pr as the session's active PR; an unset pr clears
 // the current pin. Automation never pins.
+// +api: session:pin-pr
 func (s *SessionService) PinSessionPullRequest(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PinSessionPullRequestRequest],
@@ -123,6 +124,7 @@ func (s *SessionService) PinSessionPullRequest(
 
 // DetachSessionPullRequest removes exactly this session's link to pr and
 // tombstones it, so branch discovery does not bring it back.
+// +api: session:detach-pr
 func (s *SessionService) DetachSessionPullRequest(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DetachSessionPullRequestRequest],
@@ -147,6 +149,7 @@ func (s *SessionService) DetachSessionPullRequest(
 
 // AttachSessionPullRequest links the PR at the given URL after checking on GitHub
 // that it exists. The attach clears this session's tombstone for it.
+// +api: session:attach-pr
 func (s *SessionService) AttachSessionPullRequest(
 	ctx context.Context,
 	req *connect.Request[sessionv1.AttachSessionPullRequestRequest],
@@ -193,6 +196,7 @@ func prInitialFromInfo(info *github.PRInfo) session.PRInitial {
 // RefreshSessionPullRequests re-polls the session's open, unknown and
 // unverified-terminal PRs (a verified merged or closed PR is not polled) and
 // returns the refreshed list. Bounded to 10 seconds.
+// +api: session:refresh-prs
 func (s *SessionService) RefreshSessionPullRequests(
 	ctx context.Context,
 	req *connect.Request[sessionv1.RefreshSessionPullRequestsRequest],

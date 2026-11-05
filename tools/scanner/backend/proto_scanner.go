@@ -253,6 +253,12 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// "session:save-bundle" markers in session_bundle_service.go verbatim.
 	"ExportSessionBundle": "session:export-bundle",
 	"SaveSessionBundle":   "session:save-bundle",
+	// Session PR set RPCs: match the "// +api: session:*-pr" markers in
+	// session_service_pr_refs.go verbatim.
+	"PinSessionPullRequest":      "session:pin-pr",
+	"DetachSessionPullRequest":   "session:detach-pr",
+	"AttachSessionPullRequest":   "session:attach-pr",
+	"RefreshSessionPullRequests": "session:refresh-prs",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",

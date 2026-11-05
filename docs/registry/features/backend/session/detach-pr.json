@@ -1,0 +1,16 @@
+{
+  "id": "session:detach-pr",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DetachSessionPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_pr_refs.go",
+  "tested": true,
+  "testIds": [
+    "TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn",
+    "TestDetachSessionPullRequest_ShouldFailPrecondition_WhenPRNotAttached",
+    "TestDetachPRPersisted_ShouldWriteRepositoryThenMemoryThenMirror"
+  ],
+  "lastModified": "2026-11-04T20:02:47.935985241-08:00"
+}

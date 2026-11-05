@@ -1,0 +1,15 @@
+{
+  "id": "session:pin-pr",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "PinSessionPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_pr_refs.go",
+  "tested": true,
+  "testIds": [
+    "TestPinSessionPullRequest_ShouldMakePinnedActive_UntilUnpinned",
+    "TestPinPRPersisted_ShouldPinThenUnpin"
+  ],
+  "lastModified": "2026-11-04T20:02:47.935985241-08:00"
+}
