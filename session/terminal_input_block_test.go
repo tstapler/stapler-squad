@@ -17,8 +17,9 @@ func TestTerminalInputBlock(t *testing.T) {
 		{"tymux permanently failed", InstanceSnapshot{Backend: BackendTymux, Status: PermanentlyFailed}, true, true},
 		{"tymux paused", InstanceSnapshot{Backend: BackendTymux, Status: Paused}, true, true},
 		{"tmux stopped still forwards input", InstanceSnapshot{Backend: BackendTmux, Status: Stopped}, false, false},
-		{"archived never recovers", InstanceSnapshot{Backend: BackendTymux, Status: Active, ArchivedAt: &archived}, true, false},
+		{"archived recovers on unarchive", InstanceSnapshot{Backend: BackendTymux, Status: Active, ArchivedAt: &archived}, true, true},
 		{"hidden never recovers", InstanceSnapshot{Backend: BackendTymux, Status: Stopped, Hidden: true}, true, false},
+		{"hidden and archived never recovers", InstanceSnapshot{Backend: BackendTymux, Status: Active, Hidden: true, ArchivedAt: &archived}, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

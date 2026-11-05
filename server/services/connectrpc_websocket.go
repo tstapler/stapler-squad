@@ -2418,10 +2418,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 	stream.creation.Mark(stageHubCreate)
 
-	upWriter := h.newUpgradableWriter(instance)
 	noteOperatorOpen(instance)
-	subscriberID := h.attachHubSubscriber(connCtx, hub, hubSubscriberAttachment{
-		writer:          upWriter.Writer(),
+	upWriter, subscriberID, _ := h.attachUpgradableSubscriber(connCtx, hub, hubSubscriberAttachment{
 		stream:          stream,
 		instance:        instance,
 		sessionID:       sessionID,
@@ -2429,11 +2427,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		currentPaneReq:  currentPaneReq,
 	})
 	defer hub.DetachSubscriber(subscriberID)
-	var bus *events.EventBus
-	if h.sessionService != nil {
-		bus = h.sessionService.GetEventBus()
-	}
-	h.wireWriterUpgrade(connCtx, writerUpgrade{hub: hub, id: subscriberID, writer: upWriter, instance: instance, handshake: currentPaneReq, bus: bus})
 	stream.creation.Mark(stageHubAttach)
 
 	if err := h.sendHubInitialSnapshot(stream, hub, subscriberID, instance, sessionID); err != nil {

@@ -94,6 +94,23 @@ func (s *SessionService) wireSessionExitedPublisher(inst *session.Instance) {
 		return
 	}
 	inst.RegisterLifecycleListener(&sessionExitedPublisher{svc: s, inst: inst})
+	inst.RegisterLifecycleListener(&sessionStartedPublisher{svc: s, inst: inst})
+}
+
+// sessionStartedPublisher publishes a SessionUpdatedEvent once a start completes
+// (status already Active), covering restarts that publish nothing themselves
+// (automated retry in session/retry_state.go) so terminal streams attached while
+// the session was down can upgrade without waiting for a client frame.
+type sessionStartedPublisher struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
+	if event != session.EventStarted {
+		return
+	}
+	go l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
 }
 
 // sessionExitedPublisher publishes a SessionUpdatedEvent and saves the instance
