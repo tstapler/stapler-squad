@@ -45,9 +45,7 @@ import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { SessionInactiveNotice } from "./SessionInactiveNotice";
-import { createClient } from "@connectrpc/connect";
-import { getConnectTransport } from "@/lib/api/transport";
-import { SessionService } from "@/gen/session/v1/session_pb";
+import { useTerminalHardFailed } from "@/lib/terminal/terminalConnectionStatus";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
 import { routes } from "@/lib/routes";
@@ -750,17 +748,18 @@ export function SessionDetailView({
   };
 
   const [isRetryingNow, setIsRetryingNow] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const terminalShowsRetry = useTerminalHardFailed(session.id);
+  // retrySession resolves false on failure (archived, retry already in flight, internal error).
   const handleRetryNow = useCallback(async () => {
     setIsRetryingNow(true);
+    setRetryError(null);
     try {
-      const client = createClient(SessionService, getConnectTransport({ baseUrl: getApiBaseUrl() }));
-      await client.retrySession({ id: session.id });
-    } catch (err) {
-      console.error("retrySession failed", err);
+      if (!(await actions.retry())) setRetryError("Failed to retry session.");
     } finally {
       setIsRetryingNow(false);
     }
-  }, [session.id]);
+  }, [actions]);
 
   const handleResumeFromCrash = async () => {
     await actions.resumeFromCrash();
@@ -1031,10 +1030,13 @@ export function SessionDetailView({
         >
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
-            {session.instanceType !== InstanceType.EXTERNAL && (
+            {session.instanceType !== InstanceType.EXTERNAL && !session.hidden && (
               <SessionInactiveNotice
                 status={session.status}
                 archived={session.archivedAt !== undefined}
+                terminalReadOnly={session.terminalReadOnly}
+                terminalShowsRetry={terminalShowsRetry}
+                retryError={retryError}
                 onRetryNow={handleRetryNow}
                 retrying={isRetryingNow}
               />
