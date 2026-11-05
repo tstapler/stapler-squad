@@ -124,6 +124,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		// GitHub integration fields
 		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber), //#nosec G115 -- GitHub PR numbers are far below int32 max
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
+		PullRequests:    SessionPullRequestsForList(snap.GitHub.PRs, snap.Branch), // slim form (K11); the legacy scalars above stay the active PR's mirror
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
 		GithubHost:      snap.GitHub.GitHubHost,

@@ -143,6 +143,12 @@ func currentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummar
 	return []ItemSessionSummary{*newest}
 }
 
+// NewestWorkSession returns the live-work subject of an item as a slice: its newest
+// work session, or none.
+func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
+	return currentRoundWorkSessions(sessions)
+}
+
 // SplitLiveCurrentRound separates the sessions terminal-item archival may archive
 // and pane-kill from the live current-round work session it must leave alone
 // (RULE L). A nil probe, or a flag-off caller passing nil, skips nothing. A probe

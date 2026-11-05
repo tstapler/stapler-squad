@@ -86,6 +86,7 @@ func (s *BacklogService) GetBacklogItem(
 	p := backlogItemToProto(item, s.engine, s.buildCostLookup())
 	s.attachDependencies(ctx, p)
 	enrichItemSessionsWorktreeData(ctx, s.storage, p)
+	s.attachPRSet(ctx, p, item)
 	s.checkWorkStageBudget(item.ID, item.CostBudgetThresholdUsd, p.TotalEstimatedCostUsd)
 
 	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
