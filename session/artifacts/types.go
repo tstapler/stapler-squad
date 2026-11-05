@@ -16,11 +16,14 @@ type SessionArtifactsBlob struct {
 	// ScanVersion is the extractor version that last scanned the whole transcript;
 	// absent (0) means version 1. Read it through Version().
 	ScanVersion int `json:"scan_version,omitempty"`
+	// Records are the typed findings (v2). The v1 lists above are still written
+	// so an older binary reads this blob unchanged.
+	Records RecordList `json:"records,omitempty"`
 }
 
 // ScanVersion is the current extractor version. Raising it rescans every
 // transcript from the top, but only once the artifact_scan_v2 flag is on.
-const ScanVersion = 1
+const ScanVersion = 2
 
 // legacyScanVersion is what a blob or position written before versions existed means.
 const legacyScanVersion = 1
@@ -44,7 +47,7 @@ const (
 
 // HasData reports whether any artifact has been extracted.
 func (b *SessionArtifactsBlob) HasData() bool {
-	return len(b.PRURLs)+len(b.CommitSHAs)+len(b.ExternalURLs)+len(b.Commands) > 0
+	return len(b.PRURLs)+len(b.CommitSHAs)+len(b.ExternalURLs)+len(b.Commands)+len(b.Records) > 0
 }
 
 // State returns the recorded scan state, deriving it for blobs written before

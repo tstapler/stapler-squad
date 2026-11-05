@@ -16,6 +16,7 @@ func v1Scanned(t *testing.T, flag func() bool, paths ...string) *harness {
 	t.Helper()
 	states := &memStates{recs: map[string]scanstate.Record{}}
 	old := newHarness(states)
+	old.ae.scanVersion = 1 // the previous release
 	for _, p := range paths {
 		old.ae.scanFile(p)
 	}

@@ -111,10 +111,11 @@ func (ae *ArtifactExtractor) commitScan(filePath, title string, sub, full bool, 
 type scanFindings struct {
 	prURLs, commitSHAs, externalURLs []string
 	commands                         []CommandArtifact
+	records                          []ArtifactRecord
 }
 
 func (f *scanFindings) empty() bool {
-	return len(f.prURLs)+len(f.commitSHAs)+len(f.externalURLs)+len(f.commands) == 0
+	return len(f.prURLs)+len(f.commitSHAs)+len(f.externalURLs)+len(f.commands)+len(f.records) == 0
 }
 
 // addLine extracts artifacts from one complete transcript line; malformed lines are skipped.

@@ -357,7 +357,10 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 		ScanOffsetBytes: newOffset,
 		LastScannedAt:   time.Now().UTC(),
 		ScanVersion:     version,
+		Records:         mergeRecords(existing.Records, found.records),
 	}
+	blob.enforceCaps()
+	observeBlobBytes(blob.encodedSize())
 	blob.ScanState = ScanStateNoneFound
 	if blob.HasData() {
 		blob.ScanState = ScanStateHasData
