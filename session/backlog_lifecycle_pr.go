@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -2005,6 +2006,28 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 	}
 	for _, item := range items {
 		l.reconcilePRPendingItem(ctx, er, item)
+		l.syncItemPRMirror(ctx, er, item.ID.String())
+	}
+}
+
+// backlogReaderEnabled reports whether the reader:backlog scope is effective;
+// tests install backlogReaderOverride instead of writing config.
+func (l *BacklogLifecycleListener) backlogReaderEnabled() bool {
+	if l.backlogReaderOverride != nil {
+		return l.backlogReaderOverride()
+	}
+	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
+}
+
+// syncItemPRMirror ends each ReconcilePRPending pass for an item by letting
+// pr_number/pr_url follow the derived PR set, so a session-link change (such as
+// discovery on the current round) lands within one tick. Off with reader:backlog.
+func (l *BacklogLifecycleListener) syncItemPRMirror(ctx context.Context, er *EntRepository, itemID string) {
+	if !l.backlogReaderEnabled() {
+		return
+	}
+	if _, err := er.RecomputeItemPRMirror(ctx, itemID); err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s mirror recompute: %v", itemID, err)
 	}
 }
 

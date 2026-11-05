@@ -153,6 +153,9 @@ type BacklogLifecycleListener struct {
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
 
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
+
 	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
 	// ciRerunner disables the free-rerun shortcut.
 	ciRerunner ciRerunClient

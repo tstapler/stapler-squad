@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 type itemPRFixture struct {
@@ -310,4 +311,101 @@ func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionD
 	}
 	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves the set when the next round links #31")
+}
+
+func (f *itemPRFixture) mirror() int {
+	f.t.Helper()
+	return f.itemEnt().PrNumber
+}
+
+func TestItemMirror_ShouldFollowSet_WhenSetChanges(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 21)
+	ctx := context.Background()
+	f.link(ItemPROwner(f.itemID), 21, PRStateMerged)
+	f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
+
+	changed, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, 22, f.mirror())
+	assert.Equal(t, "https://github.com/acme/app/pull/22", f.itemEnt().PrURL, "url synthesized when the state row has none")
+
+	pending, err := f.repo.FindPRPendingItems(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "FindPRPendingItems (PrNumberGT(0)) still returns the item")
+
+	changed, err = f.repo.RecomputeItemPRMirror(ctx, f.itemID)
+	require.NoError(t, err)
+	assert.False(t, changed, "idempotent when already in sync")
+}
+
+func TestItemMirror_ShouldNeverZeroStoredNumber_WhenSetEmpty(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 30)
+	ctx := context.Background()
+	s := f.session(SessionRoleWork)
+	f.link(SessionPROwner(s), 30, PRStateOpen)
+	f.detach(SessionPROwner(s), 30)
+	require.Empty(t, f.numbers())
+
+	changed, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, 30, f.mirror(), "an empty set leaves the stored number untouched")
+}
+
+func TestItemMirror_ShouldLoseToConcurrentWriter_WhenStoredNumberChangedUnderneath(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 21)
+	ctx := context.Background()
+	f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
+	stale := f.itemEnt()
+	n := 99
+	_, err := f.storage.UpdateBacklogItem(ctx, f.itemID, BacklogItemUpdate{PrNumber: &n}, nil)
+	require.NoError(t, err)
+
+	changed, err := f.repo.recomputeItemPRMirror(ctx, stale)
+	require.NoError(t, err)
+	assert.False(t, changed, "compare-and-set on the number read; the other writer wins")
+	assert.Equal(t, 99, f.mirror())
+}
+
+func TestItemMirror_ShouldFollowCurrentRound_WhenLaterWorkSessionLinks(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 30)
+	ctx := context.Background()
+	s1 := f.session(SessionRoleWork)
+	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	for run := 0; run < 2; run++ {
+		_, err := f.repo.runPRBackfill(ctx, nil)
+		require.NoError(t, err)
+	}
+	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, PRStateOpen)
+	_, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
+	require.NoError(t, err)
+	assert.Equal(t, 31, f.mirror())
+}
+
+func TestReconcilePRPending_ShouldSyncMirrorAtEndOfPass_OnlyWhenBacklogReaderOn(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		on := on
+		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
+			t.Parallel()
+			f := newItemPRFixture(t, 21)
+			f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
+			listener := NewBacklogLifecycleListener(f.storage)
+			listener.backlogReaderOverride = func() bool { return on }
+			overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false, status: &git.PRStatus{}})
+
+			listener.ReconcilePRPending(context.Background(), f.repo)
+
+			want := 21
+			if on {
+				want = 22
+			}
+			assert.Equal(t, want, f.mirror())
+		})
+	}
 }
