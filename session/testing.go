@@ -98,6 +98,21 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 	return repo
 }
 
+// NewPausedTestInstance returns a minimal Paused, started Instance ready for Storage.AddInstance, for tests of
+// packages that sit above session (and cannot set the unexported started flag themselves).
+func NewPausedTestInstance(title string) *Instance {
+	inst := &Instance{
+		Title:     title,
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.started.Store(true)
+	return inst
+}
+
 // TestBackdateCreationProgress rewrites a persisted instance's
 // creation_progress_updated_at column directly to `when`, simulating elapsed
 // wall-clock time without a real sleep. There is no production setter for an
