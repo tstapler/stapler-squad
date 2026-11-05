@@ -155,8 +155,20 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        run: buf generate proto --template buf.gen.go-only.yaml
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
       - name: Run full benchmark suite
         run: |
+          set -o pipefail
           go test \
             -bench=. \
             -run='^$' \
@@ -227,7 +239,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-throughput:
     name: Frontend Terminal Throughput
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:
@@ -339,7 +351,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-latency:
     name: E2E RPC Latency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     needs: frontend-bundle
     permissions:
@@ -543,7 +555,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-perf:
     name: E2E Perf Budget
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:
