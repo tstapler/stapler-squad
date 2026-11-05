@@ -168,10 +168,14 @@ func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 	}
 	unix, unixHTTP := newUnixTransport(path)
 	defer unixHTTP.CloseIdleConnections()
-	if probeEndpoint(ctx, "unix", path, unix) >= daemonProbeBusy {
+	switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
+	case daemonProbeHealthy:
 		return daemonProbeDegraded
+	case daemonProbeBusy:
+		return daemonProbeBusy // silent socket: inconclusive, not usable, never killed
+	default:
+		return result
 	}
-	return result
 }
 
 // dialFn is the seam probeEndpoint, portListening and unixSocketListening dial through.
@@ -222,17 +226,41 @@ func probeEndpoint(ctx context.Context, network, address string, transport rpcTr
 	}
 }
 
-// unixSocketPath is the control socket to probe, or "" when it cannot be known: a named instance
-// always sets cfg.SocketPath, the shared default daemon uses tymuxd's per-user default path, and
-// a custom TYMUXD_ADDR with no socket override could be sharing a socket with another daemon.
+// unixSocketPath is the control socket of the daemon at cfg.Addr, or "" when it cannot be known.
+// It is the single resolution both the supervisor's probe and the client's fallback use. A socket
+// is only returned when it provably belongs to the same daemon as the address: the shared default
+// daemon's per-user path for the default address, or cfg.SocketPath when it was resolved together
+// with cfg.Addr (see socketPairedWithAddr).
 func unixSocketPath(cfg DaemonConfig) string {
 	if cfg.SocketPath != "" {
-		return cfg.SocketPath
+		if socketPairedWithAddr(cfg) {
+			return cfg.SocketPath
+		}
+		return ""
 	}
 	if cfg.Addr == defaultTymuxdAddr && !sharedDaemonBlockedInTest(cfg.Addr) {
-		return udsdialer.ResolveSocketPath(os.Getuid())
+		return udsdialer.DefaultSocketPath(os.Getuid()) // not ResolveSocketPath: TYMUXD_SOCKET_PATH names another daemon
 	}
 	return ""
+}
+
+// socketPairedWithAddr rejects the env-resolved combinations where only one half was overridden,
+// since the other half then names a different daemon: TYMUXD_ADDR with an instance-hashed socket,
+// or TYMUXD_SOCKET_PATH with the default address. A hand-built cfg (not the env resolution) is
+// trusted as given.
+func socketPairedWithAddr(cfg DaemonConfig) bool {
+	rc := ResolveDaemonConfig()
+	if rc.Addr != cfg.Addr || rc.SocketPath != cfg.SocketPath {
+		return true
+	}
+	envAddr, envSock := os.Getenv("TYMUXD_ADDR") != "", os.Getenv("TYMUXD_SOCKET_PATH") != ""
+	if envAddr == envSock {
+		return true
+	}
+	if envSock { // socket overridden, address not
+		return namedInstance()
+	}
+	return !namedInstance() || cfg.Addr == instanceDaemonAddr() // address overridden, socket not
 }
 
 // unixSocketListening reports whether the control socket might be live: anything but a definite
