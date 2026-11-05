@@ -460,6 +460,30 @@ func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) 
 	return out, nil
 }
 
+// SessionUUIDsByPR returns the sorted UUIDs of the sessions linked to ref
+// (item-direct links excluded). Two statements: the state row, then its links.
+// Rows are not checked against live sessions; the caller filters orphans.
+func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+	if ref.IsZero() {
+		return nil, ErrZeroPRRef
+	}
+	stateID, err := r.client.PullRequestState.Query().Where(refPredicate(ref)).OnlyID(ctx)
+	if ent.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up pull request state %s: %w", ref, err)
+	}
+	uuids, err := r.client.SessionPR.Query().
+		Where(sessionpr.PullRequestStateID(stateID), sessionpr.SessionUUIDNEQ("")).
+		Order(ent.Asc(sessionpr.FieldSessionUUID)).
+		Select(sessionpr.FieldSessionUUID).Strings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions linked to %s: %w", ref, err)
+	}
+	return uuids, nil
+}
+
 // ListByItem returns the item-direct links of one backlog item joined to states.
 func (r *EntRepository) ListByItem(ctx context.Context, itemID string) ([]PRView, error) {
 	if itemID == "" {

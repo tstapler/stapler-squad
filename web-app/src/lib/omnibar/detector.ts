@@ -3,7 +3,8 @@
  * Ported from Go implementation at ui/overlay/omnibar/detector.go
  */
 
-import { InputType, DetectionResult, GitHubRef } from "./types";
+import type { DetectionResult, GitHubRef } from "./types";
+import { InputType } from "./types";
 import { CommandDetector } from "./detectors/CommandDetector";
 import { GitHubEnterpriseURLDetector } from "./detectors/GitHubEnterpriseURLDetector";
 import { toSessionSlug } from "./slugify";
@@ -30,6 +31,7 @@ class GitHubPRDetector implements Detector {
 
     const [, owner, repo, prNumber] = match;
     const gitHubRef: GitHubRef = {
+      host: "github.com",
       owner,
       repo,
       prNumber: parseInt(prNumber, 10),

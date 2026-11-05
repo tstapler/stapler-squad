@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/zalando/go-keyring"
 
 	"connectrpc.com/connect"
@@ -691,4 +692,33 @@ func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
 			assert.NotNil(t, inst.Snapshot().Artifacts, "the blob is still attached")
 		})
 	}
+}
+
+// A finished scan makes its session searchable without a restart (Story 9.1 "Incremental").
+func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Title: "indexed", UUID: "uuid-indexed"}
+	idx := search.NewArtifactIndex(nil)
+	handler := indexScannedArtifacts(func() []*session.Instance { return []*session.Instance{inst} }, idx)
+
+	handler("indexed", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-fresh"}}})
+	hits := idx.Search("feat-fresh", 5)
+	require.Len(t, hits, 1)
+	assert.Equal(t, "uuid-indexed", hits[0].SessionID)
+
+	handler("someone-else", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-ignored"}}})
+	assert.Equal(t, 1, idx.DocCount(), "a title with no live session indexes nothing")
+}
+
+func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStoredBlobs(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Title: "stored", UUID: "uuid-stored",
+		Artifacts: &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-stored"}}}}
+	idx := search.NewArtifactIndex(nil)
+	ready := make(chan struct{})
+	buildArtifactIndexInBackground(func() []*session.Instance { return []*session.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)
+
+	assert.Zero(t, idx.DocCount(), "nothing is indexed before the listener is up")
+	close(ready)
+	require.Eventually(t, func() bool { return idx.DocCount() == 1 }, 5*time.Second, 5*time.Millisecond)
 }

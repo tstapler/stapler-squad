@@ -312,6 +312,14 @@ service SessionService {
   // any session state; the result arrives as a SessionUpdatedEvent(["artifacts"]).
   rpc RescanSessionArtifacts(RescanSessionArtifactsRequest) returns (RescanSessionArtifactsResponse) {}
 
+  // SearchSessionArtifacts finds sessions by what they produced: a PR, commit,
+  // branch, issue, plan doc or free text. Results are sessions, best first.
+  rpc SearchSessionArtifacts(SearchSessionArtifactsRequest) returns (SearchSessionArtifactsResponse) {}
+
+  // FindSessionsByPullRequest lists the sessions tied to one PR: those with an
+  // attached link (Tracked) first, then those that only saw it (Seen in transcript).
+  rpc FindSessionsByPullRequest(FindSessionsByPullRequestRequest) returns (FindSessionsByPullRequestResponse) {}
+
   // File Viewer RPCs
 
   // ListFiles returns the immediate children of a directory in a session's worktree.
@@ -3814,6 +3822,59 @@ message RescanSessionArtifactsRequest {
 message RescanSessionArtifactsResponse {
   // False when the session has no linked transcript, so there was nothing to scan.
   bool scan_started = 1;
+}
+
+// SearchSessionArtifactsRequest searches what sessions produced.
+message SearchSessionArtifactsRequest {
+  // Required, at least 2 characters; 1 character is InvalidArgument.
+  string query = 1;
+  // Maximum sessions to return (default 20, max 100).
+  int32 limit = 2;
+  // Only sessions with a link to, or a transcript mention of, this PR.
+  PullRequestRef pr = 3;
+  // Best-effort exclude hidden (automation) sessions, as in SearchClaudeHistoryRequest.
+  bool exclude_automation_sessions = 4;
+  // Archived sessions are excluded unless true, as in ListSessionsRequest.
+  bool include_archived = 5;
+}
+
+// ArtifactMatch is one artifact of a session that matched a query.
+message ArtifactMatch {
+  // "pr", "branch", "commit", "issue", "plan_doc", "ci_link" or "command".
+  string type = 1;
+  // The matched artifact in display form: a PR ref, SHA, branch name, path or URL.
+  string text = 2;
+  float score = 3;
+}
+
+// SessionArtifactHit is one session in a result, with the artifacts that matched.
+message SessionArtifactHit {
+  string session_id = 1;
+  string title = 2;
+  // "session_pr" (Tracked) or "artifact" (Seen in transcript) for a PR lookup;
+  // "artifact" for a text search.
+  string source = 3;
+  google.protobuf.Timestamp last_activity = 4;
+  repeated ArtifactMatch matches = 5;
+}
+
+message SearchSessionArtifactsResponse {
+  repeated SessionArtifactHit hits = 1;
+  // Visible sessions whose scan_state is not_linked or scanning, so results may be incomplete.
+  int32 unscanned_session_count = 2;
+}
+
+message FindSessionsByPullRequestRequest {
+  PullRequestRef pr = 1;
+  bool exclude_automation_sessions = 2;
+  bool include_archived = 3;
+}
+
+message FindSessionsByPullRequestResponse {
+  // Tracked rows first, then Seen in transcript; each group by last_activity
+  // descending then title; one row per session.
+  repeated SessionArtifactHit hits = 1;
+  int32 unscanned_session_count = 2;
 }
 
 // ============================================================================

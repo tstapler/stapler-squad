@@ -1034,6 +1034,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
 	svc.artifactSvc.findInstance = svc.findInstance
+	svc.artifactSvc.allInstances = svc.allInstances
 
 	// Construct prCreationSvc with the shared storage/eventBus and a bound
 	// findInstance method value (narrow dependency, not the whole SessionService —

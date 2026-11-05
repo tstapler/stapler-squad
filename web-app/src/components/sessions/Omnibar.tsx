@@ -75,6 +75,7 @@ import {
 } from "./Omnibar.css";
 import { lazyComponent } from "@/lib/lazy";
 import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
+import { OmnibarFindPrAction } from "./OmnibarFindPrAction";
 import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
 import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
@@ -677,6 +678,14 @@ export function Omnibar({
   // Discovery mode derived from modeState
   const isDiscoveryMode = modeState.type === "discovery";
 
+  // A pasted github.com PR URL also offers "Find sessions for owner/repo#N" (design/ux.md S9).
+  const findPrRef = useRef<HTMLButtonElement>(null);
+  const findPrTarget = useMemo(() => {
+    const ref = detection?.gitHubRef;
+    if (detection?.type !== InputType.GitHubPR || !ref?.prNumber || isDiscoveryMode) return null;
+    return { host: ref.host ?? "github.com", owner: ref.owner, repo: ref.repo, number: ref.prNumber };
+  }, [detection, isDiscoveryMode]);
+
   // @command autocomplete — active while user is typing "@slug" (no space yet)
   const {
     isAtCommand,
@@ -1132,6 +1141,11 @@ export function Omnibar({
   // Handle keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (findPrTarget && e.key === "ArrowDown" && e.target === inputRef.current) {
+        e.preventDefault();
+        findPrRef.current?.focus();
+        return;
+      }
       // Alias palette keyboard navigation
       if (activeDropdown === "alias" && filteredAliases.length > 0) {
         if (e.key === "ArrowDown") {
@@ -1345,6 +1359,7 @@ export function Omnibar({
       filteredAliases,
       completeAlias,
       input,
+      findPrTarget,
     ],
   );
 
@@ -2206,6 +2221,16 @@ export function Omnibar({
               {typeInfo.icon} {typeInfo.label}
             </span>
           </div>
+        )}
+
+        {findPrTarget && sessionType !== "one_off" && (
+          <OmnibarFindPrAction
+            ref={findPrRef}
+            pr={findPrTarget}
+            onOpenSession={onNavigateToSession}
+            onDone={onClose}
+            onFocusInput={() => inputRef.current?.focus()}
+          />
         )}
 
         {/* Creation form + footer — delegated to OmnibarCreationPanel */}

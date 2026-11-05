@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -1928,7 +1929,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			},
 			artifactOpts...,
 		)
-		artifactExtractor.OnScanComplete = artifactScanCompleteHandler(historyLinker.Instances, eventBus)
+		artifactIndex := search.NewArtifactIndex(storage)
+		attachScan := artifactScanCompleteHandler(historyLinker.Instances, eventBus)
+		indexScan := indexScannedArtifacts(historyLinker.Instances, artifactIndex)
+		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
+			attachScan(title, blob)
+			indexScan(title, blob)
+		}
+		sessionService.SetArtifactIndex(artifactIndex)
+		buildArtifactIndexInBackground(historyLinker.Instances, artifactIndex, listenerUp.ch)
 		sessionService.SetArtifactRescanner(artifactExtractor)
 		historyLinker.RegisterFileCallback(artifactExtractor.OnHistoryFileChanged)
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))

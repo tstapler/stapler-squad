@@ -129,7 +129,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"PickFanoutWinner", "PinSessionPullRequest", "RefreshSessionPullRequests", "DetachSessionPullRequest", "AttachSessionPullRequest", "DetachItemPullRequest", "ReclassifySessionTags", "ReloadClaudeSettingsRules", "RenameSession", "RescanSessionArtifacts", "ResolveApproval",
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
-		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
+		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SearchSessionArtifacts", "FindSessionsByPullRequest", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
 		"SetStreamHubSessionOverride", "StatFile", "StopShell", "StreamTerminal", "SwitchDatabase",
 		"TestJulesConnection", "TestSlackWebhook", "UnarchiveSession", "UnpinSession", "UpdateBackgroundModels",
 		"UpdateCallbackConfig", "UpdateClaudeConfig", "UpdateFeatureFlag", "UpdateGlobalDefaults",

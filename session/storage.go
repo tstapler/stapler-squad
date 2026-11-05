@@ -1718,6 +1718,11 @@ func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string)
 	return s.repo.ListBySessionUUIDs(ctx, uuids)
 }
 
+// SessionUUIDsByPR returns the sessions holding a link to ref (see EntRepository.SessionUUIDsByPR).
+func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+	return s.repo.SessionUUIDsByPR(ctx, ref)
+}
+
 // AttachItemPRLink upserts an item-direct link (state row plus link) for prURL.
 // It reports attached=false, with no error, when the item carries a tombstone for
 // that PR, so a re-poll cannot undo a detach.

@@ -1683,6 +1683,7 @@ func (s *Server) Start(ctx context.Context) error {
 				errCh <- lerr
 				return
 			}
+			markListenerUp()
 			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
@@ -1692,6 +1693,7 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 			resolvedAddr := ln.Addr().String()
 			s.addr.Store(&resolvedAddr)
+			markListenerUp()
 			// Log the real, OS-assigned address (never the pre-bind ":0"
 			// request) now that the listener has actually bound.
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)

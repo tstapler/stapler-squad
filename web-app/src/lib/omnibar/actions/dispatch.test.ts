@@ -1,5 +1,6 @@
-import { dispatchOmnibarAction, ActionDeps } from "./dispatch";
-import { OmnibarAction } from "./types";
+import type { ActionDeps } from "./dispatch";
+import { dispatchOmnibarAction } from "./dispatch";
+import type { OmnibarAction } from "./types";
 
 function makeDeps(): jest.Mocked<ActionDeps> {
   return {
@@ -294,6 +295,23 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ path: "/repo", fanoutCount: 3, initialPrompt: "add tests", sessionType: "new_worktree" })
       );
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("find_sessions_for_pr", () => {
+    const action: OmnibarAction = { type: "find_sessions_for_pr", host: "github.com", owner: "acme", repo: "app", number: 12 };
+
+    it("dispatchOmnibarAction_should_emitArtifactsNavigationTarget_When_findSessionsForPrAction", () => {
+      const deps = { ...makeDeps(), navigateToHref: jest.fn() };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.navigateToHref).toHaveBeenCalledWith("/artifacts?pr=acme/app%2312");
+      expect(deps.close).toHaveBeenCalled();
+    });
+
+    it("dispatchOmnibarAction_should_stillClose_When_noNavigateToHrefDep", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction(action, deps);
       expect(deps.close).toHaveBeenCalled();
     });
   });
