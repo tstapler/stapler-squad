@@ -35,7 +35,7 @@ func (p blockingPanePM) GetPanePID() (int32, error) {
 // Fails on the old code, where one global mutex was held across GetPanePID.
 func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionIsSlow(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/slowio")
+	f := newLinkerFixture(t, "/repo/slowio")
 	f.write(t, claimOther, "{}", time.Second)
 
 	slow := &Instance{Title: "slow", Path: t.TempDir(), Status: Running}
@@ -70,7 +70,7 @@ func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionI
 func TestHistoryLinker_Correlate_should_LinkConversationToExactlyOneSession_When_RacingSiblings(t *testing.T) {
 	t.Parallel()
 	for round := 0; round < 50; round++ {
-		f := newClaimFixture(t, "/repo/race")
+		f := newLinkerFixture(t, "/repo/race")
 		f.write(t, claimOther, "{}", time.Second)
 		const n = 8
 		insts := make([]*Instance, n)
@@ -103,7 +103,7 @@ func TestHistoryLinker_Correlate_should_LinkConversationToExactlyOneSession_When
 // make the commit re-select instead of double-linking.
 func TestHistoryLinker_Commit_should_NotDoubleLink_When_SiblingClaimsBetweenDetectAndCommit(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/commit")
+	f := newLinkerFixture(t, "/repo/commit")
 	path := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/commit", Status: Running}
 	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
@@ -126,7 +126,7 @@ func TestHistoryLinker_Commit_should_NotDoubleLink_When_SiblingClaimsBetweenDete
 // falls through to that one.
 func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/reselect")
+	f := newLinkerFixture(t, "/repo/reselect")
 	f.write(t, claimOwnStart, "{}", 5*time.Second)
 	newest := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/reselect", Status: Running}
@@ -149,7 +149,7 @@ func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(
 // detecting must keep the newer link rather than be overwritten by a stale path guess.
 func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/stale")
+	f := newLinkerFixture(t, "/repo/stale")
 	f.write(t, claimOwnStart, "{}", 5*time.Second)
 	a := &Instance{Title: "a", Path: "/repo/stale", Status: Running}
 	f.linker.SetInstances([]*Instance{a})
@@ -165,7 +165,7 @@ func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t
 // concurrently, as the old fully-serialised correlation did.
 func TestHistoryLinker_Commit_should_OverwriteWithPanePID_When_SessionLinkedMeanwhile(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/panepid")
+	f := newLinkerFixture(t, "/repo/panepid")
 	a := &Instance{Title: "a", Path: "/repo/panepid", Status: Running}
 	f.linker.SetInstances([]*Instance{a})
 
@@ -182,7 +182,7 @@ func TestHistoryLinker_Commit_should_OverwriteWithPanePID_When_SessionLinkedMean
 // between detection and commit (the gate is held to widen the second window).
 func TestHistoryLinker_Correlate_should_RecordMiss_When_SiblingOwnsOnlyCandidate(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/miss")
+	f := newLinkerFixture(t, "/repo/miss")
 	path := f.write(t, claimOther, "{}", time.Second)
 	a := &Instance{Title: "a", Path: "/repo/miss", Status: Running}
 	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
@@ -257,7 +257,7 @@ func TestScanCoalescer_should_RunExactlyTwice_When_ManyCallersJoinDuringOneRun(t
 
 func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/coalesce")
+	f := newLinkerFixture(t, "/repo/coalesce")
 	inst := &Instance{Title: "slow", Path: t.TempDir(), Status: Running}
 	scans := new(atomic.Int64)
 	pm := blockingPanePM{enter: new(sync.Once), calls: scans, entered: make(chan struct{}), release: make(chan struct{})}

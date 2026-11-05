@@ -11,45 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	claimSibling  = "cccccccc-0000-0000-0000-000000000000"
-	claimOther    = "dddddddd-0000-0000-0000-000000000000"
-	claimOldStart = "eeeeeeee-0000-0000-0000-000000000000"
-	claimOwnStart = "ffffffff-0000-0000-0000-000000000000"
-)
-
-type claimFixture struct {
-	linker *HistoryLinker
-	dir    string
-	now    time.Time
-}
-
-func newClaimFixture(t *testing.T, repoPath string) *claimFixture {
-	t.Helper()
-	home := t.TempDir()
-	dir := filepath.Join(home, ".claude", "projects", ClaudeProjectDirName(repoPath))
-	require.NoError(t, os.MkdirAll(dir, 0755))
-	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, home)
-	return &claimFixture{linker: NewHistoryLinker(detector, nil), dir: dir, now: time.Now()}
-}
-
-// write creates <uuid>.jsonl with the given content and mtime = now - age.
-func (f *claimFixture) write(t *testing.T, uuid, content string, age time.Duration) string {
-	t.Helper()
-	p := filepath.Join(f.dir, uuid+".jsonl")
-	require.NoError(t, os.WriteFile(p, []byte(content), 0644))
-	mt := f.now.Add(-age)
-	require.NoError(t, os.Chtimes(p, mt, mt))
-	return p
-}
-
-func stampedEntry(ts time.Time) string {
-	return `{"type":"queue-operation","timestamp":"` + ts.UTC().Format(time.RFC3339Nano) + `"}` + "\n"
-}
-
 func TestHistoryLinker_SkipsConversationOwnedBySibling(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/shared")
+	f := newLinkerFixture(t, "/repo/shared")
 	f.write(t, claimOther, "{}", 2*time.Second)
 	siblingPath := f.write(t, claimSibling, "{}", time.Second) // newest
 
@@ -66,7 +30,7 @@ func TestHistoryLinker_SkipsConversationOwnedBySibling(t *testing.T) {
 
 func TestHistoryLinker_AllConversationsClaimed_StaysUnlinked(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/shared")
+	f := newLinkerFixture(t, "/repo/shared")
 	siblingPath := f.write(t, claimSibling, "{}", time.Second)
 
 	sibling := &Instance{Title: "sibling", Path: "/repo/shared", Status: Running}
@@ -81,7 +45,7 @@ func TestHistoryLinker_AllConversationsClaimed_StaysUnlinked(t *testing.T) {
 
 func TestHistoryLinker_LinkedSession_KeepsOwnConversation(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/shared")
+	f := newLinkerFixture(t, "/repo/shared")
 	ownPath := f.write(t, claimOther, "{}", time.Second) // newest
 
 	inst := &Instance{Title: "self", Path: "/repo/shared", Status: Running}
@@ -95,7 +59,7 @@ func TestHistoryLinker_LinkedSession_KeepsOwnConversation(t *testing.T) {
 
 func TestHistoryLinker_LinkedSession_ClearMovesToUnclaimedNotSiblingFile(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/shared")
+	f := newLinkerFixture(t, "/repo/shared")
 	oldPath := f.write(t, claimOldStart, "{}", time.Hour)
 	f.write(t, claimOther, "{}", 2*time.Second)                // post-/clear conversation
 	siblingPath := f.write(t, claimSibling, "{}", time.Second) // newest, owned by sibling
@@ -115,7 +79,7 @@ func TestHistoryLinker_LinkedSession_ClearMovesToUnclaimedNotSiblingFile(t *test
 // before the new session existed.
 func TestHistoryLinker_NeverLinked_SkipsConversationPredatingSession(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/predate")
+	f := newLinkerFixture(t, "/repo/predate")
 	created := f.now.Add(-time.Minute)
 	f.write(t, claimOwnStart, stampedEntry(created.Add(10*time.Second)), 5*time.Second)
 	f.write(t, claimOldStart, stampedEntry(created.Add(-time.Hour)), time.Second) // newest mtime
@@ -155,7 +119,7 @@ func TestHistoryLinker_PredatingConversation_AcceptedWhenNotFreshlyUnlinked(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := newClaimFixture(t, "/repo/p")
+			f := newLinkerFixture(t, "/repo/p")
 			path := f.write(t, claimOldStart, oldEntry, time.Second)
 			if tt.prep != nil {
 				tt.prep(tt.inst, path)
@@ -171,7 +135,7 @@ func TestHistoryLinker_PredatingConversation_AcceptedWhenNotFreshlyUnlinked(t *t
 
 func TestHistoryLinker_StartBoundary_EqualToCreatedAtAccepted(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/edge")
+	f := newLinkerFixture(t, "/repo/edge")
 	created := f.now.Add(-time.Minute).Truncate(time.Millisecond)
 	f.write(t, claimOwnStart, stampedEntry(created), time.Second)
 
@@ -180,7 +144,7 @@ func TestHistoryLinker_StartBoundary_EqualToCreatedAtAccepted(t *testing.T) {
 	f.linker.correlateSession(fresh, false)
 	assert.True(t, fresh.HasClaudeSession())
 
-	f2 := newClaimFixture(t, "/repo/edge")
+	f2 := newLinkerFixture(t, "/repo/edge")
 	f2.write(t, claimOwnStart, stampedEntry(created.Add(-time.Millisecond)), time.Second)
 	fresh2 := &Instance{Title: "fresh2", Path: "/repo/edge", Status: Running, CreatedAt: created}
 	f2.linker.SetInstances([]*Instance{fresh2})
@@ -226,7 +190,7 @@ func TestJSONLStartTime(t *testing.T) {
 
 func TestHistoryLinker_UndatableConversation_AdoptedByFreshSession(t *testing.T) {
 	t.Parallel()
-	f := newClaimFixture(t, "/repo/undated")
+	f := newLinkerFixture(t, "/repo/undated")
 	f.write(t, claimOwnStart, "{}\n", time.Second)
 
 	fresh := &Instance{Title: "fresh", Path: "/repo/undated", Status: Running, CreatedAt: f.now.Add(-time.Minute)}
@@ -234,4 +198,16 @@ func TestHistoryLinker_UndatableConversation_AdoptedByFreshSession(t *testing.T)
 	f.linker.correlateSession(fresh, false)
 
 	assert.True(t, fresh.HasClaudeSession())
+}
+
+// linkerFixture adds a HistoryLinker over the claim fixture's detector.
+type linkerFixture struct {
+	*claimFixture
+	linker *HistoryLinker
+}
+
+func newLinkerFixture(t *testing.T, repoPath string) *linkerFixture {
+	t.Helper()
+	f := newClaimFixture(t, repoPath)
+	return &linkerFixture{claimFixture: f, linker: NewHistoryLinker(f.detector, nil)}
 }
