@@ -104,8 +104,10 @@ type tymuxGRPCSession struct {
 	// restarts, so a failed follow-up capture falls back to "alive" instead of the cached DEAD.
 	restartIsPending bool
 
-	// captureReviveMu serializes capture-triggered revives so concurrent resyncs revive once.
-	captureReviveMu sync.Mutex
+	// captureReviveMu serializes capture-triggered revives; captureReviveGen counts the ones that
+	// succeeded, so a caller that lost the race sees the pane was already revived and just retries.
+	captureReviveMu  sync.Mutex
+	captureReviveGen atomic.Uint64
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
 
@@ -1053,7 +1055,9 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	if paneID == "" || closed {
 		return false
 	}
-	snap, err := s.capturePane(context.Background(), 0)
+	// Status polling must never revive: this layer cannot tell an archived or stopped session
+	// from a live one, so only the explicit capture/resync paths respawn a pane.
+	snap, err := s.capturePaneNoRevive(context.Background(), 0)
 	if err != nil {
 		if connect.CodeOf(err) == connect.CodeNotFound && s.daemonConfirmsPaneGone(sessionID, paneID) {
 			s.mu.Lock()
@@ -1232,8 +1236,18 @@ func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []b
 // --- Terminal state ---
 
 // capturePane is the shared CapturePane call every read-only introspection
-// method (capture/cursor/dimensions/IsAlive) funnels through.
+// method (capture/cursor/dimensions) funnels through; IsAlive uses capturePaneNoRevive.
 func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uint32) (*v1.PaneSnapshot, error) {
+	return s.capturePaneWith(ctx, scrollbackOffset, true)
+}
+
+// capturePaneNoRevive is capturePane for liveness polling: a pane without a process is reported
+// as ErrPaneNotRunning instead of being respawned.
+func (s *tymuxGRPCSession) capturePaneNoRevive(ctx context.Context, scrollbackOffset uint32) (*v1.PaneSnapshot, error) {
+	return s.capturePaneWith(ctx, scrollbackOffset, false)
+}
+
+func (s *tymuxGRPCSession) capturePaneWith(ctx context.Context, scrollbackOffset uint32, revive bool) (*v1.PaneSnapshot, error) {
 	s.mu.RLock()
 	paneID := s.paneID
 	s.mu.RUnlock()
@@ -1241,8 +1255,9 @@ func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uin
 		return nil, errSessionNotStarted
 	}
 	req := &v1.CapturePaneRequest{PaneId: paneID, ScrollbackOffset: scrollbackOffset}
+	reviveGen := s.captureReviveGen.Load()
 	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
-	if connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID) {
+	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
 		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
 	}
 	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
@@ -1257,23 +1272,31 @@ func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uin
 // reviveDeadPaneForCapture respawns a pane tymuxd restored from disk without a screen (capture
 // answers FAILED_PRECONDITION), the same revival the reconnect loop does on errPaneDead. It
 // never revives a view-only session, a FAILED/STOPPED pane (operator-only), or a pane whose
-// restart policy is already bringing it back. Reports whether a retry is worthwhile.
-func (s *tymuxGRPCSession) reviveDeadPaneForCapture(ctx context.Context, paneID string) bool {
+// restart policy is already bringing it back. seenGen is captureReviveGen as read before the
+// failed capture: if it moved, another caller already revived, so this one only retries.
+// Reports whether a retry is worthwhile.
+func (s *tymuxGRPCSession) reviveDeadPaneForCapture(ctx context.Context, paneID string, seenGen uint64) bool {
 	s.mu.RLock()
 	viewOnly := s.viewOnly
 	s.mu.RUnlock()
 	if viewOnly || s.closing.Load() {
 		return false
 	}
+	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer cancel()
 	if state, ok := s.paneLifecycleState(ctx, paneID); ok && (isTerminalPaneState(state) || isRestartPending(state)) {
 		return isRestartPending(state)
 	}
 	s.captureReviveMu.Lock()
 	defer s.captureReviveMu.Unlock()
+	if s.captureReviveGen.Load() != seenGen {
+		return true
+	}
 	if err := s.reviveAfterRestart(ctx); err != nil {
 		log.Warn("tymux: ReviveSession failed after capture hit a dead pane", "pane_id", paneID, "err", err)
 		return false
 	}
+	s.captureReviveGen.Add(1)
 	log.Info("tymux: revived dead pane after capture failed", "pane_id", paneID)
 	return true
 }

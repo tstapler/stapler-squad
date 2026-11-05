@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -1442,4 +1443,80 @@ func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
 	_, err := sess.capturePane(context.Background(), 0)
 	require.ErrorIs(t, err, ErrPaneNotRunning)
 	assert.Zero(t, atomic.LoadInt32(&revives))
+}
+
+// A wedged daemon must not hold captureReviveMu (and every capture/IsAlive caller behind it) past the lifecycle bound.
+func TestReviveDeadPaneForCapture_BoundsWedgedDaemon(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		transport := &fakeTransport{
+			reviveSessionFn: func(ctx context.Context, _ *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+		sess.paneID = testPaneID
+
+		start := time.Now()
+		ok := sess.reviveDeadPaneForCapture(context.Background(), testPaneID, 0)
+
+		assert.False(t, ok)
+		assert.Equal(t, lifecycleRPCTimeout, time.Since(start))
+	})
+}
+
+// Concurrent captures on one dead pane revive it once; the loser retries instead of reviving a live pane.
+func TestCapturePane_ConcurrentCallersReviveOnce(t *testing.T) {
+	t.Parallel()
+	var revived atomic.Bool
+	var revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if !revived.Load() {
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			revived.Store(true)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	const callers = 8
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := sess.capturePane(context.Background(), 0)
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+}
+
+// Status polling cannot tell an archived session from a live one, so IsAlive must never respawn a pane.
+func TestIsAlive_NeverRevivesDeadPane(t *testing.T) {
+	t.Parallel()
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			t.Error("IsAlive must not call ReviveSession")
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.liveness = v1.Liveness_LIVENESS_DEAD
+
+	assert.False(t, sess.IsAlive())
 }
