@@ -62,6 +62,7 @@ func (ae *ArtifactExtractor) scanFrom(filePath string, fi os.FileInfo, title str
 
 	var found scanFindings
 	consumed, _, err := scanstate.ScanComplete(f, maxScannerTokenSize, found.addLine)
+	found.finish()
 	if err != nil && !errors.Is(err, bufio.ErrTooLong) {
 		log.Warn("[ArtifactExtractor] scanner error", "path", filePath, "err", err)
 		ae.markFailed(filePath, title)
@@ -112,54 +113,11 @@ type scanFindings struct {
 	prURLs, commitSHAs, externalURLs []string
 	commands                         []CommandArtifact
 	records                          []ArtifactRecord
+	pending                          map[string]pendingCall // tool_use id -> call awaiting its result
 }
 
 func (f *scanFindings) empty() bool {
 	return len(f.prURLs)+len(f.commitSHAs)+len(f.externalURLs)+len(f.commands)+len(f.records) == 0
-}
-
-// addLine extracts artifacts from one complete transcript line; malformed lines are skipped.
-func (f *scanFindings) addLine(line []byte) {
-	var entry artifactEntry
-	if err := json.Unmarshal(line, &entry); err != nil {
-		return
-	}
-	var msg artifactMessage
-	switch entry.Type {
-	case "user":
-		// Extract from tool_result content (actual command output).
-		// Ignore assistant text to avoid false positives from doc links.
-		if err := json.Unmarshal(entry.Message, &msg); err != nil {
-			return
-		}
-		for _, c := range msg.Content {
-			if c.Type != "tool_result" {
-				continue
-			}
-			prs, shas, urls := ExtractFromToolResult(extractToolResultText(c.Content))
-			f.prURLs = append(f.prURLs, prs...)
-			f.commitSHAs = append(f.commitSHAs, shas...)
-			f.externalURLs = append(f.externalURLs, urls...)
-		}
-	case "assistant":
-		// Extract from tool_use bash commands — gives earlier signal than waiting
-		// for the matching tool_result output.
-		if err := json.Unmarshal(entry.Message, &msg); err != nil {
-			return
-		}
-		for _, c := range msg.Content {
-			if c.Type != "tool_use" || c.Name != "Bash" {
-				continue
-			}
-			var inp bashInput
-			if err := json.Unmarshal(c.Input, &inp); err != nil || inp.Command == "" {
-				continue
-			}
-			if cmd := ExtractFromBashCommand(inp.Command); cmd != nil {
-				f.commands = append(f.commands, *cmd)
-			}
-		}
-	}
 }
 
 // extractToolResultText converts tool_result content (string or []textBlock) to plain text.

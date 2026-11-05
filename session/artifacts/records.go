@@ -231,8 +231,14 @@ func mergeRecords(existing, add []ArtifactRecord) []ArtifactRecord {
 			out = append(out, r)
 			continue
 		}
-		if cur, ok := out[i].(PRRecord); ok {
+		switch cur := out[i].(type) {
+		case PRRecord:
 			out[i] = mergePR(cur, r.(PRRecord))
+		case CommandRecord:
+			if cur.Result == "" { // the result may arrive in a later scan pass
+				cur.Result = r.(CommandRecord).Result
+				out[i] = cur
+			}
 		}
 	}
 	return out

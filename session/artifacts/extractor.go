@@ -1,7 +1,10 @@
 package artifacts
 
 import (
+	"net/url"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 var (
@@ -82,4 +85,21 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// parsePRURL splits a pull request URL into its host, owner, repo and number.
+func parsePRURL(raw string) (PRRecord, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return PRRecord{}, false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return PRRecord{}, false
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return PRRecord{}, false
+	}
+	return PRRecord{Host: u.Host, Owner: parts[0], Repo: parts[1], Number: n}, true
 }
