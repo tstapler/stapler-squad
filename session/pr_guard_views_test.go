@@ -130,7 +130,8 @@ func TestLegacyOnlyPRSafe_ShouldFollowThePersistedTerminalFlag(t *testing.T) {
 func TestLegacyNumberRepresented_ShouldMatchRepoAndNumber(t *testing.T) {
 	t.Parallel()
 	d := InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
-	rows := []PRView{{Ref: mustPRRef(t, "", "acme", "app", 11)}}
+	rows := make([]PRView, 0, 2)
+	rows = append(rows, PRView{Ref: mustPRRef(t, "", "acme", "app", 11)})
 	assert.False(t, LegacyNumberRepresented(d, rows), "links {#11} do not carry legacy #12")
 	rows = append(rows, PRView{Ref: mustPRRef(t, "", "acme", "app", 12)})
 	assert.True(t, LegacyNumberRepresented(d, rows))

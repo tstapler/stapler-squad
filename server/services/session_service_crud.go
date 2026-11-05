@@ -83,7 +83,7 @@ func (s *SessionService) ListSessions(
 		}
 	}
 
-	prFilter, err := listPRFilter(req.Msg.GetPr())
+	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (s *SessionService) ListSessions(
 			continue
 		}
 
-		if prFilter != nil && !instanceHasPR(inst, *prFilter) {
+		if hasPRFilter && !instanceHasPR(inst, prFilter) {
 			continue
 		}
 

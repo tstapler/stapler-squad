@@ -178,8 +178,12 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLinkOrItemLookupErrors(t *testing
 	t.Parallel()
 	boom := errors.New("injected")
 	cases := map[string]func(*fakeSweepPRSource){
-		"links":   func(f *fakeSweepPRSource) { f.views = func(map[string][]session.PRView) (map[string][]session.PRView, error) { return nil, boom } },
-		"itemIDs": func(f *fakeSweepPRSource) { f.itemIDs = func(map[string][]string) (map[string][]string, error) { return nil, boom } },
+		"links": func(f *fakeSweepPRSource) {
+			f.views = func(map[string][]session.PRView) (map[string][]session.PRView, error) { return nil, boom }
+		},
+		"itemIDs": func(f *fakeSweepPRSource) {
+			f.itemIDs = func(map[string][]string) (map[string][]string, error) { return nil, boom }
+		},
 		"guards": func(f *fakeSweepPRSource) {
 			f.itemIDs = func(map[string][]string) (map[string][]string, error) { return map[string][]string{"u-e": {"i"}}, nil }
 			f.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) { return nil, boom }

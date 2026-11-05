@@ -85,8 +85,9 @@ func TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn(t *tes
 }
 
 func prNumbers(inst *session.Instance) []int {
-	var out []int
-	for _, v := range inst.Snapshot().GitHub.PRs {
+	prs := inst.Snapshot().GitHub.PRs
+	out := make([]int, 0, len(prs))
+	for _, v := range prs {
 		out = append(out, v.Ref.Number())
 	}
 	return out
@@ -215,7 +216,7 @@ func TestListSessions_ShouldFilterByPR_WhenPRSetAndNotZero(t *testing.T) {
 	titles := func(req *sessionv1.ListSessionsRequest) []string {
 		resp, err := fix.svc.ListSessions(ctx, connect.NewRequest(req))
 		require.NoError(t, err)
-		var out []string
+		out := make([]string, 0, len(resp.Msg.Sessions))
 		for _, s := range resp.Msg.Sessions {
 			out = append(out, s.Title)
 		}

@@ -21,7 +21,11 @@ type fakePRSetEditor struct {
 	pinCalls []bool
 }
 
-func (f *fakePRSetEditor) record(e string) { f.emu.Lock(); f.events = append(f.events, e); f.emu.Unlock() }
+func (f *fakePRSetEditor) record(e string) {
+	f.emu.Lock()
+	f.events = append(f.events, e)
+	f.emu.Unlock()
+}
 
 func (f *fakePRSetEditor) DetachSessionPR(_ context.Context, _ string, ref PRRef) error {
 	f.record("detach " + ref.String())
