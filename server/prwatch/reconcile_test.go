@@ -346,3 +346,26 @@ func TestReconcile_should_UnsubscribeAndStayRetired_When_PullRequestClosedEvent(
 	require.NoError(t, e.rec.Reconcile(context.Background()))
 	require.Len(t, e.callsWithPrefix("watch:"), 2)
 }
+
+func TestReconcile_should_NotEvictCoalescer_When_SessionHoldsTwoPRsListedInVaryingOrder(t *testing.T) {
+	e := newReconcileEnv(t)
+	first, second := liveSession("a", "acme/widget", 7), liveSession("a", "acme/widget", 8)
+	e.sessions.Set(first, second)
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	e.sessions.Set(second, first)
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Empty(t, e.coalescer.evicted, "the same two PRs in another order are not a moved owner")
+}
+
+func TestReconcile_should_EvictOnce_When_SessionDropsOneOfTwoPRs(t *testing.T) {
+	e := newReconcileEnv(t)
+	e.sessions.Set(liveSession("a", "acme/widget", 7), liveSession("a", "acme/widget", 8))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	e.sessions.Set(liveSession("a", "acme/widget", 8))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Equal(t, []string{"a"}, e.coalescer.evicted)
+
+	e.sessions.Set(liveSession("a", "acme/widget", 8), liveSession("a", "acme/widget", 9))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Equal(t, []string{"a"}, e.coalescer.evicted, "gaining a PR evicts nothing")
+}
