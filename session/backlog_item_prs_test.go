@@ -409,3 +409,33 @@ func TestReconcilePRPending_ShouldSyncMirrorAtEndOfPass_OnlyWhenBacklogReaderOn(
 		})
 	}
 }
+
+func TestAttachItemPRLink_ShouldLinkOnceAndHonorItemTombstone(t *testing.T) {
+	t.Parallel()
+	f := newItemPRFixture(t, 0)
+	ctx := context.Background()
+	url31 := "https://github.com/acme/app/pull/31"
+	url32 := "https://github.com/acme/app/pull/32"
+
+	for i := 0; i < 2; i++ { // second pass is a re-poll
+		for _, u := range []string{url31, url32} {
+			ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, u, AttachSourceJules)
+			require.NoError(t, err)
+			require.True(t, ok)
+		}
+	}
+	views, err := f.repo.ListByItem(ctx, f.itemID)
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	for _, v := range views {
+		assert.Equal(t, AttachSourceJules, v.AttachSource)
+	}
+	roles := []PRRole{views[0].Role, views[1].Role}
+	assert.ElementsMatch(t, []PRRole{PRRolePrimary, PRRoleFollowup}, roles)
+
+	f.detach(ItemPROwner(f.itemID), 32)
+	ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, url32, AttachSourceJules)
+	require.NoError(t, err)
+	assert.False(t, ok, "a re-poll cannot undo a detach")
+	assert.Equal(t, []int{31}, f.numbers())
+}

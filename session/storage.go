@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -1640,6 +1641,32 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 // states as row data (no live Instance needed). Sessions without links are absent.
 func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
 	return s.repo.ListBySessionUUIDs(ctx, uuids)
+}
+
+// AttachItemPRLink upserts an item-direct link (state row plus link) for prURL.
+// It reports attached=false, with no error, when the item carries a tombstone for
+// that PR, so a re-poll cannot undo a detach.
+func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (bool, error) {
+	n, err := ParsePRNumberFromURL(prURL)
+	if err != nil {
+		return false, err
+	}
+	ref, err := ParseItemPRRef(prURL, n)
+	if err != nil {
+		return false, err
+	}
+	existing, err := s.repo.ListByItem(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("attach item pr link: list links: %w", err)
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, PRLink{
+		Role: AssignRole(existing, ""), Source: source,
+		Initial: PRInitial{State: PRStateOpen, URL: strings.TrimSpace(prURL)},
+	})
+	if err != nil {
+		return false, fmt.Errorf("attach item pr link %s: %w", ref, err)
+	}
+	return !res.Tombstoned, nil
 }
 
 // ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
