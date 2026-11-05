@@ -532,6 +532,11 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
+	// The session header's Refresh awaits one poll of a single PR row. There is no
+	// user_refresh observation source yet, so it uses reconciler_refresh.
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref session.PRRef) error {
+		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
+	})
 	if err := w.Validate(); err != nil {
 		return nil, err
 	}
