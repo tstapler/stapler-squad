@@ -10,8 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// restartModeEnv overrides the restart mode requested for new panes: never, on_failure (default)
-// or always. An unrecognized value falls back to the default.
+// restartModeEnv overrides the restart mode requested for new panes: never (also off, false, none,
+// disabled), on_failure (default) or always. An unrecognized value logs a warning and falls back
+// to the default.
 const restartModeEnv = "STAPLER_SQUAD_TYMUX_RESTART_MODE"
 
 // restartPolicyFor returns the policy to send with CreateSession, or nil for "never" or when the
@@ -34,12 +35,16 @@ func (s *tymuxGRPCSession) restartPolicyFor(ctx context.Context) *v1.RestartPoli
 }
 
 func restartModeFromEnv() v1.RestartMode {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(restartModeEnv))) {
-	case "never":
+	raw := os.Getenv(restartModeEnv)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "never", "off", "false", "none", "disabled":
 		return v1.RestartMode_RESTART_MODE_NEVER
 	case "always":
 		return v1.RestartMode_RESTART_MODE_ALWAYS
+	case "", "on_failure":
+		return v1.RestartMode_RESTART_MODE_ON_FAILURE
 	default:
+		log.Warn("tymux: unrecognized restart mode, using on_failure", "env", restartModeEnv, "value", raw)
 		return v1.RestartMode_RESTART_MODE_ON_FAILURE
 	}
 }

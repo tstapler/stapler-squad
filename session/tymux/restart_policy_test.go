@@ -21,6 +21,11 @@ func TestRestartPolicyFor(t *testing.T) {
 		{"unrecognized falls back", "bogus", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_ON_FAILURE},
 		{"always", "always", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_ALWAYS},
 		{"never", " Never ", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
+		{"off", "off", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
+		{"false", "FALSE", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
+		{"none", "none", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
+		{"disabled", "disabled", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
+		{"explicit on_failure", "on_failure", []string{capPaneLifecycle}, v1.RestartMode_RESTART_MODE_ON_FAILURE},
 		{"daemon without pane.lifecycle", "", []string{"create_session.stdin_stream"}, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
 		{"pre-capability daemon", "", nil, v1.RestartMode_RESTART_MODE_UNSPECIFIED},
 	} {
