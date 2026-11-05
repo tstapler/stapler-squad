@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -21,7 +22,7 @@ import (
 // callback_config_service_test.go).
 func newIsolatedSlackConfigService(t *testing.T) *SlackConfigService {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	return NewSlackConfigService(NewSlackNotifier())
 }
 

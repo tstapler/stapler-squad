@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -72,7 +73,7 @@ func TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhite
 // with feedback = message, per AC1/AC2 — not a parallel refinement path.
 func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_When_ExistingItemIdSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -117,7 +118,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 // surfaced one at a time in a live conversation rather than as a batch dump.
 func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -154,7 +155,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 // guard must not be bypassed by the chat front door.
 func TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrReadyStatus(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{

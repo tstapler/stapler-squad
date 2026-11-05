@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -49,7 +50,7 @@ func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string,
 func TestCreateItemSourceEncryptsToken(t *testing.T) {
 	// Isolate config so GetOrCreateEncryptionKey's SaveConfig call does not write a
 	// zero-value DefaultProgram to the shared test-mode config dir.
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	// Create a test config with encryption key
 	cfg := &config.Config{}
@@ -121,7 +122,7 @@ func TestCreateItemSourceEncryptsToken(t *testing.T) {
 
 // TestUpdateItemSourceEncryptsToken verifies tokens are encrypted in UpdateItemSource
 func TestUpdateItemSourceEncryptsToken(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	cfg := &config.Config{}
 	key, err := cfg.GetOrCreateEncryptionKey()
@@ -232,7 +233,7 @@ func TestCreateItemSourceWithoutConfigDoesNotEncrypt(t *testing.T) {
 // TestCreateItemSourceEncryptionRoundTrip verifies the full store-and-retrieve cycle:
 // a token stored via CreateItemSource can be decrypted back to the original plaintext.
 func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	cfg := &config.Config{}
 	key, err := cfg.GetOrCreateEncryptionKey()

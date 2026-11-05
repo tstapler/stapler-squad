@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -70,7 +71,7 @@ func registryResolverWithStubTransport(stateDir string, transport http.RoundTrip
 }
 
 func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThisInstance(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -99,7 +100,7 @@ func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThis
 }
 
 func TestDeepLinkResolver_should_Return400WithDistinctReason_When_URLMalformedOrVersionMismatched(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	resolver := newDeepLinkResolverForTest(storage, "myhost")
 
 	tests := []struct {
@@ -145,7 +146,7 @@ func TestDeepLinkResolver_should_Return400WithDistinctReason_When_URLMalformedOr
 }
 
 func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemNoLongerExists(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	resolver := newDeepLinkResolverForTest(storage, "myhost")
 
@@ -198,7 +199,7 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 }
 
 func TestDeepLinkResolver_should_ReturnHandoffAddress_When_HostnameKnownAndLivenessCheckPasses(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	stateDir := t.TempDir()
 
 	// A plausible (non-loopback) advertised address -- session.HostRegistry
@@ -233,7 +234,7 @@ func TestDeepLinkResolver_should_ReturnHandoffAddress_When_HostnameKnownAndLiven
 }
 
 func TestDeepLinkResolver_should_ReturnNotRegistered_When_HostnameHasNoRegistryEntry(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	stateDir := t.TempDir()
 
 	resolver := NewDeepLinkResolver(storage, NewRegistryHostResolver(stateDir, session.DefaultHostRegistryTTL))
@@ -256,7 +257,7 @@ func TestDeepLinkResolver_should_ReturnNotRegistered_When_HostnameHasNoRegistryE
 }
 
 func TestDeepLinkResolver_should_ReturnUnreachableWithinBoundedTimeout_When_LivenessCheckNeverResponds(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	stateDir := t.TempDir()
 
 	// See the handoff-address test above: advertise a plausible (non-loopback)
@@ -296,7 +297,7 @@ func TestDeepLinkResolver_should_ReturnUnreachableWithinBoundedTimeout_When_Live
 }
 
 func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReasonOccurs(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	resolver := newDeepLinkResolverForTest(storage, "myhost")
 
@@ -338,7 +339,7 @@ func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReaso
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := captureLogs(t)
+			logs := svctest.CaptureLogs(t)
 
 			req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url="+tc.rawURL, nil)
 			rec := httptest.NewRecorder()

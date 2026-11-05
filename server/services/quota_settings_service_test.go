@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func updateQuota(t testing.TB, s *sessionv1.QuotaSettings) (*sessionv1.UpdateQuotaConfigResponse, error) {
@@ -33,7 +34,7 @@ func getQuota(t testing.TB) *sessionv1.GetQuotaConfigResponse {
 }
 
 func TestUpdateQuotaConfig_PersistsAndReportsProactive_WhenEnabledWithBudget(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	resp, err := updateQuota(t, &sessionv1.QuotaSettings{
 		Enabled:                  proto.Bool(true),
@@ -57,7 +58,7 @@ func TestUpdateQuotaConfig_PersistsAndReportsProactive_WhenEnabledWithBudget(t *
 }
 
 func TestUpdateQuotaConfig_RejectsInvalidInput_WhenPauseResumeSumOver100OrPauseZeroOrBadUsd(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	before := config.LoadConfig()
 
 	tests := []struct {
@@ -106,7 +107,7 @@ func TestUpdateQuotaConfig_RejectsInvalidInput_WhenPauseResumeSumOver100OrPauseZ
 }
 
 func TestGetQuotaConfig_ReturnsReactiveOnlyWithWarning_WhenEnabledAndBudgetZero(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	_, err := updateQuota(t, &sessionv1.QuotaSettings{Enabled: proto.Bool(true)})
 	require.NoError(t, err)
@@ -124,7 +125,7 @@ func TestGetQuotaConfig_ReturnsReactiveOnlyWithWarning_WhenEnabledAndBudgetZero(
 }
 
 func TestGetQuotaConfig_ReportsQuotaSource_NotConfiguredForZeroStoredValueAndConfiguredForDefaultEqualPageSave(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	// A fresh config.json holds the zero quota object, which LoadConfig turns into defaults.
 	got := getQuota(t)
@@ -144,7 +145,7 @@ func TestGetQuotaConfig_ReportsQuotaSource_NotConfiguredForZeroStoredValueAndCon
 }
 
 func TestGetQuotaConfig_ReportsConfigured_WhenStoredValuesDifferFromDefaultsWithoutAPageSave(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.UpdateConfig(func(c *config.Config) error {
 		c.Quota.Enabled = true // a hand edit of config.json
 		return nil
@@ -162,8 +163,8 @@ func quotaModeAfterUpdate(t *testing.T, settings *sessionv1.QuotaSettings) any {
 }
 
 func TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return quotaModeAfterUpdate(t, &sessionv1.QuotaSettings{
 			Enabled: proto.Bool(setting.(bool)), AssumedWindowTokenBudget: proto.Int64(5_000_000),
 		})
@@ -171,8 +172,8 @@ func TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode(t *testing.T) {
 }
 
 func TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return quotaModeAfterUpdate(t, &sessionv1.QuotaSettings{
 			Enabled: proto.Bool(true), AssumedWindowTokenBudget: proto.Int64(setting.(int64)),
 		})
@@ -180,7 +181,7 @@ func TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode(t *te
 }
 
 func TestUpdateQuotaConfig_LogsNewEffectiveValues_WhenSaved(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	buf := captureQuotaSlog(t)
 
 	_, err := updateQuota(t, &sessionv1.QuotaSettings{

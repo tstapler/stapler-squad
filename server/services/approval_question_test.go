@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 const askQuestionBody = `{"tool_name":"AskUserQuestion","cwd":"/work","tool_input":{"questions":[{"question":"Which color should the spike use?","header":"Color","options":[{"label":"Red","description":"r"},{"label":"Green","description":"g"}],"multiSelect":false}]}}`
@@ -51,7 +52,7 @@ func (q *questionHarness) post(body string, headers map[string]string) *events.E
 	}
 	w := httptest.NewRecorder()
 	q.h.HandlePermissionRequest(w, r)
-	return requireOneNotification(q.t, q.events)
+	return svctest.RequireOneNotification(q.t, q.events)
 }
 
 // T-RP-18: the real payload shape (questions[], no "prompt") registers a

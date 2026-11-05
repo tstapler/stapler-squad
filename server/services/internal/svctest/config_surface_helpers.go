@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"reflect"
@@ -8,7 +8,7 @@ import (
 // assertConfigChangesBehavior is the shared proof helper: it runs observe with
 // each setting value and fails unless the observable differs. Every proof test
 // named in the registry must call it.
-func assertConfigChangesBehavior(t testing.TB, observe func(setting any) any, before, after any) {
+func AssertConfigChangesBehavior(t testing.TB, observe func(setting any) any, before, after any) {
 	t.Helper()
 	b, a := observe(before), observe(after)
 	if reflect.DeepEqual(b, a) {

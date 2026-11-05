@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -41,7 +42,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 			ToolInput: map[string]interface{}{"prompt": "Which approach?"},
 		}, questionAttribution{})
 
-		ev := requireOneNotification(t, ch)
+		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Claude has a question", ev.NotificationTitle)
 		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority,
 			"urgent=true, important=true — Claude is blocked waiting on the user right now")
@@ -61,14 +62,14 @@ func TestNotificationPushGateClassification(t *testing.T) {
 			ToolInput: map[string]interface{}{"command": "rm -rf /tmp/x"},
 		})
 
-		ev := requireOneNotification(t, ch)
+		ev := svctest.RequireOneNotification(t, ch)
 		assert.Contains(t, ev.NotificationTitle, "Permission Required")
 		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority,
 			"urgent=true, important=true — a pending permission request blocks the session right now")
 	})
 
 	t.Run("Auto-rework stopped — repeated failure", func(t *testing.T) {
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 		bus := events.NewEventBus(4)
 		svc.SetEventBus(bus)
@@ -78,14 +79,14 @@ func TestNotificationPushGateClassification(t *testing.T) {
 
 		svc.notifyRepeatedFailure(ctx, "item-1", "Item title", session.BacklogStatusInProgress, 3, "same test failure")
 
-		ev := requireOneNotification(t, ch)
+		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Auto-rework stopped — repeated failure", ev.NotificationTitle)
 		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority,
 			"urgent=true, important=true")
 	})
 
 	t.Run("Rework blocked by a stale-but-alive session", func(t *testing.T) {
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 		bus := events.NewEventBus(4)
 		svc.SetEventBus(bus)
@@ -111,23 +112,9 @@ func TestNotificationPushGateClassification(t *testing.T) {
 
 		svc.notifyIfActiveWorkSessionStale(ctx, item.ID, item.Title, sessions)
 
-		ev := requireOneNotification(t, ch)
+		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Rework blocked by a stale-but-alive session", ev.NotificationTitle)
 		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH), ev.NotificationPriority,
 			"urgent=false, important=true")
 	})
-}
-
-// requireOneNotification waits briefly for exactly one EventNotification on ch and
-// returns it, failing the test otherwise.
-func requireOneNotification(t *testing.T, ch <-chan *events.Event) *events.Event {
-	t.Helper()
-	select {
-	case ev := <-ch:
-		require.Equal(t, events.EventNotification, ev.Type)
-		return ev
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a notification event, got none")
-		return nil
-	}
 }

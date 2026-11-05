@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,7 +41,7 @@ func TestUpdateStageTransition_should_RejectDisable_When_EdgeIsSystemRequired(t 
 			tr := seededTransition(t, svc, e[0], e[1])
 
 			_, err := svc.UpdateStageTransition(t.Context(), connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{
-				Id: tr.Id, Enabled: boolPtr(false),
+				Id: tr.Id, Enabled: svctest.BoolPtr(false),
 			}))
 			require.Error(t, err)
 			assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -73,7 +74,7 @@ func TestUpdateStageTransition_should_AllowDisable_When_EdgeIsNotSystemRequired(
 	tr := seededTransition(t, svc, session.BacklogStatusDone, session.BacklogStatusRefining)
 
 	resp, err := svc.UpdateStageTransition(t.Context(), connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{
-		Id: tr.Id, Enabled: boolPtr(false),
+		Id: tr.Id, Enabled: svctest.BoolPtr(false),
 	}))
 	require.NoError(t, err)
 	assert.False(t, resp.Msg.Item.Enabled)
@@ -101,10 +102,10 @@ func TestUpdateStageTransition_should_NameStatusAndItemIDs_When_DisableWouldStra
 	created, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck", Status: slug})
 	require.NoError(t, err)
 
-	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{Id: edges[0].Id, Enabled: boolPtr(false)}))
+	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{Id: edges[0].Id, Enabled: svctest.BoolPtr(false)}))
 	require.NoError(t, err, "removing one of several outgoing edges is allowed")
 
-	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{Id: edges[1].Id, Enabled: boolPtr(false)}))
+	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{Id: edges[1].Id, Enabled: svctest.BoolPtr(false)}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), slug)
@@ -134,7 +135,7 @@ func TestUpdateStage_should_RejectDisable_When_ItWouldStrandLiveItems(t *testing
 	fromID, toID, itemID := strandableStages(t, svc, storage, "strand-a", "strand-b")
 
 	for name, id := range map[string]string{"own stage": fromID, "target stage": toID} {
-		_, err := svc.UpdateStage(t.Context(), connect.NewRequest(&sessionv1.UpdateStageRequest{Id: id, Enabled: boolPtr(false)}))
+		_, err := svc.UpdateStage(t.Context(), connect.NewRequest(&sessionv1.UpdateStageRequest{Id: id, Enabled: svctest.BoolPtr(false)}))
 		require.Error(t, err, name)
 		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err), name)
 		assert.Contains(t, err.Error(), "strand-a", name)

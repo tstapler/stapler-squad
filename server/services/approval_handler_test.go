@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -571,7 +572,7 @@ func (fakeUnrecognizedDecisionClassifier) BuildContext(_ string) classifier.Clas
 // showed "unexpected" for the same request.
 func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
@@ -673,7 +674,7 @@ func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstanc
 // NotifyApprovalPending was invoked (it dispatches its own POST internally,
 // per Story 1.2.3's ownership model).
 func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

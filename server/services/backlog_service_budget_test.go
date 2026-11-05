@@ -10,6 +10,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	tslog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -59,7 +60,7 @@ func warningsForDefault(t *testing.T) func(setting any) any {
 }
 
 func TestEffectiveBudgetThreshold_WarnsAtBothEvaluationSites_WhenDefaultSetAndItemHasNone(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	def := 5.00
 	setDefaultBudget(t, &def)
 
@@ -75,7 +76,7 @@ func TestEffectiveBudgetThreshold_WarnsAtBothEvaluationSites_WhenDefaultSetAndIt
 }
 
 func TestEffectiveBudgetThreshold_TreatsZeroAsValidAndNilAsOff(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	setDefaultBudget(t, nil)
 	probe := newBudgetProbe(t)
@@ -90,11 +91,11 @@ func TestEffectiveBudgetThreshold_TreatsZeroAsValidAndNilAsOff(t *testing.T) {
 }
 
 func TestBudgetWarning_ChangesWhenDefaultThresholdChangedViaQuotaRpc(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, warningsForDefault(t), 10.00, 5.00)
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, warningsForDefault(t), 10.00, 5.00)
 }
 
 func TestConfigSurfaceProof_QuotaDefaultCostBudgetThresholdUSD_ChangesBudgetWarning(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, warningsForDefault(t), 100.00, 0.00)
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, warningsForDefault(t), 100.00, 0.00)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"strings"
 	"testing"
 	"time"
@@ -423,7 +424,7 @@ func TestHumanReadableReasonSet_HeaderStrings_MatchPRStatusRender(t *testing.T) 
 
 func newTestBacklogServiceForSteerNotify(t *testing.T) (*BacklogService, *events.EventBus) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(4)
 	svc.SetEventBus(bus)
@@ -798,7 +799,7 @@ func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed
 
 func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChecksThenMergeConflictWithin30s(t *testing.T) {
 	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
-	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: &sessionNudgeGuard{now: clk.Now}})
 	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 
@@ -818,7 +819,7 @@ func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testin
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	active := &session.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
 
 	live := fix.svc.FindLiveInstance(active.SessionUUID)

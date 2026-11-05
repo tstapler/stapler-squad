@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -44,7 +45,7 @@ func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []tim
 // older must be archived.
 func TestSupersededSessionSweeper_should_ArchiveOlderRound_When_NewerRoundExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	itemID, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
@@ -65,7 +66,7 @@ func TestSupersededSessionSweeper_should_ArchiveOlderRound_When_NewerRoundExists
 // never be archived out from under a user still attached to it.
 func TestSupersededSessionSweeper_should_SkipLiveSuperseded_When_SessionStillAttached(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
@@ -86,7 +87,7 @@ func TestSupersededSessionSweeper_should_SkipLiveSuperseded_When_SessionStillAtt
 // active" within a single sweep tick.
 func TestSupersededSessionSweeper_should_ConvergeOnPreExistingStaleRows(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{
@@ -118,7 +119,7 @@ func TestSupersededSessionSweeper_should_JoinCleanly_When_ContextCancelled(t *te
 	// to the sweeper as a leak -- same ordering rationale as
 	// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil in
 	// session_service_test.go.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	baseline := goleak.IgnoreCurrent()
 
 	stopper := &mockSessionStopper{}
@@ -155,7 +156,7 @@ func (c *liveCheckCounter) IsSessionLive(uuid string) bool {
 // cost two session queries apiece (11k+ in 36 minutes on the live service).
 func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionChecks(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})

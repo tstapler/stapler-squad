@@ -9,6 +9,7 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newIsolatedLauncherPresetsService creates a LauncherPresetsService backed by a fresh
@@ -16,7 +17,7 @@ import (
 func newIsolatedLauncherPresetsService(t *testing.T) (*LauncherPresetsService, string) {
 	t.Helper()
 	dir := t.TempDir()
-	withIsolatedStateDirPath(t, dir)
+	svctest.WithIsolatedStateDirPath(t, dir)
 	return NewLauncherPresetsService(), dir
 }
 

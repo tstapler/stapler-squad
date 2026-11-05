@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -74,21 +75,21 @@ func TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer(t *testing.T) {
 	}
 	custom := bkfCustomStage
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, custom, ready, createWithEdge(bkfCustomStage, setting.(bool)))
 	}, false, true) // enabled
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, custom, ready, createWithEdge(setting.(session.BacklogStatus), true))
 	}, bkfOtherStage, bkfCustomStage) // slug
 }
 
 func TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidation(t *testing.T) {
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(bkfCustomStage), Name: bkfStageName, IsEntry: setting.(bool), IsTerminal: true, Enabled: true})
 		})
 	}, false, true) // is_entry: an unreachable stage fails validation
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(bkfCustomStage), Name: bkfStageName, IsEntry: true, IsTerminal: setting.(bool), Enabled: true})
 		})
@@ -104,10 +105,10 @@ func TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer(t *testing.T) {
 		}
 	}
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, done, refining, disable(refining, setting.(bool)))
 	}, false, true) // enabled
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, done, refining, disable(setting.(session.BacklogStatus), false))
 	}, refining, review) // id: which stage the update targets
 }
@@ -118,13 +119,13 @@ func TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 		_, err := svc.UpdateStage(t.Context(), connect.NewRequest(&sessionv1.UpdateStageRequest{Id: id, IsEntry: entry, IsTerminal: terminal}))
 		require.NoError(t, err)
 	}
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			v := setting.(bool)
 			update(svc, &v, nil)
 		})
 	}, false, true) // is_entry
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			v := setting.(bool)
 			update(svc, nil, &v)
@@ -140,13 +141,13 @@ func TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer(t *testin
 		}
 	}
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, queued, refining, create(queued, refining, setting.(bool)))
 	}, false, true) // enabled
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, queued, refining, create(queued, setting.(session.BacklogStatus), true))
 	}, review, refining) // to_stage_slug
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfOperatorCanMove(t, queued, review, create(setting.(session.BacklogStatus), review, true))
 	}, idea, queued) // from_stage_slug
 }

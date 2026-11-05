@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"testing"
@@ -15,7 +15,7 @@ import (
 // call still pays the full Ent schema-creation + backfill-migration cost,
 // but backing it with an in-memory SQLite database (rather than a
 // t.TempDir()-backed file) removes the disk I/O and WAL fsync overhead.
-func createTestStorage(t *testing.T) *session.Storage {
+func CreateTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 
 	repo := session.NewTestEntRepository(t)

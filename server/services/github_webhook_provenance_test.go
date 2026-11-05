@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -55,7 +56,7 @@ func deliverCheckRun(t *testing.T, h *GitHubWebhookHandler, deliveryID string) {
 }
 
 func TestHandlePRFixEvent_should_ResolveItemFromStampedComment_When_LocalLookupMisses(t *testing.T) {
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 	comments, hostID := provenanceComments(t)
 	lister := &countingCommentLister{comments: comments}
 	h, _ := newProvenanceWebhookHandler(t, &fakePRFixEventRouter{matched: false}, lister, true)

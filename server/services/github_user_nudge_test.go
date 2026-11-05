@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -449,7 +450,7 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGenericBusyCopy_When_NoStatusSource(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
 	fix.svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { writes++; return nil }
 	fix.svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error { return nil }
@@ -563,7 +564,7 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
 	verifyErr := errors.New("pane ownership mismatch")
 	fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }

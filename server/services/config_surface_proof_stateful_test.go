@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -63,7 +64,7 @@ func stfRegressedAnswer(t *testing.T, configure func(svc *BacklogService, edge s
 }
 
 func TestConfigSurfaceProof_CreateTransitionGate_Stateful_ChangesHandlerAnswer(t *testing.T) {
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return stfRegressedAnswer(t, func(svc *BacklogService, edge string) {
 			_, err := stfCreateGate(t, svc, edge, bkfStructural(bkfCheckACDone, 0), setting.(bool))
 			require.NoError(t, err)
@@ -80,7 +81,7 @@ func TestConfigSurfaceProof_CreateTransitionGate_Stateful_RecordedKindIsAlwaysSt
 }
 
 func TestConfigSurfaceProof_UpdateTransitionGate_Stateful_ChangesHandlerAnswer(t *testing.T) {
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return stfRegressedAnswer(t, func(svc *BacklogService, edge string) {
 			resp, err := stfCreateGate(t, svc, edge, bkfStructural(bkfCheckACDone, 0), !setting.(bool))
 			require.NoError(t, err)

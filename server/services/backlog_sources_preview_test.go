@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -26,7 +27,7 @@ import (
 // with no locally-imported counterpart at all.
 func TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{items: []session.ExternalItem{
@@ -114,7 +115,7 @@ func (f *fakePaginatedSourcePlugin) MapToBacklogItem(item session.ExternalItem, 
 // implying an exhaustive count.
 func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakePaginatedSourcePlugin{
@@ -160,7 +161,7 @@ func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *
 // wrong count rather than passing by accident.
 func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 
@@ -217,7 +218,7 @@ func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testin
 // an explicit failure here (plan.md Story 4.4.1 AC2).
 func TestPreviewBackwardSyncImpact_ReturnsErrorOnFetchFailure(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{fetchErr: errors.New("upstream boom")}

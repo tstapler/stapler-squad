@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -42,7 +43,7 @@ import (
 // TestAutoReopenForPRFix_ActiveWorkSession_* tests in backlog_service_triage_test.go.
 func newTestBacklogServiceForSteerIntegration(t *testing.T, activeSessionUUID, program string) (*BacklogService, *mockSessionSteerer, *events.EventBus) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{
 		programs: map[string]string{activeSessionUUID: program},
@@ -61,7 +62,7 @@ func newTestBacklogServiceForSteerIntegration(t *testing.T, activeSessionUUID, p
 func createPRPendingItemWithActiveSession(t *testing.T, storage *session.Storage, activeSessionUUID string) string {
 	t.Helper()
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "PR-pending item with an active fix session",
@@ -122,7 +123,7 @@ const (
 
 func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionSteererNotWired(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	bus := events.NewEventBus(4)
 	svc.SetEventBus(bus)
@@ -148,7 +149,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionS
 
 func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionProgramReportsNotLive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{programs: map[string]string{}, steerErr: map[string]error{}} // no program configured for any uuid
 	svc.SetSessionSteerer(steerer)
@@ -200,7 +201,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteersWhenReady(t *testing.T) {
 // SteerSessionGuarded.
 func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReadyForSteer(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{
 		programs: map[string]string{activeSessionUUIDPrimary: "claude"},
@@ -285,7 +286,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_ReSteersOnReasonChange_EvenWithinC
 // ends and a second one is created for the same item.
 func TestAutoReopenForPRFix_ActiveWorkSession_SessionUUIDChanged_ReSteersDespiteIdenticalReasonAndCooldown(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{
 		programs: map[string]string{activeSessionUUIDPrimary: "claude", activeSessionUUIDSecondary: "claude"},
@@ -548,7 +549,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerInFlight_PreventsDuplicateCon
 // occurred among the concurrent callers.
 func TestAutoReopenForPRFix_ActiveWorkSession_SteerInFlight_PreventsDuplicateConcurrentDegrade(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{programs: map[string]string{}, steerErr: map[string]error{}} // not live for any uuid
 	svc.SetSessionSteerer(steerer)
@@ -597,7 +598,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_NoTransitionBacklogItemStatusCall(
 
 	t.Run("nil_steerer", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 		itemID := createPRPendingItemWithActiveSession(t, storage, activeSessionUUIDPrimary)
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
@@ -661,7 +662,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerFailureResolvesStalePriorResp
 
 	t.Run("degrade_reaffirmation_resolves_prior_steer_failed", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 		itemID := createPRPendingItemWithActiveSession(t, storage, activeSessionUUIDPrimary)
 		// Deliberately no SetSessionSteerer — the nil-steerer degrade path.

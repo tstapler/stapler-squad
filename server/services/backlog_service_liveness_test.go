@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -25,7 +26,7 @@ import (
 // server/dependencies.go wires production (both share one instance).
 func newLivenessTestService(t *testing.T) (*BacklogService, session.LivenessRepository, *session.CachingLivenessEngine) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	repo := session.NewEntLivenessRepository(storage.GetEntClient())
 	engine, err := session.NewCachingLivenessEngine(repo)
 	require.NoError(t, err)

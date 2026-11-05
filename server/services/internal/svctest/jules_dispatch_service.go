@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 // worktree — mirroring session.newTestRepoWithRemote
 // (session/backlog_lifecycle_pr_trigger_test.go), which this package cannot
 // import directly (unexported, different package).
-func newTestJulesRepoWithRemote(t *testing.T, remoteURL string) string {
+func NewTestJulesRepoWithRemote(t *testing.T, remoteURL string) string {
 	t.Helper()
 	dir := t.TempDir()
 	repo, err := gogit.PlainInit(dir, false)
@@ -33,24 +33,24 @@ func newTestJulesRepoWithRemote(t *testing.T, remoteURL string) string {
 // fakeSourceLister is a fake jules.sourceLister (unexported in package
 // jules, satisfied structurally) so jules.NewJulesSourceRegistry can be
 // exercised without a real HTTP round trip.
-type fakeSourceLister struct {
-	sources []jules.JulesSource
+type FakeSourceLister struct {
+	Sources []jules.JulesSource
 	err     error
 }
 
-func (f *fakeSourceLister) ListSources(_ context.Context) ([]jules.JulesSource, error) {
+func (f *FakeSourceLister) ListSources(_ context.Context) ([]jules.JulesSource, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.sources, nil
+	return f.Sources, nil
 }
 
 // newTestJulesSourceRegistry returns a *jules.JulesSourceRegistry that
 // resolves "tstapler/stapler-squad" to "sources/github-tstapler-stapler-squad" —
 // matching newTestJulesRepoWithRemote's default remote below.
-func newTestJulesSourceRegistry() *jules.JulesSourceRegistry {
-	return jules.NewJulesSourceRegistry(&fakeSourceLister{
-		sources: []jules.JulesSource{{Name: "sources/github-tstapler-stapler-squad", ID: "src-1"}},
+func NewTestJulesSourceRegistry() *jules.JulesSourceRegistry {
+	return jules.NewJulesSourceRegistry(&FakeSourceLister{
+		Sources: []jules.JulesSource{{Name: "sources/github-tstapler-stapler-squad", ID: "src-1"}},
 	})
 }
 
@@ -59,36 +59,36 @@ func newTestJulesSourceRegistry() *jules.JulesSourceRegistry {
 // test can inspect storage state mid-call (e.g. the reservation row's
 // pending SessionUUID prefix, before CreateSession returns and
 // DispatchToJules swaps it for the real name).
-type fakeJulesSessionCreator struct {
+type FakeJulesSessionCreator struct {
 	mu           sync.Mutex
 	calls        int
-	delay        time.Duration
-	err          error
-	resultName   jules.JulesSessionName
-	beforeCreate func()
+	Delay        time.Duration
+	Err          error
+	ResultName   jules.JulesSessionName
+	BeforeCreate func()
 }
 
-func (f *fakeJulesSessionCreator) CreateSession(_ context.Context, _ jules.CreateSessionRequest) (*jules.JulesSession, error) {
+func (f *FakeJulesSessionCreator) CreateSession(_ context.Context, _ jules.CreateSessionRequest) (*jules.JulesSession, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
-	if f.beforeCreate != nil {
-		f.beforeCreate()
+	if f.BeforeCreate != nil {
+		f.BeforeCreate()
 	}
-	if f.delay > 0 {
-		time.Sleep(f.delay) //nolint:notimesleeptest simulates a slow Jules API call whose wall-clock duration is under test
+	if f.Delay > 0 {
+		time.Sleep(f.Delay) //nolint:notimesleeptest simulates a slow Jules API call whose wall-clock duration is under test
 	}
-	if f.err != nil {
-		return nil, f.err
+	if f.Err != nil {
+		return nil, f.Err
 	}
-	name := f.resultName
+	name := f.ResultName
 	if name == "" {
 		name = "sessions/xyz"
 	}
 	return &jules.JulesSession{Name: name, State: jules.JulesStateQueued}, nil
 }
 
-func (f *fakeJulesSessionCreator) callCount() int {
+func (f *FakeJulesSessionCreator) CallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
@@ -97,7 +97,7 @@ func (f *fakeJulesSessionCreator) callCount() int {
 // newTestJulesConfig returns a *config.Config with Jules enabled,
 // repoPath pre-acknowledged, and generous (but non-default) spend caps —
 // the "everything else is satisfied" baseline most guard tests start from.
-func newTestJulesConfig(repoPath string) *config.Config {
+func NewTestJulesConfig(repoPath string) *config.Config {
 	return &config.Config{
 		Jules: config.JulesConfig{
 			Enabled:                    true,
@@ -112,9 +112,9 @@ func newTestJulesConfig(repoPath string) *config.Config {
 // repo (remote "https://github.com/tstapler/stapler-squad.git") so
 // resolveJulesOwnerRepo resolves it to tstapler/stapler-squad, matching
 // newTestJulesSourceRegistry's registered source.
-func createTestJulesReadyItem(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
+func CreateTestJulesReadyItem(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
 	t.Helper()
-	repoPath := newTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
+	repoPath := NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:    title,
 		Status:   string(session.BacklogStatusReady),

@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"os"
@@ -32,7 +32,7 @@ func testGitSignature() *object.Signature {
 // machine with a global identity configured, but CI runners have none and
 // fail with "Author identity unknown" — setting it here once, locally, fixes
 // every downstream CLI commit against this repo.
-func initGitRepoForTest(t *testing.T, dir string) *git.Repository {
+func InitGitRepoForTest(t *testing.T, dir string) *git.Repository {
 	t.Helper()
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
@@ -53,7 +53,7 @@ func initGitRepoForTest(t *testing.T, dir string) *git.Repository {
 // commitFileForTest writes name/content into dir and commits it into repo
 // using go-git, with a fixed per-commit Author/Committer so the commit never
 // relies on global git config.
-func commitFileForTest(t *testing.T, repo *git.Repository, dir, name, content, message string) {
+func CommitFileForTest(t *testing.T, repo *git.Repository, dir, name, content, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
@@ -75,8 +75,8 @@ func commitFileForTest(t *testing.T, repo *git.Repository, dir, name, content, m
 // commit containing README.md. Consolidates the formerly duplicated
 // subprocess-based initGitRepoWithCommit/initGitRepoForTest/harness
 // initGitRepo helpers onto go-git.
-func initGitRepoWithCommit(t *testing.T, dir string) {
+func InitGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
-	repo := initGitRepoForTest(t, dir)
-	commitFileForTest(t, repo, dir, "README.md", "# Test Repo\n", "initial")
+	repo := InitGitRepoForTest(t, dir)
+	CommitFileForTest(t, repo, dir, "README.md", "# Test Repo\n", "initial")
 }

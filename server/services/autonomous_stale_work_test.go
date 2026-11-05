@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -95,14 +96,14 @@ func (f fakeStaleInspector) InspectStaleWork(context.Context, string, *session.B
 func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesOrSkips(t *testing.T) {
 	for name, disp := range map[string]StaleWorkDisposition{"nudged": StaleWorkNudged, "skipped": StaleWorkSkipped, "respawn": StaleWorkRespawn} {
 		t.Run(name, func(t *testing.T) {
-			storage := createTestStorage(t)
+			storage := svctest.CreateTestStorage(t)
 			creator := &mockSessionCreator{}
 			svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-uuid": true}}
 			svc.SetSessionStopper(stopper)
 			svc.SetStaleWorkInspector(fakeStaleInspector{result: disp})
 			repoPath := t.TempDir()
-			initGitRepoWithCommit(t, repoPath)
+			svctest.InitGitRepoWithCommit(t, repoPath)
 			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
 			_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
 			require.NoError(t, err)

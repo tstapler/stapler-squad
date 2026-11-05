@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // TestListSlashCommands_RejectsTraversingTargetDirectory verifies that
@@ -20,7 +21,7 @@ import (
 // that directory (a broken check would still find it, since
 // filepath.Join cleans the same way).
 func TestListSlashCommands_RejectsTraversingTargetDirectory(t *testing.T) {
-	withFakeHome(t) // isolate ~/.claude/commands (user-source) from the real home dir
+	svctest.WithFakeHome(t) // isolate ~/.claude/commands (user-source) from the real home dir
 
 	base := t.TempDir()
 	// escapeDir is what filepath.Clean(maliciousTargetDir) resolves to below.
@@ -51,7 +52,7 @@ func TestListSlashCommands_RejectsTraversingTargetDirectory(t *testing.T) {
 // control case: a clean absolute target_directory must still surface its
 // project commands.
 func TestListSlashCommands_LegitimateTargetDirectory_ListsProjectCommands(t *testing.T) {
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	targetDir := t.TempDir()
 	commandsDir := filepath.Join(targetDir, ".claude", "commands")

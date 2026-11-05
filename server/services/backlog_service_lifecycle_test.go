@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -96,7 +97,7 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 // is the positive case for the opt-in default: with the flag on and no explicit
 // pipeline_mode on the request, a brand-new item defaults to "sdd" instead of "".
 func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
@@ -113,7 +114,7 @@ func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFi
 // created with no explicit pipeline_mode still gets "" — zero behavior change
 // for every item until an operator deliberately opts in.
 func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -129,7 +130,7 @@ func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *te
 // explicit empty string, which must still mean "flat default pipeline", not
 // "unset, please apply the sdd default".
 func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
@@ -695,7 +696,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 // SessionStopper (mirrors cleanupItemWorktrees, which already runs at this call site).
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReachesDone(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
@@ -728,7 +729,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 // the done case above for the "archived" terminal status.
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
@@ -761,7 +762,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 // must not touch any work session.
 func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
@@ -805,7 +806,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 	} {
 		t.Run(string(from), func(t *testing.T) {
 			t.Parallel()
-			storage := createTestStorage(t)
+			storage := svctest.CreateTestStorage(t)
 			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 			stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 			svc.SetSessionStopper(stopper)
@@ -849,7 +850,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 // TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
 func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdictPresentAndOverrideReasonSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
@@ -894,7 +895,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 // for the new teardown block).
 func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_TransitionIsNotBackwardToReady(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
@@ -931,7 +932,7 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 // would be strictly worse for the operator than a best-effort continue.
 func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}, stopperErr: errors.New("tmux teardown failed")}
 	svc.SetSessionStopper(stopper)
@@ -1157,7 +1158,7 @@ func TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl(t *te
 // pr_pending and a success notification fires (criterion 8).
 func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
 	defer bus.Close()
@@ -1198,7 +1199,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 // must not corrupt state.
 func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1231,7 +1232,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 // trail — a progress note and a notification — rather than a silent write.
 func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideReasonSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
 	defer bus.Close()
@@ -1272,7 +1273,7 @@ func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideRea
 // new notification noise — only manual overrides do.
 func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
 	defer bus.Close()
@@ -1310,7 +1311,7 @@ func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t
 // clean CAS failure.
 func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1411,7 +1412,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 // even a single straight-line call.
 func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1467,7 +1468,7 @@ func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus
 // operator writers reach the engine through the gate, not through the service).
 func newEnforcedGateService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *session.ConfiguredWorkflowEngine) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 	stageRepo := session.NewEntStageConfigRepository(storage.GetEntClient())

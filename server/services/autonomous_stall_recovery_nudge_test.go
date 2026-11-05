@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -130,7 +131,7 @@ func (f *stallNudgeFixture) rowContext(t *testing.T) string {
 }
 
 func snapshotFor(state domain.ObservedState) domain.StopSnapshot {
-	s := idleSnapshot
+	s := svctest.IdleSnapshot
 	switch state {
 	case domain.ObservedIdlePrompt:
 	case domain.ObservedWorking:
@@ -168,7 +169,7 @@ func TestStallRecovery_IdlePromptNudgesAndKeepsAutonomy(t *testing.T) {
 	row := f.rowContext(t)
 	assert.Contains(t, row, "action=nudged nudge=1/2")
 	assert.Contains(t, row, "nudge_outcome=success")
-	assert.Equal(t, []string{"Autonomous session nudged"}, notificationTitles(f.drain()),
+	assert.Equal(t, []string{"Autonomous session nudged"}, svctest.NotificationTitles(f.drain()),
 		"one INFO notification, no 'stuck' alarm")
 }
 
@@ -376,7 +377,7 @@ func TestStallRecovery_NotRestartableLeavesPaneAndStaysQuiet(t *testing.T) {
 	f.requireNoRespawn(t)
 	assert.Zero(t, f.restarts)
 	assert.Contains(t, f.rowContext(t), "nudge_outcome=not_restartable")
-	assert.Empty(t, notificationTitles(f.drain()), "a requested stop is not a stuck alarm")
+	assert.Empty(t, svctest.NotificationTitles(f.drain()), "a requested stop is not a stuck alarm")
 }
 
 // Cancelled-class stops reach no nudge and no re-attach even when every flag is on
@@ -444,7 +445,7 @@ func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
 	f.requireNoRespawn(t)
 	assert.False(t, f.mode())
 	assert.Contains(t, f.rowContext(t), "action=nudged")
-	assert.Equal(t, []string{"Autonomous session nudged"}, notificationTitles(f.drain()))
+	assert.Equal(t, []string{"Autonomous session nudged"}, svctest.NotificationTitles(f.drain()))
 }
 
 type stopAfterNudge struct {

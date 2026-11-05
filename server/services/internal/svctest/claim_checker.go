@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"encoding/json"
@@ -12,11 +12,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-type fakePeerLister struct{ entries []session.RegistryEntry }
+type FakePeerLister struct{ Entries []session.RegistryEntry }
 
-func (f fakePeerLister) LiveSnapshot() []session.RegistryEntry { return f.entries }
+func (f FakePeerLister) LiveSnapshot() []session.RegistryEntry { return f.Entries }
 
-func newClaimTestIdentity(t *testing.T) session.HostIdentity {
+func NewClaimTestIdentity(t *testing.T) session.HostIdentity {
 	t.Helper()
 	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
@@ -25,7 +25,7 @@ func newClaimTestIdentity(t *testing.T) session.HostIdentity {
 
 // newClaimTestIndex builds an index whose registry has enrolled the given hosts:
 // RecordClaim only accepts claims from enrolled hosts.
-func newClaimTestIndex(t *testing.T, enrolled ...session.HostIdentity) *session.ClaimIndex {
+func NewClaimTestIndex(t *testing.T, enrolled ...session.HostIdentity) *session.ClaimIndex {
 	t.Helper()
 	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func newClaimTestIndex(t *testing.T, enrolled ...session.HostIdentity) *session.
 
 // claimPeer starts a TLS test server standing in for a peer's /internal/claim-lookup
 // endpoint and returns its registry entry plus a request counter.
-func claimPeer(t *testing.T, identity session.HostIdentity, handler http.HandlerFunc) (session.RegistryEntry, *atomic.Int32) {
+func ClaimPeer(t *testing.T, identity session.HostIdentity, handler http.HandlerFunc) (session.RegistryEntry, *atomic.Int32) {
 	t.Helper()
 	var hits atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +52,7 @@ func claimPeer(t *testing.T, identity session.HostIdentity, handler http.Handler
 	return session.RegistryEntry{HostID: identity.ID, AdvertisedAddress: []string{srv.Listener.Addr().String()}}, &hits
 }
 
-func claimingHandler(record session.ClaimRecord) http.HandlerFunc {
+func ClaimingHandler(record session.ClaimRecord) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(record)
 	}

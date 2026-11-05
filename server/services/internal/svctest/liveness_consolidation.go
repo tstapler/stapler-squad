@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 // newEmptyPoller returns a ReviewQueuePoller that is never Start()ed, so it
 // holds instances without running any background loop.
-func newEmptyPoller() *session.ReviewQueuePoller {
+func NewEmptyPoller() *session.ReviewQueuePoller {
 	return session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 }
 
@@ -28,7 +28,7 @@ func newEmptyPoller() *session.ReviewQueuePoller {
 // Teardown kills only this one session, never the server: the isolated socket
 // is shared by every test in the binary, so kill-server would take their tmux
 // sessions down too.
-func startRealTmuxSession(t *testing.T, title string) string {
+func StartRealTmuxSession(t *testing.T, title string) string {
 	t.Helper()
 	socket := string(tmux.ResolveSocket(""))
 	require.NotEmpty(t, socket,

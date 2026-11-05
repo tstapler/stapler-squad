@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -126,7 +127,7 @@ func TestCreateStageTransition_should_InvokeGraphValidatorBeforeCommitting_When_
 	assert.Contains(t, err.Error(), "orphan")
 
 	listResp, err := svc.ListStageTransitions(ctx, connect.NewRequest(&sessionv1.ListStageTransitionsRequest{
-		FromStageSlug: strPtr("orphan"),
+		FromStageSlug: svctest.StrPtr("orphan"),
 	}))
 	require.NoError(t, err)
 	assert.Empty(t, listResp.Msg.Items, "no partial write: the rejected transition must not be persisted")
@@ -163,7 +164,7 @@ func TestUpdateStageTransition_should_ReturnFailedPreconditionAndPersistNothing_
 
 	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{
 		Id:      edgeResp.Msg.Item.Id,
-		Enabled: boolPtr(false),
+		Enabled: svctest.BoolPtr(false),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -197,7 +198,7 @@ func TestUpdateStageTransition_should_Succeed_When_DisablingEdgeForStageWithZero
 
 	updateResp, err := svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{
 		Id:      edgeResp.Msg.Item.Id,
-		Enabled: boolPtr(false),
+		Enabled: svctest.BoolPtr(false),
 	}))
 	require.NoError(t, err)
 	assert.False(t, updateResp.Msg.Item.Enabled)
@@ -291,7 +292,7 @@ func TestCreateTransitionGate_should_ReturnInvalidArgumentAndPersistNothing_When
 	assert.Contains(t, err.Error(), "extra_flag")
 
 	listResp, err := svc.ListTransitionGates(ctx, connect.NewRequest(&sessionv1.ListTransitionGatesRequest{
-		TransitionId: strPtr(edgeResp.Msg.Item.Id),
+		TransitionId: svctest.StrPtr(edgeResp.Msg.Item.Id),
 	}))
 	require.NoError(t, err)
 	assert.Empty(t, listResp.Msg.Items)
@@ -391,7 +392,7 @@ func TestCreateStageTransition_should_SerializeConcurrentCallers_When_BothWouldJ
 	assert.Equal(t, 1, conflictCount, "the other caller must observe a clean conflict, not silent data loss or duplication")
 
 	listResp, err := svc.ListStageTransitions(ctx, connect.NewRequest(&sessionv1.ListStageTransitionsRequest{
-		FromStageSlug: strPtr("race-a"),
+		FromStageSlug: svctest.StrPtr("race-a"),
 	}))
 	require.NoError(t, err)
 	require.Len(t, listResp.Msg.Items, 1, "no partial/duplicate write: exactly one persisted transition row after both calls settle")

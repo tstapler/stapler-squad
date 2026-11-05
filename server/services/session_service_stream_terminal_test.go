@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -24,7 +25,7 @@ import (
 // supports unary and server-streaming RPCs.
 func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)

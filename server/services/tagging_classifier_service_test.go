@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -21,10 +22,10 @@ import (
 // so UpdateTaggingClassifierConfig's SaveConfig never touches the real config.json.
 func isolatedClassifierService(t *testing.T) *SessionService {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
-	svc := NewSessionService(createTestStorage(t), bus)
+	svc := NewSessionService(svctest.CreateTestStorage(t), bus)
 	t.Cleanup(func() { svc.Shutdown() })
 	return svc
 }
@@ -165,7 +166,7 @@ func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey
 // reclassifyFixture registers one real session with a poller backed by client.
 func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *session.Instance) {
 	t.Helper()
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 	poller := session.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
 	svc.SetSessionTagPoller(poller)
 	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})

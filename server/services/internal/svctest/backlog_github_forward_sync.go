@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // newForwardSyncTestStorage creates a temporary ent-backed *session.Storage,
 // mirroring the pattern in backlog_service_triage_test.go /
 // backlog_item_event_publisher_test.go.
-func newForwardSyncTestStorage(t *testing.T) *session.Storage {
+func NewForwardSyncTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 
@@ -21,7 +21,7 @@ func newForwardSyncTestStorage(t *testing.T) *session.Storage {
 }
 
 // createForwardSyncTestSource creates an ItemSource row and returns its ID.
-func createForwardSyncTestSource(t *testing.T, storage *session.Storage, pluginID string, forwardSyncEnabled bool, closeLabel string) string {
+func CreateForwardSyncTestSource(t *testing.T, storage *session.Storage, pluginID string, forwardSyncEnabled bool, closeLabel string) string {
 	t.Helper()
 	src, err := storage.CreateItemSource(context.Background(), session.ItemSourceData{
 		PluginID:              pluginID,
@@ -37,7 +37,7 @@ func createForwardSyncTestSource(t *testing.T, storage *session.Storage, pluginI
 
 // createForwardSyncTestItem creates a BacklogItemData linked to sourceID with
 // the given externalID/labels.
-func createForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID, externalID string, labels []string) *session.BacklogItemData {
+func CreateForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID, externalID string, labels []string) *session.BacklogItemData {
 	t.Helper()
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:      "forward sync test item",

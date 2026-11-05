@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -764,7 +765,7 @@ func TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection(t *test
 // Hooks injected before require_local_auth existed are upgraded in place with the
 // header file argument instead of being duplicated or left unauthenticated.
 func Test_InjectHooksConfig_should_UpgradeExistingHookWithAuthHeader_When_HeaderFileAppears(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	tmpDir := t.TempDir()
 	if err := InjectHooksConfig(tmpDir, "sess", nil); err != nil {
 		t.Fatalf("first inject: %v", err)

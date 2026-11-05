@@ -26,6 +26,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,7 +41,7 @@ import (
 // (connectrpc_websocket_test.go) already established for "was AppScrollGate
 // reached" -- decisive because AppScrollGate(nil, ...) panics immediately.
 func TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalAppScrollForwardingClaudeFlagName, true))
 	assertScrollbackRequestReachesAppScrollGate(t, "native")
 
@@ -110,7 +111,7 @@ func (probeStubHandler) ProbeProgram(context.Context, *connect.Request[sessionv1
 // TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled drives a real
 // Connect handler wrapped with the same scoped interceptor server.go registers.
 func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	path, handler := sessionv1connect.NewSessionServiceHandler(probeStubHandler{}, connect.WithInterceptors(
 		interceptors.NewScopedFeatureFlagInterceptor(programCLIFlagProbeFlagName, ProgramCLIFlagProbeEnabled, ProgramCLIFlagProbeGatedMethod)))
 	mux := http.NewServeMux()
@@ -161,7 +162,7 @@ func flagUpdate(svc *FeatureFlagService, name string, enabled bool) error {
 // Pre-mortem #3: the flag service and the quota RPC both read-modify-write
 // config.json; both must go through config.UpdateConfig so neither loses a write.
 func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	const flag = "browser-passthrough"
 	const iterations = 50
 	flags := NewFeatureFlagService()
@@ -220,7 +221,7 @@ func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
 }
 
 func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_WhenFlagIsFlippedOrRolledBack(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	obs := &recordingObserver{}
 	svc.SetFlagObserver(obs)
@@ -234,7 +235,7 @@ func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_
 }
 
 func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEnableGuardReportsAReason(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	reason := "stats writer not running"
 	svc.SetEnableGuard("backlog", func() string { return reason })
@@ -253,7 +254,7 @@ func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEn
 }
 
 func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSlot_WhenCompositeProviderUsed(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	sources := map[string]func() string{
 		"stats writer not running":    func() string { return "stats writer not running" },
 		"Gate is OFF":                 func() string { return "Gate is OFF" },
@@ -283,7 +284,7 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 }
 
 func TestFeatureFlagStatusDetail_ReportsInertAndSource_WhenStallNudgeOnDiagnoseOff(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 
 	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
@@ -308,7 +309,7 @@ func (c *modeTestClock) Now() time.Time          { return c.now }
 func (c *modeTestClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineShadowFeatureFlag, "fixture: nothing is set")
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineEnforceFeatureFlag, "fixture: nothing is set")
@@ -346,7 +347,7 @@ func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *test
 }
 
 func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
 	src := NewWorkflowEngineModeSource(config.LoadConfig, clock)
 	svc := NewFeatureFlagService()
@@ -363,7 +364,7 @@ func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *
 }
 
 func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	got := map[string]bool{}
 	for _, kf := range knownFeatureFlags {
 		got[kf.name] = kf.defaultValue
@@ -485,8 +486,8 @@ func (c *countingShadow) RecordDivergence(session.EngineMethod, session.Divergen
 func (c *countingShadow) RecordNotCompared(session.NotComparedReason) {}
 
 func TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return modeFlagObservable(t, config.WorkflowEngineShadowFeatureFlag, setting.(bool),
 			func(sel *session.SwitchableWorkflowEngine, rec *countingShadow) any {
 				sel.CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
@@ -496,8 +497,8 @@ func TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded(t *t
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *testing.T) {
-	withIsolatedStateDir(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.WithIsolatedStateDir(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return modeFlagObservable(t, config.WorkflowEngineEnforceFeatureFlag, setting.(bool),
 			func(sel *session.SwitchableWorkflowEngine, _ *countingShadow) any {
 				// archived->archived is system-required: only the enforce composition allows it.
@@ -608,7 +609,7 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 }
 
 func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
 	src := session.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock)
 	svc := NewFeatureFlagService()
@@ -635,10 +636,10 @@ func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionAnswer(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	spec, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete) // system, unchecked today
 	require.True(t, ok)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
 		svc := NewFeatureFlagService()
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
@@ -652,10 +653,10 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionA
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork) // agent, unchecked today
 	require.True(t, ok)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
 		svc := NewFeatureFlagService()
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
@@ -668,7 +669,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAns
 }
 
 func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
 	svc := NewFeatureFlagService()
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
@@ -679,7 +680,7 @@ func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
 }
 
 func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	ctx := context.Background()
 	helpers := []struct {
@@ -706,7 +707,7 @@ func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFla
 }
 
 func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	for _, name := range []string{
 		"files:editing", "files:viewer-v2", "files:merge-phone",
@@ -883,7 +884,7 @@ func dfltDefaultViolations(files []dfltFile, consts map[string]string) []string 
 }
 
 func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	rows := []struct {
 		flag     string
@@ -955,7 +956,7 @@ func flagStates(t *testing.T, svc *FeatureFlagService) map[string]bool {
 }
 
 func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAliveFalse_WhenFreshConfig(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	got := flagStates(t, NewFeatureFlagService())
 
 	for name, want := range map[string]bool{
@@ -973,7 +974,7 @@ func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAlive
 }
 
 func TestKnownFeatureFlags_ShouldReportKeepAliveFalse_WhenFreshConfig_AndTrueAfterFlip(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	require.False(t, flagStates(t, svc)["window_keep_alive"])
 

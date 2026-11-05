@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // fakeFeatureController is a test double for FeatureController.
@@ -47,8 +48,8 @@ func (f *fakeFeatureController) IsEnabled() bool { return f.enabled }
 // tests are isolated from the developer's real ~/.stapler-squad config.
 func newFeatureFlagService(t *testing.T) *SessionService {
 	t.Helper()
-	withIsolatedStateDir(t)
-	storage := createTestStorage(t)
+	svctest.WithIsolatedStateDir(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })

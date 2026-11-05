@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -19,7 +20,7 @@ import (
 // tests (same isolation pattern as newIsolatedStreamHubRolloutService).
 func newIsolatedTymuxRolloutService(t *testing.T) *TymuxRolloutService {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	s := NewTymuxRolloutService()
 	// No real lsof/ss/exec probes in unit tests; version-specific tests override these.
 	s.detectDaemon = func(context.Context, tymux.DaemonConfig) tymux.DaemonVersionInfo { return tymux.DaemonVersionInfo{} }

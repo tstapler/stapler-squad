@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // fakeApprovalResolver records the last ResolveApproval call it received, in
@@ -75,7 +76,7 @@ func TestSlackInteractiveHandler_ResolvesApproval_When_VerifiedClickReceived(t *
 // not just failures.
 func TestSlackInteractiveHandler_LogsSlackActorOnSuccess(t *testing.T) {
 	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	payloadJSON := `{"user":{"id":"U123","username":"alice"},"actions":[{"action_id":"approve","value":"appr-123:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)

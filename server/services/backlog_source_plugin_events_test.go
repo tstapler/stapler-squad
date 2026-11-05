@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -21,9 +22,9 @@ func TestBacklogItemMatchesFilters_should_FilterBySourcePlugin(t *testing.T) {
 
 func TestWithSourcePlugin_should_FillPluginIDWithoutMutatingSharedEvent(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, "linear", false, "")
-	item := createForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "linear", false, "")
+	item := svctest.CreateForwardSyncTestItem(t, storage, sourceID, "ENG-1", nil)
 	// Simulate a mutation-path payload re-read without the Source edge.
 	stale := *item
 	stale.SourcePluginID, stale.SourceID = "", ""

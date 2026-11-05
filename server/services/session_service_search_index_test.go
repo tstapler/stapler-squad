@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -37,8 +38,8 @@ import (
 // fallback behavior around HOME, not a consumer of that behavior, so it
 // needs full, uncontended control of the raw env var.
 func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
-	homeLock.acquire(t)
-	stateLock.acquire(t)
+	svctest.HomeLock.Acquire(t)
+	svctest.StateLock.Acquire(t)
 	fakeHome := t.TempDir()
 	// Intentional exception to the withFakeHome rule (raw setters, locks held): see the doc comment above.
 	t.Setenv("HOME", fakeHome)
@@ -52,7 +53,7 @@ func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 		t.Cleanup(func() { os.Setenv("STAPLER_SQUAD_TEST_DIR", orig) })
 	}
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	if svc == nil {
 		t.Fatal("NewSessionService returned nil")
@@ -70,7 +71,7 @@ func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 // newDefaultSearchEngine()'s config.IsTestMode() branching.
 func TestNewSessionServiceWithSearchEngine_UsesInjectedEngine(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	injected := search.NewSearchEngine()

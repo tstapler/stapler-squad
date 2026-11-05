@@ -16,13 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newIsolatedDefaultsService creates a DefaultsService backed by a fresh temporary
 // directory, preventing config state from leaking between tests.
 func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	return NewDefaultsService()
 }
 

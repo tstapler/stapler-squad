@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
-func runGit(t *testing.T, dir string, args ...string) {
+func RunGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd := safeexec.CommandContext(context.Background(), "git", args...) //nolint:norawgitcli // test fixture helper, not product code
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",

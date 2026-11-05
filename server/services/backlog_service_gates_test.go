@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -31,7 +32,7 @@ func TestGetPendingGates_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.
 
 func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
@@ -63,7 +64,7 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 // just svc.stageConfigEngine), which is what GetPendingGates actually reads.
 func newGatesTestService(t *testing.T) (*BacklogService, session.StageCRUDRepository, *session.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 

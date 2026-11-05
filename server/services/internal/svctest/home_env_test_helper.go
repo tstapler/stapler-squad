@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"strings"
@@ -24,26 +24,26 @@ var homeEnvMu sync.Mutex
 // homeLock / stateLock pair each mutex with the holder record that makes
 // acquisition re-entrant per test — see envLock.acquire.
 var (
-	homeLock  = &envLock{mu: &homeEnvMu}
-	stateLock = &envLock{mu: &stateEnvMu}
+	HomeLock  = &envLock{mu: &homeEnvMu}
+	StateLock = &envLock{mu: &stateEnvMu}
 )
 
 // withFakeHome points HOME at a fresh temp directory for the duration of t,
 // serialized against every other HOME-mutating test in this package via
 // homeEnvMu. The lock is acquired before HOME is touched and released via
 // t.Cleanup, so it is always released even if t later calls t.Fatal.
-func withFakeHome(t *testing.T) string {
+func WithFakeHome(t *testing.T) string {
 	t.Helper()
 	// Lock before t.TempDir() so the dir is created under the lock.
-	homeLock.acquire(t)
-	return withFakeHomePath(t, t.TempDir())
+	HomeLock.Acquire(t)
+	return WithFakeHomePath(t, t.TempDir())
 }
 
 // withFakeHomePath is withFakeHome for tests that already have (or must
 // pre-populate) the directory HOME should point at.
-func withFakeHomePath(t *testing.T, home string) string {
+func WithFakeHomePath(t *testing.T, home string) string {
 	t.Helper()
-	homeLock.acquire(t)
+	HomeLock.Acquire(t)
 
 	t.Setenv("HOME", home)
 	return home
@@ -67,17 +67,17 @@ var stateEnvMu sync.Mutex
 // released even if t later calls t.Fatal. Like t.Setenv, it must be called
 // before t.Parallel(). Repeat calls on one *testing.T (or its subtests) are
 // safe: lock acquisition is re-entrant and the latest value wins.
-func withIsolatedStateDir(t *testing.T) string {
+func WithIsolatedStateDir(t *testing.T) string {
 	t.Helper()
-	stateLock.acquire(t)
-	return withIsolatedStateDirPath(t, t.TempDir())
+	StateLock.Acquire(t)
+	return WithIsolatedStateDirPath(t, t.TempDir())
 }
 
 // withIsolatedStateDirPath is withIsolatedStateDir for tests that already have
 // (or must pre-populate) the directory, e.g. to seed a config.json first.
-func withIsolatedStateDirPath(t *testing.T, dir string) string {
+func WithIsolatedStateDirPath(t *testing.T, dir string) string {
 	t.Helper()
-	stateLock.acquire(t)
+	StateLock.Acquire(t)
 
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", dir)
 	return dir
@@ -103,7 +103,7 @@ func (l *envLock) setHolder(name string) {
 	l.guard.Unlock()
 }
 
-// acquire takes the mutex for the duration of t, releasing it via t.Cleanup.
+// Acquire takes the mutex for the duration of t, releasing it via t.Cleanup.
 // It is re-entrant per test: if t is the current holder, or a subtest of it
 // (t.Name() has the holder's name plus "/" as a prefix), it returns without
 // locking, so helper-of-helper call chains and subtests that call
@@ -114,7 +114,7 @@ func (l *envLock) setHolder(name string) {
 // Lock order is home, then state; the reverse is not enforced because serial
 // tests never overlap, but keep it so a future parallel-capable helper cannot
 // deadlock.
-func (l *envLock) acquire(t *testing.T) {
+func (l *envLock) Acquire(t *testing.T) {
 	t.Helper()
 	if l.heldBy(t.Name()) {
 		return

@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
@@ -84,13 +85,13 @@ func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *tes
 		wantPriority *int
 		wantCategory *string
 	}{
-		{"valid priority and category", 1, "bugfix", intPtr(1), strPtr("bugfix")},
-		{"zero priority (omitted) leaves it unset", 0, "feature", nil, strPtr("feature")},
+		{"valid priority and category", 1, "bugfix", intPtr(1), svctest.StrPtr("bugfix")},
+		{"zero priority (omitted) leaves it unset", 0, "feature", nil, svctest.StrPtr("feature")},
 		{"negative priority rejected", -1, "", nil, nil},
 		{"priority above range rejected", 6, "", nil, nil},
 		{"empty category leaves it unset", 3, "", intPtr(3), nil},
 		{"invalid category rejected", 2, "not-a-real-category", intPtr(2), nil},
-		{"all valid categories accepted", 3, "chore", intPtr(3), strPtr("chore")},
+		{"all valid categories accepted", 3, "chore", intPtr(3), svctest.StrPtr("chore")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,13 +281,13 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 // session directly at the live checkout.
 func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails(t *testing.T) {
 	repoPath := t.TempDir()
-	initGitRepoForTest(t, repoPath)
+	svctest.InitGitRepoForTest(t, repoPath)
 
 	// Force CreateBacklogWorktree's worktree-directory creation to fail
 	// deterministically: os.MkdirAll(worktreesDir, ...) errors when a path
 	// component already exists as a regular file instead of a directory.
 	testDir := t.TempDir()
-	withIsolatedStateDirPath(t, testDir)
+	svctest.WithIsolatedStateDirPath(t, testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
 
 	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
@@ -322,7 +323,7 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
+	svctest.InitGitRepoForTest(t, repoPath) // git-initialized, but zero commits
 
 	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
@@ -340,18 +341,18 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initGitRepoForTest(t, repoPath)
-	runGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
+	svctest.InitGitRepoForTest(t, repoPath)
+	svctest.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
 	baseSHA := strings.TrimSpace(gitOutput(t, repoPath, "rev-parse", "HEAD"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "foo_test.go"), []byte("package foo\n"), 0o644))
-	runGit(t, repoPath, "add", "foo_test.go")
-	runGit(t, repoPath, "commit", "-m", "attempt 1")
+	svctest.RunGit(t, repoPath, "add", "foo_test.go")
+	svctest.RunGit(t, repoPath, "commit", "-m", "attempt 1")
 	attempt1SHA := strings.TrimSpace(gitOutput(t, repoPath, "rev-parse", "HEAD"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "bar.go"), []byte("package bar\n"), 0o644))
-	runGit(t, repoPath, "add", "bar.go")
-	runGit(t, repoPath, "commit", "-m", "attempt 2")
+	svctest.RunGit(t, repoPath, "add", "bar.go")
+	svctest.RunGit(t, repoPath, "commit", "-m", "attempt 2")
 	attempt2SHA := strings.TrimSpace(gitOutput(t, repoPath, "rev-parse", "HEAD"))
 
 	endedAt := time.Now()
@@ -374,13 +375,13 @@ func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWork
 func TestRecentWorkSessionFileLists_should_skipNonWorkAndInProgressSessions_When_Mixed(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initGitRepoForTest(t, repoPath)
-	runGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
+	svctest.InitGitRepoForTest(t, repoPath)
+	svctest.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
 	baseSHA := strings.TrimSpace(gitOutput(t, repoPath, "rev-parse", "HEAD"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "foo.go"), []byte("package foo\n"), 0o644))
-	runGit(t, repoPath, "add", "foo.go")
-	runGit(t, repoPath, "commit", "-m", "attempt 1")
+	svctest.RunGit(t, repoPath, "add", "foo.go")
+	svctest.RunGit(t, repoPath, "commit", "-m", "attempt 1")
 	attempt1SHA := strings.TrimSpace(gitOutput(t, repoPath, "rev-parse", "HEAD"))
 
 	endedAt := time.Now()
@@ -402,8 +403,8 @@ func TestRecentWorkSessionFileLists_should_skipNonWorkAndInProgressSessions_When
 func TestRecentWorkSessionFileLists_should_returnEmptyListForSlot_When_ShasMissing(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initGitRepoForTest(t, repoPath)
-	runGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
+	svctest.InitGitRepoForTest(t, repoPath)
+	svctest.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "init")
 
 	endedAt := time.Now()
 	sessions := []session.ItemSessionSummary{
@@ -432,7 +433,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 // cap-describing context, in addition to the existing notification.
 func TestNotifyReworkCapHit_should_markStuckReworkCapImmediately_When_CapHit(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -460,7 +461,7 @@ func TestNotifyReworkCapHit_should_markStuckReworkCapImmediately_When_CapHit(t *
 // silently suppress the cap-hit signal.
 func TestNotifyReworkCapHit_should_stillPublishNotification_When_MarkStuckReturnsError(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -534,7 +535,7 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 // plus an operator notification, mirroring notifyReworkCapHit's structure.
 func TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -633,12 +634,12 @@ func TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired(t *testing.T) {
 // spawned — a newer queued item must stay queued until its own slot frees.
 func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	// Fill the (default, cfg=nil) WIP cap of 2.
 	inProgressIDs := make([]string, 0, 2)
@@ -688,7 +689,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 // in_progress with no session.
 func TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
@@ -728,7 +729,7 @@ func TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance(t
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "queue-restart.db")
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	var itemID string
 	func() {
@@ -774,7 +775,7 @@ func TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance(t
 // not a read-then-write check) must let exactly one caller win. Run with -race.
 func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -827,12 +828,12 @@ func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 // single free slot. Run with -race.
 func TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyWithOneFreeSlot(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	// Fill testWIPCap-1 in_progress slots, leaving exactly 1 free slot.
 	for i := 0; i < testWIPCap-1; i++ {
@@ -894,13 +895,13 @@ func TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyW
 // session with no planning check at all.
 func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApprovedPlan(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	// Directly construct an item already "queued" with no approved plan and
 	// SkipPlanning=false — a state the RPC surface should never produce after
@@ -934,12 +935,12 @@ func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApproved
 // test in this file).
 func TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfigDefault(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "never manually spawned")
 
@@ -956,14 +957,14 @@ func TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfig
 // where manual-spawn-only behavior left them before this feature existed.
 func TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	disabled := false
 	cfg := &config.Config{AutoSpawnReadyItems: &disabled}
 	svc := NewBacklogService(storage, creator, cfg, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "manual spawn only")
 
@@ -980,12 +981,12 @@ func TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisable
 // one free slot, regardless of which was created first.
 func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_OnlyOneSlotFree(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	// Fill the (default, cfg=nil) WIP cap of 2 first, then free exactly one slot —
 	// mirrors TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst's setup.
@@ -1029,7 +1030,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 // transition for an item that was never queued.
 func TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItemSpawnFails(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
@@ -1067,14 +1068,14 @@ func TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItem
 // session FIRST and return early with no status transition at all.
 func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "PR-pending item with an active fix session",
@@ -1109,7 +1110,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 // row is written and a notification is published when the skip fires.
 func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
@@ -1121,7 +1122,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *tes
 	ch, _ := bus.Subscribe(subCtx)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "PR-pending item with an active fix session",
@@ -1167,13 +1168,13 @@ func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *tes
 // and TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded.)
 func TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "PR-pending item whose blocking fix session has since ended",
@@ -1214,14 +1215,14 @@ func TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveR
 // the reopen can proceed normally, rather than blocking forever like the bug above.
 func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "PR-pending item with a dead prior session",
@@ -1262,7 +1263,7 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // operator notification.
 func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
@@ -1274,7 +1275,7 @@ func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive
 	ch, _ := bus.Subscribe(subCtx)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "In-progress item with an active autonomous work session",
@@ -1314,13 +1315,13 @@ func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive
 // resolve-side responsibility for its own reason).
 func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "In-progress item whose blocking session has since ended",
@@ -1381,13 +1382,13 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 // together end to end), not by parking here.
 func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:    "Item that fails the same way every time",
@@ -1438,12 +1439,12 @@ func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetr
 // durable stuck-state/notification path notifyReworkCapHit uses.
 func TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalatedRetryAlsoFails(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:    "Item that fails the same way every time, even after an escalated retry",
@@ -1503,7 +1504,7 @@ func TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalat
 // code, which left the item's status unchanged ("review") here.
 func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1558,7 +1559,7 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 // mock's configured answer.
 func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := context.Background()
@@ -1566,11 +1567,11 @@ func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawni
 	// A real, detached tmux session — but the poller backing FindLiveInstance
 	// is empty, so this session is a map miss.
 	title := "map-miss-alive-" + fmt.Sprint(time.Now().UnixNano())
-	socket := startRealTmuxSession(t, title)
+	socket := svctest.StartRealTmuxSession(t, title)
 	sessSvc := &SessionService{
 		storage:           storage,
 		concStorage:       storage,
-		reviewQueuePoller: newEmptyPoller(),
+		reviewQueuePoller: svctest.NewEmptyPoller(),
 	}
 	svc.SetSessionStopper(sessSvc)
 
@@ -1640,7 +1641,7 @@ func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawni
 // covers the CAS behavior itself, one level below that error-swallowing.
 func TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarmlessly(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1685,7 +1686,7 @@ func TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarml
 // no-signal case (same fixture shape, active work session so no spawn is needed).
 func TestAutoReopenAfterFailedReview_LikelyFlaky_MarksStuckWithoutAlteringReopenDecision(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1742,7 +1743,7 @@ func TestAutoReopenAfterFailedReview_LikelyFlaky_MarksStuckWithoutAlteringReopen
 // flip-flop) and no work-session file-list signal must not write a likely_flaky row.
 func TestNotifyLikelyFlaky_should_notMarkStuck_When_NeitherPredicateFires(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1774,12 +1775,12 @@ func TestNotifyLikelyFlaky_should_notMarkStuck_When_NeitherPredicateFires(t *tes
 // in_progress with nothing acting on it.
 func TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Item whose work session already exited before the reviewer's FAIL verdict",
@@ -1834,7 +1835,7 @@ func TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne(t *testing
 // session is still deliberately never stopped or bypassed here.
 func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1905,7 +1906,7 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 // for the dedicated regression test), even though no notification fires.
 func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1962,7 +1963,7 @@ func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *te
 // <= threshold` comparison.
 func TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -1993,7 +1994,7 @@ func TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min(t *te
 
 func TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -2032,7 +2033,7 @@ func TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min(t *testin
 // above).
 func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPreconditionMismatched(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -2090,7 +2091,7 @@ func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPrecond
 // test checks (do two genuinely unrelated open reasons coexist).
 func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasBouncingRowOpen(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -2140,7 +2141,7 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 // two rework loops — actually stops it.
 func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	// Explicit cap (rather than relying on the nil-config default, which is 20 —
 	// raised from 3 since real, ultimately-fixable items were routinely tripping
 	// the old default before they were actually stuck) so this test's intent
@@ -2149,7 +2150,7 @@ func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) 
 	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Repeatedly-failing review item",
@@ -2189,11 +2190,11 @@ func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) 
 // must trip after a single prior review session, not the default 3.
 func TestAutoRespawnReview_ReworkCapHit_UsesConfiguredCap_When_MaxAutoReworkIterationsSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 1}, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Configured low-cap item",
@@ -2226,11 +2227,11 @@ func TestAutoRespawnReview_ReworkCapHit_UsesConfiguredCap_When_MaxAutoReworkIter
 // auto-respawning past that default, using its own cap instead.
 func TestAutoRespawnReview_ReworkCapOverride_AllowsMoreRoundsThanGlobalDefault(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	override := 5
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
@@ -2266,11 +2267,11 @@ func TestAutoRespawnReview_ReworkCapOverride_AllowsMoreRoundsThanGlobalDefault(t
 // review sessions well past the global default.
 func TestAutoRespawnReview_ReworkCapOverride_ZeroMeansUnlimited(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	unlimited := 0
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
@@ -2306,14 +2307,14 @@ func TestAutoRespawnReview_ReworkCapOverride_ZeroMeansUnlimited(t *testing.T) {
 // double-dispatch across two reconcile ticks landing close together.
 func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	// A headless pool being wired but never called proves no second attempt fired.
 	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Review item with an active re-review already running",
@@ -2339,7 +2340,7 @@ func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testin
 // — same audit-trail gap, third of the three call sites this fix covers.
 func TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
 	svc.SetHeadlessPool(pool)
@@ -2350,7 +2351,7 @@ func TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive(t *te
 	ch, _ := bus.Subscribe(subCtx)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Review item with an active re-review already running",
@@ -2396,14 +2397,14 @@ func TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive(t *te
 // for that scenario, exercised with no call to AutoRespawnReview at all.
 func TestAutoRespawnReview_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
 	svc.SetHeadlessPool(pool)
 	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Review item whose blocking session has since ended",
@@ -2452,7 +2453,7 @@ func TestAutoRespawnReview_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRo
 // gets a real evidence-backed call, which BUG-045 correctly refuses to spend here.
 func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
@@ -2463,7 +2464,7 @@ func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) 
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:    "Review item with a dead prior work session",
@@ -2499,7 +2500,7 @@ func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) 
 // proving the respawn is not just "detected," it actually unsticks the item.
 func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	repoDir := t.TempDir()
@@ -2556,7 +2557,7 @@ func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 // manual re-trigger would use.
 func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -2591,7 +2592,7 @@ func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.
 // performed for be676dab, now automated.
 func TestAutoRespawnTriage_should_resetQueuedToIdeaAndRetrigger_When_ItemQueued(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -2626,7 +2627,7 @@ func TestAutoRespawnTriage_should_resetQueuedToIdeaAndRetrigger_When_ItemQueued(
 // on again — mirrors AutoRespawnReview's identical guard for StuckReasonAbandonedReview.
 func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -2689,7 +2690,7 @@ func runGitTestCmd(t *testing.T, dir string, args ...string) string {
 func setupPRFixSyncRepo(t *testing.T) (originDir, repoPath string) {
 	t.Helper()
 	originDir = t.TempDir()
-	initGitRepoWithCommit(t, originDir)
+	svctest.InitGitRepoWithCommit(t, originDir)
 	runGitTestCmd(t, originDir, "branch", "-M", "main")
 
 	repoPath = filepath.Join(t.TempDir(), "clone")
@@ -2774,7 +2775,7 @@ func (f *fakeRepoWatchRemover) RemoveRepo(repoPath string) {
 // rescanning a directory that no longer exists forever.
 func TestCleanupItemWorktreesExcept_should_tellScannerToStopWatching_When_WorktreeCleanupSucceeds(t *testing.T) {
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	const workBranch = "backlog/cleanup-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
@@ -2810,7 +2811,7 @@ func TestCleanupItemWorktreesExcept_should_tellScannerToStopWatching_When_Worktr
 // it — that worktree is still in active use, not actually gone.
 func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_PathIsExempted(t *testing.T) {
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	const workBranch = "backlog/cleanup-except-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
@@ -2848,7 +2849,7 @@ func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_Pat
 // this pins that the explicit calls also run, not just that the directory disappears.
 func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_WorktreeCleanupSucceeds(t *testing.T) {
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	const workBranch = "backlog/scaffolding-cleanup-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
@@ -2890,7 +2891,7 @@ func TestCleanupItemWorktreesExcept_should_RemoveBacklogScaffolding_When_Worktre
 // session is actively using.
 func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExempted(t *testing.T) {
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	const workBranch = "backlog/scaffolding-except-test"
 	workWT := filepath.Join(t.TempDir(), "work-wt")
@@ -2934,7 +2935,7 @@ func TestCleanupItemWorktreesExcept_should_KeepBacklogScaffolding_When_PathIsExe
 // with the real linked item ID (never the session UUID) in the itemID slot.
 func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowMissingButExpected(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
@@ -2995,7 +2996,7 @@ func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowM
 // the pre-existing silent continue — no notify, no log, no behavior change.
 func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
@@ -3306,7 +3307,7 @@ func TestAutoReopenForPRFix_should_SpawnNormally_When_SyncFetchFails(t *testing.
 // 1.5's job. See the field's doc comment on BacklogService for the full rationale.
 func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When_SessionFirstStarts(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -3329,12 +3330,12 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	require.NotEmpty(t, wantHash)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "quick-mode item",
 		RepoPath:     repoPath,
-		PipelineMode: strPtr("quick"),
+		PipelineMode: svctest.StrPtr("quick"),
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -3368,7 +3369,7 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, storage *session.Storage, ctx context.Context) (itemID, activeSessionUUID string) {
 	t.Helper()
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "blocked-spawn test item",
@@ -3408,7 +3409,7 @@ func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, stor
 // (not kill-then-spawn).
 func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfirmedLive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -3471,7 +3472,7 @@ func endWorkSessionRoundsThrough(t *testing.T, storage *session.Storage, ctx con
 // both conditions are true at once.
 func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -3524,7 +3525,7 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 // notifyReworkCapHit's other two call sites already produce.
 func TestSpawnSessionFromItem_should_RefuseWithReworkCapError_When_WorkSessionCountAtCap(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
@@ -3571,7 +3572,7 @@ func TestSpawnSessionFromItem_should_RefuseWithReworkCapError_When_WorkSessionCo
 // working" from this one RPC response.
 func TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{
@@ -3599,7 +3600,7 @@ func TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSessi
 // healthy in-progress session.
 func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{
@@ -3628,7 +3629,7 @@ func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkS
 // indication that the progress signal couldn't even be attempted.
 func TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	// Deliberately no svc.SetSessionStopper call.
@@ -3652,7 +3653,7 @@ func TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedBy
 // mislabel it as fresh or stale.
 func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWorkSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{
@@ -3687,7 +3688,7 @@ func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWo
 // retriable rather than left occupying its in-flight slot.
 func TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -3726,7 +3727,7 @@ func TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight(t *
 // must produce PipelineModeSnapshotHash == "", ignoring the ok bool per spec.
 func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -3745,14 +3746,14 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 	svc.pipelineEngine = engine
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	testCases := []struct {
 		name         string
 		pipelineMode *string // nil == omitted (default mode)
 	}{
 		{name: "default mode omitted", pipelineMode: nil},
-		{name: "unresolved slug", pipelineMode: strPtr("missing-mode")},
+		{name: "unresolved slug", pipelineMode: svctest.StrPtr("missing-mode")},
 	}
 
 	for _, tc := range testCases {
@@ -3802,7 +3803,7 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 // require this same mock to record a second, distinct call.
 func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -3823,12 +3824,12 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	svc.pipelineEngine = engine
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "work-stage override item",
 		RepoPath:     repoPath,
-		PipelineMode: strPtr("sonnet-work"),
+		PipelineMode: svctest.StrPtr("sonnet-work"),
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -3872,13 +3873,13 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 // programOverride, and mockSessionCreator's own default program unaffected.
 func TestSpawnSessionFromItem_should_LeaveInstanceProgramUnchanged_When_NoWorkStageOverrideConfigured(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    "default mode item",
@@ -3934,7 +3935,7 @@ func readCommandFiles(t *testing.T, worktreePath string) map[string]string {
 // rendered content is identical regardless of which caller wrote it.
 func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_SameItemAndModeUsedByBothCallers(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -3958,12 +3959,12 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 	svc.pipelineEngine = engine
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "quick-mode parity item",
 		RepoPath:     repoPath,
-		PipelineMode: strPtr("quick"),
+		PipelineMode: svctest.StrPtr("quick"),
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -4049,7 +4050,7 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 
 	t.Run("LLMCallError_PublishesNoEvents", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		pool := &fakeHeadlessPool{err: errors.New("simulated LLM failure")}
 		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 		svc.SetHeadlessPool(pool)
@@ -4085,7 +4086,7 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 
 	t.Run("MalformedResponse_PublishesNoEvents", func(t *testing.T) {
 		t.Parallel()
-		storage := createTestStorage(t)
+		storage := svctest.CreateTestStorage(t)
 		pool := &fakeHeadlessPool{response: "this is not valid JSON at all"}
 		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 		svc.SetHeadlessPool(pool)
@@ -4195,7 +4196,7 @@ func waitForTriageFailureCaptured(t *testing.T, storage *session.Storage, itemID
 // referenced by a DB column that outlives log rotation.
 func TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessResultFailsToParse(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rawOutput := "I looked at the item and here's my analysis, but I forgot to emit the JSON block at the end as instructed."
 	pool := &fakeHeadlessPool{response: rawOutput}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -4231,7 +4232,7 @@ func TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessRes
 // in TriggerTriage's goroutine independently wire up the capture.
 func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfErrors(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: "partial output before the call errored out", err: errors.New("simulated LLM failure")}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4280,7 +4281,7 @@ func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ sessio
 // way it did across the 2026-09-08 30m->3h raise (BUG-055).
 func TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngineIsNil(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4316,7 +4317,7 @@ func TestTriggerTriage_should_UseFlatTriageCallBudgetConstant_When_LivenessEngin
 // 45m context timeout, not the flat 30m triageCallBudget constant.
 func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4353,7 +4354,7 @@ func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOver
 
 func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4403,7 +4404,7 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 // "cheap-triage" acceptance example (validation.md's Happy Path Scenario).
 func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTriageOverride(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4455,7 +4456,7 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 // model (default family:sonnet), not the account default — and an explicit "none" opts out.
 func TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefault(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4489,7 +4490,7 @@ func TestTriggerTriage_should_UseConfiguredTriageModel_When_PipelineModeIsDefaul
 // through PipelineEngine too.
 func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardlessOfPipelineMode(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
 	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -4549,7 +4550,7 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 // output — proving this seam is not cosmetic for autonomous-mode sessions.
 func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawnSessionAndNonDefaultPipelineMode(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -4567,12 +4568,12 @@ func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawn
 	svc.pipelineEngine = engine
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "quick-mode autonomous item",
 		RepoPath:     repoPath,
-		PipelineMode: strPtr("quick"),
+		PipelineMode: svctest.StrPtr("quick"),
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -4605,13 +4606,13 @@ func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawn
 // BuildTokenBudgetedPrompt's unmodified output.
 func TestSpawnSessionFromItem_should_UseDefaultInitialPrompt_When_PipelineModeIsDefault(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    "default-mode item",
@@ -4674,7 +4675,7 @@ func TestSpawnSessionFromItem_should_UseDefaultInitialPrompt_When_PipelineModeIs
 // moment the naive branch-ref fallback also fails.
 func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseShaCorrupted(t *testing.T) {
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 	runGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const workBranch = "backlog/recover-diff-merge-base"
@@ -4742,7 +4743,7 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 // branch, the worst case for the old repoPath-only recovery.
 func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted(t *testing.T) {
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 	runGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const workBranch = "backlog/recover-diff-worktree-path"
@@ -4811,7 +4812,7 @@ func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsB
 // recover the real diff via the repoPath fallback instead.
 func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched(t *testing.T) {
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 	runGitTestCmd(t, repoDir, "branch", "-M", "main")
 
 	const recordedBranch = "feature"
@@ -4903,7 +4904,7 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 	// pool's single scripted response before the re-review call under test ever runs
 	// (same ordering setupItemInReview's other callers rely on).
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	itemID := setupItemInReview(t, svc, repoDir)
 
@@ -4972,7 +4973,7 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 // end_reason classified and failure_capture_path pointing at the raw output.
 func TestTriggerReReview_should_PersistFailureCapture_When_HeadlessCallItselfErrors(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	repoDir := t.TempDir()
@@ -5017,7 +5018,7 @@ func TestTriggerReReview_should_PersistFailureCapture_When_HeadlessCallItselfErr
 // exact scenario, even though repoPath itself is a perfectly real, existing directory.
 func TestResolveCodebaseWorkDir_should_RefuseFallback_When_WorkSessionWorktreeUnresolvable(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	// repoPath is a real, existing directory — simulating the shared main checkout,
@@ -5040,7 +5041,7 @@ func TestResolveCodebaseWorkDir_should_RefuseFallback_When_WorkSessionWorktreeUn
 // to fall back from, so repoPath remains the only — and correct — directory to use.
 func TestResolveCodebaseWorkDir_should_AllowFallback_When_NoWorkSessionAtAll(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
@@ -5066,7 +5067,7 @@ func TestResolveCodebaseWorkDir_should_AllowFallback_When_NoWorkSessionAtAll(t *
 // repoPath's arbitrary contents and calling the result a real verdict on this item.
 func TestTriggerReReview_should_BlockInsteadOfReviewingSharedCheckout_When_WorktreeRowReaped(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(4)
 	svc.SetEventBus(bus)
@@ -5078,7 +5079,7 @@ func TestTriggerReReview_should_BlockInsteadOfReviewingSharedCheckout_When_Workt
 	// contains content totally unrelated to this item — exactly the shape of the live
 	// incident (an operator's unrelated, uncommitted work sitting in the checkout).
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "unrelated-in-progress-work.txt"), []byte("someone else's uncommitted work\n"), 0o644))
 
 	itemID := setupItemInReview(t, svc, repoPath)
@@ -5166,10 +5167,10 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 	// exact shape that made 693c2700's diff unreviewable.
 	originRepo, err := gitutil.OpenRepo(origin)
 	require.NoError(t, err)
-	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
+	svctest.CommitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {
 		fname := fmt.Sprintf("upstream-%d.txt", i)
-		commitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
+		svctest.CommitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
 	}
 
 	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},
@@ -5259,7 +5260,7 @@ func settingsHasDriftHook(t *testing.T, worktreePath string) bool {
 func spawnReadyItemForDriftHookTest(t *testing.T, svc *BacklogService, title string) string {
 	t.Helper()
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    title,
@@ -5287,7 +5288,7 @@ func spawnReadyItemForDriftHookTest(t *testing.T, svc *BacklogService, title str
 // must get the steering hook wired into its worktree.
 func TestSpawnSessionFromItem_should_InjectGitDriftCheckHook_When_Autonomous(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
@@ -5311,7 +5312,7 @@ func TestSpawnSessionFromItem_should_InjectGitDriftCheckHook_When_Autonomous(t *
 // must NEVER get the steering hook wired in.
 func TestSpawnSessionFromItem_should_NotInjectGitDriftCheckHook_When_NotAutonomous(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
@@ -5341,7 +5342,7 @@ func TestSpawnSessionFromItem_should_NotInjectGitDriftCheckHook_When_NotAutonomo
 // SAME worktree, and asserts the hook is gone afterward.
 func TestSpawnSessionFromItem_should_RemoveGitDriftCheckHook_When_ReopenedManuallyOnReusedWorktree(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
@@ -5382,7 +5383,7 @@ func TestSpawnSessionFromItem_should_RemoveGitDriftCheckHook_When_ReopenedManual
 // blocking session's idle time drops back under maxReworkBlockStaleness.
 func TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_SessionRecovered(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -5417,7 +5418,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_Sessio
 // the row open (no ResolveStuck call).
 func TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStale(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -5454,7 +5455,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStal
 // liveness — there's nothing left to be stale.
 func TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -5499,7 +5500,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSes
 // side of this interface boundary.
 func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRecovers_Integration(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -5560,7 +5561,7 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 
 func TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5591,7 +5592,7 @@ func TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSessi
 
 func TestTriggerTriage_should_RejectNonExistentAbsoluteRepoPath_Before_CreatingAnyItemSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5620,7 +5621,7 @@ func TestTriggerTriage_should_RejectNonExistentAbsoluteRepoPath_Before_CreatingA
 
 func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirectory(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5656,7 +5657,7 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 // crossing must not affect the triage call's own success.
 func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold(t *testing.T) {
 	buf := swapWarningLog(t)
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON(), cost: 0.15}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5710,7 +5711,7 @@ func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThres
 // precedent).
 func TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5746,7 +5747,7 @@ func TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet(t *testing
 // auto-approving plans.
 func TestTriggerTriage_should_NotAutoApprovePlan_When_AutoApprovePlanUnset(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5787,7 +5788,7 @@ func TestTriggerTriage_should_NotAutoApprovePlan_When_AutoApprovePlanUnset(t *te
 // plan_artifacts_path must stay empty.
 func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5823,7 +5824,7 @@ func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementation
 // documented SDD location is persisted.
 func TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDirExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5876,7 +5877,7 @@ func TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDir
 // back to that location rather than leaving plan_artifacts_path empty.
 func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissingButPlanMdAtRoot(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5925,7 +5926,7 @@ func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissin
 // nil-means-don't-update behavior can keep it.
 func TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWritesNoPlan(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -5968,7 +5969,7 @@ func TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWrit
 // past the 8-slot cap).
 func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	// entered signals deterministically, once per occupier, the instant that
 	// occupier's CallBlocking is entered -- replaces a require.Eventually poll
 	// on pool.callCount(), which raced scheduler contention under full-suite
@@ -6170,12 +6171,12 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 // must never be invoked.
 func TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with an open jules session")
 	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
@@ -6200,7 +6201,7 @@ func TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_Whe
 // while a Jules session is already open for the item.
 func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -6229,11 +6230,11 @@ func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPrese
 // the existing findActiveWorkSession/findActiveReviewSession block.
 func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
 		Title:    "review item with an open jules session",
@@ -6265,7 +6266,7 @@ func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *te
 // of silently attempting a tmux write to a session that has no pane.
 func TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveSessionIsJulesWork(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	steerer := &mockSessionSteerer{
 		programs: map[string]string{"jules-sessions/invariant-violation": "claude"},
@@ -6295,7 +6296,7 @@ func TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveS
 // (Story 2.2.2) — an open jules_work row alone must not shrink local capacity.
 func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -6320,7 +6321,7 @@ func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRole
 // previously had no test coverage at all).
 func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	liveUUID := "cancel-triage-live"
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -6355,7 +6356,7 @@ func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsAc
 // that nothing was cancelled.
 func TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -6454,14 +6455,14 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 // see research/architecture.md's "actual gap" finding).
 func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{}
 	svc.SetSessionStopper(stopper)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	itemID := setupItemInReview(t, svc, repoPath)
 
@@ -6491,7 +6492,7 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 // the two unended sessions and mark both their EndedAt non-nil.
 func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_CalledDirectly(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{}
 	svc.SetSessionStopper(stopper)
@@ -6549,7 +6550,7 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 // isn't left permanently blocked by hasActiveWorkSession.
 func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsError(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{stopperErr: errors.New("stop failed")}
 	svc.SetSessionStopper(stopper)
@@ -6582,13 +6583,13 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 // the row resolves, dispatch proceeds again.
 func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title: "noop gate item", RepoPath: repoPath, SkipTriage: true, SkipPlanning: true,
 		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
@@ -6617,13 +6618,13 @@ func TestSpawnSessionFromItem_should_Refuse_When_RepeatedNoopDispatchRowOpen(t *
 // re-review paths honor the lifecycle listener's per-item review reservation.
 func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, &config.Config{}, nil, nil, nil)
 	guard := session.NewReviewSpawnGuard()
 	svc.SetReviewSpawnGuard(guard)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title: "in-flight review", RepoPath: repoPath, Status: string(session.BacklogStatusReview),
 	})
@@ -6645,7 +6646,7 @@ func TestReReview_BlockedByInFlightListenerReservation(t *testing.T) {
 
 func TestTriggerTriage_should_PersistErrorDetail_When_HeadlessCallFailsWithUnclassifiedError(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: "partial", err: errors.New("dial tcp: connection refused")}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -6738,7 +6739,7 @@ func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			storage := createTestStorage(t)
+			storage := svctest.CreateTestStorage(t)
 			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
 				Title: "end-session item", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),

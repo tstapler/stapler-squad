@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -108,7 +109,7 @@ func (f *fakeBacklogItemEventSender) Sent() []*sessionv1.BacklogItemEvent {
 // sender at the RPC boundary is faked.
 func newTestBacklogServiceWithBus(t *testing.T) (*BacklogService, *session.Storage, *events.EventBus) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(100)
 	svc.SetEventBus(bus)
@@ -624,7 +625,7 @@ func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilte
 
 func TestWatchBacklogItems_should_returnUnimplemented_When_EventBusIsNil(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil) // eventBus left nil (no SetEventBus call)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -834,7 +835,7 @@ func TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilt
 // queries regardless of how many items it carries.
 func TestSnapshotEventsForItems_Should_BatchWorktreeLookups(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	var sessionQueries atomic.Int64
 	storage.GetEntClient().Session.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
 		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {

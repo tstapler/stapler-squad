@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"github.com/tstapler/stapler-squad/session"
@@ -6,6 +6,6 @@ import (
 
 // addInstanceToPoller registers a session instance directly with the poller so
 // that findInstance() can resolve it by title (the normal production path).
-func addInstanceToPoller(poller *session.ReviewQueuePoller, inst *session.Instance) {
+func AddInstanceToPoller(poller *session.ReviewQueuePoller, inst *session.Instance) {
 	poller.SetInstances(append(poller.GetInstances(), inst))
 }

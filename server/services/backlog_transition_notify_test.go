@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -19,7 +20,7 @@ func (enforceEveryClass) Mode() session.EngineMode                       { retur
 func (enforceEveryClass) ModeFor(session.CallerClass) session.EngineMode { return session.ModeEnforce }
 
 func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSeparately_When_GateDeniesAgentAndSystem(t *testing.T) {
-	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, enforceEveryClass{})
 	require.NoError(t, svc.storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	bus := events.NewEventBus(16)

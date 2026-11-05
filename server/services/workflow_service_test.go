@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/proto"
@@ -49,7 +50,7 @@ func createTestEntClient(t *testing.T) *session.EntRepository {
 // an in-memory SQLite ent client.
 func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	sessSvc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { sessSvc.Shutdown() })

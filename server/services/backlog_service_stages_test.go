@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -23,7 +24,7 @@ import (
 // newPipelineModeTestService's shape in backlog_service_pipeline_mode_test.go.
 func newStageCRUDTestService(t *testing.T) (*BacklogService, session.StageCRUDRepository, *session.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
@@ -193,7 +194,7 @@ func TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds(t *te
 
 	_, err = svc.UpdateStage(ctx, connect.NewRequest(&sessionv1.UpdateStageRequest{
 		Id:      refiningStage.ID.String(),
-		Enabled: boolPtr(false),
+		Enabled: svctest.BoolPtr(false),
 	}))
 	require.NoError(t, err)
 
@@ -208,7 +209,7 @@ func TestUpdateStage_should_ReturnNotFound_When_IdDoesNotExist(t *testing.T) {
 
 	_, err := svc.UpdateStage(ctx, connect.NewRequest(&sessionv1.UpdateStageRequest{
 		Id:   "00000000-0000-0000-0000-000000000000",
-		Name: strPtr("new name"),
+		Name: svctest.StrPtr("new name"),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))

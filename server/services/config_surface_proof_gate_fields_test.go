@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -95,16 +96,16 @@ func TestConfigSurfaceProof_CreateTransitionGate_KindConfigAndOrder_ChangeHandle
 		}
 	}
 
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, create(setting.(bkfGate)))
 	}, bkfApproval(), bkfStructural(bkfCheckNoBlocker, 0)) // kind
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, create(bkfStructural(setting.(string), 0)))
 	}, bkfCheckPRGreen, bkfCheckNoBlocker) // config
 	byOrder := func(setting any) any {
 		return bkfGatedAnswer(t, create(bkfStructural(bkfCheckACDone, setting.(int32)), bkfStructural(bkfCheckPRGreen, 1)))
 	}
-	assertConfigChangesBehavior(t, byOrder, int32(0), int32(2)) // order_index
+	svctest.AssertConfigChangesBehavior(t, byOrder, int32(0), int32(2)) // order_index
 	require.Contains(t, byOrder(int32(0)), bkfACDenial, "the lowest order_index gate is the one the denial names")
 	require.Contains(t, byOrder(int32(2)), bkfPRDenial)
 }
@@ -131,7 +132,7 @@ const (
 )
 
 func TestConfigSurfaceProof_UpdateTransitionGate_EnabledAndID_ChangeHandlerAnswer(t *testing.T) {
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, func(svc *BacklogService, edge string) {
 			id := bkfCreateGate(t, svc, edge, bkfApproval())
 			g := bkfApproval()
@@ -139,7 +140,7 @@ func TestConfigSurfaceProof_UpdateTransitionGate_EnabledAndID_ChangeHandlerAnswe
 			bkfUpdateGate(t, svc, id, g)
 		})
 	}, true, false) // enabled
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, func(svc *BacklogService, edge string) {
 			bkfDisableGate(t, svc, edge, setting.(bkfGateName))
 		})
@@ -147,13 +148,13 @@ func TestConfigSurfaceProof_UpdateTransitionGate_EnabledAndID_ChangeHandlerAnswe
 }
 
 func TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer(t *testing.T) {
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, func(svc *BacklogService, edge string) {
 			id := bkfCreateGate(t, svc, edge, bkfStructural(bkfCheckNoBlocker, 0))
 			bkfUpdateGate(t, svc, id, setting.(bkfGate))
 		})
 	}, bkfStructural(bkfCheckNoBlocker, 0), bkfApproval()) // kind
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return bkfGatedAnswer(t, func(svc *BacklogService, edge string) {
 			id := bkfCreateGate(t, svc, edge, bkfStructural(bkfCheckNoBlocker, 0))
 			bkfUpdateGate(t, svc, id, bkfStructural(setting.(string), 0))
@@ -166,7 +167,7 @@ func TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandle
 			bkfUpdateGate(t, svc, acGate, bkfStructural(bkfCheckACDone, setting.(int32)))
 		})
 	}
-	assertConfigChangesBehavior(t, byOrder, int32(0), int32(2)) // order_index
+	svctest.AssertConfigChangesBehavior(t, byOrder, int32(0), int32(2)) // order_index
 	require.Contains(t, byOrder(int32(0)), bkfACDenial, "the lowest order_index gate is the one the denial names")
 	require.Contains(t, byOrder(int32(2)), bkfPRDenial)
 }

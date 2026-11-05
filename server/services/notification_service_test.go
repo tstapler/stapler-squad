@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -24,7 +25,7 @@ import (
 // (required by the validateLocalhostOrigin check).
 func newNotificationTestServer(t *testing.T) (*SessionService, *events.EventBus, *httptest.Server) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -109,7 +110,7 @@ func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
 // because its notification's session_id never got past the title.
 func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)
@@ -236,7 +237,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
 // out of the poller (e.g. shortly after a server restart).
 func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallback(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)

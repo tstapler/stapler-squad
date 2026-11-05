@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -33,7 +34,7 @@ type clsGateHarness struct {
 
 func newClsGateHarness(t *testing.T) *clsGateHarness {
 	t.Helper()
-	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
 	return &clsGateHarness{svc: svc, h: h, sats: session.NewEntGateSatisfactionRepository(svc.storage.GetEntClient())}
 }
@@ -276,9 +277,9 @@ func clsEnforced(t *testing.T, sel *session.SwitchableWorkflowEngine, p clsModeP
 }
 
 func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	for _, p := range clsModeProbes {
-		assertConfigChangesBehavior(t, func(setting any) any {
+		svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 			rec := &countingShadow{}
 			sel := clsSelector(t, map[string]bool{config.WorkflowEngineShadowFeatureFlag: setting.(bool)}, session.WithShadowRecorder(rec))
 			spec, ok := session.LookupTransitionCaller(p.caller)
@@ -290,9 +291,9 @@ func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryC
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceFlag_ChangesOperatorAnswerAndNoOtherClass(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	op := clsModeProbes[0]
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return clsEnforced(t, clsSelector(t, map[string]bool{op.flag: setting.(bool)}), op)
 	}, false, true)
 
@@ -306,7 +307,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceFlag_ChangesOperatorAnswerAndNo
 // mode-behavior proof for all four flags: with one enforce flag on, only the
 // class it names is enforced; shadow alone enforces nothing.
 func TestWorkflowEngineModeFlags_EachEnforceFlagEnforcesExactlyItsOwnClass(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	none := clsSelector(t, nil)
 	for _, p := range clsModeProbes {
 		assert.False(t, clsEnforced(t, none, p), "defaults (shadow on, every enforce flag off) enforce no class: %s", p.class)

@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"time"
@@ -6,7 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-var idleSnapshot = domain.StopSnapshot{
+var IdleSnapshot = domain.StopSnapshot{
 	CapturedAt:       time.Date(2026, 10, 13, 12, 3, 40, 0, time.UTC),
 	LastActivityAt:   time.Date(2026, 10, 13, 12, 3, 10, 0, time.UTC),
 	Bucket:           domain.BucketSafeIdle,

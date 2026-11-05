@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -43,7 +44,7 @@ func TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCa
 	t.Cleanup(fix.cleanup)
 
 	resolvedPath := t.TempDir()
-	initGitRepoWithCommit(t, resolvedPath)
+	svctest.InitGitRepoWithCommit(t, resolvedPath)
 	resolved := make(chan struct{})
 	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
 		select {
@@ -138,7 +139,7 @@ func TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_Github
 	t.Cleanup(fix.cleanup)
 
 	resolvedPath := t.TempDir()
-	initGitRepoWithCommit(t, resolvedPath)
+	svctest.InitGitRepoWithCommit(t, resolvedPath)
 	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
 		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
 	}
@@ -277,7 +278,7 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 	t.Cleanup(fix.cleanup)
 
 	resolvedPath := t.TempDir()
-	initGitRepoWithCommit(t, resolvedPath)
+	svctest.InitGitRepoWithCommit(t, resolvedPath)
 	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
 		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "feature-x"}, nil
 	}
@@ -346,7 +347,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
-	stopSessionDriverOnCleanup(t, instance)
+	svctest.StopSessionDriverOnCleanup(t, instance)
 
 	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
 		instance:        instance,
@@ -398,7 +399,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 // TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuccess`
 // per validation.md.
 func TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuccess(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -474,7 +475,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	t.Cleanup(fix.cleanup)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	instance, err := session.CreateManagedInstance(context.Background(), session.CreateManagedInstanceParams{
 		Options: session.InstanceOptions{
@@ -489,7 +490,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, instance.GetStableID()) })
-	stopSessionDriverOnCleanup(t, instance)
+	svctest.StopSessionDriverOnCleanup(t, instance)
 
 	fix.svc.runBackgroundResolutionPipeline(context.Background(), creationPipelineParams{
 		instance:        instance,
@@ -537,7 +538,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 	t.Cleanup(fix.cleanup)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	// Session A: a real, live Directory-mode session at repoDir, created via
 	// the full CreateSession RPC (mirroring ModeIsRestart/Story 4.1.1's
@@ -636,7 +637,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	t.Cleanup(fix.cleanup)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	newContender := func(title string) *session.Instance {
 		t.Helper()
@@ -653,7 +654,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, inst.GetStableID()) })
-		stopSessionDriverOnCleanup(t, inst)
+		svctest.StopSessionDriverOnCleanup(t, inst)
 		return inst
 	}
 

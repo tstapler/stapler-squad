@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -12,9 +12,9 @@ import (
 // runGitOutput runs a git command in dir and returns its combined output, failing the
 // test on error. Used where the test needs to inspect output (runGit, defined in
 // path_completion_service_test.go, discards it).
-func runGitOutput(t *testing.T, dir string, args ...string) string {
+func RunGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd := safeexec.CommandContext(context.Background(), "git", args...) //nolint:norawgitcli // test fixture helper, not product code
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",

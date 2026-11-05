@@ -17,6 +17,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -51,7 +52,7 @@ func (f *fakeClaimChecker) ListForeignClaims() []session.ClaimRecord {
 
 func heldByHostA(t *testing.T) ClaimVerdict {
 	t.Helper()
-	hostA := newClaimTestIdentity(t)
+	hostA := svctest.NewClaimTestIdentity(t)
 	return NewHeldByOtherVerdict(session.NewSignedClaimRecord(hostA, claimIssueURL, "ssq://hostA/backlog/v1/bl_1", time.Now()))
 }
 
@@ -65,7 +66,7 @@ func captureClaimLogs(t *testing.T) *bytes.Buffer {
 
 func claimEnabledService(t *testing.T, checker CrossHostClaimChecker) *BacklogService {
 	t.Helper()
-	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	svc.claimDedupFlag = func() bool { return true }
 	svc.SetClaimChecker(checker, nil)
 	return svc
@@ -176,7 +177,7 @@ func TestImportGitHubIssue_should_NotConsultChecker_When_FeatureFlagOff(t *testi
 
 func TestImportGitHubIssue_should_CreateItem_When_NoCheckerWired(t *testing.T) {
 	serveClaimIssue(t)
-	svc := NewBacklogService(createTestStorage(t), nil, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), nil, nil, nil, nil, nil)
 	svc.claimDedupFlag = func() bool { return true }
 
 	resp, err := importClaimIssue(svc, false, "")
@@ -294,9 +295,9 @@ func openClaimStuckRows(t *testing.T, svc *BacklogService, itemID string) int {
 func newDequeueClaimService(t *testing.T, checker CrossHostClaimChecker) (*BacklogService, *mockSessionCreator, string) {
 	t.Helper()
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), creator, nil, nil, nil, nil)
 	svc.claimDedupFlag = func() bool { return true }
 	svc.SetClaimChecker(checker, nil)
 	return svc, creator, repoPath
@@ -351,9 +352,9 @@ func TestDequeueNextQueuedItems_should_DequeueAsBefore_When_FeatureFlagOff(t *te
 }
 
 func TestDequeueNextQueuedItems_should_NeverIssueNetworkCallWhileDequeueMuHeld_When_CandidateHasExternalURL(t *testing.T) {
-	self, peerID := newClaimTestIdentity(t), newClaimTestIdentity(t)
-	peer, hits := claimPeer(t, peerID, claimingHandler(session.NewSignedClaimRecord(peerID, claimIssueURL, "ssq://p/x", time.Now())))
-	local := NewLocalClaimChecker(newClaimTestIndex(t), self.ID, fakePeerLister{entries: []session.RegistryEntry{peer}})
+	self, peerID := svctest.NewClaimTestIdentity(t), svctest.NewClaimTestIdentity(t)
+	peer, hits := svctest.ClaimPeer(t, peerID, svctest.ClaimingHandler(session.NewSignedClaimRecord(peerID, claimIssueURL, "ssq://p/x", time.Now())))
+	local := NewLocalClaimChecker(svctest.NewClaimTestIndex(t), self.ID, svctest.FakePeerLister{Entries: []session.RegistryEntry{peer}})
 	svc, _, repoPath := newDequeueClaimService(t, local)
 	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 
@@ -542,8 +543,8 @@ func TestCheckCrossHostClaim_should_RequireExternalURL(t *testing.T) {
 }
 
 func TestListForeignClaims_should_ReturnOnlyOtherHostsClaims_When_FlagOn(t *testing.T) {
-	self, other := newClaimTestIdentity(t), newClaimTestIdentity(t)
-	index := newClaimTestIndex(t, other)
+	self, other := svctest.NewClaimTestIdentity(t), svctest.NewClaimTestIdentity(t)
+	index := svctest.NewClaimTestIndex(t, other)
 	for _, c := range []session.ClaimRecord{
 		session.NewSignedClaimRecord(self, "https://github.com/acme/widgets/issues/1", "ssq://self/backlog/v1/a", time.Now()),
 		session.NewSignedClaimRecord(other, "https://github.com/acme/widgets/issues/2", "ssq://other/backlog/v1/b", time.Now()),
@@ -551,7 +552,7 @@ func TestListForeignClaims_should_ReturnOnlyOtherHostsClaims_When_FlagOn(t *test
 		_, err := index.RecordClaim(c)
 		require.NoError(t, err)
 	}
-	svc := claimEnabledService(t, NewLocalClaimChecker(index, self.ID, fakePeerLister{}))
+	svc := claimEnabledService(t, NewLocalClaimChecker(index, self.ID, svctest.FakePeerLister{}))
 
 	resp, err := svc.ListForeignClaims(context.Background(), connect.NewRequest(&sessionv1.ListForeignClaimsRequest{}))
 

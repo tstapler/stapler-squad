@@ -1,23 +1,23 @@
-package services
+package svctest
 
 import (
 	"sync"
 	"time"
 )
 
-type fakeGuardClock struct {
+type FakeGuardClock struct {
 	mu sync.Mutex
-	t  time.Time
+	T  time.Time
 }
 
-func (c *fakeGuardClock) Now() time.Time {
+func (c *FakeGuardClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.t
+	return c.T
 }
 
-func (c *fakeGuardClock) Advance(d time.Duration) {
+func (c *FakeGuardClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
+	c.T = c.T.Add(d)
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -78,12 +78,6 @@ func newProbeInstance(t *testing.T, title, paneCWD, liveSessionName string) *ses
 	return inst
 }
 
-// newEmptyPoller returns a ReviewQueuePoller that is never Start()ed, so it
-// holds instances without running any background loop.
-func newEmptyPoller() *session.ReviewQueuePoller {
-	return session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
-}
-
 // --------------------------------------------------------------------------
 // findConfirmedLiveInstance
 // --------------------------------------------------------------------------
@@ -97,7 +91,7 @@ func TestFindConfirmedLiveInstance_MapHit_ReturnsWithoutStorageFallback(t *testi
 	t.Parallel()
 
 	inst := &session.Instance{Title: "map-hit", UUID: "uuid-map-hit", Path: "/tmp/test", Status: session.Active}
-	poller := newEmptyPoller()
+	poller := svctest.NewEmptyPoller()
 	poller.SetInstances([]*session.Instance{inst})
 
 	svc := &SessionService{reviewQueuePoller: poller} // concStorage deliberately nil
@@ -115,7 +109,7 @@ func TestFindConfirmedLiveInstance_MapHit_ReturnsWithoutStorageFallback(t *testi
 func TestFindConfirmedLiveInstance_MapMiss_NoConcStorage_ReturnsNil(t *testing.T) {
 	t.Parallel()
 
-	svc := &SessionService{reviewQueuePoller: newEmptyPoller()}
+	svc := &SessionService{reviewQueuePoller: svctest.NewEmptyPoller()}
 
 	assert.Nil(t, svc.findConfirmedLiveInstance("uuid-not-tracked"))
 }
@@ -129,7 +123,7 @@ func TestFindConfirmedLiveInstance_MapMiss_NoConcStorage_ReturnsNil(t *testing.T
 func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsDead_ReturnsNil(t *testing.T) {
 	t.Parallel()
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	const uuid = "uuid-shadow-dead"
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:  "shadow-dead-" + t.Name(),
@@ -146,7 +140,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsDead_ReturnsNil(t *test
 		UpdatedAt:  time.Now(),
 	}))
 
-	svc := &SessionService{storage: storage, concStorage: storage, reviewQueuePoller: newEmptyPoller()}
+	svc := &SessionService{storage: storage, concStorage: storage, reviewQueuePoller: svctest.NewEmptyPoller()}
 
 	assert.Nil(t, svc.findConfirmedLiveInstance(uuid),
 		"a persisted session whose tmux process is genuinely gone must still be reported dead")
@@ -165,9 +159,9 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 	t.Parallel()
 
 	title := "shadow-alive-" + fmt.Sprint(time.Now().UnixNano())
-	socket := startRealTmuxSession(t, title)
+	socket := svctest.StartRealTmuxSession(t, title)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	const uuid = "uuid-shadow-alive"
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:            title,
@@ -182,7 +176,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 	}))
 
 	// Poller is empty: the live map says "dead", the OS says "alive".
-	svc := &SessionService{storage: storage, concStorage: storage, reviewQueuePoller: newEmptyPoller()}
+	svc := &SessionService{storage: storage, concStorage: storage, reviewQueuePoller: svctest.NewEmptyPoller()}
 
 	got := svc.findConfirmedLiveInstance(uuid)
 
@@ -208,7 +202,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 
 	title := "kill-pane-dereg-" + fmt.Sprint(time.Now().UnixNano())
 	const uuid = "uuid-kill-pane-dereg"
-	socket := startRealTmuxSession(t, title)
+	socket := svctest.StartRealTmuxSession(t, title)
 
 	inst, err := session.FromInstanceDataDeferred(session.InstanceData{
 		Title:            title,
@@ -223,7 +217,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	poller := newEmptyPoller()
+	poller := svctest.NewEmptyPoller()
 	poller.SetInstances([]*session.Instance{inst})
 	svc := &SessionService{reviewQueuePoller: poller}
 
@@ -233,51 +227,6 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 
 	assert.False(t, svc.IsSessionLive(uuid),
 		"after a successful kill, the poller-registered instance must no longer report live — otherwise every later confirmed-liveness check (spawnSessionAfterGates' 8b2) keeps seeing a genuinely-dead session as live forever")
-}
-
-// startRealTmuxSession starts a real, detached tmux session named exactly as a
-// persisted instance with this title resolves to, on the per-process isolated
-// socket tmux.ResolveSocket hands every tmux call inside a `go test` binary,
-// and returns that socket. Real tmux (rather than a fake executor) is
-// unavoidable here: findConfirmedLiveInstance builds its shadow instance
-// internally via session.FromInstanceDataDeferred, so a test never gets a
-// handle to inject a test double before IsBackendProcessAlive() runs.
-//
-// Teardown kills only this one session, never the server: the isolated socket
-// is shared by every test in the binary, so kill-server would take their tmux
-// sessions down too.
-func startRealTmuxSession(t *testing.T, title string) string {
-	t.Helper()
-	socket := string(tmux.ResolveSocket(""))
-	require.NotEmpty(t, socket,
-		"tmux calls must resolve to the per-process isolated test socket; refusing to create a session on the shared default server")
-	name := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
-
-	// tmux.Binary() (honoring TMUX_BIN), never a bare "tmux" off PATH: a
-	// developer shell often points TMUX_BIN at a different build, and a client
-	// of one build talking to a server started by another reports the server as
-	// gone ("server exited unexpectedly") — which would look exactly like the
-	// regression this test exists to catch.
-	bin := tmux.Binary()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, err := safeexec.CommandContext(ctx, bin, "-L", socket,
-		"new-session", "-d", "-s", name, "sleep", "300").CombinedOutput()
-	require.NoError(t, err, "tmux new-session -L %s -s %s: %s", socket, name, out)
-
-	// Prove the session is actually visible on that socket before the test
-	// relies on it: a silently-dead server would otherwise make this test look
-	// like a real regression in findConfirmedLiveInstance.
-	listed, listErr := safeexec.CommandContext(ctx, bin, "-L", socket, "list-sessions").CombinedOutput()
-	require.NoError(t, listErr, "tmux list-sessions -L %s: %s", socket, listed)
-	require.Contains(t, string(listed), name)
-
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		_ = safeexec.CommandContext(cleanupCtx, bin, "-L", socket, "kill-session", "-t", name).Run() //nolint:errcheck // best-effort teardown
-	})
-	return socket
 }
 
 // --------------------------------------------------------------------------
@@ -295,7 +244,7 @@ func TestOtherLiveSessionInsideWorktree_NoPollerOrEmptyPath_NotBlocked(t *testin
 	_, blocked := noPoller.OtherLiveSessionInsideWorktree("uuid-a", "/tmp/wt")
 	assert.False(t, blocked, "no reviewQueuePoller wired: nothing can be proven, so nothing may be blocked")
 
-	withPoller := &SessionService{reviewQueuePoller: newEmptyPoller()}
+	withPoller := &SessionService{reviewQueuePoller: svctest.NewEmptyPoller()}
 	_, blocked = withPoller.OtherLiveSessionInsideWorktree("uuid-a", "")
 	assert.False(t, blocked, "an empty worktree path must never match every session's cwd by prefix")
 }
@@ -321,7 +270,7 @@ func TestOtherLiveSessionInsideWorktree_LiveSiblingInsideWorktree_Blocks(t *test
 	// canonicalization path it's guarding.
 	require.NoError(t, os.MkdirAll(siblingCWD, 0o755))
 	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), siblingCWD)
-	poller := newEmptyPoller()
+	poller := svctest.NewEmptyPoller()
 	poller.SetInstances([]*session.Instance{sibling})
 	svc := &SessionService{reviewQueuePoller: poller}
 
@@ -358,7 +307,7 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			poller := newEmptyPoller()
+			poller := svctest.NewEmptyPoller()
 			poller.SetInstances([]*session.Instance{tc.inst})
 			svc := &SessionService{reviewQueuePoller: poller}
 
@@ -392,7 +341,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		t.Parallel()
 		sibling := newLiveProbeInstance(t, "owner-"+t.Name(), sharedPath)
 		sibling.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
-		poller := newEmptyPoller()
+		poller := svctest.NewEmptyPoller()
 		poller.SetInstances([]*session.Instance{sibling})
 		svc := &SessionService{reviewQueuePoller: poller}
 
@@ -406,7 +355,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		t.Parallel()
 		self := newLiveProbeInstance(t, "self-"+t.Name(), sharedPath)
 		self.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
-		poller := newEmptyPoller()
+		poller := svctest.NewEmptyPoller()
 		poller.SetInstances([]*session.Instance{self})
 		svc := &SessionService{reviewQueuePoller: poller}
 
@@ -419,7 +368,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		t.Parallel()
 		sibling := newLiveProbeInstance(t, "different-uuid-"+t.Name(), sharedPath)
 		sibling.SetHistoryInfo("11111111-1111-1111-1111-111111111111", filepath.Join(sharedPath, "other.jsonl"))
-		poller := newEmptyPoller()
+		poller := svctest.NewEmptyPoller()
 		poller.SetInstances([]*session.Instance{sibling})
 		svc := &SessionService{reviewQueuePoller: poller}
 
@@ -432,7 +381,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		t.Parallel()
 		dead := newDeadProbeInstance(t, "dead-"+t.Name(), sharedPath)
 		dead.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
-		poller := newEmptyPoller()
+		poller := svctest.NewEmptyPoller()
 		poller.SetInstances([]*session.Instance{dead})
 		svc := &SessionService{reviewQueuePoller: poller}
 

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -54,7 +55,7 @@ func TestRestartSessionAndShell_ShouldReturnFailedPrecondition_WhenHiddenAndInte
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == "restart-hidden" {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 		}
 	}
 	require.True(t, fix.svc.FindLiveInstance("restart-hidden").Snapshot().Hidden)

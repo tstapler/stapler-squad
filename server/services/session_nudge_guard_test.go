@@ -9,27 +9,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-type fakeGuardClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
-
-func (c *fakeGuardClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *fakeGuardClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
-}
-
-func newTestGuard() (*sessionNudgeGuard, *fakeGuardClock) {
-	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+func newTestGuard() (*sessionNudgeGuard, *svctest.FakeGuardClock) {
+	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	return &sessionNudgeGuard{now: clk.Now}, clk
 }
 

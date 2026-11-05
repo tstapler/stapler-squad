@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -10,21 +10,21 @@ import (
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
-type fakeTokenStore struct {
-	results   []*tokens.ParseResult
-	isLoading bool
-	// subscribeCh, when set, is returned as-is by Subscribe() so a test can
+type FakeTokenStore struct {
+	Results []*tokens.ParseResult
+	Loading bool
+	// SubscribeCh, when set, is returned as-is by Subscribe() so a test can
 	// push values directly onto it (deterministic control over watchInsights's
 	// receive loop, vs. racing a real TokenStore's background walk timing).
 	// Subscribe() falls back to a fresh unconnected channel when unset,
 	// preserving the original behavior for tests that don't care.
-	subscribeCh chan *tokens.ParseResult
+	SubscribeCh chan *tokens.ParseResult
 }
 
-func (f *fakeTokenStore) GetAll() []*tokens.ParseResult { return f.results }
+func (f *FakeTokenStore) GetAll() []*tokens.ParseResult { return f.Results }
 
-func (f *fakeTokenStore) GetByUUID(uuid string) *tokens.ParseResult {
-	for _, r := range f.results {
+func (f *FakeTokenStore) GetByUUID(uuid string) *tokens.ParseResult {
+	for _, r := range f.Results {
 		if r.SessionUUID == uuid {
 			return r
 		}
@@ -32,35 +32,35 @@ func (f *fakeTokenStore) GetByUUID(uuid string) *tokens.ParseResult {
 	return nil
 }
 
-func (f *fakeTokenStore) IsLoading() bool { return f.isLoading }
+func (f *FakeTokenStore) IsLoading() bool { return f.Loading }
 
-func (f *fakeTokenStore) Subscribe() <-chan *tokens.ParseResult {
-	if f.subscribeCh != nil {
-		return f.subscribeCh
+func (f *FakeTokenStore) Subscribe() <-chan *tokens.ParseResult {
+	if f.SubscribeCh != nil {
+		return f.SubscribeCh
 	}
 	return make(chan *tokens.ParseResult, 1)
 }
 
-func (f *fakeTokenStore) Unsubscribe(_ <-chan *tokens.ParseResult) {}
+func (f *FakeTokenStore) Unsubscribe(_ <-chan *tokens.ParseResult) {}
 
-type fakeBacklogReader struct {
-	entries []session.ItemSessionBacklogEntry
+type FakeBacklogReader struct {
+	Entries []session.ItemSessionBacklogEntry
 	err     error
-	// calls counts GetAllItemSessionsWithBacklogInfo invocations — see
+	// Calls counts GetAllItemSessionsWithBacklogInfo invocations — see
 	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
-	calls int
+	Calls int
 }
 
-func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
-	f.calls++
+func (f *FakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+	f.Calls++
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.entries, nil
+	return f.Entries, nil
 }
 
 // newResult builds a minimal ParseResult for tests.
-func newResult(uuid, model, projectPath string, input, output, cacheRead int64, modTime time.Time) *tokens.ParseResult {
+func NewResult(uuid, model, projectPath string, input, output, cacheRead int64, modTime time.Time) *tokens.ParseResult {
 	return &tokens.ParseResult{
 		SessionUUID:  uuid,
 		PrimaryModel: model,
@@ -86,12 +86,12 @@ func newResult(uuid, model, projectPath string, input, output, cacheRead int64, 
 // insightsEventSender, capturing every sent message in a mutex-guarded slice
 // — watchInsights runs in a goroutine below while the test triggers a file
 // change concurrently, so Send is called concurrently with Sent().
-type fakeInsightsEventSender struct {
+type FakeInsightsEventSender struct {
 	mu   sync.Mutex
 	sent []*sessionv1.InsightsEvent
 }
 
-func (f *fakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
+func (f *FakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, e)
@@ -100,7 +100,7 @@ func (f *fakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
 
 // Sent returns a snapshot copy of the messages sent so far, safe to read
 // concurrently with in-flight Send calls.
-func (f *fakeInsightsEventSender) Sent() []*sessionv1.InsightsEvent {
+func (f *FakeInsightsEventSender) Sent() []*sessionv1.InsightsEvent {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]*sessionv1.InsightsEvent, len(f.sent))

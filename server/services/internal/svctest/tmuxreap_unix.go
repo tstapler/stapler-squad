@@ -1,6 +1,6 @@
 //go:build !windows
 
-package services
+package svctest
 
 import (
 	"os"
@@ -8,15 +8,15 @@ import (
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 )
 
-// reapLeakedTmuxTestServers and startTmuxTestServerWatchdog mirror
+// ReapLeakedTmuxTestServers and StartTmuxTestServerWatchdog mirror
 // session/tmux/testmain_test.go's TestMain: this package's fixtures spin up
 // real tmux test servers (CreateSession/StartSessionDriver/RestoreWithWorkDir),
 // and under repeated -count runs a server left behind by an earlier iteration
 // or a killed test binary would otherwise accumulate and never get reaped.
-func reapLeakedTmuxTestServers() {
+func ReapLeakedTmuxTestServers() {
 	tmuxreap.ReapLeakedTestServers()
 }
 
-func startTmuxTestServerWatchdog() {
+func StartTmuxTestServerWatchdog() {
 	tmuxreap.StartTestServerWatchdog(os.Getpid())
 }

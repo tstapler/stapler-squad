@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -71,7 +72,7 @@ func TestTriageInputHash_IgnoresACStatusButNotText(t *testing.T) {
 
 func TestMaybeTriggerTriage_SkipsItemWithACAndRecordsReason(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -97,7 +98,7 @@ func TestMaybeTriggerTriage_SkipsItemWithACAndRecordsReason(t *testing.T) {
 
 func TestMaybeTriggerTriage_SkipsApprovedPlan_RunsPlainItem(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -120,7 +121,7 @@ func TestMaybeTriggerTriage_SkipsApprovedPlan_RunsPlainItem(t *testing.T) {
 // skipped (not demoted), a changed description runs again, and ResumeTriage bypasses the gate.
 func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -155,7 +156,7 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 // triage-skip tests, extracted to avoid re-duplicating it a third time (dupl gate).
 func newTriageSkipTestService(t *testing.T) (*session.Storage, *fakeHeadlessPool, *BacklogService) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -186,7 +187,7 @@ func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, svc.IsRetriagePointless(t.Context(), item.ID), "content unchanged since the completed triage")
 
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{Description: strPtr("v2")}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{Description: svctest.StrPtr("v2")}, nil)
 	require.NoError(t, err)
 	assert.False(t, svc.IsRetriagePointless(t.Context(), item.ID), "changed description must no longer read as pointless")
 }
@@ -198,7 +199,7 @@ func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 // test creates items.
 func runBulkTriage(t *testing.T, cap int, rendezvous bool) int32 {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	var active, maxActive int32
 	overlapped := make(chan struct{})
 	var overlapOnce sync.Once
@@ -244,7 +245,7 @@ func TestTriageConcurrencyCapQueuesExcessRuns(t *testing.T) {
 
 func TestTriageCallUsesConfiguredModel(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, &config.Config{HeadlessTriageModel: "family:haiku"}, nil, nil, nil)
 	svc.SetHeadlessPool(pool)

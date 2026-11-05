@@ -6,11 +6,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestPinnedStageModel_should_PinOnlyClaudeWithoutModeModel(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "", ""))
 	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "claude", ""))
 	assert.Equal(t, "family:opus", pinnedStageModel(session.StageRoleReview, "", "family:opus"), "mode pin wins")
@@ -20,12 +21,12 @@ func TestPinnedStageModel_should_PinOnlyClaudeWithoutModeModel(t *testing.T) {
 }
 
 func TestPinnedWorkStageModel_should_SkipWhenExecutorProgramNotClaude(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	assert.Empty(t, pinnedWorkStageModel(t.TempDir(), "agy", ""))
 }
 
 func TestPinnedWorkStageModel_should_PinOnlyWhenDefaultProgramIsBareClaude(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	repo := t.TempDir()
 
 	cfg := config.LoadConfig()

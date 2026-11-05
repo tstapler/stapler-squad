@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 // Every swap site in this package (captureLogs, captureInfoLog/captureErrorLog in
 // session_service_client_log_test.go, and the inline swaps in search_service_test.go
 // and slack_notifier_test.go) must hold this lock for the full swap-to-restore window.
-var slogDefaultMu sync.Mutex
+var SlogDefaultMu sync.Mutex
 
 // syncLogBuffer is a mutex-guarded bytes.Buffer. Even after this package's tests stop
 // calling slog.SetDefault() directly, captureLogs's buffer can still legitimately be
@@ -24,18 +24,18 @@ var slogDefaultMu sync.Mutex
 // log.Warn/Info) concurrently with the owning test's String() read. A plain
 // bytes.Buffer would make that a genuine data race under -race; this makes the access
 // itself safe regardless of which code path writes to it.
-type syncLogBuffer struct {
+type SyncLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (b *syncLogBuffer) Write(p []byte) (int, error) {
+func (b *SyncLogBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
 }
 
-func (b *syncLogBuffer) String() string {
+func (b *SyncLogBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
@@ -43,14 +43,14 @@ func (b *syncLogBuffer) String() string {
 
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
 // restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
-func captureLogs(t *testing.T) *syncLogBuffer {
+func CaptureLogs(t *testing.T) *SyncLogBuffer {
 	t.Helper()
-	slogDefaultMu.Lock()
-	buf := &syncLogBuffer{}
+	SlogDefaultMu.Lock()
+	buf := &SyncLogBuffer{}
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() {
 		ssqlog.SetSlogDefaultForTest(prev)
-		slogDefaultMu.Unlock()
+		SlogDefaultMu.Unlock()
 	})
 	return buf
 }

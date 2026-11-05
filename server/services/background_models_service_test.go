@@ -8,10 +8,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func TestUpdateBackgroundModels_ValidatesAndPersists(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	s := &SessionService{}
 	upd := func(p *sessionv1.BackgroundModelsProto) error {
 		_, err := s.UpdateBackgroundModels(context.Background(),

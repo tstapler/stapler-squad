@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // row directly via the ent client (bypassing MarkStuck/its status precondition,
 // since these RPC-level tests only need a row to exist, not the reconciler's
 // write path — that path is covered by session/ent_repository_backlog_stuck_test.go).
-func seedOpenStuckRow(t *testing.T, storage *session.Storage, itemID string, reason domain.StuckReason, firstDetectedAt time.Time, stuckContext string) {
+func SeedOpenStuckRow(t *testing.T, storage *session.Storage, itemID string, reason domain.StuckReason, firstDetectedAt time.Time, stuckContext string) {
 	t.Helper()
 	client := storage.GetEntClient()
 	require.NotNil(t, client)

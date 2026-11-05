@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -19,7 +20,7 @@ import (
 // actually propagates from AttachSessionToItem's item-status guard, for an item in a
 // terminal status ("done").
 func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFails(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -62,7 +63,7 @@ func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFa
 // refuses the edge, even though the static validTransitions map allows it.
 func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_ConfiguredWorkflowEngineHasDisabledTheEdge(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	engine := disabledEdgeWorkflowEngine{
 		WorkflowEngine: session.NewDefaultWorkflowEngine(),
 		deniedFrom:     session.BacklogStatusReady,
@@ -102,7 +103,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 // leave done-0.md containing the SECOND item's id, not the first's, and the file set must
 // match the second item's AC count exactly (no stale done-N.md beyond it).
 func TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_RelinkedToDifferentItem(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	repoPath := t.TempDir()
 	// Distinct from repoPath (item.RepoPath): AttachSessionToItem rejects attaching a

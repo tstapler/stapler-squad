@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"testing"
@@ -10,7 +10,7 @@ import (
 
 // requireOneNotification waits briefly for exactly one EventNotification on ch and
 // returns it, failing the test otherwise.
-func requireOneNotification(t *testing.T, ch <-chan *events.Event) *events.Event {
+func RequireOneNotification(t *testing.T, ch <-chan *events.Event) *events.Event {
 	t.Helper()
 	select {
 	case ev := <-ch:

@@ -1,3 +1,3 @@
-package services
+package svctest
 
-func boolPtr(v bool) *bool { return &v }
+func BoolPtr(v bool) *bool { return &v }

@@ -18,6 +18,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -153,7 +154,7 @@ type denSpawnCase struct {
 
 func denDefaultSetup(status session.BacklogStatus) func(t *testing.T) (*BacklogService, string) {
 	return func(t *testing.T) (*BacklogService, string) {
-		svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+		svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 		svc.SetHeadlessPool(&fakeHeadlessPool{})
 		return svc, systemItemAt(t, svc, status).ID
 	}
@@ -166,7 +167,7 @@ func denSpawnCases() []denSpawnCase {
 			denDefaultSetup(session.BacklogStatusIdea), func(s *BacklogService, id string) { _ = s.AutoRespawnTriage(ctx, id) }},
 		{"MaybeTriggerTriage", session.BacklogStatusIdea, session.BacklogStatusReady, session.CallerMaybeTriggerTriage,
 			func(t *testing.T) (*BacklogService, string) {
-				svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+				svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 				svc.SetHeadlessPool(&fakeHeadlessPool{})
 				item, err := svc.storage.CreateBacklogItem(ctx, session.BacklogItemData{
 					Title: "has a plan", Status: string(session.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
@@ -228,7 +229,7 @@ func TestSpawnPoints_should_SkipOnAnOpenDenialFromTheirStatusOnly(t *testing.T) 
 					_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, tc.status, nil, session.TriggeredBySystem)
 					require.NoError(t, err)
 				}
-				logs := captureLogs(t)
+				logs := svctest.CaptureLogs(t)
 
 				tc.call(svc, itemID)
 
@@ -249,7 +250,7 @@ func TestSpawnPoints_should_ProceedAndClearTheRow_When_TheDenialLifted(t *testin
 	remove := h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
 	denOpenRowFrom(t, svc, itemID, session.CallerReconcileStuck, session.BacklogStatusInProgress, session.BacklogStatusReview)
 	remove()
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 
 	_ = svc.AutoRespawnAutonomousWork(context.Background(), itemID) // proceeds past the guard, then fails on the fixture's missing repo_path
 
@@ -461,7 +462,7 @@ func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperat
 
 func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved(t *testing.T) {
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), creator, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
 	remove := h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
 	item := systemItemAt(t, svc, session.BacklogStatusInProgress)
@@ -507,7 +508,7 @@ func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.caller), func(t *testing.T) {
-			svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
+			svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 			bus := events.NewEventBus(16)
 			svc.SetEventBus(bus)
 			ch, _ := bus.Subscribe(t.Context())

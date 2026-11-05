@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -62,7 +63,7 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	svc.SetReviewQueuePoller(poller)
 	// Registered after Shutdown's cleanup so it runs first: any session the test
 	// created through CreateSession must not leave its SessionDriver polling.
-	t.Cleanup(func() { stopPollerSessionDrivers(poller) })
+	t.Cleanup(func() { svctest.StopPollerSessionDrivers(poller) })
 
 	return &forkTestFixture{
 		svc:     svc,
@@ -71,12 +72,6 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 		poller:  poller,
 		cleanup: func() {},
 	}
-}
-
-// addInstanceToPoller registers a session instance directly with the poller so
-// that findInstance() can resolve it by title (the normal production path).
-func addInstanceToPoller(poller *session.ReviewQueuePoller, inst *session.Instance) {
-	poller.SetInstances(append(poller.GetInstances(), inst))
 }
 
 // makeInstanceWithCheckpoint creates a minimal Instance that has one checkpoint.
@@ -174,8 +169,8 @@ func TestForkSession_DuplicateTitle(t *testing.T) {
 	// Register two instances: source "src" and another with the would-be fork title "fork".
 	src, _ := makeInstanceWithCheckpoint("src")
 	existing, _ := makeInstanceWithCheckpoint("fork")
-	addInstanceToPoller(fix.poller, src)
-	addInstanceToPoller(fix.poller, existing)
+	svctest.AddInstanceToPoller(fix.poller, src)
+	svctest.AddInstanceToPoller(fix.poller, existing)
 
 	_, err := fix.svc.ForkSession(context.Background(), connect.NewRequest(&sessionv1.ForkSessionRequest{
 		SessionId:    "src",
@@ -194,7 +189,7 @@ func TestForkSession_CheckpointNotFound(t *testing.T) {
 	t.Cleanup(fix.cleanup)
 
 	src, _ := makeInstanceWithCheckpoint("src")
-	addInstanceToPoller(fix.poller, src)
+	svctest.AddInstanceToPoller(fix.poller, src)
 
 	_, err := fix.svc.ForkSession(context.Background(), connect.NewRequest(&sessionv1.ForkSessionRequest{
 		SessionId:    "src",
@@ -215,7 +210,7 @@ func TestForkSession_Success(t *testing.T) {
 	t.Cleanup(fix.cleanup)
 
 	src, cpID := makeInstanceWithCheckpoint("src")
-	addInstanceToPoller(fix.poller, src)
+	svctest.AddInstanceToPoller(fix.poller, src)
 
 	resp, err := fix.svc.ForkSession(context.Background(), connect.NewRequest(&sessionv1.ForkSessionRequest{
 		SessionId:    "src",
@@ -237,13 +232,13 @@ func TestForkSession_Success(t *testing.T) {
 // why: Start(true) runs on its own goroutine against the same *Instance this
 // test holds no other handle to observe launch completion on).
 func TestForkSession_WiresMCPServerURLProvider(t *testing.T) {
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 	fix.svc.SetMCPServerURL(func() string { return "http://localhost:19193/mcp" })
 
 	src, cpID := makeInstanceWithCheckpoint("fork-provider-src")
-	addInstanceToPoller(fix.poller, src)
+	svctest.AddInstanceToPoller(fix.poller, src)
 
 	resp, err := fix.svc.ForkSession(context.Background(), connect.NewRequest(&sessionv1.ForkSessionRequest{
 		SessionId:    "fork-provider-src",
@@ -281,7 +276,7 @@ func TestGetSessionDiff_FindsByUUID(t *testing.T) {
 	t.Cleanup(fix.cleanup)
 
 	const testUUID = "22222222-2222-2222-2222-222222222222"
-	addInstanceToPoller(fix.poller, &session.Instance{
+	svctest.AddInstanceToPoller(fix.poller, &session.Instance{
 		UUID:    testUUID,
 		Title:   "diff-session",
 		Path:    "/tmp/test-diff",
@@ -306,7 +301,7 @@ func TestGetSessionDiff_FindsByTitle(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	addInstanceToPoller(fix.poller, &session.Instance{
+	svctest.AddInstanceToPoller(fix.poller, &session.Instance{
 		Title:   "diff-by-title",
 		Path:    "/tmp/test-diff-title",
 		Status:  session.Active,
@@ -352,7 +347,7 @@ func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.
 	t.Cleanup(fix.cleanup)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "new-file.txt"), []byte("uncommitted change\n"), 0o644))
 
 	// Persisted (not live — never registered with the poller), directory-mode:

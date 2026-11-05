@@ -19,6 +19,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	tslog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -65,7 +66,7 @@ func (r *failAfterNListEnabledRepo) ListEnabled(ctx context.Context) ([]*ent.Pip
 // server/dependencies.go wires production (both share one instance).
 func newPipelineModeTestService(t *testing.T) (*BacklogService, session.PipelineModeRepository, *session.CachingPipelineEngine) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	repo := session.NewEntPipelineModeRepository(storage.GetEntClient())
 	engine, err := session.NewPipelineEngine(repo)
 	require.NoError(t, err)
@@ -250,7 +251,7 @@ func TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecut
 
 	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
 		Id:   id,
-		Name: strPtr("Cheap Triage Renamed"),
+		Name: svctest.StrPtr("Cheap Triage Renamed"),
 	}))
 	require.NoError(t, err)
 	require.Contains(t, updateResp.Msg.Item.StageExecutors, "triage")
@@ -276,7 +277,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 	// racing a concurrent Warn call — same fix as
 	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
 	// sibling comment in webhook_ssrf_test.go.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	realRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must
 	// succeed), call 2 is CreatePipelineMode's invalidation (must succeed so
@@ -301,7 +302,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 
 	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
 		Id:                   id,
-		TriagePromptTemplate: strPtr("updated prompt"),
+		TriagePromptTemplate: svctest.StrPtr("updated prompt"),
 	}))
 	require.NoError(t, err, "cache-invalidation failure after a successful DB write must not fail the RPC")
 	require.NotNil(t, updateResp)
@@ -478,8 +479,8 @@ func TestPipelineModeCRUD_should_RoundTripCreateGetUpdateDelete_When_CalledSeque
 
 	updateResp, err := svc.UpdatePipelineMode(ctx, connect.NewRequest(&sessionv1.UpdatePipelineModeRequest{
 		Id:                   created.Id,
-		Name:                 strPtr("Quick Fix v2"),
-		TriagePromptTemplate: strPtr("updated triage prompt"),
+		Name:                 svctest.StrPtr("Quick Fix v2"),
+		TriagePromptTemplate: svctest.StrPtr("updated triage prompt"),
 	}))
 	require.NoError(t, err)
 	updated := updateResp.Msg.Item

@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"fmt"
@@ -14,25 +14,25 @@ import (
 // stopSessionDriverOnCleanup stops and joins inst's SessionDriver when the test
 // ends. Use it for instances that never enter the fixture's poller (e.g. built
 // with session.CreateManagedInstance), which setupForkTestFixture cannot see.
-func stopSessionDriverOnCleanup(t testing.TB, inst *session.Instance) {
+func StopSessionDriverOnCleanup(t testing.TB, inst *session.Instance) {
 	t.Helper()
-	t.Cleanup(func() { stopSessionDriver(inst) })
+	t.Cleanup(func() { StopSessionDriver(inst) })
 }
 
-func stopSessionDriver(inst *session.Instance) {
+func StopSessionDriver(inst *session.Instance) {
 	session.StopSessionDriver(inst)
 	session.JoinSessionDriver(inst)
 }
 
 // stopPollerSessionDrivers stops the driver of every instance registered with poller.
-func stopPollerSessionDrivers(poller *session.ReviewQueuePoller) {
+func StopPollerSessionDrivers(poller *session.ReviewQueuePoller) {
 	for _, inst := range poller.GetInstances() {
-		stopSessionDriver(inst)
+		StopSessionDriver(inst)
 	}
 }
 
 // liveSessionDriverStacks returns the stack of each running SessionDriver goroutine.
-func liveSessionDriverStacks() []string {
+func LiveSessionDriverStacks() []string {
 	buf := make([]byte, 1<<24)
 	buf = buf[:runtime.Stack(buf, true)]
 	var stacks []string
@@ -45,11 +45,11 @@ func liveSessionDriverStacks() []string {
 }
 
 // liveSessionDriverCount counts running SessionDriver goroutines in this process.
-func liveSessionDriverCount() int { return len(liveSessionDriverStacks()) }
+func liveSessionDriverCount() int { return len(LiveSessionDriverStacks()) }
 
 // awaitNoSessionDrivers waits briefly for just-stopped drivers to exit and
 // returns the count still alive.
-func awaitNoSessionDrivers(timeout time.Duration) int {
+func AwaitNoSessionDrivers(timeout time.Duration) int {
 	deadline := time.Now().Add(timeout)
 	for {
 		n := liveSessionDriverCount()
@@ -67,7 +67,7 @@ var driverStartLog struct {
 	starts map[*session.Instance]string
 }
 
-func recordSessionDriverStarts() {
+func RecordSessionDriverStarts() {
 	driverStartLog.starts = map[*session.Instance]string{}
 	session.SetSessionDriverStartHookForTest(func(inst *session.Instance) {
 		stack := make([]byte, 1<<14)
@@ -79,7 +79,7 @@ func recordSessionDriverStarts() {
 }
 
 // leakedSessionDriverStarts returns the creation record of each driver still running.
-func leakedSessionDriverStarts() []string {
+func LeakedSessionDriverStarts() []string {
 	driverStartLog.mu.Lock()
 	defer driverStartLog.mu.Unlock()
 	var leaked []string

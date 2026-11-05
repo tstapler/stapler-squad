@@ -1,4 +1,4 @@
-package services
+package svctest
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 // binary: hostnames resolve to a fixed public address so callback-URL
 // validation tests need neither network access nor a working resolver.
 // Tests that need other answers still swap lookupIPAddr via withFakeResolver.
-func hermeticLookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+func HermeticLookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IPAddr{{IP: ip}}, nil
 	}

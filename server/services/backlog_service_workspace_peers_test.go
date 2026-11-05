@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -15,13 +16,13 @@ import (
 // production choke point: BacklogService.initialPromptFor, called by SpawnSessionFromItem
 // to build inst.Prompt.
 func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	// A peer session already working in the same repo (path-based key: no GitHub remote).
@@ -57,12 +58,12 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 // AC0: even with a peer present, the nudge must not appear unless the feature flag is
 // explicitly enabled.
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefault(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	peer := &session.Instance{
@@ -89,13 +90,13 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 }
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item := &session.BacklogItemData{
@@ -112,10 +113,10 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *te
 }
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item := &session.BacklogItemData{
@@ -135,15 +136,15 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t 
 // regression where every backlog item on the box would see every other item's sessions
 // as "peers" (AC1).
 func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
 
 	repoA := t.TempDir()
-	initGitRepoWithCommit(t, repoA)
+	svctest.InitGitRepoWithCommit(t, repoA)
 	repoB := t.TempDir()
-	initGitRepoWithCommit(t, repoB)
+	svctest.InitGitRepoWithCommit(t, repoB)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	peerOnRepoB := &session.Instance{

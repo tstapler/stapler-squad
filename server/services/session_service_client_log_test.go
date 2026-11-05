@@ -8,6 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	"connectrpc.com/connect"
 )
@@ -24,13 +25,13 @@ func newLogClientEventsRequest(entries ...*sessionv1.ClientLogEntry) *connect.Re
 // Holds slogDefaultMu (declared in autonomous_orchestration_service_test.go) for the
 // full swap-to-restore window so it can't race other tests' log.SetSlogDefaultForTest swaps.
 func captureInfoLog() func() string {
-	slogDefaultMu.Lock()
-	buf := &syncLogBuffer{}
+	svctest.SlogDefaultMu.Lock()
+	buf := &svctest.SyncLogBuffer{}
 	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
 	return func() string {
 		ssqlog.SetSlogDefaultForTest(original)
-		slogDefaultMu.Unlock()
+		svctest.SlogDefaultMu.Unlock()
 		return buf.String()
 	}
 }

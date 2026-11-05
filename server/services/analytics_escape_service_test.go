@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,7 +28,7 @@ func createTestAnalyticsClient(t *testing.T) *ent.Client {
 // createTestServiceWithAnalytics creates a SessionService wired with an analytics ent client.
 func createTestServiceWithAnalytics(t *testing.T) (*SessionService, *ent.Client) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -125,7 +126,7 @@ func TestQueryEscapeAnalytics_RequiresSessionID(t *testing.T) {
 
 func TestQueryEscapeAnalytics_NoClientReturnsUnavailable(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
 	// escapeEventsClient intentionally not set
@@ -224,7 +225,7 @@ func TestGetEscapeAnalyticsSummary_SeparatesSourceVolumeFromCorrelationOutcomes(
 
 func TestGetEscapeAnalyticsGlobalSummary_should_ReturnUnavailable_When_AnalyticsClientNil(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
 	// escapeEventsClient intentionally not set

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -29,7 +30,7 @@ func TestSessionService_Shutdown_KillsTestTmuxServer(t *testing.T) {
 		t.Skip("tmux not available")
 	}
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -42,13 +43,13 @@ func TestSessionService_Shutdown_KillsTestTmuxServer(t *testing.T) {
 	queue := session.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
-	t.Cleanup(func() { stopPollerSessionDrivers(poller) })
+	t.Cleanup(func() { svctest.StopPollerSessionDrivers(poller) })
 
 	require.NotEmpty(t, svc.testTmuxServerSocket, "test binary must set testTmuxServerSocket")
 	socket := svc.testTmuxServerSocket
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "shutdown-kills-tmux",

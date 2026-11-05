@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -114,7 +115,7 @@ func TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL(t *testing.T) 
 	// captureLogs holds slogDefaultMu for the test's duration: postToSlack's
 	// failure path calls log.Warn against the process-global slog default,
 	// which otherwise races with any other t.Parallel() test capturing it.
-	_ = captureLogs(t)
+	_ = svctest.CaptureLogs(t)
 	n := NewSlackNotifier()
 	const unreachableURL = "http://127.0.0.1:1/services/T0/B0/SECRET"
 
@@ -163,7 +164,7 @@ func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
 	t.Parallel()
 	// captureLogs holds slogDefaultMu for the test's duration; see the comment
 	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
-	_ = captureLogs(t)
+	_ = svctest.CaptureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -190,7 +191,7 @@ func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
 	t.Parallel()
 	// captureLogs holds slogDefaultMu for the test's duration; see the comment
 	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
-	_ = captureLogs(t)
+	_ = svctest.CaptureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("no_service"))
@@ -211,7 +212,7 @@ func TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty(t *testing.T) {
 	t.Parallel()
 	// captureLogs holds slogDefaultMu for the test's duration; see the comment
 	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
-	_ = captureLogs(t)
+	_ = svctest.CaptureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -549,8 +550,8 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	t.Parallel()
 	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
 	// swap against every other log.SetSlogDefaultForTest swap in this package.
-	slogDefaultMu.Lock()
-	buf := &syncLogBuffer{}
+	svctest.SlogDefaultMu.Lock()
+	buf := &svctest.SyncLogBuffer{}
 	sigCh := make(chan struct{}, 1)
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(&signalingLogHandler{
 		Handler: slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
@@ -559,7 +560,7 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	}))
 	t.Cleanup(func() {
 		ssqlog.SetSlogDefaultForTest(prev)
-		slogDefaultMu.Unlock()
+		svctest.SlogDefaultMu.Unlock()
 	})
 
 	n := NewSlackNotifier()
@@ -645,7 +646,7 @@ func TestGetDeliveryStatus_ReturnsSnapshot_AfterFailedSend(t *testing.T) {
 	t.Parallel()
 	// captureLogs holds slogDefaultMu for the test's duration; see the comment
 	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
-	_ = captureLogs(t)
+	_ = svctest.CaptureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -701,7 +702,7 @@ func TestGetDeliveryStatus_NoDataRace_UnderConcurrentAccess(t *testing.T) {
 
 func TestSlackNotifier_NeverLogsWebhookURL(t *testing.T) {
 	t.Parallel()
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	const secretPath = "/services/TSECRET/BSECRET/XSECRET"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -720,7 +721,7 @@ func TestSlackNotifier_NeverLogsWebhookURL(t *testing.T) {
 
 func TestSlackNotifier_NeverLogsWebhookURL_OnTransportError(t *testing.T) {
 	t.Parallel()
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	// Bind a listener then close it immediately: the port is very likely to
 	// refuse connections, forcing a genuine transport-level failure distinct
