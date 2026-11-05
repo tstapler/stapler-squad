@@ -102,6 +102,11 @@ service SessionService {
   rpc PostPRComment(PostPRCommentRequest) returns (PostPRCommentResponse) {}
   rpc MergePR(MergePRRequest) returns (MergePRResponse) {}
   rpc ClosePR(ClosePRRequest) returns (ClosePRResponse) {}
+  // PR set management for a session. UI-only: never reachable from MCP tools.
+  rpc PinSessionPullRequest(PinSessionPullRequestRequest) returns (PinSessionPullRequestResponse) {}
+  rpc RefreshSessionPullRequests(RefreshSessionPullRequestsRequest) returns (RefreshSessionPullRequestsResponse) {}
+  rpc DetachSessionPullRequest(DetachSessionPullRequestRequest) returns (DetachSessionPullRequestResponse) {}
+  rpc AttachSessionPullRequest(AttachSessionPullRequestRequest) returns (AttachSessionPullRequestResponse) {}
 
   // SendNotification allows tmux sessions to send notifications to the server.
   // Notifications are broadcast to all connected clients (web UI and TUI).
@@ -1579,6 +1584,49 @@ message ClosePRResponse {
   bool success = 1;
   // Human-readable message
   string message = 2;
+}
+
+// PinSessionPullRequestRequest pins pr as the session's active PR. An unset pr
+// clears the current pin.
+message PinSessionPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+message PinSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// RefreshSessionPullRequestsRequest re-polls the session's open, unknown and
+// unverified-terminal PRs and returns the refreshed list.
+message RefreshSessionPullRequestsRequest {
+  string id = 1;
+}
+
+message RefreshSessionPullRequestsResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// DetachSessionPullRequestRequest removes pr from this session only and blocks
+// automatic re-attachment until the user attaches it again.
+message DetachSessionPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+message DetachSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// AttachSessionPullRequestRequest links the PR at url to the session after
+// checking on GitHub that it exists; it clears this session's tombstone for it.
+message AttachSessionPullRequestRequest {
+  string id = 1;
+  string url = 2;
+}
+
+message AttachSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
 }
 
 // SendNotificationRequest allows tmux sessions to send notifications.

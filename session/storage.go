@@ -920,6 +920,39 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 	return err
 }
 
+// DetachSessionPR deletes the session's link to ref and writes its tombstone in
+// one transaction (the user's "Not mine").
+func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	_, err := s.repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
+func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	err := s.repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// ClearSessionPRTombstone removes the session's tombstone for ref, if any.
+func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	return s.repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
+}
+
 // ListPRMirrors returns the stored legacy PR columns by session uuid.
 func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
 	return s.repo.ListPRMirrors(ctx)
