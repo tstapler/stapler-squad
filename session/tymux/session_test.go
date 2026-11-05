@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -186,6 +187,7 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // this test counts launch-path GetServerInfo calls only
 	resetClaims(t)
 	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
 	require.NoError(t, os.WriteFile(promptFile, []byte("fix the bug\n"), 0o600))
@@ -1396,4 +1398,177 @@ func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalStat
 	assert.False(t, ok)
 	assert.Empty(t, data)
 	assert.False(t, altScreen)
+}
+
+func TestCapturePane_RevivesRestoredPaneWithoutScreen(t *testing.T) {
+	t.Parallel()
+	var captures, revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if atomic.AddInt32(&captures, 1) == 1 {
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+	assert.EqualValues(t, 2, atomic.LoadInt32(&captures))
+}
+
+func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
+	t.Parallel()
+	var revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.viewOnly = true
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.ErrorIs(t, err, ErrPaneNotRunning)
+	assert.Zero(t, atomic.LoadInt32(&revives))
+}
+
+// A wedged daemon must not hold captureReviveMu (and every capture/IsAlive caller behind it) past the lifecycle bound.
+func TestReviveDeadPaneForCapture_BoundsWedgedDaemon(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		transport := &fakeTransport{
+			reviveSessionFn: func(ctx context.Context, _ *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+		sess.paneID = testPaneID
+
+		start := time.Now()
+		ok := sess.reviveDeadPaneForCapture(context.Background(), testPaneID, 0)
+
+		assert.False(t, ok)
+		assert.Equal(t, lifecycleRPCTimeout, time.Since(start))
+	})
+}
+
+// Concurrent captures on one dead pane revive it once; the loser retries instead of reviving a live pane.
+func TestCapturePane_ConcurrentCallersReviveOnce(t *testing.T) {
+	t.Parallel()
+	const callers = 8
+	var revived atomic.Bool
+	var revives, entered int32
+	allFailed := make(chan struct{})
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if !revived.Load() {
+				// Barrier: every caller has read the pre-revive generation before any revive runs,
+				// so only the dedup (not scheduling luck) keeps the revive count at one.
+				if atomic.AddInt32(&entered, 1) == callers {
+					close(allFailed)
+				}
+				select {
+				case <-allFailed:
+				case <-time.After(10 * time.Second):
+					return nil, errors.New("barrier timed out")
+				}
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			revived.Store(true)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := sess.capturePane(context.Background(), 0)
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+}
+
+// Status polling cannot tell an archived session from a live one, so IsAlive must never respawn a pane.
+func TestIsAlive_NeverRevivesDeadPane(t *testing.T) {
+	t.Parallel()
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			t.Error("IsAlive must not call ReviveSession")
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.liveness = v1.Liveness_LIVENESS_DEAD
+
+	assert.False(t, sess.IsAlive())
+}
+
+func TestIsAlive_PaneNotRunning_UsesLifecycleState(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		state     v1.PaneState
+		withState bool
+		cachedLiv v1.Liveness
+		want      bool
+		wantLiv   v1.Liveness
+	}{
+		{"failed is dead despite cached live", v1.PaneState_PANE_STATE_FAILED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"stopped is dead", v1.PaneState_PANE_STATE_STOPPED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"exited is dead", v1.PaneState_PANE_STATE_EXITED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"backoff is alive", v1.PaneState_PANE_STATE_BACKOFF, true, v1.Liveness_LIVENESS_DEAD, true, v1.Liveness_LIVENESS_DEAD},
+		{"unknown state keeps cached live", v1.PaneState_PANE_STATE_UNSPECIFIED, false, v1.Liveness_LIVENESS_LIVE, true, v1.Liveness_LIVENESS_LIVE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			transport := &fakeTransport{
+				capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+					return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+				},
+			}
+			if tc.withState {
+				transport.capabilities = []string{capPaneLifecycle}
+				transport.paneStatusFn = func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+					return connect.NewResponse(&v1.PaneStatus{State: tc.state}), nil
+				}
+			}
+			sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+			sess.paneID = testPaneID
+			sess.liveness = tc.cachedLiv
+
+			assert.Equal(t, tc.want, sess.IsAlive())
+			sess.mu.RLock()
+			defer sess.mu.RUnlock()
+			assert.Equal(t, tc.wantLiv, sess.liveness)
+		})
+	}
 }
