@@ -56,7 +56,7 @@ type FederatedSessions struct {
 }
 
 func NewFederatedSessions(identity session.HostIdentity, peers FederationPeers) *FederatedSessions {
-	streamTransport := peerTLSTransport()
+	streamTransport := federationTransport()
 	streamTransport.ResponseHeaderTimeout = peerFetchTimeout
 	return &FederatedSessions{
 		streamClient: &http.Client{
@@ -66,7 +66,7 @@ func NewFederatedSessions(identity session.HostIdentity, peers FederationPeers) 
 		identity: identity,
 		peers:    peers,
 		client: &http.Client{
-			Transport: peerTLSTransport(),
+			Transport: federationTransport(),
 			// A peer must not bounce a signed request to an internal address.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},

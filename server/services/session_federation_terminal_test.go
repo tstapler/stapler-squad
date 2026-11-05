@@ -30,6 +30,7 @@ func terminalFixture(t *testing.T, capture func(string) (string, error)) (*Feder
 	srv := httptest.NewTLSServer(SessionFederationTerminalHandler(&fakePeers{reg: peerReg}, capture, 5*time.Millisecond))
 	t.Cleanup(srv.Close)
 	live := []session.RegistryEntry{{HostID: peerIdentity.ID, AdvertisedAddress: []string{strings.TrimPrefix(srv.URL, "https://")}}}
+	allowLoopbackFederationDialsForTest(t)
 	return NewFederatedSessions(selfIdentity, &fakePeers{live: live}), peerIdentity.ID
 }
 

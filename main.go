@@ -69,6 +69,7 @@ var (
 	traceFlag               bool
 	listenAddrFlag          string
 	remoteAccessFlag        bool
+	enableFederationFlag    bool
 	remotePortFlag          int
 	rpIDFlag                string
 	tmuxKeepServerFlag      bool
@@ -887,6 +888,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
 		"Enable remote access: starts a second HTTPS server with passkey auth on --remote-port (default 8444). "+
 			"Local server on localhost remains unchanged.")
+	rootCmd.Flags().BoolVar(&enableFederationFlag, "enable-federation", false,
+		"Federate sessions with enrolled peer instances (read-only list, detail and terminal). Requires remote access/gossip; off by default.")
 	rootCmd.Flags().IntVar(&remotePortFlag, "remote-port", 8444,
 		"Port for the remote access HTTPS server (used with --remote-access, default: 8444)")
 	rootCmd.Flags().StringVar(&rpIDFlag, "rp-id", "",
@@ -1483,7 +1486,9 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
 	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
 	go advertiser.Run(ctx)
-	startSessionFederation(ctx, mux, hostIdentity, hostRegistry, sessionSvc)
+	if enableFederationFlag {
+		startSessionFederation(ctx, mux, hostIdentity, hostRegistry, sessionSvc)
+	}
 	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
 	go func() {
 		defer pruneTicker.Stop()

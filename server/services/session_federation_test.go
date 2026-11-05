@@ -50,6 +50,7 @@ func federationFixture(t *testing.T) (*FederatedSessions, *httptest.Server, sess
 
 	addr := strings.TrimPrefix(srv.URL, "https://")
 	live := []session.RegistryEntry{{HostID: peerIdentity.ID, AdvertisedAddress: []string{addr}}}
+	allowLoopbackFederationDialsForTest(t)
 	return NewFederatedSessions(selfIdentity, &fakePeers{live: live}), srv, peerIdentity.ID
 }
 
