@@ -40,6 +40,7 @@ export interface SessionActionsOverflowHandle {
   openAt(x: number, y: number): void;
 }
 
+/* eslint-disable no-restricted-syntax -- SessionActionsOverflowProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 export interface SessionActionsOverflowProps {
   session: Session;
   /** Show Resume/Pause as a shortcut button before the ··· */
@@ -75,6 +76,7 @@ export interface SessionActionsOverflowProps {
   /** Save a new program for the session. Empty string = system default. */
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
+/* eslint-enable no-restricted-syntax */
 
 const VIEWPORT_MARGIN = 8;
 
@@ -98,7 +100,7 @@ function MenuSection({ id, label, openId, onToggle, children }: {
         aria-controls={`overflow-section-${id}`}
         onClick={(e) => { e.stopPropagation(); onToggle(id); }}
         style={{ justifyContent: "space-between" }}
-      >
+      >{/* analytics-exempt */}
         <span>{label}</span>
         <span aria-hidden="true">{open ? "▾" : "▸"}</span>
       </button>

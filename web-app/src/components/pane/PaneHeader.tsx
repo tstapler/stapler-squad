@@ -107,7 +107,7 @@ export function PaneHeader({
             }}
             title={isListPane ? "Switch to session detail" : "Switch to session list"}
             aria-label={isListPane ? "Switch to session detail" : "Switch to session list"}
-          >
+          >{/* analytics-exempt */}
             {isListPane ? <LayoutDashboard size={14} /> : <LayoutList size={14} />}
           </button>
         )}
@@ -124,7 +124,7 @@ export function PaneHeader({
               }}
               title="Split pane side by side (vertical)"
               aria-label="Split pane side by side"
-            >
+            >{/* analytics-exempt */}
               <Columns2 size={14} />
             </button>
             <button
@@ -136,7 +136,7 @@ export function PaneHeader({
               }}
               title="Split pane top and bottom (horizontal)"
               aria-label="Split pane top and bottom"
-            >
+            >{/* analytics-exempt */}
               <Rows2 size={14} />
             </button>
           </>
@@ -152,7 +152,7 @@ export function PaneHeader({
             }}
             title="Fullscreen pane"
             aria-label="Fullscreen pane"
-          >
+          >{/* analytics-exempt */}
             <Maximize2 size={14} />
           </button>
         )}
@@ -166,7 +166,7 @@ export function PaneHeader({
           }}
           title="Close pane"
           aria-label="Close pane"
-        >
+        >{/* analytics-exempt */}
           <X size={14} />
         </button>
       </div>

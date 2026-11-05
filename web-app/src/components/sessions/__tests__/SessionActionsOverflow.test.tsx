@@ -48,7 +48,7 @@ jest.mock("../CreatePullRequestModal", () => ({
   }) =>
     isOpen ? (
       <div data-testid="create-pr-modal" data-session-id={session.id}>
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{/* analytics-exempt */}Close</button>
       </div>
     ) : null,
 }));

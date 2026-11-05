@@ -2,7 +2,8 @@
 // +feature: remote-host-badge
 
 import { useState, useRef, useEffect, memo } from "react";
-import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus, PiExtensionHealth } from "@/gen/session/v1/types_pb";
+import type { Session, ReviewItem, CheckpointProto} from "@/gen/session/v1/types_pb";
+import { SessionStatus, SubStatus, InstanceType, RateLimitState, DetectedStatus, PiExtensionHealth } from "@/gen/session/v1/types_pb";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
@@ -28,7 +29,8 @@ import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { useTaggingRuleNames } from "@/lib/hooks/useTaggingRuleNames";
 import { UNCLASSIFIED_TAG, tagProvenanceTitle, tagProvenanceAriaLabel } from "@/lib/sessions/tagProvenance";
 import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
-import { ColumnKey, CARD_DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
+import type { ColumnKey} from "./session-columns";
+import { CARD_DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -210,6 +212,7 @@ const CARD_PATH_MAX_LEN = Infinity;
 
 // Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
 // callback surface without duplicating this list.
+/* eslint-disable no-restricted-syntax -- SessionCardProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
@@ -253,6 +256,7 @@ export interface SessionCardProps {
   /** Which optional columns to render (Program row, memory badge). Defaults to CARD_DEFAULT_VISIBLE_COLUMNS (Card/Board's pre-PR always-on behavior — row view passes its own user-configurable set explicitly). */
   visibleColumns?: ColumnKey[];
 }
+/* eslint-enable no-restricted-syntax */
 
 function SessionCardInner({
   session,
@@ -863,7 +867,7 @@ function SessionCardInner({
                   aria-label={`Auto-pilot active${session.autonomousMaxTurns > 0 ? ` (turn ${session.autonomousTurn}/${session.autonomousMaxTurns})` : ""} — click to disable`}
                   data-testid="badge-autonomous"
                   onClick={(e) => { e.stopPropagation(); onToggleAutonomousMode(session.id, false); }}
-                >
+                >{/* analytics-exempt */}
                   {session.autonomousMaxTurns > 0 ? `Auto-pilot ${session.autonomousTurn}/${session.autonomousMaxTurns}` : "Auto-pilot"}
                 </button>
               ) : (
@@ -915,7 +919,7 @@ function SessionCardInner({
                   aria-label="Auto-approve enabled — this session skips permission prompts; click to disable"
                   data-testid="badge-auto-approve"
                   onClick={(e) => { e.stopPropagation(); onToggleAutoApprove(session.id, false); }}
-                >
+                >{/* analytics-exempt */}
                   ⚡ Auto
                 </button>
               ) : (
@@ -1013,7 +1017,7 @@ function SessionCardInner({
             tabIndex={selectMode ? -1 : undefined}
             aria-hidden={selectMode ? "true" : undefined}
             inert={selectMode || undefined}
-          >
+          >{/* analytics-exempt */}
             {session.tags && session.tags.length > 0 ? "Edit Tags" : "Add Tags"}
           </button>
         </div>
@@ -1088,7 +1092,7 @@ function SessionCardInner({
                   onClick={(e) => e.stopPropagation()}
                   className={githubLink}
                   aria-label={`GitHub repository ${session.githubOwner}/${session.githubRepo}, opens in new tab`}
-                >
+                >{/* analytics-exempt */}
                   {session.githubOwner}/{session.githubRepo}
                 </a>
               </span>
@@ -1105,7 +1109,7 @@ function SessionCardInner({
                   onClick={(e) => e.stopPropagation()}
                   className={githubLink}
                   aria-label={`Pull request #${session.githubPrNumber} on ${session.githubOwner}/${session.githubRepo}, opens in new tab`}
-                >
+                >{/* analytics-exempt */}
                   #{session.githubPrNumber}
                 </a>
               </span>
@@ -1186,7 +1190,7 @@ function SessionCardInner({
               aria-label="Cancel session creation"
               data-testid="cancel-creation-button"
               className={`${actionButton} ${actionButtonCompact}`}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           </div>
@@ -1215,7 +1219,7 @@ function SessionCardInner({
               aria-label="Retry creating session"
               data-testid="retry-creation-button"
               className={`${actionButton} ${actionButtonCompact}`}
-            >
+            >{/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -1230,7 +1234,7 @@ function SessionCardInner({
               onClick={() => setIsSnapshotOpen((prev) => !prev)}
               aria-expanded={isSnapshotOpen}
               aria-label={isSnapshotOpen ? "Collapse terminal preview" : "Expand terminal preview"}
-            >
+            >{/* analytics-exempt */}
               <span>Terminal Preview</span>
               <span className={snapshotToggleIcon} aria-hidden="true">
                 {isSnapshotOpen ? "▲" : "▼"}
