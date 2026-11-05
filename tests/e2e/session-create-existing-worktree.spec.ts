@@ -5,8 +5,9 @@ const _features = [
   FEATURE_CATALOG['session-create'],
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -49,7 +50,7 @@ test.describe('existing worktree session creation', () => {
 
     // Provide path + name — but no existingWorktree path
     await page.locator('input[aria-label="Session source input"]').fill('/tmp');
-    await page.getByLabel('Session Name').fill('my-worktree-session');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('my-worktree-session');
 
     // canSubmit requires existingWorktree.trim() to be non-empty for this mode
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeDisabled();
@@ -61,7 +62,7 @@ test.describe('existing worktree session creation', () => {
 
     await page.locator('input[aria-label="Session source input"]').fill('/tmp');
     // Wait for detection (auto-fills session name, but does NOT enable submit yet — worktree required)
-    await expect(page.getByLabel('Session Name')).not.toHaveValue('', { timeout: 3000 });
+    await expect(page.getByRole('textbox', { name: /^Session Name/ })).not.toHaveValue('', { timeout: 3000 });
 
     // Fill the existing worktree path (text input, no worktrees pre-seeded in test server)
     await page.getByLabel('Existing Worktree Path').fill('/tmp/worktree');

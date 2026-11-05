@@ -23,7 +23,7 @@ describe("ShortcutRegistry sequences", () => {
     reg.register("v", { ...base, key: "x", label: "Visible" });
     reg.register("h", { ...base, key: "y", label: "Hidden", hidden: true });
     const all = reg.getAll();
-    expect(Object.keys(all).sort()).toEqual(["approval", "cockpit", "global", "omnibar", "session-list", "terminal"]);
+    expect(Object.keys(all).sort()).toEqual(["approval", "cockpit", "diff", "global", "omnibar", "session-list", "terminal"]);
     expect(all.global.map((s) => s.label)).toEqual(["Visible"]);
   });
 

@@ -5,11 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
 	"modernc.org/sqlite"
-
-	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // withSeedURI makes NewEntRepository copy the database at uri (a fully
@@ -38,7 +34,8 @@ func newSeededEntRepository(db *sql.DB, repo *EntRepository) (*EntRepository, er
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to load seed database: %w", err)
 	}
-	repo.client = ent.NewClient(ent.Driver(entsql.OpenDB(dialect.SQLite, db)))
+	repo.client, repo.driver = newInstrumentedEntClient(db, nil)
+	repo.watchGuidanceWrites(repo.client)
 	return repo, nil
 }
 

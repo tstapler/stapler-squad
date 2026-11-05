@@ -16,8 +16,9 @@
 
 import { test, expect, APIRequestContext } from "@playwright/test";
 import { BacklogSourcesSettingsPage } from "./pages/BacklogSourcesSettingsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 // See backlog-sources-settings.spec.ts for why this polls a real
 // BacklogService RPC rather than GetFeatureFlags.

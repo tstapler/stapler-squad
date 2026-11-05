@@ -2,6 +2,8 @@ package contexthistory
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -20,6 +22,12 @@ type Recorder struct {
 	maxFn     func(model string) int
 	retention time.Duration
 	now       func() time.Time
+
+	// lastCompactions is what Record last stored per session. Every transcript
+	// re-parse used to re-upsert all of a session's compaction events in a
+	// writer transaction even though they almost never change.
+	mu              sync.Mutex
+	lastCompactions map[string][]Compaction
 }
 
 // NewRecorder builds a Recorder. maxFn maps a model name to its context window;
@@ -83,7 +91,29 @@ func (r *Recorder) Record(ctx context.Context, result *tokens.ParseResult) error
 			TokensFreed:  ev.TokensFreed(),
 		})
 	}
-	return r.store.UpsertCompactions(ctx, events)
+	return r.upsertCompactionsIfChanged(ctx, result.SessionUUID, events)
+}
+
+func (r *Recorder) upsertCompactionsIfChanged(ctx context.Context, sessionUUID string, events []Compaction) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if prev, ok := r.lastCompactions[sessionUUID]; ok && slices.EqualFunc(prev, events, compactionEqual) {
+		return nil
+	}
+	if err := r.store.UpsertCompactions(ctx, events); err != nil {
+		return err
+	}
+	if r.lastCompactions == nil {
+		r.lastCompactions = make(map[string][]Compaction)
+	}
+	r.lastCompactions[sessionUUID] = events
+	return nil
+}
+
+func compactionEqual(a, b Compaction) bool {
+	return a.SessionUUID == b.SessionUUID && a.Ordinal == b.Ordinal && a.TurnIndex == b.TurnIndex &&
+		a.OccurredAt.Equal(b.OccurredAt) && a.Trigger == b.Trigger &&
+		a.TokensBefore == b.TokensBefore && a.TokensAfter == b.TokensAfter && a.TokensFreed == b.TokensFreed
 }
 
 // Run records every result already in src, then follows its updates until ctx
@@ -129,6 +159,11 @@ func (r *Recorder) sweep(ctx context.Context, src tokens.TokenStoreReader) {
 }
 
 func (r *Recorder) prune(ctx context.Context) {
+	// Prune can delete rows the cache believes are stored (e.g. zero-timestamp
+	// events); dropping it makes the next Record re-upsert, and bounds its size.
+	r.mu.Lock()
+	r.lastCompactions = nil
+	r.mu.Unlock()
 	if n, err := r.store.Prune(ctx, r.now().Add(-r.retention)); err != nil {
 		log.Warn("[ContextHistory] prune failed", "err", err)
 	} else if n > 0 {

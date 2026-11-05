@@ -154,6 +154,7 @@ func flagScopeReadback(cfg *config.Config, name string, scopes []string) []*sess
 func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit *flagAudit) error {
 	var previous, hadKey bool
 	var cfg *config.Config
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
 	err := config.UpdateConfig(func(c *config.Config) error {
 		cfg = c
 		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
@@ -161,10 +162,13 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 			previous = c.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
 		}
 		if op.isSet() {
-			return c.SetFeatureFlagScope(op.name, op.scope, op.enabled)
+			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
 		}
-		return c.DeleteFeatureFlagScope(op.name, op.scope)
+		return nil
 	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
@@ -193,9 +197,11 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 		"feature", op.name, "scope", op.scope, "err", ctrlErr)
 	rollbackErr := config.UpdateConfig(func(c *config.Config) error {
 		if hadKey {
-			return c.SetFeatureFlagScope(op.name, op.scope, previous)
+			c.ApplyFeatureFlagScope(op.name, op.scope, previous)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
 		}
-		return c.DeleteFeatureFlagScope(op.name, op.scope)
+		return nil
 	})
 	if rollbackErr != nil {
 		if audit.active() {
@@ -227,8 +233,8 @@ func explicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
 // kindOffStatusDetail is the per-kind half of the explicit-false status line
 // (Task 2.11g): one phrase per kind whose override is false. It is a source on
 // the composite provider, so registration order cannot hide it.
-func kindOffStatusDetail() string {
-	kinds := explicitOffKinds(config.LoadConfig())
+func kindOffStatusDetail(cfg *config.Config) string {
+	kinds := explicitOffKinds(cfg)
 	parts := make([]string, 0, len(kinds))
 	for _, k := range kinds {
 		parts = append(parts, fmt.Sprintf("Gate is OFF for kind %s: hidden %s sessions deliver everything", k, k))
@@ -245,8 +251,7 @@ const (
 // effective global value is off and either never set (shadow mode) or
 // explicitly false. It reads the effective value, so it goes silent once the
 // default flips on.
-func globalOffStatusDetail() string {
-	cfg := config.LoadConfig()
+func globalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
 	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
 		return ""

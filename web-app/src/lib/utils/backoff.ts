@@ -1,5 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
+import { POLICY_VIOLATION } from "../transport/terminal-socket-pool";
+
 /**
  * Full-jitter exponential backoff delay.
  * Formula: Math.random() * Math.min(capMs, baseMs * 2^attempt)
@@ -48,6 +50,15 @@ export class BackoffState {
  *   4004 — session not found (session is gone; reconnecting is pointless)
  */
 export const NON_RETRIABLE_WS_CODES = new Set([4001, 4004]);
+
+/**
+ * Maps a stream that never got a 200 handshake to a Connect code. A pooled stream refused by
+ * the server's per-OPEN auth re-check closes with 1008 before any header arrives (status
+ * parses as -1); treat it like a 401 so it is non-retriable and surfaces the login UX.
+ */
+export function connectCodeForRejectedStream(statusCode: number, wsCloseCode: number | null): Code {
+  return statusCode === 401 || wsCloseCode === POLICY_VIOLATION ? Code.Unauthenticated : Code.Unknown;
+}
 
 /**
  * Returns true if the given WebSocket close code should trigger a reconnect attempt.

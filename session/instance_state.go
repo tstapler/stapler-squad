@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +51,11 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
+	if to == Creating {
+		i.creationProgressUpdatedAt = time.Now() // see transitionToLocked
+	}
 	i.touchUpdatedAt()
+	i.touchLocked(SessionEventStatusChanged, i.UpdatedAt)
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
@@ -100,6 +105,11 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
+	if to == Creating {
+		// Re-entering Creating (e.g. a retry) starts a new episode: without this the stale-creation
+		// sweeper reads the previous attempt's old timestamp and fails the session within a minute.
+		i.creationProgressUpdatedAt = time.Now()
+	}
 	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
@@ -171,12 +181,10 @@ func (i *Instance) GetLifecycleStatus() Status {
 // Read-only: there is no public setter (see failureReason's doc comment in
 // instance.go for why).
 func (i *Instance) FailureReason() string {
-	var reason string
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	reason, _ := sendSyncValue(i, func(s *instanceState) (string, error) {
 		s.inst.mu.Lock()
-		reason = s.inst.failureReason
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.failureReason, nil
 	})
 	return reason
 }
@@ -191,26 +199,26 @@ func (i *Instance) FailureReason() string {
 // it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
 // to build its CreationOutcome snapshot atomically.
 func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	type statusAndReason struct {
+		status Status
+		reason string
+	}
+	pair, _ := sendSyncValue(i, func(s *instanceState) (statusAndReason, error) {
 		s.inst.mu.Lock()
-		status = s.inst.Status
-		failureReason = s.inst.failureReason
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return statusAndReason{s.inst.Status, s.inst.failureReason}, nil
 	})
-	return status, failureReason
+	return pair.status, pair.reason
 }
 
 // CreationProgressUpdatedAt returns when CreationProgress was last set. Used by
 // the Stale-Creation Sweeper (Epic 4.1) to judge a Creating instance's actual
 // progress rather than only its Creating-onset time.
 func (i *Instance) CreationProgressUpdatedAt() time.Time {
-	var t time.Time
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	t, _ := sendSyncValue(i, func(s *instanceState) (time.Time, error) {
 		s.inst.mu.Lock()
-		t = s.inst.creationProgressUpdatedAt
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationProgressUpdatedAt, nil
 	})
 	return t
 }
@@ -231,7 +239,58 @@ func (i *Instance) GetCategoryPath() []string {
 	return parts
 }
 
-// MarkViewed records that the user has viewed this session.
+// AcquireTerminalView inhibits automatic hibernation until the returned cleanup runs.
+func (i *Instance) AcquireTerminalView() (func(), error) {
+	for {
+		viewers := i.terminalViewers.Load()
+		if viewers < 0 {
+			return nil, fmt.Errorf("session is being automatically hibernated; reconnect to resume")
+		}
+		if i.terminalViewers.CompareAndSwap(viewers, viewers+1) {
+			break
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Publish the idle baseline before making the session eligible again.
+			i.terminalViewClosedAt.Store(time.Now().UnixNano())
+			i.terminalViewers.Add(-1)
+		})
+	}, nil
+}
+
+// HasTerminalViewers reports whether any terminal transport is attached.
+func (i *Instance) HasTerminalViewers() bool {
+	return i.terminalViewers.Load() > 0
+}
+
+func (i *Instance) hibernationIdleDuration() time.Duration {
+	idle := i.TimeSinceLastMeaningfulOutput(i.Snapshot().CreatedAt)
+	if closedAt := i.terminalViewClosedAt.Load(); closedAt != 0 {
+		if sinceClose := time.Since(time.Unix(0, closedAt)); sinceClose < idle {
+			idle = sinceClose
+		}
+	}
+	return idle
+}
+
+func (i *Instance) hibernateAutomatically(ctx context.Context, reason string) error {
+	if !i.terminalViewers.CompareAndSwap(0, -1) {
+		return nil
+	}
+	i.SetHibernateReason(reason)
+	if err := i.Hibernate(ctx); err != nil {
+		i.terminalViewers.Store(0)
+		return err
+	}
+	go func() {
+		i.hibernateTeardownWG.Wait()
+		i.terminalViewers.Store(0)
+	}()
+	return nil
+}
+
 func (i *Instance) MarkViewed() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -535,6 +594,8 @@ func (i *Instance) RecoverFromStopped() {
 	defer i.mu.Unlock()
 	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
 		i.loadStatus(Creating)
+		// A new Creating episode starts now; the stale-creation sweeper measures from this.
+		i.creationProgressUpdatedAt = time.Now()
 		i.touchUpdatedAt()
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))

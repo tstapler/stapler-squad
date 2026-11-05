@@ -31,6 +31,7 @@ None of these are fixable after the fact without either weakening the thing bein
 
 - Don't reach for `time.Sleep(N)` / a real timeout to make a flaky-looking assertion pass — fix the underlying race or inject a fake clock instead.
 - Don't add a new `t.Setenv`-based fixture when a plain function parameter would do the same job and stay parallel-safe.
+- Don't call `session.StartSessionDriver` directly in a test outside package `session` — a driver left running polls every 2s and can write `config.json` into a later test's `STAPLER_SQUAD_TEST_DIR`. Use `session.StartSessionDriverForTest(t, inst, path)`, which registers the stop+join cleanup at start time. The `nosessiondrivertest` analyzer (`tools/lint/nosessiondrivertest`, in `make lint-custom`) rejects raw calls; the escape hatch is `//nolint:nosessiondrivertest <reason>` (reason required).
 - Don't treat "it passed on retry" as resolution for a new test — that's exactly the pattern `fix-flaky-tests-dont-defer` exists to stop; this skill is its "shift left" counterpart, for before the flake exists.
 - Don't write a `Test` that mainly demonstrates something scales or performs adequately — that belongs in a `Benchmark` (see above), where its cost is opt-in instead of paid on every CI run.
 

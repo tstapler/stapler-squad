@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // GetCreatedAt returns the time this instance was created. The field is immutable after creation.
@@ -108,14 +109,16 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// Use mutex for thread safety
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	// Update the title
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 
+	// After releasing i.mu: pm() takes pmMu, and updateProcessManagerForRestart nests i.mu inside
+	// pmMu, so calling it with i.mu held would be an ABBA deadlock.
+	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
 }
@@ -192,12 +195,19 @@ func (i *Instance) Preview() (string, error) {
 	// No controller at all (e.g. external/attached sessions): try capture-pane
 	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
 	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
-	content, err := i.pm().CapturePaneContent()
+	content, err := tymux.FinalScreen(i.pm().CapturePaneContent())
 	if err != nil {
 		return "", nil
 	}
 
 	return content, nil
+}
+
+// CapturePaneContentFinal is CapturePaneContent for readers that want what an
+// exited pane last showed (previews, debug dumps) rather than a fail-fast
+// ErrPaneExited. Liveness-sensitive loops keep calling CapturePaneContent.
+func (i *Instance) CapturePaneContentFinal() (string, error) {
+	return tymux.FinalScreen(i.CapturePaneContent())
 }
 
 // PreviewContext is Preview with an external context threaded onto the
@@ -421,8 +431,8 @@ type PRStatusUpdate struct {
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
 func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
-	var result prUpdateResult
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	result, _ := sendSyncValue(i, func(s *instanceState) (prUpdateResult, error) {
+		var result prUpdateResult
 		inst := s.inst
 		// i.mu guards the writes + buildSnapshot together: legacy setters
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
@@ -444,7 +454,15 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)
-		return nil
+		return result, nil
 	})
 	return result
+}
+
+// syncProcessLabel tells the process manager the record's new title: tymux keys record identity
+// and daemon session names on it, so a stale label would leave the old one registered.
+func (i *Instance) syncProcessLabel(title string) {
+	if l, ok := capabilityOf[SessionLabeler](i.pm()); ok {
+		l.SetSessionLabel(title)
+	}
 }

@@ -128,8 +128,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const overflowRowRef = useRef<HTMLDivElement>(null);
-  // Only the visible terminal anchors the phone deck; a background pane must not move it.
-  usePublishDeckTopOffset(toolbarRef, isVisible !== false, overflowRowRef);
+  // Only the visible terminal in the current window anchors the phone deck; a background pane, or a
+  // keep-alive background window's otherwise-"visible" pane, must not move it.
+  usePublishDeckTopOffset(toolbarRef, windowActive && isVisible !== false, overflowRowRef);
   // Story 3 (Task 3.4) — anchor <div> the pooled terminal docks into. A
   // plain, otherwise-childless node (see TerminalPool.tsx's module doc
   // comment for why it must never receive JSX children of its own): the

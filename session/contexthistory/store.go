@@ -8,7 +8,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/compactionevent"
@@ -71,13 +74,32 @@ type CompactionStats struct {
 // Store persists and queries context history on an already-migrated ent client.
 type Store struct {
 	client *ent.Client
+
+	// nextIdx caches NextTurnIndex per session so the recorder's per-notification
+	// hot path never reads context_samples. Writes through this Store raise
+	// entries (samples are only ever upserted, so a cached value never exceeds
+	// the table); Prune and failed writes drop them. cold flights coalesce
+	// concurrent first reads of one session.
+	mu      sync.Mutex
+	nextIdx map[string]int
+	gen     uint64 // bumped by every write/invalidation; fences cold fills
+	cold    singleflight.Group
 }
 
 // NewStore wraps client; the caller must have run schema migration.
-func NewStore(client *ent.Client) *Store { return &Store{client: client} }
+func NewStore(client *ent.Client) *Store {
+	return &Store{client: client, nextIdx: make(map[string]int)}
+}
 
 // UpsertSamples inserts samples, updating existing (session, turn) rows. Safe to re-run.
-func (s *Store) UpsertSamples(ctx context.Context, samples []Sample) error {
+func (s *Store) UpsertSamples(ctx context.Context, samples []Sample) (err error) {
+	maxNext := make(map[string]int)
+	for _, sm := range samples {
+		maxNext[sm.SessionUUID] = max(maxNext[sm.SessionUUID], sm.TurnIndex+1)
+	}
+	// Chunks commit independently, so even a failed call may have written some
+	// rows: on failure, drop the cached indexes rather than trust either value.
+	defer func() { s.noteWrite(maxNext, err == nil) }()
 	for start := 0; start < len(samples); start += insertChunk {
 		end := min(start+insertChunk, len(samples))
 		creates := make([]*ent.ContextSampleCreate, 0, end-start)
@@ -129,8 +151,90 @@ func (s *Store) UpsertCompactions(ctx context.Context, events []Compaction) erro
 }
 
 // NextTurnIndex returns one past the highest stored turn index for a session
-// (0 when none), letting callers skip already-persisted turns.
+// (0 when none), letting callers skip already-persisted turns. Served from an
+// in-memory cache that assumes this Store is the table's only writer.
 func (s *Store) NextTurnIndex(ctx context.Context, sessionUUID string) (int, error) {
+	if n, ok := s.cachedNext(sessionUUID); ok {
+		return n, nil
+	}
+	v, err, _ := s.cold.Do(sessionUUID, func() (any, error) {
+		s.mu.Lock()
+		genAtStart := s.gen
+		s.mu.Unlock()
+		// The flight is shared, so it must not die with its first caller's ctx.
+		n, err := s.queryNextTurnIndex(context.WithoutCancel(ctx), sessionUUID)
+		if err != nil {
+			return 0, err
+		}
+		s.mu.Lock()
+		// A write that landed while we were reading may not be reflected in n.
+		if s.gen == genAtStart {
+			s.nextIdx[sessionUUID] = n
+		}
+		s.mu.Unlock()
+		return flight{n: n, gen: genAtStart}, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	f := v.(flight)
+	n := f.n
+	if cached, ok := s.cachedNext(sessionUUID); ok {
+		// A joined flight can predate a write that has since raised the cache.
+		return max(n, cached), nil
+	}
+	s.mu.Lock()
+	wroteSince := s.gen != f.gen
+	s.mu.Unlock()
+	if wroteSince {
+		// A write landed after the flight began and nothing was cached to
+		// correct it, so its value may predate the write: read the table directly.
+		return s.queryNextTurnIndex(ctx, sessionUUID)
+	}
+	return n, nil
+}
+
+// flight is a cold read's result and the write generation it started at.
+type flight struct {
+	n   int
+	gen uint64
+}
+
+func (s *Store) cachedNext(sessionUUID string) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nextIdx[sessionUUID]
+	return n, ok
+}
+
+// noteWrite applies a completed UpsertSamples to the cache.
+func (s *Store) noteWrite(maxNext map[string]int, ok bool) {
+	if len(maxNext) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gen++
+	for uuid, next := range maxNext {
+		cached, have := s.nextIdx[uuid]
+		switch {
+		case !ok:
+			delete(s.nextIdx, uuid)
+		case have:
+			s.nextIdx[uuid] = max(cached, next)
+		}
+	}
+}
+
+// invalidateNext drops every cached index (after rows are deleted).
+func (s *Store) invalidateNext() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gen++
+	clear(s.nextIdx)
+}
+
+func (s *Store) queryNextTurnIndex(ctx context.Context, sessionUUID string) (int, error) {
 	last, err := s.client.ContextSample.Query().
 		Where(contextsample.SessionUUIDEQ(sessionUUID)).
 		Order(ent.Desc(contextsample.FieldTurnIndex)).First(ctx)
@@ -291,6 +395,9 @@ func toCompactions(rows []*ent.CompactionEvent) []Compaction {
 func (s *Store) Prune(ctx context.Context, cutoff time.Time) (int, error) {
 	n1, err := s.client.ContextSample.Delete().
 		Where(contextsample.SampledAtLT(cutoff)).Exec(ctx)
+	if n1 > 0 || err != nil {
+		s.invalidateNext()
+	}
 	if err != nil {
 		return 0, fmt.Errorf("prune context samples: %w", err)
 	}

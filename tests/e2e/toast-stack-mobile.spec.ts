@@ -8,10 +8,11 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
-import { ToastDeck, sendNotification } from './pages/NotificationPanel';
+import { ToastDeck, sendNotification, sendOnceStreamLive, watchStreamLive } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 
 async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNotification>[0], count: number) {
@@ -20,14 +21,14 @@ async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNot
   // Fill the screen first so the prompt sits at the bottom, as it does in a long Claude Code session.
   const session = await client.createSession({ title, path: '/tmp', program: "bash -c 'seq 1 300; exec bash'" });
   await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
+  watchStreamLive(page);
   await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
 
   const deck = new ToastDeck(page);
-  await expect(async () => {
+  await sendOnceStreamLive(page, async () => {
     await sendNotification(request, BASE_URL, { sessionId: `${title}-0`, type: 'ERROR', title: 'Failure 0' });
-    await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-  }).toPass({ timeout: 20_000 });
+  }, [deck.toasts.first()]);
   for (let i = 1; i < count; i++) {
     await sendNotification(request, BASE_URL, { sessionId: `${title}-${i}`, type: 'ERROR', title: `Failure ${i}` });
   }

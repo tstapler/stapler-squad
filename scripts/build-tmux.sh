@@ -56,9 +56,9 @@ if [[ ! -f "$SUBMODULE_DIR/configure.ac" ]]; then
     log "Initializing third_party/tmux submodule..."
     (cd "$ROOT" && git submodule update --init third_party/tmux)
   else
-    log "Cloning tmux 3.4 into third_party/tmux (gitlink not registered; run 'git submodule add' to fix)..."
+    log "Cloning tmux 3.8 into third_party/tmux (gitlink not registered; run 'git submodule add' to fix)..."
     TMUX_TMP="$(mktemp -d)"
-    git clone --depth 1 --branch 3.4 https://github.com/tmux/tmux.git "$TMUX_TMP"
+    git clone --depth 1 --branch 3.8 https://github.com/tmux/tmux.git "$TMUX_TMP"
     cp -rn "$TMUX_TMP"/. "$SUBMODULE_DIR/"
     rm -rf "$TMUX_TMP"
   fi
@@ -85,6 +85,16 @@ fi
 log "Building tmux from $SUBMODULE_DIR..."
 cd "$SUBMODULE_DIR"
 
+TMUX_VERSION="3.8"
+
+# Generated files (configure, Makefile.in, objects) are untracked and survive a
+# submodule bump; a leftover 3.4 tree would be reused (the tarball overlay is
+# no-clobber) and its recorded configure args lack --enable-jemalloc.
+if [[ -f "./configure" ]] && ! grep -q "PACKAGE_VERSION='${TMUX_VERSION}'" ./configure; then
+  log "Stale build tree (not tmux ${TMUX_VERSION}); cleaning untracked build files..."
+  git clean -fdxq
+fi
+
 if [[ ! -f "./configure" ]]; then
   # Prefer downloading the release tarball — faster and avoids the macOS
   # autotools hang (autogen.sh → 'automake --add-missing' triggers network
@@ -93,7 +103,6 @@ if [[ ! -f "./configure" ]]; then
   # and etc/{install-sh,config.guess,...} are also autotools-generated and
   # absent from a plain git checkout, so extract the whole tarball and layer
   # it over the submodule source with no-clobber (keeps our git-tracked files).
-  TMUX_VERSION="3.4"
   TARBALL_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
   # BSD mktemp (macOS) does not substitute the XXXXXX run when it's followed
   # by a dotted suffix like .tar.gz — it returns the literal template every
@@ -105,7 +114,9 @@ if [[ ! -f "./configure" ]]; then
   log "Downloading generated build files from release tarball (${TARBALL_URL})..."
   if curl -fsSL -o "$TMPTAR" "$TARBALL_URL" 2>/dev/null && \
      tar xzf "$TMPTAR" -C /tmp "tmux-${TMUX_VERSION}" 2>/dev/null; then
-    cp -rn "/tmp/tmux-${TMUX_VERSION}/." .
+    # BSD cp -n exits 1 when it skips an existing (git-tracked) file; the chmod below
+    # still fails the script if the overlay did not produce ./configure.
+    cp -rn "/tmp/tmux-${TMUX_VERSION}/." . || true
     chmod +x ./configure
     rm -rf "$TMPDIR_TAR" "/tmp/tmux-${TMUX_VERSION}"
     log "Generated build files extracted from release tarball"
@@ -122,10 +133,15 @@ if [[ ! -f "./Makefile" ]]; then
   if [[ "$(uname)" == "Darwin" ]]; then
     LIBEVENT_PREFIX="$(brew --prefix libevent)"
     NCURSES_PREFIX="$(brew --prefix ncurses)"
+    # tmux >= 3.8 refuses to configure on macOS without an explicit jemalloc
+    # choice (macOS calloc can return unzeroed memory); upstream recommends it.
+    brew list --versions jemalloc >/dev/null 2>&1 || brew install jemalloc
+    JEMALLOC_PREFIX="$(brew --prefix jemalloc)"
     ./configure \
       --prefix="$ROOT/bin/tmux-install" \
       --disable-utf8proc \
-      PKG_CONFIG_PATH="$LIBEVENT_PREFIX/lib/pkgconfig:$NCURSES_PREFIX/lib/pkgconfig" \
+      --enable-jemalloc \
+      PKG_CONFIG_PATH="$LIBEVENT_PREFIX/lib/pkgconfig:$NCURSES_PREFIX/lib/pkgconfig:$JEMALLOC_PREFIX/lib/pkgconfig" \
       CFLAGS="-I$LIBEVENT_PREFIX/include -I$NCURSES_PREFIX/include" \
       LDFLAGS="-L$LIBEVENT_PREFIX/lib -L$NCURSES_PREFIX/lib"
   else

@@ -144,6 +144,10 @@ func parseConfigFile(path string) (entries []cfgEntry, exists bool, err error) {
 	if len(data) > maxConfigFileSize {
 		return nil, true, fmt.Errorf("%s is larger than %d bytes", path, maxConfigFileSize)
 	}
+	return parseConfigData(data)
+}
+
+func parseConfigData(data []byte) (entries []cfgEntry, exists bool, err error) {
 	if !headersAreStrict(data) {
 		return nil, true, errors.New("config file has a section header git would reject")
 	}

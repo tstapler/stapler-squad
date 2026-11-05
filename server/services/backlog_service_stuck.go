@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -178,6 +179,10 @@ func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*session
 	if refresh {
 		ctx = githubpkg.WithRepoSettingsRefresh(ctx)
 	}
+	lookup := s.repoSettings
+	if !refresh && s.repoSettingsFast != nil {
+		lookup = s.repoSettingsFast
+	}
 	hosts := s.EnterpriseHosts()
 	byRepo := make(map[githubpkg.RepoRef]githubpkg.RepoSettingsResult)
 	for _, item := range items {
@@ -194,7 +199,7 @@ func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*session
 		}
 		res, ok := byRepo[ref]
 		if !ok {
-			res = s.repoSettings(ctx, ref)
+			res = lookup(ctx, ref)
 			byRepo[ref] = res
 		}
 		applyAutoMerge(item, res)
@@ -266,16 +271,28 @@ func (s *BacklogService) ListStuckBacklogItems(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list stuck backlog items: %w", err))
 	}
 
+	// Review-status items need their sessions for the duplicate-pending hint;
+	// fetch them for every such item in one batch instead of per row.
+	var reviewIDs []string
+	for _, row := range rows {
+		if row.ItemStatus == session.BacklogStatusReview {
+			reviewIDs = append(reviewIDs, row.ItemID)
+		}
+	}
+	var sessionsByItem map[string][]session.ItemSessionSummary
+	if len(reviewIDs) > 0 {
+		var sessErr error
+		if sessionsByItem, sessErr = s.storage.ListItemSessionsForItems(ctx, reviewIDs); sessErr != nil {
+			log.Warn("stuck report: batched item-session lookup failed; duplicate hints omitted", "err", sessErr)
+		}
+	}
+
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
-		if row.ItemStatus == session.BacklogStatusReview {
-			if sessions, sessErr := s.storage.ListItemSessions(ctx, row.ItemID); sessErr == nil {
-				if ref := session.PendingDuplicateRef(sessions); ref != "" {
-					items[i].DuplicatePending = true
-					items[i].DuplicateRef = ref
-				}
-			}
+		if ref := session.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+			items[i].DuplicatePending = true
+			items[i].DuplicateRef = ref
 		}
 	}
 
@@ -428,7 +445,10 @@ func pluralSuffix(n int) string {
 // AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner/
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
-// connect.CodeUnimplemented until a future phase adds it here.
+// connect.CodeUnimplemented until a future phase adds it here (except
+// multiple_reasons, which TriggerRemediationNow rejects earlier with
+// CodeFailedPrecondition). The web-app mirrors this set as REMEDIABLE_STUCK_REASONS
+// (web-app/src/components/backlog-stuck/stuckReason.ts); keep the two in sync.
 //
 // Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
 // and domain.StuckReasonSteerFailed both fall through to the default case, so
@@ -469,7 +489,9 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 // dispatcher-triggered one, so it counts toward the same 5-attempt cap. The
 // wrapped action's own circuit breaker (IsRepeatedFailure/
 // IsRepeatedNoVerdictFailure inside AutoReopenAfterFailedReview, for example)
-// still applies — this RPC does not bypass it.
+// still applies — this RPC does not bypass it. multiple_reasons is an aggregate
+// with no action of its own: it returns CodeFailedPrecondition naming the
+// item's open constituent reasons.
 // +api: backlog:trigger-remediation-now
 func (s *BacklogService) TriggerRemediationNow(
 	ctx context.Context,
@@ -484,6 +506,10 @@ func (s *BacklogService) TriggerRemediationNow(
 	reason := fromProtoStuckReason(req.Msg.Reason)
 	if !reason.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
+	}
+
+	if reason == domain.StuckReasonMultipleReasons {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, s.multipleReasonsRemediationError(ctx, req.Msg.ItemId))
 	}
 
 	action := s.remediationActionByReason(reason)
@@ -517,4 +543,25 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil
+}
+
+// multipleReasonsRemediationError explains that multiple_reasons is an aggregate
+// escalation row with no action of its own, naming the item's open constituent
+// reasons so the caller can retry each one individually.
+func (s *BacklogService) multipleReasonsRemediationError(ctx context.Context, itemID string) error {
+	rows, err := s.storage.FindOpenStuckStates(ctx)
+	if err != nil {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually (could not list them: %w)", err)
+	}
+	var names []string
+	for _, row := range rows {
+		if row.ItemID != itemID || row.Reason == domain.StuckReasonMultipleReasons {
+			continue
+		}
+		names = append(names, string(row.Reason))
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own, and no constituent reasons are open")
+	}
+	return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually: [%s]", strings.Join(names, ", "))
 }

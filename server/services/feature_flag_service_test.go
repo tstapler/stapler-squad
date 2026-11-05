@@ -894,6 +894,7 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 		{config.DiagnoseNudgeFeatureFlag, config.DiagnoseNudgeDefault, config.EffectiveDiagnoseNudgeEnabled},
 		{config.AutonomousStallNudgeFeatureFlag, config.AutonomousStallNudgeDefault, config.EffectiveAutonomousStallNudgeEnabled},
 		{config.HiddenSessionGateFeatureFlag, config.HiddenSessionGateDefault, nil},
+		{session.FeatureFlagDriverPaneActivityGate, config.DriverPaneActivityGateDefault, func(*config.Config) bool { return session.DriverPaneActivityGateSetting() }},
 		{config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineShadowDefault, config.EffectiveWorkflowEngineShadow},
 		{config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceDefault, config.EffectiveWorkflowEngineEnforce},
 		{config.WorkflowEngineEnforceAgentFeatureFlag, config.WorkflowEngineEnforceAgentDefault, config.EffectiveWorkflowEngineEnforceAgent},
@@ -962,6 +963,8 @@ func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAlive
 		"unary_over_ws":        false,
 		"unary_over_ws_remote": false,
 		"window_keep_alive":    false,
+		"batch_unary":          false,
+		"ghostty_renderer":     false,
 	} {
 		enabled, registered := got[name]
 		require.True(t, registered, "%s is registered", name)

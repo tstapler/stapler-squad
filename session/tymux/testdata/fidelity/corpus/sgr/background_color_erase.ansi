@@ -1,0 +1,8 @@
+sgr/background_color_erase -- xterm ctlseqs BCE; esctest2 ed.py/el.py/ech.py/i
+[1;1H[44m[2J[0m[2;1Hafter ED2 with blue bg (whole screen blue)[4;1H[41mred-bg EL0 from col 5[4;5H[K[0m
+[5;1H[42mgreen EL1 to col 6[5;6H[1K[0m[6;1H[43myellow EL2[2K[0m
+[7;1H0123456789[7;3H[45m[4X[0m ECH magenta
+[8;1H0123456789[8;3H[46m[3@[0m ICH cyan
+[9;1H0123456789[9;3H[47m[3P[0m DCH white
+[10;1Hline-a[11;1Hline-b[11;3H[41m[L[0m IL red[13;1Hline-c[14;1Hline-d[13;1H[42m[M[0m DL green
+[16;1H[44mscroll-up-blue[24;1H[S[0m[20;1H[41m[T[0m

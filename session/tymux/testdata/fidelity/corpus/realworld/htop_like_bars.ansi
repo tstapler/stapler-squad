@@ -1,0 +1,6 @@
+realworld/htop_like_bars -- htop/btop: dense bg-color bars, reverse headers, b
+[1;30;46m  CPU[[0m[32m||||||||||||||||||||[31m||||||||[2m                    [0m[1;30;46m62.5%][0m
+[42m                              [41m          [43m          [44m     [0m[7m MEM [0m
+[30;46m  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command [0m
+[38;5;244m    1[0m root       20   0  168M  12.0M  8.1M S  0.0  0.1  0:01.23 [32m/sbin/init[0m
+[30;42mF1[0mHelp  [30;42mF2[0mSetup [30;42mF10[0mQuit

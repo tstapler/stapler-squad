@@ -1,0 +1,2 @@
+modes/app_cursor_keys_set -- xterm ctlseqs DECCKM ?1h
+[?1hDECCKM on (application cursor keys)

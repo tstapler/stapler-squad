@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -57,7 +58,12 @@ func (g *GitProvider) loc() backend.RepoLocation {
 
 // gitCtx bounds one backend call.
 func gitCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), gitCallTimeout)
+	return gitCtxFrom(context.Background())
+}
+
+// gitCtxFrom bounds one backend call and also ends it when parent does.
+func gitCtxFrom(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, gitCallTimeout)
 }
 
 // shortHashLen is how many leading hex characters of a full commit OID are
@@ -84,11 +90,35 @@ func truncateHash(oid string) string {
 // runtime's global syscall.ForkLock, so this count directly drove measured
 // mutex contention under concurrent session polling.
 func (g *GitProvider) GetStatus() (*VCSStatus, error) {
+	return g.GetStatusContext(context.Background())
+}
+
+// GetStatusContext is GetStatus with every git call bound to parent, so a
+// cancelled request stops its spawns instead of running them to the 30s timeout.
+func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, error) {
 	status := &VCSStatus{
 		Type: VCSGit,
 	}
 
-	ctx, cancel := gitCtx()
+	// The HEAD subject doesn't depend on status output, so spawn it alongside
+	// `git status` instead of after: sequential spawns each pay fork/exec
+	// queueing on a loaded host.
+	var description string
+	var logWG sync.WaitGroup
+	logParent, stopLog := context.WithCancel(parent)
+	logWG.Add(1)
+	go func() {
+		defer logWG.Done()
+		logCtx, logCancel := gitCtxFrom(logParent)
+		defer logCancel()
+		if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
+			description = entries[0].Subject
+		}
+	}()
+	// Cancel before waiting (defers run LIFO): a failed `git status` must not wait out the log spawn.
+	defer func() { stopLog(); logWG.Wait() }()
+
+	ctx, cancel := gitCtxFrom(parent)
 	defer cancel()
 	res, err := gitprovider.Backend().Status(ctx, g.loc(), backend.IntentDisplay)
 	if err != nil {
@@ -106,15 +136,12 @@ func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 		g.applyBranchHeader(status, res)
 	}
 
-	logCtx, logCancel := gitCtx()
-	defer logCancel()
-	if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
-		status.Description = entries[0].Subject
-	}
-
 	// Changed files come from the status result already fetched above --
 	// avoids a second `git status` spawn.
-	files := g.changedFilesFromStatus(res)
+	files := g.changedFilesFromStatus(parent, res)
+
+	logWG.Wait()
+	status.Description = description
 
 	// Categorize files
 	for _, f := range files {
@@ -190,7 +217,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	return g.changedFilesFromStatus(res), nil
+	return g.changedFilesFromStatus(context.Background(), res), nil
 }
 
 // changedFilesFromStatus converts an already-fetched StatusResult into
@@ -202,7 +229,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 // the status output always carries header lines, so only the parsed file
 // list says whether the repo is clean -- otherwise both `git diff --numstat`
 // calls would run unconditionally on every clean-repo poll.
-func (g *GitProvider) changedFilesFromStatus(res backend.StatusResult) []FileChange {
+func (g *GitProvider) changedFilesFromStatus(parent context.Context, res backend.StatusResult) []FileChange {
 	files := fileChangesFromStatus(res)
 	if len(files) == 0 {
 		return nil
@@ -211,12 +238,18 @@ func (g *GitProvider) changedFilesFromStatus(res backend.StatusResult) []FileCha
 	// Best-effort per-file insertion/deletion counts. A numstat failure (e.g. no
 	// commits yet) should not prevent the file list itself from being returned.
 	var unstagedStats, stagedStats map[string]numstatEntry
-	if stats, statErr := g.getNumstat(false); statErr == nil {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // the two numstat spawns are independent
+		defer wg.Done()
+		if stats, statErr := g.getNumstat(parent, true); statErr == nil {
+			stagedStats = stats
+		}
+	}()
+	if stats, statErr := g.getNumstat(parent, false); statErr == nil {
 		unstagedStats = stats
 	}
-	if stats, statErr := g.getNumstat(true); statErr == nil {
-		stagedStats = stats
-	}
+	wg.Wait()
 
 	return mergeNumstat(files, unstagedStats, stagedStats)
 }
@@ -312,8 +345,8 @@ type numstatEntry struct {
 // getNumstat returns per-file insertion/deletion counts keyed by the file's
 // current (post-change) path. Pass staged=true for staged changes, false for
 // unstaged. Binary files report no counts, which are treated as 0.
-func (g *GitProvider) getNumstat(staged bool) (map[string]numstatEntry, error) {
-	ctx, cancel := gitCtx()
+func (g *GitProvider) getNumstat(parent context.Context, staged bool) (map[string]numstatEntry, error) {
+	ctx, cancel := gitCtxFrom(parent)
 	defer cancel()
 	rows, err := gitprovider.Backend().DiffNumstat(ctx, g.loc(), backend.DiffSpec{Staged: staged, Intent: backend.IntentDisplay})
 	if err != nil {

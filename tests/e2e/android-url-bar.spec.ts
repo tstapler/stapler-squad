@@ -15,8 +15,9 @@ const _features = [
  * the reduced viewport and the page produces no horizontal overflow.
  */
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Pixel 6 Pro in portrait. The second viewport simulates the URL bar visible,
 // which reduces usable height by ~66 px (the bar's CSS-pixel height on this device).

@@ -3,8 +3,9 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 
 // Every test here starts from a fresh browser context (Playwright's default),
@@ -150,6 +151,10 @@ async function readDropdownGeometry(page: import('@playwright/test').Page): Prom
     const overlayEl = document.querySelector('[role="dialog"][aria-labelledby="omnibar-title"]');
     const modalEl = overlayEl?.firstElementChild as HTMLElement | null;
     const dropdownEl = document.querySelector('[data-testid="path-completion-dropdown"]');
+    // The panel scrolls (max-height 80vh), and how far down the field sits depends on how many
+    // history rows the shared server has accumulated. Measure where a user would see it after
+    // scrolling it into view, so the check is about clipping, not about that count.
+    dropdownEl?.scrollIntoView({ block: 'nearest' });
     const rows = dropdownEl ? Array.from(dropdownEl.querySelectorAll('[role="option"]')) : [];
     return {
       dropdown: dropdownEl?.getBoundingClientRect().toJSON(),
@@ -185,7 +190,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
     await settleNewProjectDefault(page);
 
     const parentDir = page.getByLabel('Parent Directory *');
-    const typed = `/tmp/brand-new-e2e-parent-${Date.now()}`;
+    const typed = `${slotTmp("brand-new-e2e-parent")}-${Date.now()}`;
     await parentDir.fill(typed);
 
     await expect(parentDir).toHaveValue(typed);
@@ -286,7 +291,7 @@ test.describe('repo path picker parity — Existing Worktree Path fallback field
     await selectSessionType(page, 'Existing branch');
 
     const worktreeInput = page.getByLabel('Existing Worktree Path *');
-    const typed = `/tmp/brand-new-e2e-worktree-${Date.now()}`;
+    const typed = `${slotTmp("brand-new-e2e-worktree")}-${Date.now()}`;
     await worktreeInput.fill(typed);
 
     await expect(worktreeInput).toHaveValue(typed);

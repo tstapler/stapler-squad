@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // WakeMarkerPrefix begins every text written into a pane. It is not a digit
@@ -40,6 +41,8 @@ var ErrNotWakeText = errors.New("wakes: pane text must start with " + WakeMarker
 // (session.PaneShowsDialog is Absent); a showing, indeterminate or failed
 // capture writes nothing. The cached IsReadyForSteer status is not enough on
 // its own because it is blank for 6-9 s after a keypress.
+//
+// While tymuxd is restarting an exited pane it returns (WriteNotAttempted, nil): the wake stays held and is retried.
 func WriteIfIdle(ctx context.Context, p Pane, text string) (WriteOutcome, error) {
 	if !strings.HasPrefix(text, WakeMarkerPrefix) {
 		return WriteNotAttempted, ErrNotWakeText
@@ -51,6 +54,10 @@ func WriteIfIdle(ctx context.Context, p Pane, text string) (WriteOutcome, error)
 	capture, err := lease.Capture()
 	if err != nil {
 		lease.Release()
+		if errors.Is(err, tymux.ErrPaneExited) && !tymux.IsFinalExit(err) {
+			// The daemon is restarting the pane: nothing to write into yet, try again later.
+			return WriteNotAttempted, nil
+		}
 		return WriteNotAttempted, fmt.Errorf("wake write: capture pane: %w", err)
 	}
 	if !session.PaneShowsDialog(capture).Absent() {

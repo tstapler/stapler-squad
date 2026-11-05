@@ -106,7 +106,7 @@ export const cancelButton = style({
   background: vars.color.cardBackground,
   color: vars.color.textPrimary,
   border: `1px solid ${vars.color.borderColor}`,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": { background: vars.color.hoverBackground, borderColor: vars.color.borderHover },
   },
@@ -121,7 +121,7 @@ export const dangerButton = style({
   background: vars.color.error,
   color: vars.color.primaryText,
   border: `1px solid ${vars.color.error}`,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": { background: vars.color.errorDark },
     "&:disabled": { opacity: 0.5, cursor: "not-allowed" },

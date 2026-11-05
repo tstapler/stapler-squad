@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from "web-vitals";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { getActiveSessionUUID } from "@/lib/telemetry/active-session";
+import { observeLongTasks, routeLabel } from "@/lib/telemetry/longTasks";
 
 export function WebVitalsReporter() {
   const analytics = useAnalytics();
@@ -45,6 +46,7 @@ export function WebVitalsReporter() {
           ? Math.round(metric.value * 10000)
           : Math.round(metric.value),
         sessionId: getActiveSessionUUID() ?? undefined,
+        page: routeLabel(window.location.pathname),
         labels: {
           rating: metric.rating,
           id: metric.id,
@@ -58,6 +60,7 @@ export function WebVitalsReporter() {
     onINP(report);
     onLCP(report);
     onTTFB(report);
+    return observeLongTasks((event) => analyticsRef.current.track(event));
   }, []);
 
   return null;

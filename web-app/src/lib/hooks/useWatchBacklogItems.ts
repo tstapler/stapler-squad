@@ -202,7 +202,21 @@ export function useWatchBacklogItems(
 
   // On mount, immediately issue the REST snapshot fetch alongside (not
   // gated behind) opening the stream below — Task 4.2.1a/pitfalls.md #1.
+  // Skipped only on the first run when the store is already populated AND the
+  // stream is actively connecting/live: the stream replays a full snapshot, so
+  // the one-shot REST call is redundant and only delays first paint on
+  // list<->board navigation. A filter change (non-first run) or a stream that
+  // is not connecting/live (reconnecting/stale/exhausted) always refetches.
+  const storeHasItemsRef = useRef(items.length > 0);
+  storeHasItemsRef.current = items.length > 0;
+  const connectionStateRef = useRef(connectionState);
+  connectionStateRef.current = connectionState;
+  const hasMountedRef = useRef(false);
   useEffect(() => {
+    const firstRun = !hasMountedRef.current;
+    hasMountedRef.current = true;
+    const streamActive = connectionStateRef.current === "connecting" || connectionStateRef.current === "live";
+    if (firstRun && storeHasItemsRef.current && streamActive) return;
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilterKey]);

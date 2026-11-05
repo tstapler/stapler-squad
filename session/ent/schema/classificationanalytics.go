@@ -72,10 +72,11 @@ func (ClassificationAnalytics) Edges() []ent.Edge {
 // Indexes of the ClassificationAnalytics.
 func (ClassificationAnalytics) Indexes() []ent.Index {
 	return []ent.Index{
-		index.Fields("session_id"),
-		index.Fields("decision"),
-		index.Fields("risk_level"),
-		index.Fields("rule_id"),
+		// Only created_at and (command_program, created_at) serve a query (the
+		// ListAnalytics* readers in session/ent_repository.go). session_id, decision,
+		// risk_level and rule_id were never a WHERE/ORDER BY target, so each cost a
+		// B-tree insert per row plus space (~9-11 MB each on a 425k-row table) for nothing.
+		// Existing databases drop them via obsoleteIndexes (ent migrations are additive).
 		index.Fields("created_at"),
 		index.Fields("command_program", "created_at"), // NEW: AC-2
 	}

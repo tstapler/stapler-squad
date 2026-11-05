@@ -4,18 +4,25 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/text/width"
+
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 )
 
 // Attribute bitflags mirrored from proto/tymux/v1/tymux.proto's Cell.attrs
 // doc comment, which itself mirrors crates/tymux-core/src/pane.rs's
-// ATTR_BOLD/ATTR_UNDERLINE/ATTR_REVERSE/ATTR_ITALIC constants exactly —
+// ATTR_BOLD/ATTR_UNDERLINE/ATTR_REVERSE/ATTR_ITALIC/ATTR_FAINT constants exactly —
 // keep all three in sync if any changes.
 const (
 	attrBold      uint32 = 1
 	attrUnderline uint32 = 2
 	attrReverse   uint32 = 4
 	attrItalic    uint32 = 8
+	attrFaint     uint32 = 16
+	attrStrike    uint32 = 32
+	attrBlink     uint32 = 64
+	attrConceal   uint32 = 128
+	attrOverline  uint32 = 256
 )
 
 // Color tag bits mirrored from pane.rs's pack_color doc comment: the top
@@ -28,20 +35,35 @@ const (
 	colorTagRGB     uint32 = 0x0200_0000
 )
 
-// sgrState is the subset of a Cell that affects its SGR encoding.
+// sgrState is the subset of a Cell that affects its SGR encoding. ulStyle/ulColor are
+// zeroed when the underline bit is off, so a stale value never forces a reset.
+// link is the cell's 1-based hyperlink index; it travels as OSC 8, not SGR, but lives
+// here so the run-diffing in rowToSGR sees one state.
 type sgrState struct {
-	fg, bg, attrs uint32
+	fg, bg, attrs    uint32
+	ulStyle, ulColor uint32
+	link             uint32
 }
 
 func cellState(c *v1.Cell) sgrState {
-	return sgrState{fg: c.GetFg(), bg: c.GetBg(), attrs: c.GetAttrs()}
+	s := sgrState{fg: c.GetFg(), bg: c.GetBg(), attrs: c.GetAttrs(), link: c.GetHyperlink()}
+	if s.attrs&attrUnderline != 0 {
+		s.ulStyle, s.ulColor = c.GetUnderlineStyle(), c.GetUnderlineColor()
+	}
+	return s
+}
+
+// sgr is s without its hyperlink, the part SGR 0 can reset.
+func (s sgrState) sgr() sgrState {
+	s.link = 0
+	return s
 }
 
 // isZero reports whether s is the terminal's implicit default state (no
 // attributes, default fg/bg) — the state a line starts in and the state a
 // bare SGR reset (`\x1b[0m`) restores.
 func (s sgrState) isZero() bool {
-	return s.fg == 0 && s.bg == 0 && s.attrs == 0
+	return s.sgr() == sgrState{}
 }
 
 // CellsToSGR renders a PaneSnapshot's cell grid (PaneSnapshot.grid) into an
@@ -59,35 +81,139 @@ func (s sgrState) isZero() bool {
 // an SGR escape sequence is emitted only when a cell's fg/bg/attrs differ
 // from the previous cell's (Task 2.6.1a/Story 2.6.1) — an unbroken
 // attribute run gets exactly one sequence before it, not one per cell.
-func CellsToSGR(grid []*v1.Row) (string, error) {
+//
+// links is PaneSnapshot.hyperlinks, the table Cell.hyperlink indexes into (nil when
+// the grid has no links). Each hyperlink run is opened and closed within its row.
+func CellsToSGR(grid []*v1.Row, links []*v1.Hyperlink) (string, error) {
 	lines := make([]string, len(grid))
 	for i, row := range grid {
-		lines[i] = rowToSGR(row)
+		lines[i] = rowToSGR(row, links)
 	}
 	return strings.Join(lines, "\n"), nil
 }
 
-// rowToSGR renders one row's cells, diffing each cell's SGR state against
-// the previous cell's (implicitly the terminal's default state at the
-// start of the row) and emitting a sequence only on change.
-func rowToSGR(row *v1.Row) string {
+// rowToSGR renders one row for text capture: trailing never-written cells are dropped so rows
+// aren't padded to the pane width.
+func rowToSGR(row *v1.Row, links []*v1.Hyperlink) string {
+	return renderCells(row.GetCells(), links, true)
+}
+
+// renderCells renders cells, diffing each cell's SGR state against the previous cell's
+// (implicitly the terminal's default state at the start of the row) and emitting a sequence only
+// on change. With trimTrailing, trailing cells that are empty, unstyled and unlinked are dropped
+// (a literal " " is kept: the daemon sent it); the pending-wrap re-print needs them untrimmed.
+func renderCells(cells []*v1.Cell, links []*v1.Hyperlink, trimTrailing bool) string {
+	if trimTrailing {
+		for len(cells) > 0 {
+			last := cells[len(cells)-1]
+			if cellTextOf(last) != "" || cellState(last) != (sgrState{}) {
+				break
+			}
+			cells = cells[:len(cells)-1]
+		}
+	}
 	var b strings.Builder
 	prev := sgrState{}
-	for _, c := range row.GetCells() {
+	afterWide := false
+	for _, c := range cells {
 		cur := cellState(c)
-		if cur != prev {
-			b.WriteString(sgrSequence(prev, cur))
+		if _, _, ok := linkTarget(cur.link, links); !ok {
+			cur.link = 0 // an unusable link renders as plain text, not as an open/close pair
 		}
-		b.WriteString(c.GetText())
+		if cur.sgr() != prev.sgr() {
+			b.WriteString(sgrSequence(prev.sgr(), cur.sgr()))
+		}
+		if cur.link != prev.link {
+			b.WriteString(hyperlinkSequence(cur.link, links))
+		}
+		text := cellTextOf(c)
+		b.WriteString(printedText(text, afterWide))
+		afterWide = isWide(text)
 		prev = cur
 	}
 	// Leave the line in the default state so whatever follows (the next
 	// row, or the caller's own trailing output) never inherits a stale
 	// attribute/color — matches capture-pane -e's per-line reset.
+	if prev.link != 0 {
+		b.WriteString(hyperlinkSequence(0, nil))
+	}
 	if !prev.isZero() {
 		b.WriteString("\x1b[0m")
 	}
 	return b.String()
+}
+
+// maxHyperlinkURIBytes caps a rendered OSC 8 URI (matches common emulator limits); the URI is
+// re-emitted on every link change, so an unbounded one amplifies the broadcast.
+const maxHyperlinkURIBytes = 2048
+
+// linkTarget resolves 1-based index idx of links to the sanitized OSC 8 parameters and URI.
+// ok is false for no link, an out-of-range index, an empty URI, or one over the cap.
+func linkTarget(idx uint32, links []*v1.Hyperlink) (params, uri string, ok bool) {
+	if idx == 0 || int(idx) > len(links) || links[idx-1] == nil {
+		return "", "", false
+	}
+	l := links[idx-1]
+	uri = stripControl(l.GetUri(), "")
+	if uri == "" || len(uri) > maxHyperlinkURIBytes {
+		return "", "", false
+	}
+	if id := stripControl(l.GetId(), ";:"); id != "" {
+		params = "id=" + id
+	}
+	return params, uri, true
+}
+
+// hyperlinkSequence opens the OSC 8 hyperlink at 1-based index idx of links, or closes the
+// current one when idx doesn't resolve. SGR 0 doesn't end a hyperlink, so closing is explicit.
+func hyperlinkSequence(idx uint32, links []*v1.Hyperlink) string {
+	params, uri, ok := linkTarget(idx, links)
+	if !ok {
+		return "\x1b]8;;\x1b\\"
+	}
+	return "\x1b]8;" + params + ";" + uri + "\x1b\\"
+}
+
+// stripControl drops C0/DEL/C1 control bytes (so a daemon-supplied string can't end the OSC
+// early or inject escapes) plus any rune in extra.
+func stripControl(s, extra string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || (r >= 0x7f && r < 0xa0) || strings.ContainsRune(extra, r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// cellTextOf is a cell's text with control bytes removed: cell text comes from the daemon's
+// view of arbitrary program output and is replayed into browser terminals, so it must never
+// carry escapes.
+func cellTextOf(c *v1.Cell) string {
+	return stripControl(c.GetText(), "")
+}
+
+// printedText returns the text to print for a cell whose sanitized text is text. The daemon
+// leaves a cell's Text empty when the cursor skipped over it (CSI C, which Claude Code's renderer
+// uses instead of printing spaces) — printing "" would glue the words on either side together.
+// An empty cell is the 2nd half of a wide glyph only when the preceding cell is wide, and that
+// one prints nothing.
+func printedText(text string, afterWide bool) string {
+	if text != "" {
+		return text
+	}
+	if afterWide {
+		return ""
+	}
+	return " "
+}
+
+func isWide(text string) bool {
+	if text == "" {
+		return false
+	}
+	p, _ := width.LookupString(text)
+	k := p.Kind()
+	return k == width.EastAsianWide || k == width.EastAsianFullwidth
 }
 
 // sgrSequence renders the one escape sequence needed to move from prev to
@@ -116,6 +242,9 @@ func isRemoval(prev, cur sgrState) bool {
 	if prev.attrs&^cur.attrs != 0 {
 		return true
 	}
+	if prev.ulColor != 0 && cur.ulColor == 0 {
+		return true
+	}
 	if prev.fg != 0 && cur.fg == 0 {
 		return true
 	}
@@ -126,24 +255,51 @@ func isRemoval(prev, cur sgrState) bool {
 }
 
 // sgrCodes returns the ordered SGR parameters (bold/italic/underline/
-// reverse per Task 2.6.1b, then fg, then bg) needed to set s's full state.
+// reverse per Task 2.6.1b, then fg, then bg, then underline color) needed to set s's full state.
 func sgrCodes(s sgrState) []string {
 	var codes []string
 	if s.attrs&attrBold != 0 {
 		codes = append(codes, "1")
 	}
+	if s.attrs&attrFaint != 0 {
+		codes = append(codes, "2")
+	}
 	if s.attrs&attrItalic != 0 {
 		codes = append(codes, "3")
 	}
 	if s.attrs&attrUnderline != 0 {
-		codes = append(codes, "4")
+		codes = append(codes, underlineCode(s.ulStyle))
+	}
+	if s.attrs&attrBlink != 0 {
+		codes = append(codes, "5")
 	}
 	if s.attrs&attrReverse != 0 {
 		codes = append(codes, "7")
 	}
+	if s.attrs&attrConceal != 0 {
+		codes = append(codes, "8")
+	}
+	if s.attrs&attrStrike != 0 {
+		codes = append(codes, "9")
+	}
+	if s.attrs&attrOverline != 0 {
+		codes = append(codes, "53")
+	}
 	codes = append(codes, colorCodes(s.fg, "38")...)
 	codes = append(codes, colorCodes(s.bg, "48")...)
+	if s.attrs&attrUnderline != 0 {
+		codes = append(codes, colorCodes(s.ulColor, "58")...)
+	}
 	return codes
+}
+
+// underlineCode renders Cell.underline_style: plain `4` for single, else the colon sub-parameter
+// form `4:N` (2 double, 3 curly, 4 dotted, 5 dashed) that xterm.js, kitty, wezterm and iTerm2 accept.
+func underlineCode(style uint32) string {
+	if style == 0 || style > 4 {
+		return "4"
+	}
+	return "4:" + strconv.Itoa(int(style)+1)
 }
 
 // colorCodes unpacks one packed Cell.fg/Cell.bg value (pane.rs's

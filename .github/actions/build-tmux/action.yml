@@ -1,5 +1,5 @@
-name: 'Build pinned tmux 3.4'
-description: 'Installs build deps, restores/builds the pinned tmux 3.4 binary at bin/tmux'
+name: 'Build pinned tmux 3.8'
+description: 'Installs build deps, restores/builds the pinned tmux 3.8 binary at bin/tmux'
 inputs:
   install-socat:
     description: 'Also install socat (needed by real-shell approval-relay tests)'
@@ -23,8 +23,8 @@ runs:
       id: tmux-cache
       with:
         path: bin/tmux
-        key: tmux-3.4-${{ runner.os }}-v1
-    - name: Build pinned tmux 3.4
+        key: tmux-3.8-${{ runner.os }}-v1
+    - name: Build pinned tmux 3.8
       if: steps.tmux-cache.outputs.cache-hit != 'true'
       shell: bash
       run: ./scripts/build-tmux.sh

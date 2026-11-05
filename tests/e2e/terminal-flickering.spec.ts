@@ -21,8 +21,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Terminal Flickering Fix', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to test page (using production server at 8543)
-    await page.goto('http://localhost:8544/test-terminal');
+    // Navigate to test page (baseURL is the isolated test server)
+    await page.goto('/test-terminal');
 
     // Wait for terminal to initialize
     await page.waitForSelector('[data-testid="terminal-container"]', { timeout: 10000 });

@@ -22,9 +22,10 @@ const CONTEXT_LABELS: Record<ShortcutContext, string> = {
   terminal: "Terminal",
   cockpit: "Cockpit / Panes",
   omnibar: "Omnibar",
+  diff: "Diff View",
 };
 
-const CONTEXTS: ShortcutContext[] = ["global", "session-list", "approval", "terminal", "cockpit", "omnibar"];
+const CONTEXTS: ShortcutContext[] = ["global", "session-list", "approval", "terminal", "cockpit", "omnibar", "diff"];
 
 function formatKey(s: Shortcut): string {
   if (s.sequence && s.sequence.length > 0 && s.key === undefined) return `Leader ${s.sequence.join(" ")}`;

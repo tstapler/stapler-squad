@@ -1,0 +1,5 @@
+modes/ris_resets_state -- esctest2 ris.py (scroll region, tabs, charset, SGR)
+[5;10r[7;1H(0[1;4mc[1;1Hplain
+
+[3gc	after-tab-reset[24;1H
+bottom-scrolls-full-screen

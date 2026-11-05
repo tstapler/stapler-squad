@@ -9,12 +9,15 @@ import {
   ListFilesResponseSchema,
   SessionService,
 } from "@/gen/session/v1/session_pb";
-import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { createRpcTimingInterceptor, setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 import { encodeFrame, MAX_FRAME_BYTES, type MuxFrame } from "./unary-mux-frame";
 import { FakeWebSocket } from "./__fixtures__/fakeUnaryWebSocket";
 import {
   createUnaryWsTransport,
   deriveSocketUrl,
+  MAX_IN_FLIGHT,
+  PONG_DEADLINE_HIDDEN_MS,
+  PONG_DEADLINE_MS,
   UnaryWsBreaker,
   WsUnaryError,
   type UnaryWsTransport,
@@ -293,24 +296,42 @@ describe("frame size routing", () => {
 });
 
 describe("send queue and window", () => {
-  it("unary_should_RejectResourceExhausted_When_65thFrameQueuedWhileConnecting", async () => {
+  it("unary_should_ReplayReadOverHttp_When_SendQueueFullWhileConnecting", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
     const h = setup();
     const ps = Array.from({ length: 65 }, (_, i) => settled(callListFiles(h.t, `/${i}`)));
     const last = await ps[64];
-    expect(!last.ok && ConnectError.from(last.error).code).toBe(Code.ResourceExhausted);
+    expect(last.ok).toBe(true);
+    expect(h.fallback.unary).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "ws_unary_fallback_total", labels: { reason: "ws-send-queue-full" } })
+    );
     h.sock().open();
-    expect(h.sock().requestIds().length).toBe(6); // 64 queued, window caps at 6
+    expect(h.sock().requestIds().length).toBe(MAX_IN_FLIGHT); // 64 queued, all fit the window
+    setRpcTimingSink(undefined);
+    h.t.close();
+  });
+
+  it("unary_should_RejectResourceExhausted_When_SendQueueFull_And_CallNotReplayable", async () => {
+    const h = setup();
+    for (let i = 0; i < 64; i++) void callListFiles(h.t, `/${i}`);
+    const p = settled(h.t.unary(createSession, undefined, undefined, undefined, {}));
+    const r = await p;
+    expect(!r.ok && ConnectError.from(r.error).code).toBe(Code.ResourceExhausted);
+    expect(h.fallback.unary).not.toHaveBeenCalled();
     h.t.close();
   });
 
   it("unary_should_KeepAtMostMaxInFlightOutstanding_And_SendNextWhenOneSettles", async () => {
     const h = setup();
-    const ps = Array.from({ length: 8 }, (_, i) => callListFiles(h.t, `/${i}`));
+    h.t.connect();
     h.sock().open();
-    expect(h.sock().requestIds()).toHaveLength(6);
+    const ps = Array.from({ length: MAX_IN_FLIGHT + 2 }, (_, i) => callListFiles(h.t, `/${i}`));
+    expect(h.sock().requestIds()).toHaveLength(MAX_IN_FLIGHT);
     h.sock().receive(response(h.sock().requestIds()[0], "/0"));
     await ps[0];
-    expect(h.sock().requestIds()).toHaveLength(7);
+    expect(h.sock().requestIds()).toHaveLength(MAX_IN_FLIGHT + 1);
     h.t.close();
   });
 
@@ -323,6 +344,52 @@ describe("send queue and window", () => {
     // a call arriving after the window goes straight to HTTP without waiting
     void callListFiles(h.t, "/late");
     expect(h.fallback.unary).toHaveBeenCalledTimes(2);
+    h.t.close();
+  });
+});
+
+describe("client metrics events", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_EmitOpenSendCloseAndReconnectWithTheCloseCode", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().serverClose(1006);
+    await read;
+
+    const events = track.mock.calls.map(([e]) => e);
+    const ws = events.filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws).toEqual([
+      { kind: "unary", event: "open" },
+      { kind: "unary", event: "close", code: "1006" },
+      { kind: "unary", event: "reconnect" },
+    ]);
+    const send = events.find((e) => e.name === "cm.ws_send");
+    expect(send.labels).toEqual({ pending: "0" });
+    expect(typeof send.durationMs).toBe("number");
+    h.t.close();
+  });
+});
+
+describe("close recording after an error", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_RecordTheCloseCode_When_ErrorIsFollowedByClose", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().onerror?.();
+    h.sock().serverClose(1006);
+    h.sock().serverClose(1006); // a duplicate close event must not double count
+    await read;
+    const ws = track.mock.calls.map(([e]) => e).filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws.filter((l) => l.event === "error")).toHaveLength(1);
+    expect(ws.filter((l) => l.event === "close")).toEqual([{ kind: "unary", event: "close", code: "1006" }]);
     h.t.close();
   });
 });
@@ -445,6 +512,52 @@ describe("liveness", () => {
     expect(h.sock().closed).toBe(false);
     expect(h.t.breaker.failures).toBe(0);
     h.t.close();
+  });
+
+  it("liveness_should_StayOpen_When_AnyInboundFrameArrivesInsteadOfPong", () => {
+    const h = setup();
+    void callVcs(h.t);
+    h.sock().open();
+    jest.advanceTimersByTime(10_000); // PING sent, pong deadline armed
+    h.sock().receive({ type: "PING", id: 7 }); // any frame proves the socket is alive
+    jest.advanceTimersByTime(5_000);
+    expect(h.sock().closed).toBe(false);
+    expect(h.t.breaker.failures).toBe(0);
+    h.t.close();
+  });
+
+  it("liveness_should_WaitLonger_When_DocumentIsHidden", () => {
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      const h = setup();
+      callVcs(h.t).catch(() => undefined); // the 30s call deadline fires during the advance
+      h.sock().open();
+      jest.advanceTimersByTime(10_000);
+      jest.advanceTimersByTime(PONG_DEADLINE_MS + 1);
+      expect(h.sock().closed).toBe(false);
+      jest.advanceTimersByTime(PONG_DEADLINE_HIDDEN_MS);
+      expect(h.sock().closed).toBe(true);
+      h.t.close();
+    } finally {
+      hidden.mockRestore();
+    }
+  });
+
+  it("liveness_should_GiveHiddenGrace_When_TabHidesWhileWaitingForPong", () => {
+    const h = setup();
+    callVcs(h.t).catch(() => undefined);
+    h.sock().open();
+    jest.advanceTimersByTime(10_000); // PING sent while visible
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      jest.advanceTimersByTime(PONG_DEADLINE_MS + 1);
+      expect(h.sock().closed).toBe(false);
+      jest.advanceTimersByTime(PONG_DEADLINE_HIDDEN_MS - PONG_DEADLINE_MS);
+      expect(h.sock().closed).toBe(true);
+    } finally {
+      hidden.mockRestore();
+      h.t.close();
+    }
   });
 
   it("liveness_should_NotPing_When_NoCallInFlight", () => {

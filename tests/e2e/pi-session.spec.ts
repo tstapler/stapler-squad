@@ -9,8 +9,9 @@
  */
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/SessionsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 const PI_SUPPORT_FLAG_NAME = "pi-support";
 
 async function setPiSupportFlag(request: import("@playwright/test").APIRequestContext, enabled: boolean) {

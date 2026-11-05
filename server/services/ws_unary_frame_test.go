@@ -46,6 +46,7 @@ type unaryVectors struct {
 
 type unaryAllowlist struct {
 	WsUnaryAllowed []string `json:"wsUnaryAllowed"`
+	BatchAllowed   []string `json:"batchAllowed"`
 	ClientHeaders  []string `json:"clientHeaders"`
 	MaxInFlight    int      `json:"maxInFlight"`
 }
@@ -97,9 +98,9 @@ func TestUnaryFrameVectors_ShouldBeSelfConsistent(t *testing.T) {
 func TestUnaryAllowlistFixture_ShouldLoad(t *testing.T) {
 	var a unaryAllowlist
 	loadFixture(t, "ws-unary-allowlist.json", &a)
-	assert.Len(t, a.WsUnaryAllowed, 9)
+	assert.Len(t, a.WsUnaryAllowed, 17)
 	assert.Equal(t, []string{"Connect-Protocol-Version"}, a.ClientHeaders)
-	assert.Equal(t, 6, a.MaxInFlight)
+	assert.Equal(t, 64, a.MaxInFlight)
 }
 
 type vectorFields struct {

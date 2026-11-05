@@ -652,3 +652,21 @@ describe("StuckItemDetail", () => {
     });
   });
 });
+
+describe("StuckItemDetail constituent reasons", () => {
+  it("lists constituent reasons with Retry only for remediable ones, calling TriggerRemediationNow per reason", async () => {
+    const onTrigger = jest.fn().mockResolvedValue(undefined);
+    const item = makeItem({ reason: StuckReason.MULTIPLE_REASONS });
+    render(
+      <StuckItemDetail
+        item={item}
+        constituentReasons={[StuckReason.PR_NEEDS_FIX, StuckReason.REWORK_CAP]}
+        onTriggerRemediationNow={onTrigger}
+      />
+    );
+    expect(screen.getByTestId(`stuck-constituent-reason-${StuckReason.REWORK_CAP}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`stuck-constituent-retry-${StuckReason.REWORK_CAP}`)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`stuck-constituent-retry-${StuckReason.PR_NEEDS_FIX}`));
+    await waitFor(() => expect(onTrigger).toHaveBeenCalledWith(item.itemId, StuckReason.PR_NEEDS_FIX));
+  });
+});

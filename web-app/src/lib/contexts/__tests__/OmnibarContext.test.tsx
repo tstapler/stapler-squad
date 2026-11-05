@@ -12,10 +12,12 @@ import { OmnibarProvider } from "../OmnibarContext";
 // the full omnibar UI (keyboard shortcuts, detectors, etc).
 
 let capturedOnRunWorkflow: ((slug: string, arg: string) => Promise<void>) | undefined;
+let capturedIsOpen: boolean | undefined;
 
 jest.mock("@/components/sessions/Omnibar", () => ({
-  Omnibar: (props: { onRunWorkflow?: (slug: string, arg: string) => Promise<void> }) => {
+  Omnibar: (props: { onRunWorkflow?: (slug: string, arg: string) => Promise<void>; isOpen?: boolean }) => {
     capturedOnRunWorkflow = props.onRunWorkflow;
+    capturedIsOpen = props.isOpen;
     return null;
   },
 }));
@@ -169,5 +171,28 @@ describe("OmnibarContext handleRunWorkflow", () => {
       "run-workflow:topic-synthesis"
     );
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe("OmnibarProvider bare 'n' shortcut", () => {
+  const pressN = (target: Element) =>
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    });
+
+  it("Omnibar_should_Open_When_NPressedOutsideInputs", () => {
+    render(<OmnibarProvider>{null}</OmnibarProvider>);
+    pressN(document.body);
+    expect(capturedIsOpen).toBe(true);
+  });
+
+  it("Omnibar_should_StayClosed_When_NPressedInsideDiffPane", () => {
+    render(
+      <OmnibarProvider>
+        <div data-context="diff" tabIndex={0} data-testid="pane" />
+      </OmnibarProvider>,
+    );
+    pressN(document.querySelector('[data-testid="pane"]')!);
+    expect(capturedIsOpen).toBe(false);
   });
 });

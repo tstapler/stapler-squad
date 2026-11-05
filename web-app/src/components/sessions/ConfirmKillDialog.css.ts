@@ -71,7 +71,7 @@ export const cancelButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
@@ -93,7 +93,7 @@ export const killButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       filter: "brightness(1.1)",

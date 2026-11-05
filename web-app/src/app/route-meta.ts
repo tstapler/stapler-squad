@@ -1,8 +1,7 @@
 /**
- * One row per `page.tsx` under src/app: the effective document title and the
- * feature-flag guard (if any). `route-meta.test.ts` fails when this table
- * drifts from the Next `metadata` exports and layouts. When it does, add or fix
- * the row here.
+ * One row per `page.tsx` under src/app: the document title and the feature-flag
+ * guard (if any). This table is the only source of both; `route-meta.test.ts`
+ * fails when a page has no row, so add the row when you add the page.
  */
 
 import type { RoutePath } from "@/lib/nav/paths";
@@ -10,9 +9,9 @@ import type { RoutePath } from "@/lib/nav/paths";
 export type GuardFlag = "backlog" | "changelog";
 
 export interface RouteMetaEntry {
-  /** Effective title: the page's own `metadata.title`, else the nearest layout's, else the root's. */
+  /** Document title for this path. */
   title: string;
-  /** Feature flag that gates this path (and, via its layout, everything below it). */
+  /** Feature flag that gates this path (applied by the router table in `routes.tsx`). */
   guard?: GuardFlag;
 }
 

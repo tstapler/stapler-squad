@@ -187,8 +187,8 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 //     question_text) inside the transaction; if found, that row's ID is what
 //     this call resolves to — no new row is created. If not found, Create()
 //     a new row with a caller-chosen candidate ID. This is safe without an
-//     OnConflict upsert because every transaction is serialized process-wide
-//     (session/ent_repository.go's SetMaxOpenConns(1)) — no concurrent
+//     OnConflict upsert because every transaction runs on the single writer connection
+//     (session/ent_repository.go's SetMaxOpenConns(1)), so they serialize process-wide — no concurrent
 //     transaction can race this read-then-create.
 //  3. Comparing the resolved ID against the candidate ID is how the caller
 //     distinguishes "created new" from "resolved to existing".
@@ -262,6 +262,7 @@ func (r *EntRepository) createGuidanceRequest(ctx context.Context, in CreateGuid
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("create guidance request: commit: %w", err)
 	}
+	r.pendingGuidance.invalidate() // the mutation hook ran before this commit
 	r.publishGuidanceChange(ctx, row.Scope, row.ScopeKey)
 	return guidanceRequestToData(row), nil
 }
@@ -540,6 +541,10 @@ func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope 
 // ListAllPendingGuidanceRequests returns every open GuidanceRequest row across
 // every scope — backs the nav badge (Epic 7).
 func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
+	if cached, ok := r.pendingGuidance.get(); ok {
+		return cached, nil
+	}
+	readGen := r.pendingGuidance.gen.Load()
 	rows, err := r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.AnsweredAtIsNil(),
@@ -549,7 +554,9 @@ func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("list all pending guidance requests: %w", err)
 	}
-	return guidanceRequestsToData(rows), nil
+	data := guidanceRequestsToData(rows)
+	r.pendingGuidance.put(readGen, data)
+	return copyGuidanceRows(data), nil
 }
 
 // pendingGuidanceItemIDs returns the subset of itemIDs that have at least one

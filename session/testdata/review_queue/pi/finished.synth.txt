@@ -1,0 +1,5 @@
+Listed 3 files and read README.md.
+
+The directory contains a README, a Makefile and src/. Nothing else to do.
+──────────────────────────────────────────────────
+> 

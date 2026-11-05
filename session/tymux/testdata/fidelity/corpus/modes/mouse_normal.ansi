@@ -1,0 +1,2 @@
+modes/mouse_normal -- xterm ctlseqs mouse tracking normal tracking (?1000)
+[?1000hmouse protocol normal tracking (?1000) on

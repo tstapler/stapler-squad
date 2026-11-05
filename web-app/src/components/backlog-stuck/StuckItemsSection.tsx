@@ -265,6 +265,17 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     [visibleItems]
   );
 
+  const constituentReasonsFor = useCallback(
+    (item: StuckBacklogItem): StuckReason[] =>
+      item.reason === StuckReason.MULTIPLE_REASONS
+        ? // Unfiltered `items`: an active reason filter hides the sibling rows.
+          items
+            .filter((i) => i.itemId === item.itemId && !isEscalationReason(i.reason))
+            .map((i) => i.reason)
+        : [],
+    [items]
+  );
+
   const grouped = useMemo(() => {
     const map = new Map<StuckReason, StuckBacklogItem[]>();
     for (const reason of GROUP_ORDER) map.set(reason, []);
@@ -406,6 +417,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       onToggleExpand={() => toggleExpand(key)}
                       otherReasonsCount={otherCount}
                       otherReasonLabels={otherReasonLabelsFor(item)}
+                      constituentReasons={constituentReasonsFor(item)}
                       justResolved={ghost !== undefined}
                       resolvedMessage={ghost?.message}
                       resolvedTrailingMessage={ghost?.trailingMessage}

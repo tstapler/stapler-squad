@@ -448,6 +448,9 @@ func TestExitStatusMapping(t *testing.T) {
 	_, err = cli.New(nil).RepoRoot(ctx, loc(newFake().on("rev-parse --show-toplevel", "fatal: not a git repository (or any of the parent directories): .git\n", exitErr{128})))
 	assert.ErrorIs(t, err, backend.ErrNotARepo)
 
+	_, err = cli.New(nil).RepoRoot(ctx, loc(newFake().on("rev-parse --show-toplevel", "fatal: gitfile does not point to a valid repository: /wt/.git\n", exitErr{128})))
+	assert.ErrorIs(t, err, backend.ErrNotARepo, "git 2.56 wording for a dangling worktree gitfile")
+
 	err = cli.New(nil).Add(ctx, loc(newFake().on("add -A", "fatal: Unable to create '/r/.git/index.lock': File exists.\n", exitErr{128})), backend.AddRequest{All: true})
 	assert.ErrorIs(t, err, backend.ErrLocked{})
 	var locked backend.ErrLocked
@@ -570,4 +573,20 @@ func TestDiffKeepsIndentedWarningContextLine(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, diff, got)
+}
+
+// Local non-network ops use the resolved direct binary; network ops stay on PATH's git.
+// Not parallel: pins the process-wide resolver.
+func TestLocalRunsUseDirectGitBinary_NetworkOpsKeepPathGit(t *testing.T) {
+	restore := cli.SetDirectGitForTest("/real/bin/git")
+	defer restore()
+	ctx := context.Background()
+	rec := &rawRecorder{}
+	b := cli.New(rec)
+
+	_, _ = b.CurrentBranch(ctx, backend.Local{Root: "/r"})
+	assert.Equal(t, "/real/bin/git", rec.name)
+
+	_ = b.Fetch(ctx, backend.Local{Root: "/r"}, backend.FetchRequest{Remote: "origin"})
+	assert.Equal(t, "git", rec.name, "fetch is a wrapper network op")
 }

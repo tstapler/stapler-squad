@@ -1,0 +1,6 @@
+cursor/absolute_moves -- esctest2 cup.py cha.py hpa.py vpa.py hvp.py hpr.py vp
+[5;20Hcup 5;20[6;1H[30Gcha-col30[10`hpa-col10[5acol-hpr-5-right
+[8;1H[12dvpa-row12-col1[12;40fhvp-12;40[14;1H[3ehpr3-rel
+[15;1H[20;10fhvp[2ecol-vpr[1evpr1
+[18;1HCUP-18-default-col[20H20-default-col[22;H22-no-col
+[3;50H[1;1Hhome[5;5H[H[mx

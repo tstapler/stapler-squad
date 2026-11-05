@@ -127,6 +127,21 @@ func (w *unaryWriter) drop(id uint32) {
 	}
 }
 
+// abort finishes every stream still queued (the socket is going away), so their
+// onDone cleanup, such as returning buffer budget, still runs.
+func (w *unaryWriter) abort() {
+	w.mu.Lock()
+	streams := w.streams
+	w.streams = nil
+	w.queued = 0
+	w.mu.Unlock()
+	for _, st := range streams {
+		if st.onDone != nil {
+			st.onDone()
+		}
+	}
+}
+
 // next pops the next frame to write, or nil when idle.
 func (w *unaryWriter) next() []byte {
 	frame, onDone := w.pop()

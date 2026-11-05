@@ -8,8 +8,9 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import axe from 'axe-core';
 import { ROUTE_META } from '../../web-app/src/app/route-meta';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 /** Every page.tsx route, derived so a new route cannot escape the sweep (Story 7.8a). */
 const ROUTES = Object.keys(ROUTE_META);

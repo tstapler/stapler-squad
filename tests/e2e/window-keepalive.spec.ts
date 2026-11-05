@@ -6,8 +6,9 @@
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const FLAG = 'window_keep_alive';
 const rpc = (name: string) => `${BASE_URL}/api/session.v1.SessionService/${name}`;
 const json = { 'Content-Type': 'application/json' };

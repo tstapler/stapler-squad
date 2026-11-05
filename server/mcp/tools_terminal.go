@@ -204,7 +204,7 @@ func (th *terminalHandlers) readOutputBytes(sessionID string, inst *session.Inst
 	}
 	capture := th.capturePane
 	if capture == nil {
-		capture = func(i *session.Instance) (string, error) { return i.CapturePaneContent() }
+		capture = func(i *session.Instance) (string, error) { return i.CapturePaneContentFinal() }
 	}
 	content, err := capture(inst)
 	if err != nil {

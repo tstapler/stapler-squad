@@ -117,9 +117,12 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 	)
 	// The one sanctioned git spawn site: every Run of git is counted here, once.
 	t.spawns.Count(ctx, op, t.remote)
-	name, argv := "git", args
+	var name string
+	argv := args
 	if t.remote {
 		name, argv = remoteGitArgv(args)
+	} else {
+		name = localGitName(args)
 	}
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
 		out, err = sr.RunStdout(ctx, t.dir, name, argv...)
@@ -236,7 +239,9 @@ func truncateKeepingEnds(s string, max int) string {
 
 func sentinelFor(lower, original string) error {
 	switch {
-	case strings.Contains(lower, "not a git repository"):
+	case strings.Contains(lower, "not a git repository"),
+		// git 2.56 says this, instead of "not a git repository", for a gitfile whose admin dir is gone.
+		strings.Contains(lower, "gitfile does not point to a valid repository"):
 		return backend.ErrNotARepo
 	case strings.Contains(lower, "does not have any commits yet"):
 		return backend.ErrUnborn

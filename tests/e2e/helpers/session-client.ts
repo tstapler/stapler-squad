@@ -153,7 +153,8 @@ export class SessionClient {
 
   async getReviewQueue(): Promise<ReviewQueue> {
     const resp = await this.rpc<{ reviewQueue: ReviewQueue }>('GetReviewQueue', {});
-    return resp.reviewQueue ?? { totalItems: 0, items: [] };
+    // proto3 JSON omits empty repeated fields
+    return { totalItems: resp.reviewQueue?.totalItems ?? 0, items: resp.reviewQueue?.items ?? [] };
   }
 
   /**
@@ -171,6 +172,19 @@ export class SessionClient {
     throw new Error(
       `Review queue has ${queue.totalItems} items after ${timeoutMs}ms, wanted >= ${minItems}`
     );
+  }
+
+  /** Poll until every named session has finished creating and is running (the server-observable "seeded" signal). */
+  async waitForSessionsActive(titles: string[], timeoutMs = 60000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let sessions = await this.listSessions();
+    while (Date.now() < deadline) {
+      const active = new Set(sessions.filter(s => s.status === 'SESSION_STATUS_ACTIVE').map(s => s.title));
+      if (titles.every(t => active.has(t))) return;
+      await new Promise(r => setTimeout(r, 250));
+      sessions = await this.listSessions();
+    }
+    throw new Error(`Sessions not active after ${timeoutMs}ms: ${titles.join(', ')} (have: ${sessions.map(s => `${s.title}=${s.status}`).join(', ')})`);
   }
 
   /**

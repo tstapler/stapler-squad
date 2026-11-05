@@ -225,7 +225,7 @@ var transitionCallers = []TransitionCallerSpec{
 	specOp(CallerOperatorUnarchiveRPC, LegacyUnchecked, []SystemEdge{edge(stArchived, stIdea)}, site(fileLifecycle, "BacklogService.UnarchiveBacklogItem", 1)),
 	specOp(CallerOperatorPRAssociation, LegacyUnchecked, []SystemEdge{edge(stReview, stPrPend)}, site(fileLifecycle, "BacklogService.UpdateBacklogItem", 1)),
 	specOp(CallerOperatorTriggerTriage, LegacyUnchecked, []SystemEdge{edge(stReady, stIdea)}, site(fileTriggerTri, "BacklogService.TriggerTriage", 1)),
-	specOp(CallerOperatorForceReset, LegacyUnchecked, []SystemEdge{edge(stReview, stInProg)}, site(fileTriage, "BacklogService.forceResetItem", 1)),
+	specOp(CallerOperatorForceReset, LegacyUnchecked, []SystemEdge{edge(stReview, stInProg), edge(stPrPend, stInProg)}, site(fileTriage, "BacklogService.forceResetItem", 1)),
 	specOp(CallerOperatorNotificationAction, LegacyEngine, []SystemEdge{edge(stReview, stDone), edge(stReview, stReady), edge(stPrPend, stReady)}, site(fileNotifyAction, "backlogDecider.transition", 1)),
 
 	// Agent. request_review's skip-stReview-gate path writes ->stDone from

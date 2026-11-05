@@ -9,7 +9,7 @@ import { FilesTab } from "../FilesTab";
 import { storageKey } from "@/lib/hooks/useOpenBuffers";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
-  useSessionVcsContext: () => ({ status: null, diff: null, statusLoading: false, refreshStatus: jest.fn() }),
+  useSessionVcsContext: () => ({ status: null, diff: null, statusLoading: false, refreshStatus: jest.fn(), ensureDiff: jest.fn() }),
 }));
 jest.mock("../FileTree", () => ({
   FileTree: forwardRef(function FileTreeStub({ onFileSelect }: { onFileSelect: (p: string) => void }, ref) {

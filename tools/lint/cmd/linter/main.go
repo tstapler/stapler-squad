@@ -29,6 +29,8 @@
 //     log.Info/Warn/Error/Debug API
 //   - notimesleeptest: rejects time.Sleep in _test.go files outside
 //     tests/realtime/ (ADR-003); //nolint:notimesleeptest <reason> exempts
+//   - nosessiondrivertest: rejects raw session.StartSessionDriver in _test.go files
+//     outside package session; use session.StartSessionDriverForTest
 //   - noarchivedrevival: requires Start(false)/RecoverFromStopped()/restartForRetry/
 //     transitionToLocked(..., Active) in the automated-lifecycle files to follow an
 //     IsArchived()/ArchivedAt check (.claude/rules/noarchivedrevival.md)
@@ -46,12 +48,15 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/nolegacylog"
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
+	"github.com/tstapler/stapler-squad/tools/lint/norawdb"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitcli"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
+	"github.com/tstapler/stapler-squad/tools/lint/nosessiondrivertest"
 	"github.com/tstapler/stapler-squad/tools/lint/notimesleeptest"
 	"github.com/tstapler/stapler-squad/tools/lint/novartestseam"
+	"github.com/tstapler/stapler-squad/tools/lint/nowrongdbentity"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -64,10 +69,13 @@ func main() {
 		nocommandpattern.Analyzer,
 		nolegacylog.Analyzer,
 		noliveinstanceraw.Analyzer,
+		nosessiondrivertest.Analyzer,
+		norawdb.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitcli.Analyzer,
 		norawgitopen.Analyzer,
+		nowrongdbentity.Analyzer,
 		notimesleeptest.Analyzer,
 		novartestseam.Analyzer,
 		silenttransition.Analyzer,

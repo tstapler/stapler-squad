@@ -13,8 +13,9 @@
  * and drives the real ReviewQueuePanel UI against it.
  */
 import { test, expect, Page } from "@playwright/test";
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 interface QueueFixtureItem {
   sessionId: string;
@@ -37,7 +38,7 @@ function makeReviewQueueResponse(items: QueueFixtureItem[]) {
         context: "e2e fixture context",
         program: "claude",
         branch: "main",
-        path: "/tmp/e2e-repo",
+        path: slotTmp("e2e-repo"),
         tags: [],
         category: "",
         metadata: it.metadata ?? {},
@@ -145,7 +146,7 @@ test.describe("review-queue-priority-tiers", () => {
         status: "SESSION_STATUS_ACTIVE",
         subStatus: "SUB_STATUS_IDLE",
         program: "claude",
-        path: "/tmp/e2e-idle-shared",
+        path: slotTmp("e2e-idle-shared"),
         branch: "main",
       });
       await route.fulfill({ response, json: { ...json, sessions } });
@@ -161,7 +162,7 @@ test.describe("review-queue-priority-tiers", () => {
     // visible text node (its branch-column-visibility fallback).
     const sessionRow = page
       .locator('[data-testid="session-card"], [data-testid="session-row"]')
-      .filter({ hasText: "/tmp/e2e-idle-shared" });
+      .filter({ hasText: slotTmp("e2e-idle-shared") });
     await expect(sessionRow).toBeVisible({ timeout: 10000 });
     await expect(sessionRow.getByRole("status", { name: "Session is idle" })).toBeVisible();
 

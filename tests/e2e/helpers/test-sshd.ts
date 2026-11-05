@@ -21,7 +21,8 @@ export class TestSSHD {
   private basePath = '';
 
   constructor(binPath?: string) {
-    this.binPath = binPath || path.join(__dirname, '../.bin/e2e-sshd');
+    // TEST_SSHD_BINARY: CI prebuilds the helper (the Playwright-image shard containers have no Go).
+    this.binPath = binPath || process.env.TEST_SSHD_BINARY || path.join(__dirname, '../.bin/e2e-sshd');
   }
 
   async start(): Promise<void> {
@@ -68,6 +69,11 @@ export class TestSSHD {
   }
 
   private async ensureBinary(): Promise<void> {
+    if (process.env.TEST_SSHD_BINARY) {
+      // A pinned binary is never rebuilt; fail loudly instead of falling through to `go build`.
+      await fs.promises.access(this.binPath, fs.constants.X_OK);
+      return;
+    }
     const stats = await fs.promises.stat(this.binPath).catch(() => null);
     if (stats?.isFile()) {
       const age = Date.now() - stats.mtimeMs;

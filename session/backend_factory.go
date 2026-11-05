@@ -28,7 +28,12 @@ var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBac
 // through as-is (so "native" still works), and "" falls through to
 // NewProcessManager's defaultBackend/BackendTmux.
 func getSelectedBackend() ProcessManagerBackend {
-	cfg := config.LoadConfig()
+	return selectedBackendFromConfig(config.LoadConfig())
+}
+
+// selectedBackendFromConfig is getSelectedBackend's pure core over an
+// already-loaded config.
+func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
 	backend := ProcessManagerBackend(cfg.ProcessManagerBackend)
 	if backend == BackendTymux || config.EffectiveTymuxEnabled(cfg) {
 		return BackendTymux
@@ -103,6 +108,8 @@ func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 	if cmd := opts.launchCommand(); cmd != nil {
 		b.TymuxManager().SetCommand(cmd)
 	}
+	b.TymuxManager().SetSessionLabel(opts.SessionName)
+	b.TymuxManager().SetStoredSessionID(opts.TymuxSessionID)
 	return b
 }
 

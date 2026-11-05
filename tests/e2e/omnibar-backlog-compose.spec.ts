@@ -2,8 +2,9 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { V1_DESKTOP, V2_PORTRAIT } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || process.env.BASE_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openOmnibar(page: import('@playwright/test').Page, typed: string) {
   // Suppress the app-wide onboarding walkthrough; its overlay intercepts clicks.

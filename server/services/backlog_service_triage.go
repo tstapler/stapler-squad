@@ -571,7 +571,8 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// (stop review session + transition back to in_progress so restart begins from
 	// the work phase where the git worktree and slash commands are set up).
 	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
-		item.Status == string(session.BacklogStatusReview)) {
+		item.Status == string(session.BacklogStatusReview) ||
+		item.Status == string(session.BacklogStatusPRPending)) {
 		var forceErr error
 		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
@@ -1363,18 +1364,44 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 	}
 }
 
+// prPendingScopedStuckReasons are the stuck reasons that only describe a pr_pending item.
+var prPendingScopedStuckReasons = []domain.StuckReason{
+	domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed,
+	domain.StuckReasonPRNeedsFix, domain.StuckReasonPRPendingNoPR, domain.StuckReasonMergedPRUnverified,
+	domain.StuckReasonMultipleReasons, domain.StuckReasonSteerFailed, domain.StuckReasonRespawnBlockedActive,
+}
+
 // forceResetItem stops any in-flight work or review sessions for the item, and — if
 // the item is currently in review — transitions it back to in_progress. Used when
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
 func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
+	// Refuse before any mutation: spawnSessionAfterGates rejects an item with a live
+	// Jules session, so resetting first would leave it in_progress with no new session.
+	if sessions, listErr := s.storage.ListItemSessions(ctx, item.ID); listErr == nil {
+		if jules := findActiveJulesSession(sessions); jules != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("a Jules session (%s) is still running for this item; wait for it to finish before force-restarting", jules.SessionUUID))
+		}
+	}
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
-	if item.Status == string(session.BacklogStatusReview) {
+	wasPRPending := item.Status == string(session.BacklogStatusPRPending)
+	if item.Status == string(session.BacklogStatusReview) || wasPRPending {
 		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		})
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
+		}
+		if wasPRPending {
+			// Leaving pr_pending: clear stuck rows that only apply there so the item
+			// doesn't re-enter stuck right after the spawn. The rework counter is
+			// deliberately untouched: force is an explicit operator override of the cap.
+			for _, reason := range prPendingScopedStuckReasons {
+				//nolint:silenttransition // best-effort: a row left open is resolved by the next sweep once its status precondition is gone.
+				if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, reason); resolveErr != nil {
+					log.Warn("[forceResetItem] ResolveStuck failed", "reason", reason, "item", item.ID, "error", resolveErr)
+				}
+			}
 		}
 		return updated, nil
 	}

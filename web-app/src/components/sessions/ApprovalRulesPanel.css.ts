@@ -46,7 +46,7 @@ export const refreshButton = style({
   fontSize: 16,
   cursor: "pointer",
   color: vars.color.textPrimary,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.accentHover,
@@ -117,7 +117,7 @@ export const tab = style({
   fontSize: 13,
   cursor: "pointer",
   color: vars.color.textSecondary,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,
@@ -304,7 +304,7 @@ export const toggle = style({
   fontSize: 11,
   fontWeight: 700,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:disabled": {
       cursor: "default",
@@ -331,7 +331,7 @@ export const deleteButton = style({
   fontSize: 14,
   padding: "2px 6px",
   borderRadius: 4,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.errorBg,
@@ -473,7 +473,7 @@ export const cancelButton = style({
   fontSize: 14,
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,
@@ -500,7 +500,7 @@ export const generateButton = style({
   fontWeight: 500,
   color: vars.color.textPrimary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.accentHover,
@@ -520,7 +520,7 @@ export const cancelGenerateButton = style({
   fontSize: 13,
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,

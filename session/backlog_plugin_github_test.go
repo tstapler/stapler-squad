@@ -562,3 +562,25 @@ func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Len(t, data.Title, 200)
 	require.Equal(t, "9", data.ExternalID)
 }
+
+func TestGitHubIssuesPlugin_ReadIssueState(t *testing.T) {
+	for _, state := range []string{"open", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.Equal(t, "/repos/acme/widgets/issues/42", r.URL.Path)
+				fmt.Fprintf(w, `{"number":42,"state":%q,"updated_at":"2026-11-01T00:00:00Z"}`, state)
+			})
+			got, updatedAt, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+			require.NoError(t, err)
+			require.Equal(t, state, got)
+			require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), updatedAt)
+		})
+	}
+}
+
+func TestGitHubIssuesPlugin_ReadIssueState_NonOKReturnsError(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	_, _, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+	require.Error(t, err)
+}

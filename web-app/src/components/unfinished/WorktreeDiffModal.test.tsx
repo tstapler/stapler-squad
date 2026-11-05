@@ -49,13 +49,12 @@ describe("WorktreeDiffModal", () => {
     render(<WorktreeDiffModal repoPath="/repo" branch="main" repoName="my-repo" onClose={jest.fn()} />);
 
     const closeButton = screen.getByRole("button", { name: /close diff/i });
-    // "Unified" is the last focusable element rendered by DiffRenderer once the
-    // diff resolves — "Split" is disabled and excluded from the trap.
-    const unifiedButton = await screen.findByRole("button", { name: "Unified" });
+    // "Split" is the last focusable element rendered by DiffRenderer once the diff resolves.
+    const lastButton = await screen.findByRole("button", { name: "Split" });
 
     closeButton.focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(unifiedButton);
+    expect(document.activeElement).toBe(lastButton);
   });
 
   it("WorktreeDiffModal_should_callOnClose_When_EscapePressed", () => {

@@ -33,6 +33,7 @@ export const overlay = style({
   // Advanced Options can push modal content taller than the viewport; without
   // this the footer (Cancel/Create Session) is clipped and unreachable.
   overflowY: "auto",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
@@ -257,7 +258,7 @@ export const button = style({
   fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s",
+  transition: "background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s",
   border: "none",
 });
 

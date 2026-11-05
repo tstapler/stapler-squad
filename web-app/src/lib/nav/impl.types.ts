@@ -26,7 +26,7 @@ export interface RedirectProps {
   to: string;
 }
 
-/** The contract every `impl.*.tsx` satisfies; selected per build through the `@/lib/nav/impl` alias. */
+/** The contract every `impl.*.tsx` satisfies; `impl.router` ships; `impl.memory` is for tests. */
 export interface NavImpl {
   useRouter(): NavRouter;
   useSearchParams(): NavSearchParams;

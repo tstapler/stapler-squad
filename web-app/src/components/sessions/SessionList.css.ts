@@ -53,7 +53,7 @@ export const selectModeButton = style({
   border: `1px solid ${vars.color.borderColor}`,
   color: vars.color.textPrimary,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   whiteSpace: "nowrap",
   selectors: {
     "&:hover": {
@@ -244,6 +244,7 @@ export const categoryTitle = style({
   // Story 4.3: sticky group headers — stick to top of scrolling column
   position: "sticky",
   top: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 10,
   background: vars.color.surfaceSubtle,
   borderLeft: `4px solid ${vars.color.primary}`,
@@ -315,7 +316,7 @@ export const clearButton = style({
   fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,

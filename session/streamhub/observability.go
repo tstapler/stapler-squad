@@ -55,6 +55,18 @@ var (
 	batchFlushFramesHist       metric.Int64Histogram
 	slowSubscriberDropsCounter metric.Int64Counter
 	overlapInvariantCounter    metric.Int64Counter
+	hubEventsCounter           metric.Int64Counter
+	subscriberEventsCounter    metric.Int64Counter
+)
+
+// TeardownReason labels why a hub was torn down; a fixed enum so the metric
+// label stays bounded.
+type TeardownReason string
+
+const (
+	TeardownLastSubscriber  TeardownReason = "last_subscriber"
+	TeardownControllerError TeardownReason = "controller_error"
+	TeardownForced          TeardownReason = "forced"
 )
 
 func init() {
@@ -114,6 +126,16 @@ func registerMetricsOnce() error {
 
 	if overlapInvariantCounter, err = meter.Int64Counter("streamhub_overlap_invariant_violations_total",
 		metric.WithDescription("Count of OverlapInvariant violations — must stay 0 after cutover")); err != nil {
+		return err
+	}
+
+	if hubEventsCounter, err = meter.Int64Counter("streamhub_hub_events_total",
+		metric.WithDescription("Hub lifecycle events: event=created|torn_down, reason (torn_down only) is last_subscriber|controller_error|forced")); err != nil {
+		return err
+	}
+
+	if subscriberEventsCounter, err = meter.Int64Counter("streamhub_subscriber_events_total",
+		metric.WithDescription("Subscriber events: event=attached|detached|evicted")); err != nil {
 		return err
 	}
 
@@ -188,3 +210,32 @@ func recordOverlapInvariantViolation() {
 // stay 0 across the whole dark-launch window (plan.md's Observability
 // Plan / Success Metric).
 func OverlapInvariantViolationsTotal() int64 { return overlapInvariantViolationsCount.Load() }
+
+func recordHubCreated() {
+	if hubEventsCounter != nil {
+		hubEventsCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("event", "created")))
+	}
+}
+
+func recordHubTeardown(reason TeardownReason) {
+	if hubEventsCounter != nil {
+		hubEventsCounter.Add(context.Background(), 1, metric.WithAttributes(
+			attribute.String("event", "torn_down"), attribute.String("reason", string(reason))))
+	}
+}
+
+func recordSubscriberAttached() { recordSubscriberEvent("attached") }
+
+func recordSubscriberRemoved(evicted bool) {
+	if evicted {
+		recordSubscriberEvent("evicted")
+		return
+	}
+	recordSubscriberEvent("detached")
+}
+
+func recordSubscriberEvent(event string) {
+	if subscriberEventsCounter != nil {
+		subscriberEventsCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("event", event)))
+	}
+}

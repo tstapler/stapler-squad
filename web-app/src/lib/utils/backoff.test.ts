@@ -1,4 +1,5 @@
 import { ConnectError, Code } from "@connectrpc/connect";
+import { endStreamFromJson } from "@connectrpc/connect/protocol-connect";
 import {
   jitteredDelay,
   BackoffState,
@@ -7,6 +8,7 @@ import {
   isNonRetriableConnectError,
   isWorktreeMissingError,
   connectTimeoutMs,
+  connectCodeForRejectedStream,
   FOREGROUND_CONNECT_TIMEOUT_MS,
   CONNECT_TIMEOUT_MS,
   FOREGROUND_FAST_ATTEMPTS,
@@ -144,6 +146,15 @@ describe("isNonRetriableConnectError", () => {
     expect(isNonRetriableConnectError(err)).toBe(false);
   });
 
+  it("isNonRetriableConnectError_should_returnFalse_When_muxRefusesStreamWith1013", () => {
+    // The terminal mux answers a refused OPEN (stream cap, stall reap) with close 1013
+    // "try again later": it must follow the normal backoff retry, not hard-fail.
+    for (const code of ["1013", "1006"]) {
+      const err = new ConnectError("WebSocket closed", Code.Unavailable, new Headers({ "ws-close-code": code }));
+      expect(isNonRetriableConnectError(err)).toBe(false);
+    }
+  });
+
   it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsUnauthenticated", () => {
     // createConnectTransport never sets a ws-close-code header — this is the
     // native-transport equivalent of ws-close-code 4001 (auth failure).
@@ -156,6 +167,16 @@ describe("isNonRetriableConnectError", () => {
     // Native-transport equivalent of ws-close-code 4004 (session not found).
     const err = new ConnectError("session not found", Code.NotFound);
     expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_serverEndStreamFrameIsNotFound", () => {
+    // Pins the server contract: endStreamErrorCode emits "not_found" for a pane the daemon no longer has.
+    const frame = new TextEncoder().encode(
+      JSON.stringify({ error: { code: "not_found", message: "session ended" } })
+    );
+    const err = endStreamFromJson(frame).error;
+    expect(err?.code).toBe(Code.NotFound);
     expect(isNonRetriableConnectError(err)).toBe(true);
   });
 
@@ -208,5 +229,20 @@ describe("connectTimeoutMs", () => {
   it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundFalseRegardlessOfAttempt", () => {
     expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
     expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
+  });
+});
+
+describe("connectCodeForRejectedStream", () => {
+  it("maps a 1008 pooled-OPEN refusal and a 401 to a non-retriable Unauthenticated", () => {
+    for (const [status, close] of [[-1, 1008], [401, null]] as const) {
+      const code = connectCodeForRejectedStream(status, close);
+      expect(code).toBe(Code.Unauthenticated);
+      expect(isNonRetriableConnectError(new ConnectError("x", code))).toBe(true);
+    }
+  });
+
+  it("keeps other failures Unknown (retriable)", () => {
+    expect(connectCodeForRejectedStream(-1, 1006)).toBe(Code.Unknown);
+    expect(connectCodeForRejectedStream(500, null)).toBe(Code.Unknown);
   });
 });

@@ -15,10 +15,13 @@ export const REQUEST_COALESCING_PRELOAD = true;
 export const WINDOW_KEEP_ALIVE_DEFAULT = false;
 
 const PERSIST_PREFIX = "ssq:flag:";
-const PERSISTED_WS_FLAGS = ["unary_over_ws", "unary_over_ws_remote"] as const;
+const PERSISTED_WS_FLAGS = ["unary_over_ws", "unary_over_ws_remote", "terminal_ws_pool"] as const;
 const KEEP_ALIVE_FLAG = "window_keep_alive";
+/** Renderer choice is read synchronously at terminal mount, so it needs a persisted pre-load value. */
+export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";
 
-let cached: { at: number; flags: FeatureFlag[] } | null = null;
+// `etag` is the server validator for `flags`; empty when the server sent none or a local write made the body differ.
+let cached: { at: number; flags: FeatureFlag[]; etag: string } | null = null;
 let inFlight: Promise<FeatureFlag[]> | null = null;
 // Bumped on every invalidation so a response that started before a write cannot overwrite the write.
 let generation = 0;
@@ -69,6 +72,10 @@ function persistFlags(flags: FeatureFlag[]): void {
     const keepAlive = flags.find((f) => f.name === KEEP_ALIVE_FLAG);
     if (keepAlive) ls.setItem(PERSIST_PREFIX + KEEP_ALIVE_FLAG, keepAlive.enabled ? "1" : "0");
     else ls.removeItem(PERSIST_PREFIX + KEEP_ALIVE_FLAG);
+    // Absent or OFF must clear the key so a disabled flag reverts to xterm.js on the next load.
+    const ghostty = flags.find((f) => f.name === GHOSTTY_RENDERER_FLAG);
+    if (ghostty?.enabled) ls.setItem(PERSIST_PREFIX + GHOSTTY_RENDERER_FLAG, "1");
+    else ls.removeItem(PERSIST_PREFIX + GHOSTTY_RENDERER_FLAG);
   } catch {
     // Quota or privacy-mode failures only cost the pre-load hint.
   }
@@ -80,6 +87,13 @@ function persistFlags(flags: FeatureFlag[]): void {
  */
 export function preloadFlagValue(name: string): boolean | undefined {
   if (name === "request_coalescing") return REQUEST_COALESCING_PRELOAD;
+  if (name === GHOSTTY_RENDERER_FLAG) {
+    try {
+      return storage()?.getItem(PERSIST_PREFIX + name) === "1";
+    } catch {
+      return false;
+    }
+  }
   const isWs = (PERSISTED_WS_FLAGS as readonly string[]).includes(name);
   if (!isWs && name !== KEEP_ALIVE_FLAG) return undefined;
   let persisted: string | null = null;
@@ -108,12 +122,24 @@ export async function loadFlags(
   if (!inFlight) {
     const startedAt = generation;
     const client = createClient(SessionService, getConnectTransport());
-    inFlight = client
+    const fetchFlags = (ifNoneMatch: string) =>
       // Shared across consumers, so a per-component abort would cancel others' read; bound it by time instead.
-      .getFeatureFlags({}, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-      .then((res) => {
+      client.getFeatureFlags({ ifNoneMatch }, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    inFlight = fetchFlags(cached?.etag ?? "")
+      .then(async (res) => {
+        if (res.notModified) {
+          if (cached) {
+            // Unchanged: keep the held body (same reference, so no re-render); extend the TTL only if no write intervened.
+            if (startedAt === generation) cached = { ...cached, at: now() };
+            return cached.flags;
+          }
+          // Nothing held to keep (cleared mid-flight): ask again without a validator.
+          res = await fetchFlags("");
+          // An empty validator can never match; a server claiming it did is misbehaving, so keep what we hold.
+          if (res.notModified) return peekFlags() ?? [];
+        }
         if (startedAt !== generation) return res.flags;
-        cached = { at: now(), flags: res.flags };
+        cached = { at: now(), flags: res.flags, etag: res.etag };
         persistFlags(res.flags);
         notify();
         return res.flags;
@@ -136,7 +162,7 @@ export function recordFlagWrite(name: string, enabled: boolean, scope?: string):
     if (!scope) return { ...f, enabled } as FeatureFlag;
     return { ...f, scopes: f.scopes.map((s) => (s.scope === scope ? { ...s, enabled } : s)) } as FeatureFlag;
   });
-  cached = { at: Number.NEGATIVE_INFINITY, flags };
+  cached = { at: Number.NEGATIVE_INFINITY, flags, etag: "" };
   inFlight = null;
   generation++;
   notify();

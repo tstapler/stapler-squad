@@ -1,0 +1,2 @@
+modes/app_keypad_deckpnm_after_pam -- xterm ctlseqs DECKPNM ESC >
+=>DECKPAM then DECKPNM: numeric keypad

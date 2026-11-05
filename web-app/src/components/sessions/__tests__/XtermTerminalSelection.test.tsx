@@ -88,6 +88,7 @@ jest.mock("@xterm/xterm", () => {
   };
 
   class MockTerminal {
+    unicode = { activeVersion: "6" };
     cols = 80;
     rows = 24;
     options: Record<string, unknown> = {};

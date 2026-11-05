@@ -13,8 +13,9 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 // Worktree content lives on the Worktrees tab; the default tab is PRs.
 const UNFINISHED_URL = `${BASE_URL}/unfinished?tab=worktrees`;
 
@@ -96,7 +97,8 @@ test.beforeAll(async () => {
   testRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-'));
   testWorktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-wt-'));
 
-  execSync(`git init --bare "${testRepoDir}"`);
+  // Pin the branch: the clone's default comes from init.defaultBranch, which is `master` on the CI image.
+  execSync(`git init --bare --initial-branch=main "${testRepoDir}"`);
 
   testSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-'));
   execSync(`git clone "${testRepoDir}" "${testSeedDir}"`);
@@ -232,7 +234,7 @@ test.describe('unfinished-work', () => {
     // stays pinned alongside it so later tests are unaffected.
     const noSessionRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-nosession-'));
     const noSessionSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-nosession-'));
-    execSync(`git init --bare "${noSessionRepoDir}"`);
+    execSync(`git init --bare --initial-branch=main "${noSessionRepoDir}"`);
     execSync(`git clone "${noSessionRepoDir}" "${noSessionSeedDir}"`);
     execSync('git config user.email "test@example.com"', { cwd: noSessionSeedDir });
     execSync('git config user.name "Test"', { cwd: noSessionSeedDir });

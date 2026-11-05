@@ -136,4 +136,6 @@ type ProcessManagerOptions struct {
 	// means "no per-session override," preserving today's behavior for every caller
 	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
 	Backend ProcessManagerBackend
+	// TymuxSessionID is the persisted daemon session id for a restored tymux Instance.
+	TymuxSessionID string
 }

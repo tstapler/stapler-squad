@@ -79,7 +79,7 @@ export const markAllButton = style({
   cursor: "pointer",
   fontSize: "0.875rem",
   color: vars.color.textPrimary,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       backgroundColor: vars.color.hoverBackground,
@@ -95,7 +95,7 @@ export const clearButton = style({
   cursor: "pointer",
   fontSize: "0.875rem",
   color: vars.color.error,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       backgroundColor: vars.color.hoverBackground,
@@ -273,7 +273,7 @@ export const focusButton = style({
   cursor: "pointer",
   fontSize: "0.75rem",
   fontWeight: 500,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   whiteSpace: "nowrap",
   selectors: {
     "&:hover": {
@@ -303,7 +303,7 @@ export const removeButton = style({
   cursor: "pointer",
   fontSize: "1rem",
   color: vars.color.textMuted,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   opacity: 0,
   flexShrink: 0,
   selectors: {
@@ -373,7 +373,7 @@ export const loadMoreButton = style({
   cursor: "pointer",
   fontSize: "0.875rem",
   color: vars.color.textPrimary,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.hoverBackground,
@@ -640,7 +640,7 @@ export const filterPill = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   whiteSpace: "nowrap",
   selectors: {
     "&:hover": {
