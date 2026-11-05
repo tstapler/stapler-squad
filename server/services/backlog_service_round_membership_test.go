@@ -48,7 +48,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	numbers := func() []int {
 		prs, perr := repo.ItemPRsByID(ctx, itemID)
 		require.NoError(t, perr)
-		out := []int{}
+		out := make([]int, 0, len(prs))
 		for _, v := range prs {
 			out = append(out, v.Ref.Number())
 		}

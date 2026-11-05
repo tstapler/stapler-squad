@@ -312,6 +312,9 @@ type backlogHandlers struct {
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
 	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
 
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
