@@ -37,6 +37,8 @@ func (f *scanFindings) addLine(line []byte) {
 			f.addToolResult(c, entry.Timestamp)
 		case entry.Type == "assistant" && c.Type == "tool_use" && c.Name == "Bash":
 			f.addBashUse(c, entry.Timestamp)
+		case entry.Type == "assistant" && c.Type == "tool_use" && fileWriteTools[c.Name]:
+			f.addFileWrite(c, entry.Timestamp)
 		}
 	}
 }
@@ -47,6 +49,7 @@ func (f *scanFindings) addBashUse(c artifactContentBlock, ts time.Time) {
 		return
 	}
 	cmd := ExtractFromBashCommand(inp.Command)
+	f.addCommandRecords(inp.Command, ts)
 	call := pendingCall{seenAt: ts, cmd: cmd}
 	if rest, ok := ghSubcommand(shellFields(inp.Command), "pr", "create"); ok {
 		call.createPR = true
@@ -76,6 +79,7 @@ func (f *scanFindings) addToolResult(c artifactContentBlock, ts time.Time) {
 		delete(f.pending, c.ToolUseID)
 	}
 	f.addPRRecords(prs, call, paired, ts)
+	f.addResultRecords(text, ts)
 	if paired && call.cmd != nil {
 		f.records = append(f.records, commandRecord(call, text))
 	}
