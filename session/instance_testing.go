@@ -52,3 +52,12 @@ func SetStatusForTest(tb testing.TB, inst *Instance, status Status, archivedAt *
 	inst.ArchivedAt = archivedAt
 	inst.snapshot.Store(buildSnapshot(inst))
 }
+
+// SetHiddenForTest flips inst's Hidden flag and republishes its snapshot.
+func SetHiddenForTest(tb testing.TB, inst *Instance, hidden bool) {
+	tb.Helper()
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	inst.Hidden = hidden
+	inst.snapshot.Store(buildSnapshot(inst))
+}

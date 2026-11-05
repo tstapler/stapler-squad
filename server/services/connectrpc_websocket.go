@@ -413,12 +413,8 @@ func (h *ConnectRPCWebSocketHandler) writerFor(instance *session.Instance) Termi
 // writerDecision is writerFor plus whether a nil writer may become non-nil
 // later: true only when a tymux instance is not Active yet (see upgradableWriter).
 func (h *ConnectRPCWebSocketHandler) writerDecision(instance *session.Instance) (writer TerminalWriter, upgradable bool) {
-	snap := instance.Snapshot()
-	if snap.ArchivedAt != nil {
-		return nil, false
-	}
-	if snap.Backend == session.BackendTymux && snap.Status != session.Active {
-		return nil, AccessFor(instance) == TerminalReadWrite
+	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
+		return nil, recoverable
 	}
 	writer, err := AccessFor(instance).Writer(h.tmuxSender)
 	if err != nil {
@@ -2281,9 +2277,13 @@ func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id str
 		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
 		return
 	}
-	size, sizeErr := streamhub.NewTerminalSize(int(*req.TargetCols), int(*req.TargetRows))
+	voteSize(connCtx, hub, id, int(*req.TargetCols), int(*req.TargetRows))
+}
+
+func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, cols, rows int) {
+	size, sizeErr := streamhub.NewTerminalSize(cols, rows)
 	if sizeErr != nil {
-		log.Warn("[streamViaHub] invalid handshake dimensions", "err", sizeErr)
+		log.Warn("[streamViaHub] invalid resize dimensions", "err", sizeErr)
 		return
 	}
 	hub.RequestResize(connCtx, id, size)
@@ -2429,10 +2429,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		currentPaneReq:  currentPaneReq,
 	})
 	defer hub.DetachSubscriber(subscriberID)
-	upWriter.SetOnUpgrade(func() {
-		hub.UpgradeSubscriber(subscriberID, streamhub.SubscriberCapability{CanResize: true, CanWrite: instance.Permissions.CanSendCommand})
-		voteHandshakeSize(connCtx, hub, subscriberID, currentPaneReq)
-	})
+	var bus *events.EventBus
+	if h.sessionService != nil {
+		bus = h.sessionService.GetEventBus()
+	}
+	h.wireWriterUpgrade(connCtx, writerUpgrade{hub: hub, id: subscriberID, writer: upWriter, instance: instance, handshake: currentPaneReq, bus: bus})
 	stream.creation.Mark(stageHubAttach)
 
 	if err := h.sendHubInitialSnapshot(stream, hub, subscriberID, instance, sessionID); err != nil {
@@ -2467,11 +2468,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
 	// already owns delivering output to this connection via transport.Send.
 	runInputReadLoop(inputReadLoopParams{
-		currentWriter: upWriter.Writer,
-		stream:        stream,
-		doneChan:      doneChan,
-		errChan:       errChan,
-		sessionID:     sessionID,
+		currentWriter:   upWriter.Writer,
+		onDroppedResize: upWriter.NoteDroppedResize,
+		stream:          stream,
+		doneChan:        doneChan,
+		errChan:         errChan,
+		sessionID:       sessionID,
 		onInput: func(data []byte) {
 			writer := upWriter.Writer()
 			if writer == nil {
@@ -3018,10 +3020,12 @@ type inputReadLoopParams struct {
 	// currentWriter, when set, is consulted per frame instead of writer, so a
 	// read-only attach can upgrade mid-connection (see upgradableWriter).
 	currentWriter func() TerminalWriter
-	stream        *connectWebSocketStream
-	doneChan      chan struct{}
-	errChan       chan error
-	sessionID     string
+	// onDroppedResize, when set, is told of a resize frame dropped while read-only.
+	onDroppedResize func(cols, rows int)
+	stream          *connectWebSocketStream
+	doneChan        chan struct{}
+	errChan         chan error
+	sessionID       string
 	// onInput forwards one input frame's raw bytes to tmux (CM path + subprocess fallback).
 	onInput func(data []byte)
 	// onResize pushes a mid-stream resize request to the coalescing worker.
@@ -3122,6 +3126,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 			p.onResize(int(resize.Cols), int(resize.Rows))
 		} else {
 			log.Debug("[runInputReadLoop] read-only attach: resize frame dropped", "session", p.sessionID, "cols", resize.Cols, "rows", resize.Rows)
+			if p.onDroppedResize != nil {
+				p.onDroppedResize(int(resize.Cols), int(resize.Rows))
+			}
 		}
 	}
 	if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {

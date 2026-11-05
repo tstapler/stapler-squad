@@ -145,6 +145,7 @@ func (h *StreamHub) UpgradeSubscriber(id SubscriberID, capability SubscriberCapa
 	if !ok {
 		return false
 	}
+	capability.ManualFirstPaint = sub.capability.ManualFirstPaint // attach-time only
 	sub.upgraded.Store(&capability)
 	log.Info("streamhub subscriber capability upgraded",
 		"session", h.sessionName, "subscriber_id", string(id),

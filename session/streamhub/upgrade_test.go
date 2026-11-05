@@ -27,6 +27,24 @@ func TestUpgradeSubscriber_should_CountResizeVotes_When_ReadOnlySubscriberIsUpgr
 	}
 }
 
+func TestUpgradeSubscriber_should_KeepAttachTimeManualFirstPaint(t *testing.T) {
+	t.Parallel()
+	hub := NewStreamHub("test-session", nil, WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+	attach := ReadOnlyCapability()
+	attach.ManualFirstPaint = true
+	id := hub.AttachSubscriber(noopTransport{}, attach)
+
+	hub.UpgradeSubscriber(id, SubscriberCapability{CanResize: true})
+
+	hub.mu.Lock()
+	sub := hub.subscribers[id]
+	hub.mu.Unlock()
+	if !sub.currentCapability().ManualFirstPaint {
+		t.Fatal("upgrade dropped ManualFirstPaint")
+	}
+}
+
 func TestUpgradeSubscriber_should_ReturnFalse_When_SubscriberIsUnknown(t *testing.T) {
 	t.Parallel()
 	hub := NewStreamHub("test-session", nil, WithTeardownGrace(time.Hour))
