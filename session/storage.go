@@ -933,6 +933,33 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref P
 	return err
 }
 
+// AttachItemPR writes an item-direct PR link (agent-reported, Jules, manual). A
+// tombstoned PR is not attached (PRLinkResult.Tombstoned).
+func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, link PRLink) (PRLinkResult, error) {
+	if itemID == "" {
+		return PRLinkResult{}, ErrInvalidPROwner
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, link)
+	if err == nil {
+		s.saved.reset()
+	}
+	return res, err
+}
+
+// DetachItemPR deletes the item-direct link to ref and writes the item's
+// tombstone in one transaction; it reports whether a link existed. Session links
+// are untouched.
+func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (bool, error) {
+	if itemID == "" {
+		return false, ErrInvalidPROwner
+	}
+	found, err := s.repo.DeleteSessionPR(ctx, ItemPROwner(itemID), ref)
+	if err == nil {
+		s.saved.reset()
+	}
+	return found, err
+}
+
 // SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
 func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
 	if sessionUUID == "" {

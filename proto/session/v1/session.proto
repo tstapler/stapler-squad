@@ -107,6 +107,8 @@ service SessionService {
   rpc RefreshSessionPullRequests(RefreshSessionPullRequestsRequest) returns (RefreshSessionPullRequestsResponse) {}
   rpc DetachSessionPullRequest(DetachSessionPullRequestRequest) returns (DetachSessionPullRequestResponse) {}
   rpc AttachSessionPullRequest(AttachSessionPullRequestRequest) returns (AttachSessionPullRequestResponse) {}
+  // Item-scoped detach: the release for an item-direct PR hold. UI-only.
+  rpc DetachItemPullRequest(DetachItemPullRequestRequest) returns (DetachItemPullRequestResponse) {}
 
   // SendNotification allows tmux sessions to send notifications to the server.
   // Notifications are broadcast to all connected clients (web UI and TUI).
@@ -1639,6 +1641,15 @@ message AttachSessionPullRequestRequest {
 message AttachSessionPullRequestResponse {
   repeated SessionPullRequest pull_requests = 1;
 }
+
+// DetachItemPullRequestRequest removes pr from this backlog item only (its
+// item-direct link) and blocks automatic re-attachment. Session links are untouched.
+message DetachItemPullRequestRequest {
+  string item_id = 1;
+  PullRequestRef pr = 2;
+}
+
+message DetachItemPullRequestResponse {}
 
 // SendNotificationRequest allows tmux sessions to send notifications.
 message SendNotificationRequest {
