@@ -344,6 +344,20 @@ describe("PullRequestList dialogs (S3)", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("menuInvokedDialog_should_returnFocusToTheRowMenuAndTrackToTheHeaderMenu_When_CancelledOrEscaped", async () => {
+    const user = userEvent.setup();
+    render(<PullRequestList pullRequests={[makePr({ number: 12, isActive: true })]} actions={fakeActions()} nowMs={NOW} />);
+    await user.click(screen.getByTestId("pr-menu-12"));
+    await user.click(screen.getByTestId("pr-menu-close-12"));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByTestId("pr-menu-12")).toHaveFocus());
+
+    await user.click(screen.getByTestId("pr-header-menu"));
+    await user.click(screen.getByTestId("pr-track-by-url"));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.getByTestId("pr-header-menu")).toHaveFocus());
+  });
+
   it("close_and_detach_dialogs_should_stateTheGitHubEffect", async () => {
     const user = userEvent.setup();
     render(<PullRequestList pullRequests={[makePr({ number: 12, isActive: true })]} actions={fakeActions()} nowMs={NOW} />);

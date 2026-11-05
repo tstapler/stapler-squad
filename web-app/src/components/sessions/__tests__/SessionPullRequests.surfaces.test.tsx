@@ -48,9 +48,9 @@ const threePrs = () => [
   makePr({ number: 10, state: "merged" }),
 ];
 
-const surfaces: Array<[string, (s: Session, onClick?: () => void) => React.ReactElement]> = [
-  ["SessionCard", (s, onClick) => <SessionCard session={s} onClick={onClick} />],
-  ["SessionRow", (s, onClick) => <SessionRow session={s} onClick={onClick} />],
+const surfaces: Array<[string, (s: Session, onClick?: () => void, onOpenInfo?: () => void) => React.ReactElement]> = [
+  ["SessionCard", (s, onClick, onOpenInfo) => <SessionCard session={s} onClick={onClick} onOpenInfo={onOpenInfo} />],
+  ["SessionRow", (s, onClick, onOpenInfo) => <SessionRow session={s} onClick={onClick} onOpenInfo={onOpenInfo} />],
 ];
 
 describe.each(surfaces)("%s pull request badge", (_name, renderSurface) => {
@@ -72,6 +72,16 @@ describe.each(surfaces)("%s pull request badge", (_name, renderSurface) => {
     await userEvent.setup().click(more);
     expect(onClick).toHaveBeenCalledTimes(1);
     expect(window.location.hash).toBe("#pull-requests");
+  });
+
+  it("plusTwo_should_openTheInfoTab_When_TheHostProvidesOnOpenInfo", async () => {
+    mockFlags = flags(true);
+    const onClick = jest.fn();
+    const onOpenInfo = jest.fn();
+    await act(async () => { render(renderSurface(makeSession({ pullRequests: threePrs() }), onClick, onOpenInfo)); });
+    await userEvent.setup().click(await screen.findByTestId("pr-more-button"));
+    expect(onOpenInfo).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
   });
 
   it("surface_should_showTheLegacySingleBadge_When_ReaderUiFlagOff", async () => {

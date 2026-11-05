@@ -43,8 +43,6 @@ const legacyPrScalarBans = ["githubPrNumber", "githubPrUrl"].map((property) => (
 const LEGACY_PR_SCALAR_ALLOWLIST = [
   "src/lib/pr/legacyPullRequest.ts",
   "src/lib/vcs/adapters.ts",
-  "src/components/sessions/ReviewQueuePanel.tsx",
-  "src/components/unfinished/UnfinishedItemDetail.tsx",
 ];
 
 export default [
@@ -344,7 +342,7 @@ export default [
   },
   {
     // The legacy single-PR scalars may be read only here (session-multi-pr-tracking T6.3.1, ratchet: the
-    // list is expected to shrink). ReviewQueuePanel and UnfinishedItemDetail move off them in T6.2.4.
+    // list is expected to shrink).
     files: LEGACY_PR_SCALAR_ALLOWLIST,
     ignores: ["src/lib/nav/**", "src/**/*.test.*", "src/**/*.spec.*", "src/**/__tests__/**"],
     rules: {

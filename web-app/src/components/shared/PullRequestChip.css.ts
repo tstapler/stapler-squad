@@ -59,3 +59,14 @@ export const moreButton = style({
 });
 
 export const staleMark = style({ fontWeight: 700, marginLeft: 2 });
+
+/** The state word beside the glyph. Full opacity: GitHubBadge's `priorityLabel` dims to 0.9, which puts the open chip at 4.44:1 in dark. */
+export const stateLabel = style({
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.03em",
+  textTransform: "uppercase",
+  paddingLeft: 2,
+  borderLeft: "1px solid currentColor",
+  marginLeft: 2,
+});

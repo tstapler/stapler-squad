@@ -2,11 +2,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Session, SessionArtifacts } from "@/gen/session/v1/types_pb";
+import type { Session, SessionArtifacts, SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useRescanArtifacts } from "@/lib/hooks/useRescanArtifacts";
+import { ArtifactsGroupedView } from "./ArtifactsGroupedView";
 import * as styles from "./ArtifactsTab.css";
 
 interface ArtifactsTabProps {
@@ -22,6 +23,7 @@ export const SCAN_SLOW_AFTER_MS = 60_000;
 
 function hasContent(a: SessionArtifacts | undefined): boolean {
   return (
+    (a?.records?.length ?? 0) > 0 ||
     (a?.prUrls?.length ?? 0) > 0 ||
     (a?.commitShas?.length ?? 0) > 0 ||
     (a?.externalUrls?.length ?? 0) > 0
@@ -43,8 +45,10 @@ function parsePRDisplay(url: string): string {
 // safeHref ensures only http/https URLs are used as link targets (N-5 fix).
 const safeHref = (url: string) => /^https?:\/\//i.test(url) ? url : "#";
 
-function ArtifactLists({ artifacts }: { artifacts: SessionArtifacts }) {
+function ArtifactLists({ artifacts, pullRequests }: { artifacts: SessionArtifacts; pullRequests: readonly SessionPullRequest[] }) {
   const [urlsExpanded, setUrlsExpanded] = useState(false);
+  // Older scans and servers send no records: keep the flat v1 lists (UX-S7 "v1 blobs").
+  if ((artifacts.records?.length ?? 0) > 0) return <ArtifactsGroupedView artifacts={artifacts} pullRequests={pullRequests} />;
   return (
     <div className={styles.lists}>
       {(artifacts.prUrls?.length ?? 0) > 0 && (
@@ -158,7 +162,8 @@ function scanKey(a: SessionArtifacts | undefined): string {
 }
 
 function describeResult(a: SessionArtifacts | undefined): string {
-  const n = (a?.prUrls?.length ?? 0) + (a?.commitShas?.length ?? 0) + (a?.externalUrls?.length ?? 0);
+  const flat = (a?.prUrls?.length ?? 0) + (a?.commitShas?.length ?? 0) + (a?.externalUrls?.length ?? 0);
+  const n = (a?.records?.length ?? 0) || flat;
   return n > 0 ? `Scan finished: ${n} artifact${n === 1 ? "" : "s"}` : "No artifacts found";
 }
 
@@ -198,6 +203,7 @@ function useRescan(artifacts: SessionArtifacts | undefined, rescanRpc: () => Pro
 
 export function ArtifactsTab({ session, onRescan: onRescanOverride }: ArtifactsTabProps) {
   const artifacts = session.artifacts;
+  const pullRequests = session.pullRequests ?? [];
   const state = resolveState(artifacts);
   const rescanRpc = useRescanArtifacts(session.id);
   const rescan = useRescan(artifacts, onRescanOverride ?? rescanRpc);
@@ -267,7 +273,7 @@ export function ArtifactsTab({ session, onRescan: onRescanOverride }: ArtifactsT
     if (cancelled) {
       return artifacts && hasContent(artifacts) ? (
         <div className={styles.container}>
-          <ArtifactLists artifacts={artifacts} />
+          <ArtifactLists artifacts={artifacts} pullRequests={pullRequests} />
         </div>
       ) : (
         <div className={styles.emptyState}>
@@ -313,7 +319,7 @@ export function ArtifactsTab({ session, onRescan: onRescanOverride }: ArtifactsT
       {rescanError}
       {header}
       {artifacts && hasContent(artifacts) ? (
-        <ArtifactLists artifacts={artifacts} />
+        <ArtifactLists artifacts={artifacts} pullRequests={pullRequests} />
       ) : (
         <div className={styles.emptyState}>
           <span>No artifacts found in this session&apos;s conversation history.</span>

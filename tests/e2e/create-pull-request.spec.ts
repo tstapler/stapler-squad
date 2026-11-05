@@ -24,6 +24,7 @@ import { SessionClient } from "./helpers/session-client";
 import { waitUntilSettled } from "./helpers/wait";
 import { SessionsPage } from "./pages/SessionsPage";
 import { baseUrl } from './helpers/base-url';
+import { prJson } from "./helpers/multi-pr";
 
 const BASE_URL = baseUrl();
 
@@ -31,6 +32,8 @@ interface SessionFixture {
   hasCommitsAhead?: boolean;
   githubPrUrl?: string;
   githubPrNumber?: number;
+  /** The server returns `pull_requests` next to the legacy scalars above; a fixture sets both, as it does. */
+  pullRequests?: Record<string, unknown>[];
 }
 
 async function mockSessionFields(page: Page, sessionId: string, fields: SessionFixture) {
@@ -147,6 +150,7 @@ test.describe("create-pull-request", () => {
         hasCommitsAhead: true,
         githubPrUrl: "https://github.com/tstapler/stapler-squad/pull/500",
         githubPrNumber: 500,
+        pullRequests: [prJson({ number: 500, owner: "tstapler", repo: "stapler-squad", isActive: true })],
       });
 
       // The overflow menu renders in a portal outside the card's DOM subtree,

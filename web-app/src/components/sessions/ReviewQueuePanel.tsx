@@ -17,6 +17,8 @@ import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { parseGitHubRef } from "@/lib/github/urlParser";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
+import { reviewItemHasOpenPr, reviewItemPr } from "@/lib/pr/reviewItemPr";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
@@ -353,7 +355,8 @@ export function ReviewQueuePanel({
   // so both entry points open the identical shared CreatePullRequestModal (ux.md Surface 1 & 2).
   const [isCreatePrOpen, setIsCreatePrOpen] = useState<string | null>(null);
   const createPrTriggerRef = useRef<HTMLElement | null>(null);
-  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
+  const { draftPullRequest, createPullRequest, sessions: liveSessions } = useSessionServiceContext();
+  const multiPrUi = useSessionMultiPR();
   // ReviewItem carries only a PR URL, not the originating host, so recognize
   // any configured GHE host when parsing it (same source as GitHubEnterpriseURLDetector).
   const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
@@ -495,6 +498,16 @@ export function ReviewQueuePanel({
   // so the queue only shows sessions that need user attention.
   // Exception: INPUT_REQUIRED and APPROVAL_PENDING items always show — they need immediate action
   // even though deriveWorkingState maps their subStatus to WorkingState.PROCESSING.
+  // The queue's ReviewItem carries no PR list; look the live session up (by id or title) for it.
+  const liveSessionByItemId = useMemo(() => {
+    const map = new Map<string, Session>();
+    for (const s of liveSessions ?? []) {
+      map.set(s.id, s);
+      if (s.title && !map.has(s.title)) map.set(s.title, s);
+    }
+    return map;
+  }, [liveSessions]);
+
   const allFilteredItems = useMemo(() => {
     let filtered = allItems.filter((item) => {
       const ws = deriveWorkingState(item);
@@ -542,10 +555,9 @@ export function ReviewQueuePanel({
     if (tagExcludeFilter.size > 0) {
       filtered = filtered.filter((item) => !item.tags.some((t) => tagExcludeFilter.has(t)));
     }
-    if (prFilter === "has-pr") {
-      filtered = filtered.filter((item) => !!item.githubPrUrl);
-    } else if (prFilter === "no-pr") {
-      filtered = filtered.filter((item) => !item.githubPrUrl);
+    if (prFilter !== "all") {
+      const wantPr = prFilter === "has-pr";
+      filtered = filtered.filter((item) => reviewItemHasOpenPr(item, liveSessionByItemId.get(item.sessionId), multiPrUi) === wantPr);
     }
     if (divergedOnly) {
       filtered = filtered.filter((item) => item.branchDivergedFromBase);
@@ -603,6 +615,8 @@ export function ReviewQueuePanel({
     tagFilter,
     tagExcludeFilter,
     prFilter,
+    liveSessionByItemId,
+    multiPrUi,
     divergedOnly,
     searchText,
     sortField,
@@ -1252,9 +1266,8 @@ export function ReviewQueuePanel({
             (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
         {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
           const hasCommitsAhead = queueItem.hasCommitsAhead;
-          const prNumber = queueItem.githubPrUrl
-            ? parseGitHubRef(queueItem.githubPrUrl, enterpriseHosts)?.prNumber
-            : undefined;
+          const itemPr = reviewItemPr(queueItem, liveSessionByItemId.get(queueItem.sessionId), multiPrUi);
+          const prNumber = itemPr ? (itemPr.number ?? parseGitHubRef(itemPr.url, enterpriseHosts)?.prNumber) : undefined;
           return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {queueItem.branchDivergedFromBase && (
@@ -1262,9 +1275,9 @@ export function ReviewQueuePanel({
                   ⚠ Diverged from main
                 </span>
               )}
-              {queueItem.githubPrUrl ? (
+              {itemPr ? (
                 <a
-                  href={queueItem.githubPrUrl}
+                  href={itemPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}

@@ -116,7 +116,7 @@ export function paneReducer(state: PaneState, action: PaneAction): PaneState {
       // Step 2: assign to the target pane.
       // If the target is a session-list pane, auto-split to create a detail pane.
       if (target.viewKind === "session-list" && !wouldExceedMaxDepth(newRoot, paneId)) {
-        const newDetail = createLeaf(undefined, "terminal", "session-detail");
+        const newDetail = createLeaf(undefined, action.tab ?? "terminal", "session-detail");
         const detailWithSession: LeafPane = { ...newDetail, sessionId };
         const splitNode: SplitPane = {
           type: "split",

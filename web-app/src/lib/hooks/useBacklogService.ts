@@ -5,6 +5,7 @@ import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import type { PrHold, SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import type {
@@ -233,6 +234,10 @@ export interface BacklogItem {
   prUrl?: string;
   /** GitHub PR number when item is in pr_pending status */
   prNumber?: number;
+  /** The item's derived PR set (item-direct plus current round); empty from servers that predate it. */
+  pullRequests?: SessionPullRequest[];
+  /** Why cleanup is held for this item. Detail responses only, never list responses. */
+  prHolds?: PrHold[];
   /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
   externalId?: string;
   /** Source plugin id ("github_issues", "linear", ...), populated for imported items only. */
@@ -703,6 +708,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
+    pullRequests: p.pullRequests ?? [],
+    prHolds: p.prHolds ?? [],
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,

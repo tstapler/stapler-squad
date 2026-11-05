@@ -52,10 +52,12 @@ export function PullRequestList(props: PullRequestListProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const headerMenuRef = useRef<HTMLButtonElement>(null);
   const rowEls = useRef(new Map<string, HTMLLIElement>());
   const toastFocus = useRef<FocusPlan | null>(null);
   const dialogFocus = useRef<FocusPlan | null>(null);
   const toastSeq = useRef(0);
+  const keyboardToast = useRef(false);
 
   usePullRequestsAnchor(headingRef, !loading);
 
@@ -87,6 +89,7 @@ export function PullRequestList(props: PullRequestListProps) {
   const focusAfterRender = (plan: FocusPlan) => { setTimeout(() => focusDestination(plan), 0); };
 
   const showToast = (message: string, hint: string, undo: () => void, keyboard: boolean) => {
+    keyboardToast.current = keyboard;
     toastSeq.current += 1;
     setToast({ id: toastSeq.current, message, hint, undo, keyboard });
   };
@@ -109,7 +112,8 @@ export function PullRequestList(props: PullRequestListProps) {
     const result = await run(`Couldn't pin #${pr.number}`, () => actions.pin(asTarget(pr)));
     if (!result.ok) return;
     toastFocus.current = plan;
-    focusAfterRender(plan);
+    // A keyboard pin gives the focus to the toast's Undo; a deferred focus on the row would take it back.
+    if (!keyboard) focusAfterRender(plan);
     showToast(`Pinned #${pr.number} as current.`, "Undo, or choose Unpin in the row menu.", () => void actions.pin(previous ? asTarget(previous) : null), keyboard);
   };
 
@@ -124,6 +128,7 @@ export function PullRequestList(props: PullRequestListProps) {
 
   const onCommand = (command: RowCommand, pr: SessionPullRequest, e: { detail?: number }) => {
     const keyboard = (e.detail ?? 1) === 0;
+    keyboardToast.current = false;
     switch (command) {
       case "merge": case "close": case "detach": dialogFocus.current = planFocus(pr); setDialog({ kind: command, pr }); break;
       case "pin": void pin(pr, keyboard); break;
@@ -143,7 +148,18 @@ export function PullRequestList(props: PullRequestListProps) {
 
   const finishDialog = () => {
     setDialog(null);
-    if (dialogFocus.current) focusAfterRender(dialogFocus.current);
+    if (dialogFocus.current && !keyboardToast.current) focusAfterRender(dialogFocus.current);
+  };
+
+  // Cancel and Esc: the focus trap hands focus back to the invoker, but a row-menu item is gone by then, so
+  // focus would drop to <body>. Only in that case, go to the row's menu (or the header menu): UX-S3-3.
+  const cancelDialog = () => {
+    setDialog(null);
+    setTimeout(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      if (dialogFocus.current) focusDestination(dialogFocus.current);
+      else headerMenuRef.current?.focus();
+    }, 0);
   };
 
   const active = pullRequests.find((p) => p.isActive);
@@ -159,12 +175,12 @@ export function PullRequestList(props: PullRequestListProps) {
         <button type="button" className={s.button} onClick={() => void refresh()} aria-busy={refreshing} disabled={refreshing} data-testid="pr-refresh">{/* analytics-exempt */}
           {refreshing ? "Refreshing" : "Refresh"}
         </button>
-        <button type="button" className={s.button} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More pull request actions" onClick={() => setMenuOpen((v) => !v)} data-testid="pr-header-menu">{/* analytics-exempt */}
+        <button ref={headerMenuRef} type="button" className={s.button} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More pull request actions" onClick={() => setMenuOpen((v) => !v)} data-testid="pr-header-menu">{/* analytics-exempt */}
           <span aria-hidden="true">...</span>
         </button>
         {menuOpen && (
           <div role="menu" className={s.menu} onKeyDown={(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
-            <button type="button" role="menuitem" className={s.menuItem} autoFocus data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); setDialog({ kind: "track" }); }}>{/* analytics-exempt */}
+            <button type="button" role="menuitem" className={s.menuItem} autoFocus data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); dialogFocus.current = null; setDialog({ kind: "track" }); }}>{/* analytics-exempt */}
               Track a PR by URL
             </button>
           </div>
@@ -244,7 +260,7 @@ export function PullRequestList(props: PullRequestListProps) {
           isActive={dialog.pr.isActive}
           url={dialog.pr.url}
           onMerge={(method) => actions.merge(asTarget(dialog.pr), method)}
-          onClose={() => setDialog(null)}
+          onClose={cancelDialog}
           onDone={finishDialog}
           onStale={() => void actions.refresh()}
         />
@@ -258,7 +274,7 @@ export function PullRequestList(props: PullRequestListProps) {
           busyLabel="Closing..."
           danger
           onConfirm={() => actions.close(asTarget(dialog.pr))}
-          onClose={() => setDialog(null)}
+          onClose={cancelDialog}
           onDone={finishDialog}
         />
       )}
@@ -270,12 +286,12 @@ export function PullRequestList(props: PullRequestListProps) {
           confirmLabel="Not mine"
           busyLabel="Removing..."
           onConfirm={(keyboard) => detach(dialog.pr, keyboard)}
-          onClose={() => setDialog(null)}
+          onClose={cancelDialog}
           onDone={finishDialog}
         />
       )}
       {dialog?.kind === "track" && (
-        <TrackPrDialog onAttach={actions.attachByUrl} onClose={() => setDialog(null)} onDone={() => setDialog(null)} />
+        <TrackPrDialog onAttach={actions.attachByUrl} onClose={cancelDialog} onDone={cancelDialog} />
       )}
 
       {toast && (
