@@ -2,10 +2,12 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -377,3 +379,131 @@ func (p *PRStatusPoller) SetOnPRUnknown(fn func(PRView)) {
 	p.onPRUnknown = fn
 	p.mu.Unlock()
 }
+
+// terminalDiscoveryFactor slows branch discovery for a session whose PRs are all terminal.
+const terminalDiscoveryFactor = 10
+
+func (p *PRStatusPoller) terminalDiscoveryBackoff() time.Duration {
+	return p.config.NoPRBackoff * terminalDiscoveryFactor
+}
+
+func (p *PRStatusPoller) terminalDiscoveryDue(key string, now time.Time) bool {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return !now.Before(p.terminalDiscoveryAfter[key])
+}
+
+func (p *PRStatusPoller) armTerminalDiscovery(key string, now time.Time) {
+	if p.config.NoPRBackoff <= 0 {
+		return
+	}
+	p.stateMu.Lock()
+	p.terminalDiscoveryAfter[key] = now.Add(p.terminalDiscoveryBackoff())
+	p.stateMu.Unlock()
+}
+
+// discoveryEligible: a live, unarchived session whose links are all terminal. It
+// polls nothing else, so a new PR on its branch is the only thing that can resume it.
+func discoveryEligible(snap *InstanceSnapshot) bool {
+	gh := snap.GitHub
+	if snap.Status.IsSuspended() || snap.ArchivedAt != nil || gh.GitHubIsFork ||
+		gh.GitHubOwner == "" || gh.GitHubRepo == "" || len(gh.PRs) == 0 {
+		return false
+	}
+	for _, v := range gh.PRs {
+		if !v.Terminal() {
+			return false
+		}
+	}
+	return true
+}
+
+// discoverForResolvedSessions looks for a new PR on the branch of each session
+// whose PRs are all terminal, at terminalDiscoveryBackoff cadence (T3.2.3).
+func (p *PRStatusPoller) discoverForResolvedSessions(ctx context.Context) {
+	now := p.nowTime()
+	for _, inst := range p.GetInstances() {
+		snap := inst.Snapshot()
+		if !discoveryEligible(snap) {
+			continue
+		}
+		key := pollKey(snap)
+		if !p.terminalDiscoveryDue(key, now) {
+			continue
+		}
+		p.armTerminalDiscovery(key, now)
+		fctx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
+		fctx = github.WithGitHubCallOrigin(fctx, github.OriginPRStatusPoller)
+		p.discoverBranchPR(fctx, inst, snap)
+		cancel()
+	}
+}
+
+// discoverBranchPR attaches the open PR on the session's current branch when it
+// is not linked yet. AttachPR honors tombstones and the 50-link cap, and a new
+// open PR makes the mirror's terminal flag false again, resuming the session.
+func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *Instance, snap *InstanceSnapshot) {
+	branch := inst.CurrentBranch()
+	if branch == "" {
+		return
+	}
+	gh := snap.GitHub
+	ref, err := github.NewRepoRefWithHost(gh.GitHubOwner, gh.GitHubRepo, gh.GitHubHost)
+	if err != nil {
+		return
+	}
+	listKey := gh.GitHubOwner + "/" + gh.GitHubRepo + "/" + branch
+	var etag string
+	if v, ok := p.listEtags.Load(listKey); ok {
+		etag = v.(string)
+	}
+	prMetrics.discoveryListCall()
+	info, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, etag)
+	if newEtag != "" {
+		p.listEtags.Store(listKey, newEtag)
+	}
+	if err != nil || !changed || info == nil {
+		if err != nil && !errors.Is(err, github.ErrNoPR) {
+			log.Warn("PR status poller: discovery for a resolved session failed", "session", snap.Title, "err", err)
+		}
+		return
+	}
+	prRef, err := NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, info.Number)
+	if err != nil {
+		return
+	}
+	if _, linked := findPR(gh.PRs, prRef); linked {
+		return
+	}
+	initial := PRInitial{State: PRStateOpen, URL: info.HTMLURL, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	if err := inst.AttachPR(prRef, AttachSourceBranchDiscovery, initial); err != nil {
+		log.Warn("PR status poller: attaching the discovered PR failed", "session", snap.Title, "pr", prRef, "err", err)
+		return
+	}
+	log.Info("PR status poller: resolved session resumed, new PR on its branch", "session", snap.Title, "pr", prRef)
+}
+
+// Refresh fetches one PR through the poll core and returns once the observation
+// was applied, dropped or failed, bounded by refreshTimeout. It never writes a
+// row itself. A PR with no state row is an error.
+func (p *PRStatusPoller) Refresh(ctx context.Context, ref PRRef, src PRObservationSource) error {
+	if p.storage == nil {
+		return ErrNotFound
+	}
+	v, err := p.storage.GetPullRequestState(ctx, ref)
+	if err != nil {
+		return err
+	}
+	fctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+	defer cancel()
+	fctx = github.WithGitHubCallOrigin(fctx, github.OriginWebhookReconcile)
+	var byRef map[PRRef][]*Instance
+	if p.multiPRScope(config.SessionMultiPRScopePoller) {
+		byRef = p.instancesByRef()
+	}
+	p.pollState(fctx, v, src, byRef)
+	return fctx.Err()
+}
+
+// refreshTimeout bounds one webhook or reconciler refresh.
+const refreshTimeout = 10 * time.Second

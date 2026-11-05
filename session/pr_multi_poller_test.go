@@ -309,3 +309,123 @@ func TestPoller_ShouldUseHostAwareToken_WhenItemOnlyStateOnGHE(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "auth", got.PollError)
 }
+
+// discoveryClient answers the branch list with a fixed PR and counts the calls.
+type discoveryClient struct {
+	recordingPRClient
+	found       *github.PRInfo
+	branchCalls int
+}
+
+func (c *discoveryClient) GetPRForBranchConditional(_ context.Context, _ github.RepoRef, _, etag string) (*github.PRInfo, string, bool, error) {
+	c.mu.Lock()
+	c.branchCalls++
+	c.mu.Unlock()
+	if c.found == nil {
+		return nil, etag, false, github.ErrNoPR
+	}
+	return c.found, etag, true, nil
+}
+
+func discoverySession(t *testing.T, prs ...PRInitialRef) (*PRStatusPoller, *Storage, *Instance, *discoveryClient) {
+	t.Helper()
+	storage, inst := persistedPRSession(t)
+	client := &discoveryClient{}
+	p := NewPRStatusPollerWithConfig(storage, DefaultPRStatusPollerConfig())
+	p.ghClient = client
+	p.ctx, p.cancel = context.Background(), func() {}
+	p.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
+	p.multiPRScope = func(string) bool { return true }
+	p.refresherOn = func() bool { return true }
+	inst.SetPRPersister(storage)
+	inst.Status = Active
+	for _, pr := range prs {
+		require.NoError(t, inst.AttachPR(prRefN(t, pr.N), AttachSourceCreatedFromURL, pr.Initial))
+	}
+	p.SetInstances([]*Instance{inst})
+	return p, storage, inst, client
+}
+
+type PRInitialRef struct {
+	N       int
+	Initial PRInitial
+}
+
+func TestPoller_ShouldResumeAndClearTerminal_WhenDiscoveryFindsPRBOnBranch(t *testing.T) {
+	p, storage, inst, client := discoverySession(t, PRInitialRef{11, PRInitial{State: PRStateMerged, Terminal: true}})
+	require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
+	client.found = &github.PRInfo{Number: 12, State: "open", HeadRef: "feat/x"}
+	observedBefore := SessionPRCountObservations(2)
+
+	p.checkAllSessions()
+
+	snap := inst.Snapshot().GitHub
+	require.Len(t, snap.PRs, 2)
+	assert.Equal(t, 12, snap.PRs[1].Ref.Number())
+	assert.Equal(t, PRRoleFollowup, snap.PRs[1].Role, "#11 stays the primary")
+	assert.False(t, snap.GitHubPRStatusTerminal, "a new open PR resumes the session")
+	assert.Equal(t, observedBefore+1, SessionPRCountObservations(2), "attach observed ssq_session_pr_count")
+
+	p.checkAllSessions()
+	assert.Equal(t, 1, client.callsFor(12), "the next tick polls #12")
+	assert.Equal(t, PRStateOpen, rowOf(t, storage, 12).State)
+}
+
+func TestPoller_ShouldDiscoverSlowly_WhenAllPRsTerminal(t *testing.T) {
+	p, _, _, client := discoverySession(t, PRInitialRef{11, PRInitial{State: PRStateMerged, Terminal: true}})
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	p.clock = func() time.Time { return now }
+	step := p.terminalDiscoveryBackoff()
+	require.Equal(t, 10*p.config.NoPRBackoff, step)
+
+	p.checkAllSessions()
+	p.checkAllSessions()
+	assert.Equal(t, 1, client.branchCalls, "second tick is inside the backoff")
+
+	now = now.Add(step)
+	p.checkAllSessions()
+	assert.Equal(t, 2, client.branchCalls, "due again after ten no-PR backoffs")
+}
+
+func TestPoller_ShouldMakeNoBranchListCall_WhenSessionHasOpenPR(t *testing.T) {
+	p, _, _, client := discoverySession(t, PRInitialRef{12, PRInitial{State: PRStateOpen}})
+
+	p.checkAllSessions()
+
+	assert.Equal(t, 0, client.branchCalls)
+}
+
+func TestPoller_ShouldHonorTombstone_WhenDiscoveryFindsDetachedPR(t *testing.T) {
+	p, storage, inst, client := discoverySession(t, PRInitialRef{11, PRInitial{State: PRStateMerged, Terminal: true}})
+	ref := prRefN(t, 12)
+	_, err := storage.repo.UpsertSessionPR(context.Background(), SessionPROwner(inst.UUID), ref, PRLink{Source: AttachSourceManual})
+	require.NoError(t, err)
+	_, err = storage.repo.DeleteSessionPR(context.Background(), SessionPROwner(inst.UUID), ref)
+	require.NoError(t, err)
+	client.found = &github.PRInfo{Number: 12, State: "open"} // GitHub spells it however it likes
+
+	p.checkAllSessions()
+
+	assert.Len(t, inst.Snapshot().GitHub.PRs, 1, "a detached PR is not re-attached by discovery")
+}
+
+func TestInvalidateAndRefresh_ShouldRefreshOnlyTheNamedRow_WhenSessionTracksTwoPRs(t *testing.T) {
+	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", ApprovedCount: 4}}}
+	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
+	inst := newTwoPRInstance(t)
+	inst.Status = Active
+	p.SetInstances([]*Instance{inst})
+	owner := SessionPROwner(inst.UUID)
+	seedStateRow(t, storage.repo, owner, prRefN(t, 11), PRInitial{State: PRStateMerged, Terminal: true})
+	seedStateRow(t, storage.repo, owner, prRefN(t, 12), PRInitial{State: PRStateOpen})
+	upper, err := NewPRRef("", "Acme", "App", 12)
+	require.NoError(t, err)
+
+	require.True(t, p.InvalidateAndRefresh(context.Background(), upper, PRSourceWebhook))
+	p.dispatchWG.Wait()
+
+	assert.Equal(t, 1, client.callsFor(12))
+	assert.Equal(t, 0, client.callsFor(11))
+	assert.Equal(t, 4, rowOf(t, storage, 12).ApprovedCount, "mixed-case ref resolves to the same row")
+	assert.Equal(t, 4, inst.Snapshot().GitHub.PRs[1].ApprovedCount)
+}

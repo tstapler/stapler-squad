@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -25,6 +26,7 @@ const (
 type prPollMetrics struct {
 	polls         *counterByLabel
 	failures      *counterByLabel
+	sessionCounts *counterByLabel
 	discoveryList atomic.Int64
 	unverified    atomic.Int64
 
@@ -36,7 +38,7 @@ type prPollMetrics struct {
 var prMetrics = newPRPollMetrics()
 
 func newPRPollMetrics() *prPollMetrics {
-	m := &prPollMetrics{polls: newCounterByLabel(), failures: newCounterByLabel()}
+	m := &prPollMetrics{polls: newCounterByLabel(), failures: newCounterByLabel(), sessionCounts: newCounterByLabel()}
 	meter := telemetry.GetMeter()
 	m.pollOtel, _ = meter.Int64Counter(MetricPRPollTotal)
 	m.failOtel, _ = meter.Int64Counter(MetricPRPollFailuresTotal)
@@ -68,6 +70,7 @@ func (m *prPollMetrics) discoveryListCall() {
 }
 
 func (m *prPollMetrics) observeSessionPRCount(n int) {
+	m.sessionCounts.add(strconv.Itoa(n))
 	if m.sessionPRCount != nil {
 		m.sessionPRCount.Record(context.Background(), int64(n))
 	}
@@ -105,3 +108,6 @@ func (c *counterByLabel) get(label string) int64 {
 	defer c.mu.Unlock()
 	return c.m[label]
 }
+
+// SessionPRCountObservations is how many times ssq_session_pr_count observed n in this process.
+func SessionPRCountObservations(n int) int64 { return prMetrics.sessionCounts.get(strconv.Itoa(n)) }

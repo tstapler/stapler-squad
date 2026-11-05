@@ -101,7 +101,9 @@ type PRStatusPoller struct {
 	// keyed by PullRequestState id; guarded by stateMu, never p.mu.
 	stateMu       sync.Mutex
 	stateBackoffs map[int]stateBackoff
-	hostHealth    *hostHealth
+	// terminalDiscoveryAfter is the next branch discovery per session key; guarded by stateMu.
+	terminalDiscoveryAfter map[string]time.Time
+	hostHealth             *hostHealth
 	// refresherState remembers the last logged switch value (0 unset, 1 off, 2 on).
 	refresherState atomic.Int32
 
@@ -136,16 +138,17 @@ func NewPRStatusPoller(storage *Storage) *PRStatusPoller {
 // NewPRStatusPollerWithConfig creates a poller with custom configuration.
 func NewPRStatusPollerWithConfig(storage *Storage, cfg PRStatusPollerConfig) *PRStatusPoller {
 	return &PRStatusPoller{
-		instances:     make([]*Instance, 0),
-		storage:       storage,
-		config:        cfg,
-		etagCache:     github.NewETagCache(),
-		ghClient:      realGHClient{},
-		noPRPollAfter: make(map[string]time.Time),
-		multiPRScope:  config.SessionMultiPR,
-		refresherOn:   config.SessionMultiPRRefresher,
-		stateBackoffs: map[int]stateBackoff{},
-		hostHealth:    newHostHealth(),
+		instances:              make([]*Instance, 0),
+		storage:                storage,
+		config:                 cfg,
+		etagCache:              github.NewETagCache(),
+		ghClient:               realGHClient{},
+		noPRPollAfter:          make(map[string]time.Time),
+		multiPRScope:           config.SessionMultiPR,
+		refresherOn:            config.SessionMultiPRRefresher,
+		stateBackoffs:          map[int]stateBackoff{},
+		terminalDiscoveryAfter: map[string]time.Time{},
+		hostHealth:             newHostHealth(),
 	}
 }
 
@@ -164,29 +167,28 @@ func (p *PRStatusPoller) ETagCache() *github.ETagCache {
 	return p.etagCache
 }
 
-// InvalidateAndRefresh drops the shared ETagCache entry for (owner, repo,
-// prNumber) and dispatches an out-of-band fetchAndUpdatePRStatus for every
-// tracked instance matching that PR (plural — two Instances, e.g. a worktree
-// session and its parent, can track the same PR). Returns matched=true if at
-// least one instance matched; a miss still invalidates the cache (harmless
-// sync.Map no-op) and returns false.
+// InvalidateAndRefresh drops the shared ETagCache entry for ref and dispatches
+// out-of-band fetches: one per-PR refresh of its PullRequestState row (when it has
+// one) and, for sessions still tracking the PR only through the legacy scalars, the
+// per-session fetch. Returns matched=true if a row or an instance matched; a miss
+// still invalidates the cache (harmless) and returns false. src is webhook, or
+// webhook_reopened for a pull_request.reopened event, the only observation allowed
+// to reopen a terminal row.
 //
-// The dispatched fetch's context is built from p.ctx (the poller's own
-// lifetime), not derived from the passed-in ctx: the caller (the webhook
-// handler) does not block on this call, so deriving from its request-scoped
-// ctx would cancel the fetch as soon as the HTTP response is written.
-func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, owner, repo string, prNumber int) bool {
+// The dispatched fetch's context is built from p.ctx (the poller's own lifetime),
+// not the passed-in ctx: the webhook handler does not block on this call, so a
+// request-scoped ctx would cancel the fetch as soon as the HTTP response is written.
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref PRRef, src PRObservationSource) bool {
 	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
-	// Host unknown at this call site (webhook's repoFullName carries no host) —
-	// github.com is the safe default; see poller_invalidation_adapter.go.
-	if ref, refErr := github.NewRepoRef(owner, repo); refErr == nil {
-		p.etagCache.Invalidate(ref, prNumber)
+	if repoRef, err := ref.repoRef(); err == nil {
+		p.etagCache.Invalidate(repoRef, ref.Number())
 	}
 
-	matched := false
+	matched := p.dispatchRowRefresh(ref, src)
+	rowsDriveSessions := p.multiPRScope(config.SessionMultiPRScopePoller)
 	for _, inst := range p.GetInstances() {
 		snap := inst.Snapshot()
-		if snap.GitHub.GitHubOwner != owner || snap.GitHub.GitHubRepo != repo || snap.GitHub.GitHubPRNumber != prNumber {
+		if (rowsDriveSessions && snap.GitHub.HasPRLinks) || !legacyScalarsName(snap.GitHub, ref) {
 			continue
 		}
 		matched = true
@@ -203,6 +205,30 @@ func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, owner, repo s
 	}
 
 	return matched
+}
+
+// dispatchRowRefresh starts Refresh for ref's row, if it has one.
+func (p *PRStatusPoller) dispatchRowRefresh(ref PRRef, src PRObservationSource) bool {
+	if p.storage == nil || p.ctx == nil {
+		return false
+	}
+	if _, err := p.storage.GetPullRequestState(p.ctx, ref); err != nil {
+		return false
+	}
+	p.dispatchWG.Add(1)
+	go func() {
+		defer p.dispatchWG.Done()
+		if err := p.Refresh(p.ctx, ref, src); err != nil {
+			log.Warn("PR status poller: webhook refresh did not complete", "pr", ref, "err", err)
+		}
+	}()
+	return true
+}
+
+// legacyScalarsName reports whether a session's legacy scalars name ref.
+func legacyScalarsName(g GitHubIntegration, ref PRRef) bool {
+	return strings.EqualFold(g.GitHubOwner, ref.Owner()) && strings.EqualFold(g.GitHubRepo, ref.Repo()) &&
+		g.GitHubPRNumber == ref.Number()
 }
 
 // SetInstances replaces the full list of monitored instances.
@@ -328,6 +354,7 @@ func (p *PRStatusPoller) checkAllSessions() {
 		p.pollPullRequestStates(p.ctx, stateLoopOwnsLinked)
 	}
 	if stateLoopOwnsLinked {
+		p.discoverForResolvedSessions(p.ctx)
 		instances = withoutPRLinks(instances)
 	}
 
