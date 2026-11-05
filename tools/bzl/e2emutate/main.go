@@ -243,6 +243,7 @@ type Result struct {
 }
 
 func sh(dir string, env []string, name string, args ...string) ([]byte, error) {
+	//nolint:norawexec short-lived run-to-completion spike driver (own timeout/kill)
 	c := exec.Command(name, args...)
 	c.Dir = dir
 	c.Env = append(os.Environ(), env...)
@@ -327,6 +328,7 @@ func runSpec(cfg runCfg, bin, spec string, timeout time.Duration) int {
 	dir, _ := os.MkdirTemp(cfg.scratch, "mut-srv-")
 	defer os.RemoveAll(dir)
 	abs, _ := filepath.Abs(bin)
+	//nolint:norawexec short-lived run-to-completion spike driver (own timeout/kill)
 	c := exec.Command("nice", "-n", "19", "ionice", "-c3", "bunx", "playwright", "test", path.Base(spec), "--workers=1", "--project=chromium", "--reporter=line")
 	c.Dir = filepath.Join(cfg.root, "tests/e2e")
 	var env []string

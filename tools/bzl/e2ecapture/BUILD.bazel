@@ -3,7 +3,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "e2ecapture_lib",
-    srcs = ["fine.go", "main.go"],
+    srcs = [
+        "fine.go",
+        "main.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/e2ecapture",
     visibility = ["//visibility:private"],
 )

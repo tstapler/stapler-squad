@@ -23,6 +23,7 @@ type bazel struct {
 }
 
 func (b bazel) run(args ...string) (string, error) {
+	//nolint:norawexec short-lived run-to-completion spike driver
 	c := exec.Command("nice", append([]string{"-n", "19", "tools/bazel"}, args...)...)
 	c.Dir = b.root
 	c.Env = os.Environ()
@@ -111,6 +112,7 @@ func play(root, bin, scratch string, specs []string) (time.Duration, error) {
 		args = append(args, filepath.Base(s))
 	}
 	args = append(args, "--workers=1", "--project=chromium", "--reporter=line")
+	//nolint:norawexec short-lived run-to-completion spike driver
 	c := exec.Command("nice", args...)
 	c.Dir = filepath.Join(root, "tests/e2e")
 	var env []string

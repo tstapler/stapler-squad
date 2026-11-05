@@ -148,6 +148,7 @@ func main() {
 			a := Attempt{LoadAtRun: readLoad("/proc/loadavg"), MemAvailGB: readMemGB("/proc/meminfo")}
 			out := filepath.Join(*capsDir, capName(rel))
 			var buf bytes.Buffer
+			//nolint:norawexec short-lived run-to-completion spike driver (own timeout/kill)
 			cmd := exec.Command("nice", "-n", "19", "ionice", "-c3", *captureBin, "-spec", rel, "-binary", *serverBin,
 				"-root", *root, "-tmp", *scratch, "-out", out)
 			cmd.Stdout, cmd.Stderr = &buf, &buf
