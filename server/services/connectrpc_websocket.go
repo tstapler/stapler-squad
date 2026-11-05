@@ -3319,7 +3319,9 @@ func handleCurrentPaneRequestFrame(
 	// doc comment for the incident this closes.
 	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
-		span.RecordError(err)
+		if !errors.Is(err, tymux.ErrPaneNotRunning) {
+			span.RecordError(err)
+		}
 		if endErr := logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err); endErr != nil {
 			return endErr
 		}
@@ -3474,7 +3476,9 @@ func handleBatchedCurrentPaneRequest(
 	for _, paneReq := range requests {
 		output, err := onCurrentPaneRequest(ctx, paneReq)
 		if err != nil {
-			span.RecordError(err)
+			if !errors.Is(err, tymux.ErrPaneNotRunning) {
+				span.RecordError(err)
+			}
 			if gone := logCurrentPaneFailure("coalesced current pane request", sessionID, paneReq.GetResyncId(), err); gone != nil {
 				endErr = gone
 			} else if out := paneNotLiveReply(paneReq, err); out != nil {

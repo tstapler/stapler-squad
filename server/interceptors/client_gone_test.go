@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"os"
 	"syscall"
 	"testing"
 
@@ -13,29 +11,58 @@ import (
 )
 
 func TestAsCanceled(t *testing.T) {
-	broken := &net.OpError{Op: "write", Err: os.NewSyscallError("write", syscall.EPIPE)}
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	live := context.Background()
+	write := fmt.Errorf("write envelope: write tcp [::1]:8543->[::1]:1: %w", syscall.EPIPE)
+	backend := fmt.Errorf("dial tymuxd: %w", syscall.ECONNRESET)
+	internalCanceled := connect.NewError(connect.CodeInternal, context.Canceled)
+
 	for name, tc := range map[string]struct {
+		ctx  context.Context
 		err  error
 		want connect.Code
-		conv bool
 	}{
-		"broken pipe":   {fmt.Errorf("write envelope: %w", broken), connect.CodeCanceled, true},
-		"conn reset":    {fmt.Errorf("x: %w", syscall.ECONNRESET), connect.CodeCanceled, true},
-		"ctx canceled":  {context.Canceled, connect.CodeCanceled, true},
-		"real internal": {connect.NewError(connect.CodeInternal, errors.New("boom")), connect.CodeInternal, false},
-		"plain error":   {errors.New("boom"), connect.CodeUnknown, false},
+		"connect write broken pipe, live ctx": {live, write, connect.CodeCanceled},
+		"ctx canceled, dead ctx":              {dead, context.Canceled, connect.CodeCanceled},
+		"backend reset, live ctx stays real":  {live, backend, connect.CodeUnknown},
+		"server-side canceled, live ctx":      {live, context.Canceled, connect.CodeUnknown},
+		"internal wrapping canceled kept":     {dead, internalCanceled, connect.CodeInternal},
+		"plain error":                         {live, errors.New("boom"), connect.CodeUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := asCanceled(tc.err)
-			if tc.conv && connect.CodeOf(got) != tc.want {
-				t.Fatalf("code = %v, want %v", connect.CodeOf(got), tc.want)
-			}
-			if !tc.conv && connect.CodeOf(got) != tc.want {
-				t.Fatalf("code = %v, want %v", connect.CodeOf(got), tc.want)
+			if got := connect.CodeOf(asCanceled(tc.ctx, tc.err)); got != tc.want {
+				t.Fatalf("code = %v, want %v", got, tc.want)
 			}
 		})
 	}
-	if asCanceled(nil) != nil {
+	if asCanceled(live, nil) != nil {
 		t.Fatal("nil must stay nil")
+	}
+}
+
+type recordingRegistry struct{ calls int }
+
+func (r *recordingRegistry) Record(ctx context.Context, _ error, _ string) {
+	if ctx.Err() == nil {
+		r.calls++
+	}
+}
+
+func TestErrorRecorder_SkipsClientCancelAndDetachesCtx(t *testing.T) {
+	reg := &recordingRegistry{}
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	run := func(err error) {
+		fn := NewErrorRecorderInterceptor(reg)(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) { return nil, err })
+		_, _ = fn(dead, connect.NewRequest(&struct{}{}))
+	}
+	run(connect.NewError(connect.CodeCanceled, context.Canceled))
+	if reg.calls != 0 {
+		t.Fatalf("client cancel must not be recorded, got %d", reg.calls)
+	}
+	run(connect.NewError(connect.CodeInternal, errors.New("boom")))
+	if reg.calls != 1 {
+		t.Fatalf("real error must be recorded with a live (detached) ctx, got %d", reg.calls)
 	}
 }

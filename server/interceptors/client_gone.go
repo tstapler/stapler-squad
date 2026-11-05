@@ -3,6 +3,7 @@ package interceptors
 import (
 	"context"
 	"errors"
+	"strings"
 	"syscall"
 
 	"connectrpc.com/connect"
@@ -15,7 +16,14 @@ func NewClientGoneInterceptor() connect.Interceptor { return clientGoneIntercept
 
 type clientGoneInterceptor struct{}
 
-func isClientGone(err error) bool {
+// connectWriteFailure is connect-go's own prefix for a failed write to the client; a backend
+// socket error inside a handler never carries it.
+const connectWriteFailure = "write envelope"
+
+// isClientGone reports a caller disconnect: the request ctx is dead, or connect itself failed
+// writing to the client with a broken pipe / reset. An EPIPE/ECONNRESET from a backend socket
+// with a live caller is a real server error and is left alone.
+func isClientGone(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
@@ -23,12 +31,15 @@ func isClientGone(err error) bool {
 	if errors.As(err, &ce) {
 		return ce.Code() == connect.CodeCanceled
 	}
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
+	if ctx.Err() != nil {
+		return errors.Is(err, context.Canceled)
+	}
+	return (errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)) &&
+		strings.Contains(err.Error(), connectWriteFailure)
 }
 
-func asCanceled(err error) error {
-	if err == nil || !isClientGone(err) {
+func asCanceled(ctx context.Context, err error) error {
+	if !isClientGone(ctx, err) {
 		return err
 	}
 	var ce *connect.Error
@@ -41,7 +52,7 @@ func asCanceled(err error) error {
 func (clientGoneInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 		resp, err := next(ctx, req)
-		return resp, asCanceled(err)
+		return resp, asCanceled(ctx, err)
 	}
 }
 
@@ -51,6 +62,6 @@ func (clientGoneInterceptor) WrapStreamingClient(next connect.StreamingClientFun
 
 func (clientGoneInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		return asCanceled(next(ctx, conn))
+		return asCanceled(ctx, next(ctx, conn))
 	}
 }

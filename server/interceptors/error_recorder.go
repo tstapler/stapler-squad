@@ -2,9 +2,9 @@ package interceptors
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"runtime"
+	"time"
 
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/attribute"
@@ -44,7 +44,9 @@ func NewErrorRecorderInterceptor(registry ErrorRecorder) connect.UnaryIntercepto
 				// A client that went away is not a server fault, and its ctx is
 				// already dead so the INSERT below would fail with "context canceled".
 				if registry != nil && !isClientCancel(err) {
-					registry.Record(context.WithoutCancel(ctx), err, req.Spec().Procedure)
+					recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), errorRecordTimeout)
+					registry.Record(recordCtx, err, req.Spec().Procedure)
+					cancel()
 				}
 			}
 			return resp, err
@@ -52,8 +54,11 @@ func NewErrorRecorderInterceptor(registry ErrorRecorder) connect.UnaryIntercepto
 	}
 }
 
+// errorRecordTimeout bounds the detached SQLite write so a contended DB can't hang the request.
+const errorRecordTimeout = 2 * time.Second
+
 func isClientCancel(err error) bool {
-	return errors.Is(err, context.Canceled) || connect.CodeOf(err) == connect.CodeCanceled
+	return connect.CodeOf(err) == connect.CodeCanceled
 }
 
 func captureStack(maxFrames int) string {
