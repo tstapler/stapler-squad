@@ -67,3 +67,14 @@ concentrate in small, hook-free files. Counts are from the per-file table below.
    nothing unique remains.
 3. Review #3, #6, #10 for value, since all three can pass without proving anything.
 4. Sample the unsampled middle band (52–300 lines, hook-free) if the owner wants a suite-wide estimate.
+
+## Decision record (backlog item c52a2b3a)
+
+Tyler chose **Option D** (B + C) on 2026-11-04:
+
+- Convert `tests/e2e/triage-question-answer.spec.ts` to `BacklogItemDetail.triageQuestionAnswer.test.tsx`.
+- Drop the durable-snapshot half of `tests/e2e/vcs-widget.spec.ts`; keep its real-worktree compact-mode test.
+- Run this differently-sampled triage pass.
+
+Rationale: component-level Jest already covered the scenarios, so the missing piece was a `BacklogItemDetail`
+integration test for the prop-threading chain; the first sample's own caveat said its candidate count may undersell.
