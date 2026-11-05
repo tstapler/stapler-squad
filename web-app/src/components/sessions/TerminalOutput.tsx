@@ -17,7 +17,7 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { ScrollGestureProps } from "./XtermTerminal";
 import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
 import * as poolStyles from "@/lib/terminal/TerminalPool.css";
-import { clearTerminalConnectionStatus, setTerminalConnectionStatus } from "@/lib/terminal/terminalConnectionStatus";
+import { clearTerminalConnectionStatus, setTerminalConnectionStatus, setTerminalHardFailed } from "@/lib/terminal/terminalConnectionStatus";
 import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
@@ -910,6 +910,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     if (shellId || isExternal) return;
     return () => clearTerminalConnectionStatus(effectiveSessionId);
   }, [effectiveSessionId, shellId, isExternal]);
+  useEffect(() => {
+    if (shellId || isExternal) return;
+    setTerminalHardFailed(effectiveSessionId, isHardFailed);
+    return () => setTerminalHardFailed(effectiveSessionId, false);
+  }, [effectiveSessionId, isHardFailed, shellId, isExternal]);
 
   const handleRetryNow = useCallback(async () => {
     setIsRetryingSession(true);
