@@ -38,6 +38,13 @@ export interface PrSeed {
   closedAt?: string;
   createdAt?: string;
   pollError?: string;
+  title?: string;
+  /** The item itself links this PR (offers "Stop tracking" on the item list). */
+  itemDirect?: boolean;
+  outcomeUnverified?: boolean;
+  verifyAttempts?: number;
+  verifyAttemptLimit?: number;
+  verifyExhausted?: boolean;
 }
 
 /** ConnectRPC JSON shape of one SessionPullRequest. */
@@ -63,6 +70,12 @@ export function prJson(seed: PrSeed): Record<string, unknown> {
     mergedAt: seed.mergedAt,
     closedAt: seed.closedAt,
     pollError: seed.pollError ?? "POLL_ERROR_NONE",
+    title: seed.title ?? "",
+    itemDirect: seed.itemDirect ?? false,
+    outcomeUnverified: seed.outcomeUnverified ?? false,
+    verifyAttempts: seed.verifyAttempts ?? 0,
+    verifyAttemptLimit: seed.verifyAttemptLimit ?? 0,
+    verifyExhausted: seed.verifyExhausted ?? false,
   };
 }
 

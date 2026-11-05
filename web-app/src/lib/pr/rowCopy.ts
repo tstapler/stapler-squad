@@ -2,9 +2,6 @@ import { timestampMs } from "@bufbuild/protobuf/wkt";
 import { PollError, PrHold_Kind, type PrHold, type SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { prRowState } from "./pullRequests";
 
-/** Counted verification polls before an unverified terminal row is treated as closed. */
-export const VERIFY_ATTEMPT_LIMIT = 5;
-
 /** "just now", "5m ago", "3h ago", "2d ago". */
 export function ageShort(thenMs: number, nowMs: number): string {
   const s = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
@@ -35,16 +32,16 @@ export function stateText(pr: SessionPullRequest, nowMs: number): string {
   }
 }
 
+type VerifyFields = Pick<SessionPullRequest, "verifyAttempts" | "verifyAttemptLimit" | "verifyExhausted">;
+
 /**
  * Second line under an unverified terminal row. The two strings never show together:
- * counting ("Checking... (attempt 2 of 5)") and exhausted ("Couldn't verify ...").
- * `attempt` is undefined while the server does not report the counter.
+ * counting ("Checking... (attempt 2 of 5)") and exhausted ("Couldn't verify ..."). The server owns both numbers.
  */
-export function unverifiedLine(attempt: number | undefined): string {
-  if (attempt !== undefined && attempt >= VERIFY_ATTEMPT_LIMIT) {
-    return `Couldn't verify after ${VERIFY_ATTEMPT_LIMIT} attempts. Treated as closed.`;
-  }
-  return attempt === undefined ? "Checking..." : `Checking... (attempt ${attempt} of ${VERIFY_ATTEMPT_LIMIT})`;
+export function unverifiedLine(pr: VerifyFields | undefined): string {
+  if (pr?.verifyExhausted) return `Couldn't verify after ${pr.verifyAttemptLimit} attempts. Treated as closed.`;
+  if (pr && pr.verifyAttempts > 0 && pr.verifyAttemptLimit > 0) return `Checking... (attempt ${pr.verifyAttempts} of ${pr.verifyAttemptLimit})`;
+  return "Checking...";
 }
 
 function clock(ms: number): string {
@@ -73,14 +70,14 @@ export type HoldSurface = "session" | "item";
  * Plain-wording line explaining why a hold keeps things. Never says "worktree".
  * The server decides holds; this only words them.
  */
-export function holdLine(hold: PrHold, pr: SessionPullRequest | undefined, surface: HoldSurface, nowMs: number, attempt?: number): string {
+export function holdLine(hold: PrHold, pr: SessionPullRequest | undefined, surface: HoldSurface, nowMs: number): string {
   const n = hold.pr?.number ?? pr?.number ?? 0;
   const ref = `#${n}`;
   switch (hold.kind) {
     case PrHold_Kind.OPEN_PR:
       return `Local files kept: ${ref} is still open. They are removed after ${ref} is merged or closed.`;
     case PrHold_Kind.UNVERIFIED:
-      return `Local files kept until ${ref} is confirmed closed or merged. ${unverifiedLine(attempt)}`;
+      return `Local files kept until ${ref} is confirmed closed or merged. ${unverifiedLine(pr)}`;
     case PrHold_Kind.UNKNOWN: {
       const seen = pr?.lastPolledAt ? ` (last seen ${ageShort(timestampMs(pr.lastPolledAt), nowMs)})` : "";
       return `Local files kept: GitHub can't be reached for ${ref}${seen}.`;

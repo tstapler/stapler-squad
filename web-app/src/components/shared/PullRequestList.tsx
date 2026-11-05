@@ -20,8 +20,6 @@ export interface PullRequestListProps {
   pullRequests: readonly SessionPullRequest[];
   holds?: readonly PrHold[];
   actions: PullRequestActions;
-  /** Counted verification polls per `prKey`; absent while the server does not report them. */
-  verifyAttempts?: Readonly<Record<string, number>>;
   /** True until the first list arrives; after 10 s the skeleton becomes the error state. */
   loading?: boolean;
   loadError?: boolean;
@@ -41,7 +39,7 @@ const asTarget = (pr: SessionPullRequest): PrTarget => toRef(pr);
 
 /** The "Pull requests" section: every PR of a session, the held state of each, and per-PR actions. */
 export function PullRequestList(props: PullRequestListProps) {
-  const { pullRequests, holds = [], actions, verifyAttempts = {}, loading, loadError, onRetryLoad, fallbackUrl, onCreatePullRequest } = props;
+  const { pullRequests, holds = [], actions, loading, loadError, onRetryLoad, fallbackUrl, onCreatePullRequest } = props;
   const nowMs = props.nowMs ?? Date.now();
   const compact = useMediaQuery(PHONE);
   const [expanded, setExpanded] = useState(false);
@@ -137,7 +135,7 @@ export function PullRequestList(props: PullRequestListProps) {
       case "askToFix": {
         const { askToFix } = actions;
         if (!askToFix) break;
-        void run(`Couldn't ask to fix #${pr.number}`, () => askToFix(asTarget(pr))).then((r) => { if (r.ok) setNote({ text: `Asked the session to fix ${prTarget(pr)}.`, alert: false }); });
+        void run(`Couldn't ask to fix #${pr.number}`, () => askToFix(asTarget(pr))).then((r) => { if (r.ok) setNote({ text: r.notice ?? `Asked the session to fix ${prTarget(pr)}.`, alert: false }); });
         break;
       }
       case "copyLink":
@@ -223,7 +221,6 @@ export function PullRequestList(props: PullRequestListProps) {
               pr={pr}
               holds={holdsFor(holds, pr)}
               nowMs={nowMs}
-              verifyAttempt={verifyAttempts[prKey(pr)]}
               canAskToFix={!!actions.askToFix}
               canAct
               onCommand={onCommand}
@@ -291,7 +288,7 @@ export function PullRequestList(props: PullRequestListProps) {
         />
       )}
       {dialog?.kind === "track" && (
-        <TrackPrDialog onAttach={actions.attachByUrl} onClose={cancelDialog} onDone={cancelDialog} />
+        <TrackPrDialog onAttach={actions.attachByUrl} onClose={cancelDialog} onDone={(notice) => { cancelDialog(); if (notice) setNote({ text: notice, alert: false }); }} />
       )}
 
       {toast && (

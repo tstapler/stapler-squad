@@ -31,16 +31,18 @@ function ItemRow({ pr, nowMs, onStop }: { pr: SessionPullRequest; nowMs: number;
       <div className={shared.rowMain}>
         <div className={shared.rowLine}>
           <PrStateGlyph state={state} className={shared.glyph} />
-          <a className={shared.prLink} href={pr.url} target="_blank" rel="noopener noreferrer" aria-label={`Pull request ${prTarget(pr)}, opens in new tab`}>
+          <a className={shared.prLink} href={pr.url} target="_blank" rel="noopener noreferrer" aria-label={`Pull request ${prTarget(pr)}${pr.title ? `, ${pr.title}` : ""}, opens in new tab`}>
             #{pr.number}
           </a>
+          {pr.title && <span className={shared.prTitleText} data-testid={`item-pr-title-${pr.number}`}>{pr.title}</span>}
           <span>{stateText(pr, nowMs)}</span>
         </div>
         {pr.headBranch && <div className={shared.rowMeta}><span>{pr.headBranch}</span></div>}
-        {state === "unverified" && <span className={shared.rowMeta}>{unverifiedLine(undefined)}</span>}
+        {onStop && !pr.itemDirect && canStopTracking(pr) && <div className={shared.rowMeta} data-testid={`item-pr-via-session-${pr.number}`}><span>Tracked by the item&apos;s session; stop it there.</span></div>}
+        {state === "unverified" && <span className={shared.rowMeta}>{unverifiedLine(pr)}</span>}
         {error && <span className={shared.errorChip}>{error}</span>}
       </div>
-      {onStop && canStopTracking(pr) && (
+      {onStop && pr.itemDirect && canStopTracking(pr) && (
         <div className={shared.rowActions}>
           <button type="button" className={shared.button} aria-label={`Stop tracking ${prTarget(pr)}`} data-testid={`item-pr-stop-${pr.number}`} onClick={() => onStop(pr)}>{/* analytics-exempt */}
             Stop tracking

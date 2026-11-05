@@ -7,7 +7,6 @@ import { PollError, PrHold_Kind, type PrHold, type SessionPullRequest } from "@/
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { failure, OK, type PrActionResult, type PullRequestActions } from "@/lib/pr/actionResult";
 import { makeHold, makePr } from "@/lib/pr/__testUtils__/pullRequests";
-import { prKey } from "@/lib/pr/pullRequests";
 import { PullRequestList, type PullRequestListProps } from "./PullRequestList";
 
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -241,9 +240,8 @@ describe("PullRequestList poll errors, holds and refresh (U-147)", () => {
   it("list_should_showDistinctCountingAndExhaustedUnverifiedCopyAndRefreshTheRow", async () => {
     const user = userEvent.setup();
     const actions = fakeActions();
-    const seeded = () => [makePr({ number: 9, state: "unknown", outcomeUnverified: true })];
-    const key = prKey(seeded()[0]);
-    const { unmount } = render(<PullRequestList pullRequests={seeded()} verifyAttempts={{ [key]: 2 }} actions={actions} nowMs={NOW} />);
+    const seeded = (over: { verifyAttempts?: number; verifyExhausted?: boolean } = {}) => [makePr({ number: 9, state: "unknown", outcomeUnverified: true, verifyAttemptLimit: 5, ...over })];
+    const { unmount } = render(<PullRequestList pullRequests={seeded({ verifyAttempts: 2 })} actions={actions} nowMs={NOW} />);
     const row = screen.getByTestId("pr-row-9");
     expect(row).toHaveTextContent("Closed or merged (unverified)");
     expect(row).toHaveTextContent("Checking... (attempt 2 of 5)");
@@ -256,9 +254,35 @@ describe("PullRequestList poll errors, holds and refresh (U-147)", () => {
     expect(actions.refresh).toHaveBeenCalledTimes(2);
     unmount();
 
-    render(<PullRequestList pullRequests={seeded()} verifyAttempts={{ [key]: 5 }} actions={actions} nowMs={NOW} />);
+    render(<PullRequestList pullRequests={seeded({ verifyAttempts: 5, verifyExhausted: true })} actions={actions} nowMs={NOW} />);
     expect(screen.getByTestId("pr-row-9")).toHaveTextContent("Couldn't verify after 5 attempts. Treated as closed.");
     expect(screen.getByTestId("pr-row-9")).not.toHaveTextContent("Checking...");
+  });
+
+  it("list_should_showTheServerPrTitleInTheRowAndItsLinkName", () => {
+    render(<PullRequestList pullRequests={[makePr({ number: 12, isActive: true, title: "Add token refresh", headBranch: "tok" })]} actions={fakeActions()} nowMs={NOW} />);
+    expect(screen.getByTestId("pr-title-12")).toHaveTextContent("Add token refresh");
+    expect(screen.getByTestId("pr-link-12")).toHaveAccessibleName("Pull request #12 acme/app, Add token refresh, branch tok, opens in new tab");
+  });
+
+  it("askToFix_should_showTheServerOutcomeNoticeInTheNote", async () => {
+    const user = userEvent.setup();
+    const actions = fakeActions({ askToFix: jest.fn(async () => ({ ok: true as const, notice: "Request sent to refactor-auth (#12 acme/app)." })) });
+    render(<PullRequestList pullRequests={[makePr({ number: 12, isActive: true })]} actions={actions} nowMs={NOW} />);
+    await user.click(screen.getByRole("button", { name: "Ask to fix #12 acme/app" }));
+    expect(actions.askToFix).toHaveBeenCalledWith(expect.objectContaining({ number: 12 }));
+    expect(await screen.findByTestId("pr-note")).toHaveTextContent("Request sent to refactor-auth (#12 acme/app).");
+  });
+
+  it("track_should_saySoInTheNote_When_TheServerReportsTheSessionAlreadyTracksIt", async () => {
+    const user = userEvent.setup();
+    const actions = fakeActions({ attachByUrl: jest.fn(async () => ({ ok: true as const, notice: "This session is already tracking #12 acme/app." })) });
+    render(<PullRequestList pullRequests={three()} actions={actions} nowMs={NOW} />);
+    await user.click(screen.getByTestId("pr-header-menu"));
+    await user.click(screen.getByTestId("pr-track-by-url"));
+    await user.type(screen.getByLabelText("Pull request URL"), "https://github.com/acme/app/pull/12");
+    await user.click(screen.getByRole("button", { name: "Track" }));
+    expect(await screen.findByTestId("pr-note")).toHaveTextContent("already tracking #12 acme/app");
   });
 
   it("header_refresh_should_beBusyWhileRefreshingAndShowFailureInline", async () => {

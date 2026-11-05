@@ -14,8 +14,6 @@ interface RowProps {
   pr: SessionPullRequest;
   holds: readonly PrHold[];
   nowMs: number;
-  /** Counted verification polls for an unverified row; absent while the server does not report it. */
-  verifyAttempt?: number;
   canAskToFix: boolean;
   canAct: boolean;
   onCommand: (command: RowCommand, pr: SessionPullRequest, e: MouseEvent | KeyboardEvent) => void;
@@ -103,14 +101,14 @@ function RowMenu({ pr, items, onCommand }: { pr: SessionPullRequest; items: Menu
 
 /** One PR: link, state text, role chip, review summary, error chip, held line and its actions. */
 export const PullRequestRow = forwardRef<HTMLLIElement, RowProps>(function PullRequestRow(
-  { pr, holds, nowMs, verifyAttempt, canAskToFix, canAct, onCommand }, ref,
+  { pr, holds, nowMs, canAskToFix, canAct, onCommand }, ref,
 ) {
   const state = prRowState(pr);
   const terminal = isTerminal(pr);
   const error = pollErrorText(pr, nowMs);
   const chip = pr.role === "followup" || pr.role === "stacked" ? pr.role : null;
   const summary = terminal ? [] : reviewSummary(pr);
-  const branch = pr.headBranch ? `, branch ${pr.headBranch}` : "";
+  const named = `${pr.title ? `, ${pr.title}` : ""}${pr.headBranch ? `, branch ${pr.headBranch}` : ""}`;
   const items = menuItems(pr, canAskToFix, canAct);
 
   return (
@@ -129,10 +127,11 @@ export const PullRequestRow = forwardRef<HTMLLIElement, RowProps>(function PullR
             target="_blank"
             rel="noopener noreferrer"
             data-testid={`pr-link-${pr.number}`}
-            aria-label={`Pull request ${prTarget(pr)}${branch}, opens in new tab`}
+            aria-label={`Pull request ${prTarget(pr)}${named}, opens in new tab`}
           >
             #{pr.number}
           </a>
+          {pr.title && <span className={s.prTitleText} data-testid={`pr-title-${pr.number}`}>{pr.title}</span>}
           <span>{stateText(pr, nowMs)}</span>
           {pr.isActive && <span className={s.activeChip}>Active</span>}
           {chip && <span className={s.roleChip}>{chip}</span>}
@@ -143,11 +142,11 @@ export const PullRequestRow = forwardRef<HTMLLIElement, RowProps>(function PullR
             {summary.map((t) => <span key={t}>{t}</span>)}
           </div>
         )}
-        {state === "unverified" && <span className={s.rowMeta} aria-busy={verifyAttempt === undefined || verifyAttempt < 5}>{unverifiedLine(verifyAttempt)}</span>}
+        {state === "unverified" && <span className={s.rowMeta} aria-busy={!pr.verifyExhausted}>{unverifiedLine(pr)}</span>}
         {error && <span className={s.errorChip} data-testid={`pr-error-${pr.number}`}>{error}</span>}
         {holds.map((h) => (
           <p key={h.kind} className={`${s.holdLine} ${isWarningHold(h) ? s.holdWarning : ""}`} data-testid={`pr-hold-${pr.number}`}>
-            {holdLine(h, pr, "session", nowMs, verifyAttempt)}
+            {holdLine(h, pr, "session", nowMs)}
           </p>
         ))}
       </div>
