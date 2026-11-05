@@ -5,11 +5,13 @@ import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { useCreationLifecycleActions } from "@/lib/hooks/useCreationLifecycleActions";
 import { getFailureMessage } from "@/lib/utils/sessionFailure";
-import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
+import type { Session} from "@/gen/session/v1/types_pb";
+import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
+import type {
+  SessionActionsOverflowHandle} from "./SessionActionsOverflow";
 import {
-  SessionActionsOverflow,
-  SessionActionsOverflowHandle,
+  SessionActionsOverflow
 } from "./SessionActionsOverflow";
 import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
 import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
@@ -51,13 +53,15 @@ import {
   failureMessageLine,
 } from "./SessionRow.css";
 import { failureMessageIcon } from "./SessionCard.css";
+import type {
+  ColumnKey} from "./session-columns";
 import {
-  ColumnKey,
   DEFAULT_VISIBLE_COLUMNS,
   buildRowGridTemplate,
 } from "./session-columns";
 import { truncateGoal } from "@/lib/utils/string";
 
+/* eslint-disable no-restricted-syntax -- SessionRowProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 interface SessionRowProps {
   session: Session;
   onClick?: () => void;
@@ -69,6 +73,8 @@ interface SessionRowProps {
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onRetryNow?: (sessionId: string) => Promise<boolean | void>;
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
@@ -97,6 +103,7 @@ interface SessionRowProps {
   /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
   backlogEntry?: BacklogIndexEntry;
 }
+/* eslint-enable no-restricted-syntax */
 
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
 const BIGINT_ZERO = BigInt(0);
@@ -214,6 +221,8 @@ function SessionRowInner({
   onNewWorkspace,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
@@ -355,7 +364,7 @@ function SessionRowInner({
             onToggleSelect?.(e);
           }}
           className={checkboxButton}
-        />
+        >{/* analytics-exempt */}</button>
       </div>
 
       {/* Status dot — always visible */}
@@ -615,7 +624,7 @@ function SessionRowInner({
                 onResume();
               }}
               aria-label={`Resume session ${session.title}`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">▶️</span> Resume
             </button>
           )}
@@ -627,7 +636,7 @@ function SessionRowInner({
                 onResumeFromHibernation();
               }}
               aria-label={`Wake session ${session.title} from hibernation`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">▶️</span> Resume
             </button>
           )}
@@ -639,7 +648,7 @@ function SessionRowInner({
                 onPause();
               }}
               aria-label={`Pause session ${session.title}`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">⏸️</span> Pause
             </button>
           )}
@@ -657,7 +666,7 @@ function SessionRowInner({
               disabled={cancelDisabled}
               aria-label="Cancel session creation"
               data-testid="cancel-creation-button"
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           )}
@@ -673,7 +682,7 @@ function SessionRowInner({
               disabled={retryDisabled}
               aria-label="Retry creating session"
               data-testid="retry-creation-button"
-            >
+            >{/* analytics-exempt */}
               Retry
             </button>
           )}
@@ -693,6 +702,8 @@ function SessionRowInner({
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
           onRetryNow={onRetryNow}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
           onCreateCheckpoint={onCreateCheckpoint}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}

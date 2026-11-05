@@ -77,6 +77,8 @@ interface SessionListActionHandlers {
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession?: (sessionId: string) => Promise<boolean>;
   onRetryNowSession?: (sessionId: string) => Promise<boolean>;
+  onArchiveSession?: (sessionId: string) => Promise<boolean>;
+  onUnarchiveSession?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onNewSession?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
@@ -142,6 +144,8 @@ interface SessionRowHandlers {
   onNewWorkspaceSession?: (id: string) => void;
   onRestartSession?: (id: string) => Promise<boolean | void>;
   onRetryNowSession?: (id: string) => Promise<boolean | void>;
+  onArchiveSession?: (id: string) => Promise<boolean | void>;
+  onUnarchiveSession?: (id: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
@@ -185,6 +189,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onNewWorkspaceSession,
   onRestartSession,
   onRetryNowSession,
+  onArchiveSession,
+  onUnarchiveSession,
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
@@ -211,6 +217,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
       onRestart={onRestartSession}
       onRetryNow={onRetryNowSession}
+      onArchive={onArchiveSession}
+      onUnarchive={onUnarchiveSession}
       onCreateCheckpoint={onCreateCheckpoint}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
@@ -387,6 +395,8 @@ export function SessionList({
   onRenameSession,
   onRestartSession,
   onRetryNowSession,
+  onArchiveSession,
+  onUnarchiveSession,
   onUpdateTags,
   onNewSession,
   onCreateCheckpoint,
@@ -1406,6 +1416,8 @@ export function SessionList({
                     onNewWorkspaceSession={stableOnNewWorkspaceSession}
                     onRestartSession={onRestartSession}
                     onRetryNowSession={onRetryNowSession}
+                    onArchiveSession={onArchiveSession}
+                    onUnarchiveSession={onUnarchiveSession}
                     onCreateCheckpoint={onCreateCheckpoint}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
@@ -1592,6 +1604,8 @@ export function SessionList({
                   onRename={onRenameSession}
                   onRestart={onRestartSession}
                   onRetryNow={onRetryNowSession}
+                  onArchive={onArchiveSession}
+                  onUnarchive={onUnarchiveSession}
                   onUpdateTags={onUpdateTags}
                   onCreateCheckpoint={onCreateCheckpoint}
                   onListCheckpoints={onListCheckpoints}
