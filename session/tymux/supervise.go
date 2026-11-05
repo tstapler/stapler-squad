@@ -125,8 +125,8 @@ type TymuxdReady struct {
 	Spawned bool
 }
 
-// checkDaemonHealthy reports whether tymuxd is usable by squad's clients: true if its TCP listener
-// answers, or (degraded) only its Unix control socket does, which the client falls back to. A
+// checkDaemonHealthy reports whether tymuxd is usable by squad's clients: true if its Unix control
+// socket answers, or (degraded) only its TCP listener does, which the client falls back to. A
 // daemon that accepts a connection but answers slowly is busy, not dead, and counts as alive so
 // no caller kills it. The reason for a failed probe is logged at Warn.
 func checkDaemonHealthy(ctx context.Context, cfg DaemonConfig) bool {
@@ -140,13 +140,15 @@ const (
 	daemonProbeNotListening daemonProbeResult = iota // connection refused / no socket: definitively down
 	daemonProbeUnhealthy                             // something answered, but not as tymuxd
 	daemonProbeBusy                                  // accepted the connection but did not answer in time: inconclusive
-	daemonProbeDegraded                              // TCP is refused but the Unix control socket answers: usable via the fallback
-	daemonProbeHealthy                               // answered GetServerInfo over TCP
+	daemonProbeDegraded                              // the Unix control socket is down but the deprecated TCP listener answers: usable via the fallback
+	daemonProbeHealthy                               // answered GetServerInfo over the primary transport (the Unix socket; TCP when no socket is known)
 )
 
-// probeDaemon probes the TCP listener first. Only when TCP is definitively refused does it try the
-// Unix control socket, and a socket that answers is reported as daemonProbeDegraded (not Healthy)
-// so the monitor can still surface the dead TCP listener.
+// probeDaemon probes the Unix control socket first, the transport squad prefers. A socket that
+// answers is Healthy: squad does not need TCP. Only when the socket is definitively not listening
+// (or answers as something else) does it try TCP, and a TCP listener that answers is reported as
+// daemonProbeDegraded so the monitor surfaces that squad is on the unauthenticated fallback. With
+// no known socket for the address, TCP alone decides.
 func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 	addr := cfg.Addr
 	if sharedDaemonBlockedInTest(addr) {
@@ -156,26 +158,25 @@ func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 	if err != nil {
 		return daemonProbeNotListening
 	}
+	path := unixSocketPath(cfg)
+	if path != "" {
+		unix, unixHTTP := newUnixTransport(path)
+		defer unixHTTP.CloseIdleConnections()
+		switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
+		case daemonProbeHealthy, daemonProbeBusy:
+			return unixResult // a silent socket is inconclusive, never killed, and TCP is not consulted
+		}
+		if ctx.Err() != nil {
+			return daemonProbeNotListening
+		}
+	}
 	tcp := newTCPTransport(addr)
 	defer tcp.closeIdle()
 	result := probeEndpoint(ctx, "tcp", hostPort, tcp)
-	if result != daemonProbeNotListening || ctx.Err() != nil {
-		return result
-	}
-	path := unixSocketPath(cfg)
-	if path == "" {
-		return result
-	}
-	unix, unixHTTP := newUnixTransport(path)
-	defer unixHTTP.CloseIdleConnections()
-	switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
-	case daemonProbeHealthy:
+	if path != "" && result == daemonProbeHealthy {
 		return daemonProbeDegraded
-	case daemonProbeBusy:
-		return daemonProbeBusy // silent socket: inconclusive, not usable, never killed
-	default:
-		return result
 	}
+	return result
 }
 
 // dialFn is the seam probeEndpoint, portListening and unixSocketListening dial through.

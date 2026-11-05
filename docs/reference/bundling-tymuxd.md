@@ -180,9 +180,15 @@ registered for it at all, regardless of the flag — `StopTymuxd()` has no
 ownership check beyond a PID file, so stopping a daemon this process doesn't
 own could kill one a sibling process still depends on.
 
-### Unix-socket fallback (TCP listener down)
+### Transport: Unix control socket first, TCP fallback
 
-If tymuxd's TCP listener dies but its Unix control socket still answers, stapler-squad's tymux client (`session/tymux/transport_select.go`) switches every RPC, including a new Attach dial, to that socket and re-probes TCP every 30s; Attach streams already open are not migrated and reconnect through the same choice. Only the socket that belongs to this instance's daemon is used (`STAPLER_SQUAD_INSTANCE`-scoped path, or the shared default daemon's per-user path). The supervisor treats this as degraded, not failed: it reuses the daemon, never kills it, and logs one `[tymux] degraded: tymuxd TCP listener is down` warning per 10 minutes. Watch `tymux_daemon_degraded` (1 while degraded), `tymux_transport{transport}` and `tymux_transport_transitions_total{from,to}`. The fix for the underlying dead listener is to restart tymuxd at a time when its panes can be interrupted.
+stapler-squad's tymux client (`session/tymux/transport_select.go`) talks to tymuxd over its Unix control socket by default: the daemon authenticates socket peers (SO_PEERCRED), while its TCP listener on `127.0.0.1:7419` is deprecated and unauthenticated. One selector is shared by every session of a daemon, so a switch is logged once, not per session.
+
+- **Fallback.** A call refused on the socket (`ENOENT`/`ECONNREFUSED`) moves to TCP if TCP answers; the choice is sticky and the socket is re-probed every 30s by one caller at a time. Attach streams already open are not migrated and reconnect through the same choice.
+- **`EACCES` is a hard error.** If the kernel denies `connect()` on the socket, a daemon is listening and does not authorize this user; the client returns `ErrTymuxdSocketAccessDenied` and never falls back to TCP (same rule as upstream `udsdialer.DialWithFallback`).
+- **Which socket.** Only the socket that belongs to this instance's daemon is used (`STAPLER_SQUAD_INSTANCE`-scoped path, or the shared default daemon's per-user path). With no paired socket the client is TCP-only.
+- **Supervisor.** A daemon whose socket answers is healthy, whatever TCP is doing. "Degraded" now means the reverse: the socket is down but TCP answers, so squad is on the unauthenticated fallback. The supervisor reuses the daemon, never kills it (any live socket or TCP listener vetoes a stop), and logs one `[tymux] degraded: tymuxd Unix control socket is not answering` warning per 10 minutes. Watch `tymux_daemon_degraded` (1 while degraded), `tymux_transport{transport}` and `tymux_transport_transitions_total{from,to}`.
+- **Follow-up.** tymuxd has `--disable-tcp-loopback` (`TYMUXD_DISABLE_TCP_LOOPBACK`) to run socket-only. Squad does not set it: older or already-running daemons and other TCP-only clients still need the listener.
 
 ## Upgrading and downgrading the running daemon
 

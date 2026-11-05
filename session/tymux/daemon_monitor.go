@@ -32,7 +32,7 @@ const daemonMonitorThreshold = 6
 // busy daemon under load is indistinguishable from a wedged one, and killing it destroys every pane.
 const daemonWedgedAfter = 10 * time.Minute
 
-// daemonDegradedWarnEvery rate-limits the "TCP listener down, using the control socket" warning:
+// daemonDegradedWarnEvery rate-limits the "control socket down, using the TCP fallback" warning:
 // the state can last for hours, and the transport selector already logs each switch.
 const daemonDegradedWarnEvery = 10 * time.Minute
 
@@ -129,7 +129,7 @@ func (d *degradedTracker) observe(ctx context.Context, cfg DaemonConfig, degrade
 		return false
 	}
 	d.lastWarn = now
-	log.Warn("[tymux] degraded: tymuxd TCP listener is down, sessions are using its Unix control socket; the daemon is left running",
+	log.Warn("[tymux] degraded: tymuxd Unix control socket is not answering, sessions are using its deprecated unauthenticated TCP listener; the daemon is left running",
 		"addr", cfg.Addr, "degraded_for", now.Sub(d.since).Round(time.Second))
 	return true
 }

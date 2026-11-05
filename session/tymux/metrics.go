@@ -104,7 +104,7 @@ var (
 	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
 		metric.WithDescription("1 while tymuxd's TCP listener is down but its Unix control socket answers (sessions use the fallback), otherwise 0"))
 	daemonDegradedSecondsGauge = mustFloat64Gauge("tymux_daemon_degraded_seconds",
-		metric.WithDescription("Seconds the current degraded episode (TCP listener down, Unix socket answering) has lasted, 0 when not degraded"),
+		metric.WithDescription("Seconds the current degraded episode (Unix control socket down, TCP fallback answering) has lasted, 0 when not degraded"),
 		metric.WithUnit("s"))
 	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
 		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))

@@ -103,20 +103,41 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		grpcOKServer(t, ln)
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), DaemonConfig{Addr: "http://" + ln.Addr().String()}))
 	})
-	t.Run("unix socket answering a dead TCP listener is degraded, still usable", func(t *testing.T) {
+	t.Run("unix socket answering with a dead TCP listener is healthy: squad does not need TCP", func(t *testing.T) {
 		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t)}
-		require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), cfg), "not Healthy: the monitor must still see TCP is down")
-		require.True(t, checkDaemonHealthy(context.Background(), cfg), "the client falls back to the socket")
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg))
+		require.True(t, checkDaemonHealthy(context.Background(), cfg))
 	})
-	t.Run("silent unix socket with TCP refused is busy, never degraded", func(t *testing.T) {
-		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: silentUnixSocket(t)}
-		require.Equal(t, daemonProbeBusy, probeDaemon(context.Background(), cfg), "only a healthy socket reply may be Degraded")
-	})
-	t.Run("TCP squatter stays unhealthy even when the unix socket is healthy", func(t *testing.T) {
+	t.Run("answering unix socket with a TCP squatter is healthy", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
 		t.Cleanup(srv.Close)
 		cfg := DaemonConfig{Addr: srv.URL, SocketPath: answeringUnixSocket(t)}
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg), "the socket decides; TCP is not consulted")
+	})
+	t.Run("missing unix socket with TCP answering is degraded, still usable", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		grpcOKServer(t, ln)
+		cfg := DaemonConfig{Addr: "http://" + ln.Addr().String(), SocketPath: missingSocketPath(t)}
+		require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), cfg), "not Healthy: the monitor must see squad is on the TCP fallback")
+		require.True(t, checkDaemonHealthy(context.Background(), cfg), "the client falls back to TCP")
+	})
+	t.Run("missing unix socket and dead TCP is not listening", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: missingSocketPath(t)}
+		require.Equal(t, daemonProbeNotListening, probeDaemon(context.Background(), cfg))
+	})
+	t.Run("missing unix socket with a TCP squatter stays unhealthy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
+		t.Cleanup(srv.Close)
+		cfg := DaemonConfig{Addr: srv.URL, SocketPath: missingSocketPath(t)}
 		require.Equal(t, daemonProbeUnhealthy, probeDaemon(context.Background(), cfg))
+	})
+	t.Run("silent unix socket is busy even when TCP answers", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		grpcOKServer(t, ln)
+		cfg := DaemonConfig{Addr: "http://" + ln.Addr().String(), SocketPath: silentUnixSocket(t)}
+		require.Equal(t, daemonProbeBusy, probeDaemon(context.Background(), cfg), "inconclusive: never degraded, never killed")
 	})
 	t.Run("caller deadline mid-answer is unhealthy, not busy", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -410,4 +431,13 @@ func TestTerminateProcess_SpawnedDaemonIsReapedPromptly(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, terminateProcess(proc.Pid))
 	require.Less(t, time.Since(start), 2*time.Second, "exited child must read as gone, not wait for SIGKILL")
+}
+
+// missingSocketPath is a socket path nothing listens on (ENOENT).
+func missingSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir + "/none.sock"
 }
