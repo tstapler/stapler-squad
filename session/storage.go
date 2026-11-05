@@ -1707,6 +1707,11 @@ func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []str
 	return s.repo.ListItemGuardViews(ctx, itemIDs)
 }
 
+// ListLinkOwnersByStateIDs returns the session uuids and item ids linking the states.
+func (s *Storage) ListLinkOwnersByStateIDs(ctx context.Context, stateIDs []int) (sessionUUIDs, itemIDs []string, err error) {
+	return s.repo.ListLinkOwnersByStateIDs(ctx, stateIDs)
+}
+
 // ListItemIDsBySessionUUIDs returns every item id of each session uuid.
 func (s *Storage) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
 	return s.repo.ListItemIDsBySessionUUIDs(ctx, uuids)

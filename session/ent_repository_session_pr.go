@@ -1000,3 +1000,30 @@ func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]PRMirror,
 	}
 	return out, nil
 }
+
+// ListLinkOwnersByStateIDs returns the distinct session uuids and item ids that
+// link any of the given PullRequestState rows (one query per chunk of ids).
+func (r *EntRepository) ListLinkOwnersByStateIDs(ctx context.Context, stateIDs []int) (sessionUUIDs, itemIDs []string, err error) {
+	seenS, seenI := map[string]struct{}{}, map[string]struct{}{}
+	for _, chunk := range chunkSlice(stateIDs, prStateIDChunk) {
+		links, qerr := r.client.SessionPR.Query().Where(sessionpr.PullRequestStateIDIn(chunk...)).All(ctx)
+		if qerr != nil {
+			return nil, nil, fmt.Errorf("list link owners by state: %w", qerr)
+		}
+		for _, l := range links {
+			if l.SessionUUID != "" {
+				if _, ok := seenS[l.SessionUUID]; !ok {
+					seenS[l.SessionUUID] = struct{}{}
+					sessionUUIDs = append(sessionUUIDs, l.SessionUUID)
+				}
+			}
+			if l.BacklogItemID != "" {
+				if _, ok := seenI[l.BacklogItemID]; !ok {
+					seenI[l.BacklogItemID] = struct{}{}
+					itemIDs = append(itemIDs, l.BacklogItemID)
+				}
+			}
+		}
+	}
+	return sessionUUIDs, itemIDs, nil
+}

@@ -283,6 +283,7 @@ func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v PRView, info 
 		p.mirrorToSession(inst, v.Ref, obs, info, changed)
 	}
 	if obs.State.Terminal() && !v.Terminal() {
+		p.notifyTerminal([]int{v.StateID})
 		return []int{v.StateID}
 	}
 	return nil

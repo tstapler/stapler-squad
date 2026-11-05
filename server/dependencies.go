@@ -1771,6 +1771,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, probeErr
 	}
 	backlogLifecycleListener.SetPRRowRefresher(svc.PRStatusPoller)
+	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
+	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
+	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI
