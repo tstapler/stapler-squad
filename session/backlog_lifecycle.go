@@ -550,7 +550,7 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 
 // SetChainReconciler wires in the pipeline-chain restart-recovery reconciler
 // (webhook-triggers Phase 6). Called via server/dependencies.go once a
-// ChainFirer has been constructed (see Storage.WireChainFirer).
+// ChainFirer has been constructed (see WireChainFirer).
 func (l *BacklogLifecycleListener) SetChainReconciler(r *TriggerChainReconciler) {
 	l.chainReconcilerMu.Lock()
 	defer l.chainReconcilerMu.Unlock()

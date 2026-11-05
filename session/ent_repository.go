@@ -85,11 +85,11 @@ type EntRepository struct {
 
 	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
 	// (dispatch is best-effort and never blocks or fails the underlying
-	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// mutation). Wired via SetChainFirer, typically by WireChainFirer's
 	// forwarding call in server/dependencies.go. Used by
 	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
 	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
-	chainFirer *ChainFirer
+	chainFirer ChainDispatcher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.

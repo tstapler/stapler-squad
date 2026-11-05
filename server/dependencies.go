@@ -1947,7 +1947,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// "done" transition commits — AC9) and BacklogLifecycleListener (the
 		// restart-recovery reconciler, running on the existing 60s tick).
 		if triggerFireEventRepo != nil {
-			if chainFirer := storage.WireChainFirer(workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+			if chainFirer := session.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
 				backlogLifecycleListener.SetChainReconciler(session.NewTriggerChainReconciler(chainFirer))
 				log.Info("ChainFirer and TriggerChainReconciler initialized")
 			}

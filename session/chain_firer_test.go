@@ -63,7 +63,7 @@ func (f *countingTriggerFirer) callCount() int {
 // a real (sqlite-backed) EntRepository plus the WorkflowRepository/
 // TriggerFireEventRepository built around the exact same ent.Client, mirroring
 // how server/dependencies.go wires ChainFirer in production
-// (Storage.WireChainFirer).
+// (WireChainFirer).
 type chainTestFixture struct {
 	repo       *EntRepository
 	workflows  WorkflowRepository
@@ -519,4 +519,35 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 	final, err := fx.repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.False(t, final.ChainFired)
+}
+
+// TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOnDone pins the production wiring path:
+// WireChainFirer must hand the repository a ChainFirer that actually fires when an item reaches done.
+func TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOnDone(t *testing.T) {
+	t.Parallel()
+	fx, cleanup := newChainTestFixture(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	storage, err := NewStorageWithRepository(fx.repo)
+	require.NoError(t, err)
+	firer := &countingTriggerFirer{}
+
+	cf := WireChainFirer(storage, fx.workflows, fx.fireEvents, firer, enabledCfg())
+	require.NotNil(t, cf)
+	assert.Same(t, fx.repo, storage.Repository())
+	assert.Same(t, cf, fx.repo.chainFirer, "WireChainFirer must register the ChainFirer as the repository's dispatcher")
+
+	wf := fx.createWorkflow(t, "wire-chain-next")
+	item, err := fx.repo.CreateBacklogItem(ctx, BacklogItemData{Title: "wired chain item", Status: string(BacklogStatusReview)})
+	require.NoError(t, err)
+	wfID := wf.ID
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	require.NoError(t, err)
+	_, err = fx.repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone,
+		&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
+	require.NoError(t, err)
+
+	wait.RequireEventually(t, func() bool { return firer.callCount() == 1 }, 5*time.Second, 5*time.Millisecond,
+		"the wired ChainFirer should fire the next workflow once")
 }

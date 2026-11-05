@@ -2170,12 +2170,17 @@ func (r *EntRepository) dispatchCallback(eventType string, payload any) {
 	r.callbackDispatcher.Dispatch(eventType, payload)
 }
 
+// ChainDispatcher fires the pipeline-chain continuation for a "done" item; *ChainFirer implements it.
+type ChainDispatcher interface {
+	Dispatch(item *BacklogItemData)
+}
+
 // SetChainFirer wires a ChainFirer into this repository so
 // TransitionBacklogItemStatus can dispatch the pipeline-chain fire
 // immediately after a "done" transition commits (webhook-triggers Phase 6,
-// AC5/AC9). Called via Storage.WireChainFirer's forwarding call in
+// AC5/AC9). Called via WireChainFirer's forwarding call in
 // server/dependencies.go, the same pattern SetCallbackDispatcher uses.
-func (r *EntRepository) SetChainFirer(f *ChainFirer) {
+func (r *EntRepository) SetChainFirer(f ChainDispatcher) {
 	r.chainFirer = f
 }
 

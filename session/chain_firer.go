@@ -106,7 +106,7 @@ type ChainFirer struct {
 // instance the rest of the backlog write path uses (so ChainFirer's own
 // UpdateBacklogItem calls share the same callbackDispatcher/
 // itemChangePublisher wiring as every other backlog mutation) — callers
-// should obtain it via Storage.WireChainFirer rather than constructing a
+// should obtain it via WireChainFirer rather than constructing a
 // second EntRepository around the same ent.Client.
 func NewChainFirer(repo *EntRepository, workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
 	return &ChainFirer{
@@ -365,3 +365,16 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *EntRep
 		r.firer.Dispatch(&item)
 	}
 }
+
+// WireChainFirer constructs a ChainFirer bound to storage's *EntRepository (so its ListItemSessions/UpdateBacklogItem
+// calls share the same callbackDispatcher/itemChangePublisher wiring as every other backlog mutation) and wires it as
+// that repository's chain-fire dispatcher (EntRepository.SetChainFirer, the happy-path caller from
+// TransitionBacklogItemStatus, webhook-triggers Phase 6).
+func WireChainFirer(storage *Storage, workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+	repo := storage.Repository()
+	cf := NewChainFirer(repo, workflows, fireEvents, firer, cfg)
+	repo.SetChainFirer(cf)
+	return cf
+}
+
+var _ ChainDispatcher = (*ChainFirer)(nil)

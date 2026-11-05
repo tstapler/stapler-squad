@@ -11,7 +11,6 @@ import (
 
 	"entgo.io/ent/dialect"
 
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -362,17 +361,9 @@ func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
 	s.repo.SetCallbackDispatcher(d)
 }
 
-// WireChainFirer constructs a ChainFirer bound to the underlying
-// *EntRepository (so its ListItemSessions/UpdateBacklogItem calls share the
-// exact same callbackDispatcher/itemChangePublisher wiring as every other
-// backlog mutation) and wires it as that repository's own chain-fire
-// dispatcher (EntRepository.SetChainFirer — the happy-path caller from
-// TransitionBacklogItemStatus, webhook-triggers Phase 6).
-func (s *Storage) WireChainFirer(workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
-	cf := NewChainFirer(s.repo, workflows, fireEvents, firer, cfg)
-	s.repo.SetChainFirer(cf)
-	return cf
-}
+// Repository returns the backing *EntRepository, for wiring code that sits above the session package
+// (for example WireChainFirer).
+func (s *Storage) Repository() *EntRepository { return s.repo }
 
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*Instance) error {
