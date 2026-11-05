@@ -131,7 +131,7 @@ func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, sto
 
 // staleWorkInspectTimeout bounds snapshot + planning + nudge delivery; generous so a
 // nudge that is delivering is not cut short and then answered with a restart.
-const staleWorkInspectTimeout = 2 * time.Minute
+const StaleWorkInspectTimeout = 2 * time.Minute
 
 // RecordDeadPane writes the dead-pane stop snapshot to the stuck row of the
 // session's backlog item, so the operator sees why the health checker respawned

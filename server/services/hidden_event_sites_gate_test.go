@@ -104,10 +104,10 @@ func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGa
 	}
 	e := newHiddenSiteEnv(t, true, inst)
 	require.NoError(t, e.svc.storage.AddInstance(inst))
-	e.svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	e.svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	e.svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
-	e.svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
 
 	got := e.collect(t)
 	failures := notificationsOf(got, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE))

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -109,7 +110,7 @@ type ServerDependencies struct {
 	// Token usage analytics.
 	InsightsService *services.InsightsService
 
-	BacklogService *services.BacklogService
+	BacklogService *backlogsvc.BacklogService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -546,7 +547,7 @@ type RuntimeDeps struct {
 	// Token usage analytics.
 	InsightsService *services.InsightsService
 
-	BacklogService *services.BacklogService
+	BacklogService *backlogsvc.BacklogService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -1567,7 +1568,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}
 
-	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	backlogSvc := backlogsvc.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
 	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
 		return nil, gateErr
 	}

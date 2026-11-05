@@ -39,11 +39,11 @@ type fakeJulesTransitionGuard struct {
 	transitionCalls []fakeJulesTransitionCall
 }
 
-func (f *fakeJulesTransitionGuard) hasUnresolvedBlockers(_ context.Context, _ string) (bool, error) {
+func (f *fakeJulesTransitionGuard) HasUnresolvedBlockers(_ context.Context, _ string) (bool, error) {
 	return f.hasBlockers, f.hasBlockersErr
 }
 
-func (f *fakeJulesTransitionGuard) transitionWithGuard(_ context.Context, item *session.BacklogItemData, to session.BacklogStatus, _ *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
+func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *session.BacklogItemData, to session.BacklogStatus, _ *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	f.mu.Lock()
 	f.transitionCalls = append(f.transitionCalls, fakeJulesTransitionCall{
 		itemID: item.ID, to: to, triggeredBy: triggeredBy, hasUnresolvedBlockers: hasUnresolvedBlockers,

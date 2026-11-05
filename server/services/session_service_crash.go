@@ -81,7 +81,7 @@ func NewSessionCrashEvent(uuid, title, exitReason string, exitedAt time.Time) *e
 	return events.NewNotificationEvent(
 		uuid, title, fmt.Sprintf("%s%s-%d", crashNotificationIDBase, uuid, exitedAt.Unix()),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE),
-		derivePriority(true, true),
+		DerivePriority(true, true),
 		"Session crashed", msg,
 		events.SessionScopedMetadata(nil, ""),
 	)
@@ -99,7 +99,7 @@ func newCrashSummaryEvent(d crashDecision) *events.Event {
 	return events.NewNotificationEvent(
 		"", "", fmt.Sprintf("%s%d", crashSummaryIDPrefix, d.WindowStart.Unix()),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE),
-		derivePriority(true, true),
+		DerivePriority(true, true),
 		"Sessions crashed", msg, nil,
 	)
 }

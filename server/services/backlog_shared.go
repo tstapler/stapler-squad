@@ -18,7 +18,7 @@ func NewFlagGatedForeignClaimLookup(inner session.ForeignClaimLookup) session.Fo
 }
 
 func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.ClaimRecord, bool) {
-	if !config.LoadConfig().GetFeatureFlag(crossHostClaimDedupFlagName) {
+	if !config.LoadConfig().GetFeatureFlag(CrossHostClaimDedupFlagName) {
 		return session.ClaimRecord{}, false
 	}
 	return f.inner.ForeignClaim(externalURL)
@@ -26,7 +26,7 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.C
 
 // sddDefaultPipelineEnabled reads the flag with its registered default, so an
 // unset flag resolves the same way the Features page reports it.
-func sddDefaultPipelineEnabled() bool {
+func SddDefaultPipelineEnabled() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(
-		sddDefaultPipelineFlagName, featureFlagDefault(sddDefaultPipelineFlagName))
+		SddDefaultPipelineFlagName, featureFlagDefault(SddDefaultPipelineFlagName))
 }

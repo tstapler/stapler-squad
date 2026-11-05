@@ -92,7 +92,7 @@ type SessionSteerer interface {
 // default: with it off, creation and dequeue behave exactly as they did before
 // the claim substrate existed. Claim recording (Storage.CreateBacklogItem) is
 // always on.
-const crossHostClaimDedupFlagName = "cross_host_claim_dedup"
+const CrossHostClaimDedupFlagName = "cross_host_claim_dedup"
 
 type transitionActorKey struct{}
 
@@ -116,8 +116,8 @@ func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) 
 // the user actor is an operator; the agent actor, and any unknown value, is the
 // MCP delegate (class agent), so an unknown actor never gains the operator
 // override. Both context keys are unexported, so only in-process code sets them.
-func resolveTransitionCaller(ctx context.Context) session.TransitionCaller {
-	if transitionActorFromContext(ctx) != session.TriggeredByUser {
+func ResolveTransitionCaller(ctx context.Context) session.TransitionCaller {
+	if TransitionActorFromContext(ctx) != session.TriggeredByUser {
 		return session.CallerMCPTransitionDelegate
 	}
 	if c, ok := ctx.Value(transitionCallerKey{}).(session.TransitionCaller); ok && c == session.CallerOperatorNotificationAction {
@@ -126,7 +126,7 @@ func resolveTransitionCaller(ctx context.Context) session.TransitionCaller {
 	return session.CallerOperatorTransitionRPC
 }
 
-func transitionActorFromContext(ctx context.Context) string {
+func TransitionActorFromContext(ctx context.Context) string {
 	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
 		return a
 	}
@@ -137,10 +137,10 @@ func transitionActorFromContext(ctx context.Context) string {
 // is also present: the manual nudge has no changes-requested reason and its
 // thread prompt carries the same actionable content, so keeping the name would
 // key the same fix differently on the two paths and send it twice.
-func dropSubsumedChangesRequested(names []string) []string {
+func DropSubsumedChangesRequested(names []string) []string {
 	hasThreads := false
 	for _, n := range names {
-		if n == reasonNameUnresolvedThreads {
+		if n == ReasonNameUnresolvedThreads {
 			hasThreads = true
 		}
 	}
@@ -149,7 +149,7 @@ func dropSubsumedChangesRequested(names []string) []string {
 	}
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		if n != reasonNameChangesRequested {
+		if n != ReasonNameChangesRequested {
 			out = append(out, n)
 		}
 	}
@@ -160,7 +160,7 @@ func dropSubsumedChangesRequested(names []string) []string {
 // type for repository calls. STUCK_REASON_UNSPECIFIED and any unrecognized
 // value map to the empty StuckReason (""), which fails IsValid() — callers
 // must check IsValid() before using the result.
-func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
+func FromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 	switch reason {
 	case sessionv1.StuckReason_STUCK_REASON_PR_READY_UNMERGED:
 		return domain.StuckReasonPRReadyUnmerged
@@ -236,8 +236,8 @@ const headlessTriageUUIDPrefix = "headless-triage-"
 // genuinely-attached session from being archived on such a disagreement, not
 // this function agreeing with those two on "current."
 // Pure — no I/O, no locking — so it's table-testable without tmux/storage.
-func findSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
-	currentReview, currentWork := findMostRecentSessions(sessions)
+func FindSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
+	currentReview, currentWork := FindMostRecentSessions(sessions)
 
 	var superseded []session.ItemSessionSummary
 	for i := range sessions {
@@ -272,14 +272,14 @@ var errorDetailURLUserinfoPattern = regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*
 
 // redactErrorDetail masks credential-shaped substrings. Best-effort: error_detail outlives
 // log rotation and is shown in the UI, so it must not become a durable secret store.
-func redactErrorDetail(s string) string {
+func RedactErrorDetail(s string) string {
 	s = errorDetailURLUserinfoPattern.ReplaceAllString(s, "${1}[REDACTED]@")
 	return errorDetailSecretPattern.ReplaceAllString(s, "[REDACTED]")
 }
 
 // findMostRecentSessions returns the most recently created review and work ItemSessions
 // from the provided list. Either return value may be nil if no session of that role exists.
-func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
+func FindMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
 	for i := range sessions {
 		is := &sessions[i]
 		switch is.Role {
@@ -296,13 +296,13 @@ func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSessio
 	return
 }
 
-const reasonNameFailingChecks = "FAILING_CHECKS"
+const ReasonNameFailingChecks = "FAILING_CHECKS"
 
-const reasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
+const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
 
 // reasonNameChangesRequested has no manual-nudge counterpart, so a
 // changes-requested-only steer never suppresses a thread nudge.
-const reasonNameChangesRequested = "CHANGES_REQUESTED"
+const ReasonNameChangesRequested = "CHANGES_REQUESTED"
 
 // headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
 // headless triage path. The orphan guard uses this prefix to identify sessions that have no

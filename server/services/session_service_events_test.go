@@ -119,7 +119,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	assert.Equal(t, "Session crashed", f.NotificationTitle)
 	assert.Contains(t, f.NotificationMessage, "crashy")
 	assert.Contains(t, f.NotificationMessage, "pane exited 137")
-	assert.Equal(t, derivePriority(true, true), f.NotificationPriority)
+	assert.Equal(t, DerivePriority(true, true), f.NotificationPriority)
 	assert.Equal(t, "true", f.NotificationMetadata["session_scoped"])
 	updated := 0
 	for _, ev := range seen {

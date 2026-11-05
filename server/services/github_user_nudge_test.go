@@ -36,7 +36,7 @@ type fakeNudger struct {
 	steers   []steerCall
 	outcome  SteerOutcome
 	err      error
-	guard    *sessionNudgeGuard
+	guard    *SessionNudgeGuard
 	inWrite  chan struct{} // closed on first write entry when non-nil
 	holdOpen chan struct{} // writes block until closed when non-nil
 	onSteer  func()
@@ -517,7 +517,7 @@ func TestNudgeSessionForPR_should_ReturnNothingToFixWithZeroSteers_When_OnlyChan
 func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliveredOneBusyOnSimultaneousCalls(t *testing.T) {
 	f := newNudgeFixture(t)
 	guardClock := newFakeNudgeClock()
-	f.nudger.guard = &sessionNudgeGuard{now: guardClock.Now}
+	f.nudger.guard = &SessionNudgeGuard{now: guardClock.Now}
 
 	first, err := f.call("fix-ci")
 	require.NoError(t, err)
@@ -530,7 +530,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 	// Double-click race: the first call is held inside the write; the second arrives meanwhile.
 	g := newNudgeFixture(t)
-	g.nudger.guard = &sessionNudgeGuard{now: newFakeNudgeClock().Now}
+	g.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
 	g.nudger.inWrite = make(chan struct{})
 	g.nudger.holdOpen = make(chan struct{})
 	done := make(chan *sessionv1.NudgeSessionForPRResponse, 1)
@@ -550,7 +550,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSessionNudgeGuardAndFakePRNudger(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.nudger.guard = &sessionNudgeGuard{now: newFakeNudgeClock().Now}
+	f.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
 
 	for i := 0; i < 3; i++ {
 		_, err := f.call("fix-ci")

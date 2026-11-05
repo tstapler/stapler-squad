@@ -30,7 +30,7 @@ func TestTransitionHandler_ResolvesCallerClassFromContextActor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveTransitionCaller(tc.ctx)
+			got := ResolveTransitionCaller(tc.ctx)
 			assert.Equal(t, tc.want, got)
 			spec, ok := session.LookupTransitionCaller(got)
 			require.True(t, ok)

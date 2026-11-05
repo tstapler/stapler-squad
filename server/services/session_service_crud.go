@@ -232,7 +232,7 @@ func (s *SessionService) GetSession(
 // session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
 // two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
+	return WorkspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // ─── Batch Session Creation ───────────────────────────────────────────────────

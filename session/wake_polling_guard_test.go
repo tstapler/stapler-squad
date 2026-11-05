@@ -23,19 +23,19 @@ const scheduleWakeupToken = "Schedule" + "Wakeup"
 // file or raise a count: add durable waits with schedule_wake instead, and
 // reach for this map only when a new prompt must forbid the tool.
 var pollingReferences = map[string]int{
-	"server/mcp/tools_backlog.go":                          6,
-	"server/mcp/tools_backlog_test.go":                     2,
-	"server/mcp/tools_backlog_wait_cap_test.go":            3,
-	"server/services/backlog_service_verdict_steer.go":     2,
-	"server/services/backlog_stuck_rpc_test.go":            1,
-	"server/services/guidance_ack_wiring.go":               4, // PostToolUse receipt counter, not a prompt
-	"server/services/notification_quality_metrics.go":      7, // agent_schedule_wakeup_calls_total
-	"server/services/notification_quality_metrics_test.go": 6,
-	"session/backlog_commands.go":                          1,
-	"session/backlog_context.go":                           1,
-	"session/backlog_post_review_prompt_test.go":           1,
-	"session/domain/backlog.go":                            1,
-	"session/pipeline_mode_seed.go":                        2,
+	"server/mcp/tools_backlog.go":                                 6,
+	"server/mcp/tools_backlog_test.go":                            2,
+	"server/mcp/tools_backlog_wait_cap_test.go":                   3,
+	"server/services/backlogsvc/backlog_service_verdict_steer.go": 2,
+	"server/services/backlogsvc/backlog_stuck_rpc_bsvc_test.go":   1,
+	"server/services/guidance_ack_wiring.go":                      4, // PostToolUse receipt counter, not a prompt
+	"server/services/notification_quality_metrics.go":             7, // agent_schedule_wakeup_calls_total
+	"server/services/notification_quality_metrics_test.go":        6,
+	"session/backlog_commands.go":                                 1,
+	"session/backlog_context.go":                                  1,
+	"session/backlog_post_review_prompt_test.go":                  1,
+	"session/domain/backlog.go":                                   1,
+	"session/pipeline_mode_seed.go":                               2,
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {

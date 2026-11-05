@@ -113,9 +113,13 @@ func TestNoBareEnvMutationInServicesTests(t *testing.T) {
 	guarded := map[string]bool{"HOME": true, "STAPLER_SQUAD_TEST_DIR": true}
 	setters := map[string]bool{"Setenv": true, "Unsetenv": true}
 
-	files, err := filepath.Glob("*_test.go")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no *_test.go files found (err=%v); guard would pass vacuously", err)
+	var files []string
+	for _, dir := range []string{".", "backlogsvc"} {
+		matches, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+		if err != nil || len(matches) == 0 {
+			t.Fatalf("no *_test.go files found in %s (err=%v); guard would pass vacuously", dir, err)
+		}
+		files = append(files, matches...)
 	}
 	fset := token.NewFileSet()
 	for _, file := range files {

@@ -80,8 +80,8 @@ func TestConfigSurfaceProof_WorkspacePeersNudge_ChangesPromptBlock(t *testing.T)
 	addTestPeer(t, storage, repoPath)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(workspacePeersNudgeFlagName, setting.(bool))
-		return workspacePeersBlockFor(t.Context(), storage, repoPath) != ""
+		set(WorkspacePeersNudgeFlagName, setting.(bool))
+		return WorkspacePeersBlockFor(t.Context(), storage, repoPath) != ""
 	}, false, true)
 }
 

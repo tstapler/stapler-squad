@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -66,7 +67,7 @@ func (l *instanceLease) Submit(ctx context.Context, text string) error {
 
 // wakeAdmission is BacklogService.Admit (the WIP cap); without a backlog
 // service nothing is admitted, so a stopped owner is never revived.
-type wakeAdmission struct{ backlog *services.BacklogService }
+type wakeAdmission struct{ backlog *backlogsvc.BacklogService }
 
 func (a wakeAdmission) Admit(ctx context.Context) (bool, error) {
 	if a.backlog == nil {

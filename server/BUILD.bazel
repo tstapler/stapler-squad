@@ -85,6 +85,7 @@ go_library(
         "//server/prwatch/inbox",
         "//server/push",
         "//server/services",
+        "//server/services/backlogsvc",
         "//server/services/devtools",
         "//server/services/sessionbundle",
         "//server/wakes",

@@ -12,9 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-func newTestGuard() (*sessionNudgeGuard, *svctest.FakeGuardClock) {
+func newTestGuard() (*SessionNudgeGuard, *svctest.FakeGuardClock) {
 	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	return &sessionNudgeGuard{now: clk.Now}, clk
+	return &SessionNudgeGuard{now: clk.Now}, clk
 }
 
 func TestTryBegin_should_ReturnBusyThenOKAfterRelease_When_SecondAttemptWhileInFlight(t *testing.T) {
@@ -145,6 +145,6 @@ func TestTryBegin_should_SweepRecordOlderThan10Minutes_When_NextTryBegin(t *test
 }
 
 func TestReasonSetSignature_should_BeOrderAndDuplicateInsensitive(t *testing.T) {
-	assert.Equal(t, reasonSetSignature("A", "B"), reasonSetSignature("B", "A", "A"))
-	assert.NotEqual(t, reasonSetSignature("A"), reasonSetSignature("A", "B"))
+	assert.Equal(t, ReasonSetSignature("A", "B"), ReasonSetSignature("B", "A", "A"))
+	assert.NotEqual(t, ReasonSetSignature("A"), ReasonSetSignature("A", "B"))
 }

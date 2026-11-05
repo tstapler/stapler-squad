@@ -51,7 +51,7 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
 	ch, _ := bus.Subscribe(ctx)
 	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
@@ -70,7 +70,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus session.
 }
 
 func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
-	f.svc.autonomousSvc.onAutonomousDriverComplete(f.title, outcome)
+	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
 }
 
 // drain returns every event already published; the callback publishes synchronously.

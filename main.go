@@ -20,6 +20,7 @@ import (
 	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -375,7 +376,7 @@ var (
 				svcDeps  *server.ServiceDeps
 				srv      *server.Server
 				// backlogSvc is captured from the runtime phase for startRemoteAccess.
-				backlogSvc *services.BacklogService
+				backlogSvc *backlogsvc.BacklogService
 			)
 
 			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
@@ -1472,7 +1473,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 // project_plans/cross-host-claim-dedup/decisions/), and hands backlogSvc and
 // storage the claim checkers. backlogSvc may be nil. Failures disable gossip
 // with a warning rather than aborting remote access.
-func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) {
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *backlogsvc.BacklogService) {
 	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
@@ -1526,7 +1527,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	// The checks below are all gated by the cross_host_claim_dedup feature flag
 	// (off by default), so wiring them here changes nothing until it is enabled.
 	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
-	storage.SetPRProvenanceSource(services.NewFlagGatedPRProvenance(recorder))
+	storage.SetPRProvenanceSource(backlogsvc.NewFlagGatedPRProvenance(recorder))
 	if backlogSvc != nil {
 		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
 		backlogSvc.SetClaimChecker(checker, checker)
@@ -1535,7 +1536,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *backlogsvc.BacklogService) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)

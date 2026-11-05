@@ -763,7 +763,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	// row reproduces the exact "jules-sessions/{id}" storage form ADR-004
 	// documents — julesWebUrlFor (SessionsSection.tsx) strips this same
 	// prefix to build the jules.google.com escape-hatch link.
-	sessionUUID := julesSessionUUIDPrefix + "sessions/" + uuid.New().String()
+	sessionUUID := JulesSessionUUIDPrefix + "sessions/" + uuid.New().String()
 	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,

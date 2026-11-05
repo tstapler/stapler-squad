@@ -32,7 +32,7 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 // is opt-in via the workspacePeersNudgeFlagName feature flag.
 func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -70,7 +70,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_OmitPeerNudge_When_FlagDisa
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExist(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)

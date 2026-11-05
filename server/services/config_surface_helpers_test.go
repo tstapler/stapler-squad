@@ -86,12 +86,16 @@ func allConfigSurfaces() []surfaceID {
 	return out
 }
 
-// testFuncBodies parses every _test.go file in dir and maps func name to its body.
-func testFuncBodies(t testing.TB, dir string) map[string]*ast.BlockStmt {
+// testFuncBodies parses every _test.go file in the dirs and maps func name to its body.
+func testFuncBodies(t testing.TB, dirs ...string) map[string]*ast.BlockStmt {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
-	if err != nil {
-		t.Fatalf("glob: %v", err)
+	var files []string
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+		if err != nil {
+			t.Fatalf("glob: %v", err)
+		}
+		files = append(files, matches...)
 	}
 	fset := token.NewFileSet()
 	out := map[string]*ast.BlockStmt{}

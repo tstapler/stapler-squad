@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -183,7 +183,7 @@ func TestNewCore_should_WireNilTolerantAttacher_When_BacklogSvcIsLiteralNil(t *t
 	store := &stubStore{}
 	sbMgr := makeScrollbackMgr(t)
 
-	var backlogSvc *services.BacklogService // literal nil, matches main.go's stdio fallback call
+	var backlogSvc *backlogsvc.BacklogService // literal nil, matches main.go's stdio fallback call
 	s := NewCore(store, nil, sbMgr, storage, nil, nil, nil, nil, backlogSvc, nil)
 
 	tool := s.GetTool("link_session_to_item")

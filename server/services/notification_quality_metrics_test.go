@@ -170,7 +170,7 @@ func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsAr
 	dir := t.TempDir()
 	require.NoError(t, InjectHooksConfig(dir, "sess", []HookName{HookPostToolLogging}))
 	var top struct {
-		Hooks map[string][]hookMatcherGroup `json:"hooks"`
+		Hooks map[string][]HookMatcherGroup `json:"hooks"`
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.local.json"))
 	require.NoError(t, err)

@@ -337,7 +337,7 @@ type SessionService struct {
 	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
-	autonomousSvc *AutonomousOrchestrationService
+	AutonomousSvc *AutonomousOrchestrationService
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -688,7 +688,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 	eventBus.Publish(events.NewNotificationEvent(
 		"", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		derivePriority(false, false), // urgent, important — informational config-reload notice
+		DerivePriority(false, false), // urgent, important — informational config-reload notice
 		content.title, content.message,
 		map[string]string{"type": "claude_settings_reload", "origin": content.origin},
 	))
@@ -1043,7 +1043,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		}
 		return nil
 	})
-	svc.autonomousSvc = autonomousSvc
+	svc.AutonomousSvc = autonomousSvc
 
 	return svc
 }

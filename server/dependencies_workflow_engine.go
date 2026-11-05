@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -28,7 +29,7 @@ type WorkflowEngineWiring struct {
 	// Soak backs /actuator/workflow-engine.
 	Soak *WorkflowEngineSoakSource
 	// Status backs GetWorkflowEngineStatus; GateWired is filled by InjectTransitionGate.
-	Status *services.WorkflowEngineStatusSource
+	Status *backlogsvc.WorkflowEngineStatusSource
 }
 
 // newWorkflowEngineWiring builds the selector over def and cfgEngine (nil
@@ -61,7 +62,7 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		soak.ConfigDiff = NewWorkflowEngineConfigDiff(entClient, cfgEngine)
 	}
 
-	status := &services.WorkflowEngineStatusSource{
+	status := &backlogsvc.WorkflowEngineStatusSource{
 		ModeFor:          modes.ModeFor,
 		Ledger:           soak.Ledger,
 		ConfigDiff:       soak.ConfigDiff,

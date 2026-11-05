@@ -75,8 +75,8 @@ func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T
 func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(sddDefaultPipelineFlagName, setting.(bool))
-		return sddDefaultPipelineEnabled()
+		set(SddDefaultPipelineFlagName, setting.(bool))
+		return SddDefaultPipelineEnabled()
 	}, false, true)
 }
 
@@ -100,7 +100,7 @@ func TestConfigSurfaceProof_CrossHostClaimDedup_ChangesClaimLookup(t *testing.T)
 	set := bkfFlagWriter(t)
 	lookup := NewFlagGatedForeignClaimLookup(bkfForeignClaims{})
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(crossHostClaimDedupFlagName, setting.(bool))
+		set(CrossHostClaimDedupFlagName, setting.(bool))
 		_, found := lookup.ForeignClaim("https://example.test/issues/1")
 		return found
 	}, false, true)

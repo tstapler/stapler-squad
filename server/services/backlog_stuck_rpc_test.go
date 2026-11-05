@@ -22,7 +22,7 @@ import (
 // (backlog-bounce-escalation, Epic 1.1) recovers the correct domain constant.
 func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted(t *testing.T) {
 	t.Parallel()
-	got := fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
+	got := FromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
 

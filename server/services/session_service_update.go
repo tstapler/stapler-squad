@@ -301,7 +301,7 @@ func (s *SessionService) UpdateSession(
 		if instance.AutonomousMode {
 			s.StartAutonomousDriverForInstance(instance)
 		} else {
-			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
+			s.AutonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
 		sideEffectChanged = true
@@ -387,7 +387,7 @@ func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessag
 	s.eventBus.Publish(events.NewNotificationEvent(
 		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
 		int32(10),                    // NotificationType_INFO
-		derivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
+		DerivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
 		"Steering input sent",
 		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
 		nil,

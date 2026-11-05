@@ -253,27 +253,27 @@ linters:
             - "!**/server/services/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"
             - "!**/server/services/workflow_service.go"
-            - "!**/server/services/backlog_service_query.go"
-            - "!**/server/services/backlog_service_lifecycle.go"
-            - "!**/server/services/backlog_service_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_query.go"
+            - "!**/server/services/backlogsvc/backlog_service_lifecycle.go"
+            - "!**/server/services/backlogsvc/backlog_service_triage.go"
             # TriggerTriage's ent.IsNotFound check moved here from
             # backlog_service_triage.go above (2026-09-12 hotspot split) — same
             # pre-existing usage, not newly introduced.
-            - "!**/server/services/backlog_service_trigger_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_trigger_triage.go"
             - "!**/server/services/session_service.go"
             # Newly surfaced (2026-08-23) by fixing the files: glob bug above — this rule was
             # silently matching 0 files in server/services/ before the fix, so these pre-existing
             # session/ent imports were never actually checked despite not being on the exclusion
             # list. Same family as the backlog_service_*.go / session_summary_service.go splits
             # already grandfathered above; not newly introduced.
-            - "!**/server/services/backlog_service_pipeline_mode.go"
-            - "!**/server/services/backlog_service_ship.go"
-            - "!**/server/services/backlog_service_ship_status.go"
+            - "!**/server/services/backlogsvc/backlog_service_pipeline_mode.go"
+            - "!**/server/services/backlogsvc/backlog_service_ship.go"
+            - "!**/server/services/backlogsvc/backlog_service_ship_status.go"
             - "!**/server/services/session_summary_service_test.go"
-            - "!**/server/services/backlog_service_sync.go"
+            - "!**/server/services/backlogsvc/backlog_service_sync.go"
             - "!**/server/services/github_webhook_handler.go"
             - "!**/server/services/session_summary_service.go"
-            - "!**/server/services/backlog_service_pipeline_mode_test.go"
+            - "!**/server/services/backlogsvc/backlog_service_pipeline_mode_test.go"
             - "!**/server/services/webhook_trigger_common.go"
             - "!**/server/services/github_webhook_handler_test.go"
             - "!**/server/services/generic_webhook_handler_test.go"
@@ -498,12 +498,12 @@ linters:
         text: "log\\."
       # ──────────────────────────────────────────────────────────────────────────
       # forbidigo: ent.IsNotFound boundary guard
-      # server/services/backlog_service*.go still calls ent.IsNotFound directly —
+      # server/services/backlogsvc/backlog_service*.go still calls ent.IsNotFound directly —
       # excluded until the storage-interface cleanup refactor (P6). The glob covers
       # the base file AND all split files created in Phase 3 (P1):
       # backlog_service_query.go, backlog_service_lifecycle.go, backlog_service_triage.go
       # removed-in: refactor/storage-interface-cleanup (P6)
-      - path: "server/services/backlog_service.*\\.go"
+      - path: "server/services/backlogsvc/backlog_service.*\\.go"
         linters: [forbidigo]
         text: "ent\\.IsNotFound"
       # session/ is the legitimate ent-wrapping layer; allowed to reference ent.IsNotFound

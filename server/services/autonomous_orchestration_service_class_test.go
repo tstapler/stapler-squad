@@ -22,7 +22,7 @@ func cancelledOutcome(reason domain.StopReason) session.AutonomousDriverOutcome 
 }
 
 func (f *charFixture) setReadoption(on bool) {
-	f.svc.autonomousSvc.SetReadoptionEnabled(func() bool { return on })
+	f.svc.AutonomousSvc.SetReadoptionEnabled(func() bool { return on })
 }
 
 // assertNoRowOrRecovery asserts the item has no open stuck row, its ItemSession is

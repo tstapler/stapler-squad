@@ -33,7 +33,7 @@ func newTestLocalCheckerEnrolled(t *testing.T, self session.HostIdentity, timeou
 }
 
 func TestUnimplementedClaimChecker_CheckClaim_should_ReturnUnclaimedVerdict_When_NoCheckerWired(t *testing.T) {
-	var c CrossHostClaimChecker = unimplementedClaimChecker{}
+	var c CrossHostClaimChecker = UnimplementedClaimChecker{}
 	for name, check := range map[string]func(context.Context, string) (ClaimVerdict, error){
 		"live": c.CheckClaim, "local": c.CheckClaimLocalOnly,
 	} {

@@ -139,7 +139,7 @@ func (n *MemoryPressureNotifier) notify(ratio float64) {
 	n.eventBus.Publish(events.NewNotificationEvent(
 		"system", "System", memoryPressureNotificationID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		derivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
+		DerivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
 		"Memory usage near limit",
 		fmt.Sprintf("Process memory is at %.0f%% of its configured limit. %s Dashboard: http://localhost:3000",
 			ratio*100, n.reclaimOptionsText()),
@@ -158,7 +158,7 @@ func (n *MemoryPressureNotifier) notifyCleared(ratio float64) {
 	n.eventBus.Publish(events.NewNotificationEvent(
 		"system", "System", memoryPressureNotificationID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		derivePriority(false, false), // cleared -- no longer urgent or important
+		DerivePriority(false, false), // cleared -- no longer urgent or important
 		"Memory usage cleared",
 		fmt.Sprintf("Process memory has dropped back below %.0f%% of its configured limit.", memoryPressureClearRatio*100),
 		map[string]string{"reason": "memory_pressure", "memory_pressure_level": "ok"},

@@ -5,7 +5,7 @@
   "method": "UpdateBacklogItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",
@@ -21,5 +21,5 @@
     "TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview",
     "TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview"
   ],
-  "lastModified": "2026-08-04T00:00:00-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

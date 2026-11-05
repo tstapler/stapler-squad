@@ -110,7 +110,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 
 // permissionRequestGroups extracts the PermissionRequest hookMatcherGroup slice from a
 // parsed settings.local.json top-level map, failing the test on any parse error.
-func permissionRequestGroups(t *testing.T, top map[string]json.RawMessage) []hookMatcherGroup {
+func permissionRequestGroups(t *testing.T, top map[string]json.RawMessage) []HookMatcherGroup {
 	t.Helper()
 	hooksRaw, ok := top["hooks"]
 	if !ok {
@@ -124,7 +124,7 @@ func permissionRequestGroups(t *testing.T, top map[string]json.RawMessage) []hoo
 	if !ok {
 		t.Fatal("PermissionRequest key not present in hooks")
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(prRaw, &groups); err != nil {
 		t.Fatalf("parse PermissionRequest groups: %v", err)
 	}
@@ -132,7 +132,7 @@ func permissionRequestGroups(t *testing.T, top map[string]json.RawMessage) []hoo
 }
 
 // commandsContain reports whether any command-type hook entry across groups contains substr.
-func commandsContain(groups []hookMatcherGroup, substr string) bool {
+func commandsContain(groups []HookMatcherGroup, substr string) bool {
 	for _, g := range groups {
 		for _, h := range g.Hooks {
 			if h.Type == "command" && strings.Contains(h.Command, substr) {
@@ -146,7 +146,7 @@ func commandsContain(groups []hookMatcherGroup, substr string) bool {
 // commandsContainNewerThan reports whether any command-type hook entry contains an
 // "http://localhost:<port>" address other than staleAddr, i.e. a freshly-written entry
 // distinct from the one built with staleAddr.
-func commandsContainNewerThan(groups []hookMatcherGroup, staleAddr string) bool {
+func commandsContainNewerThan(groups []HookMatcherGroup, staleAddr string) bool {
 	for _, g := range groups {
 		for _, h := range g.Hooks {
 			if h.Type != "command" {
@@ -695,7 +695,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 		ToolName:  "Bash",
 		ToolInput: map[string]interface{}{},
 	}
-	h.broadcastApprovalNotification("sess-1", approval)
+	h.BroadcastApprovalNotification("sess-1", approval)
 
 	wait.RequireEventually(t, func() bool {
 		return requestCount.Load() >= 1
@@ -732,7 +732,7 @@ func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.
 	}
 
 	require.NotPanics(t, func() {
-		h.broadcastApprovalNotification("sess-2", approval)
+		h.BroadcastApprovalNotification("sess-2", approval)
 	})
 
 	select {
@@ -784,7 +784,7 @@ func TestBroadcastApprovalNotification_ShouldStampRiskLevel_WhenApprovalIsClassi
 	ch, _ := bus.Subscribe(ctx)
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
 
-	h.broadcastApprovalNotification("sess-r", &PendingApproval{
+	h.BroadcastApprovalNotification("sess-r", &PendingApproval{
 		ID: "appr-r", SessionID: "sess-r", ToolName: "Bash", RiskLevel: "critical",
 		ToolInput: map[string]interface{}{},
 	})
