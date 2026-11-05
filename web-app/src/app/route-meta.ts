@@ -26,6 +26,7 @@ export const ROUTE_META: Record<RoutePath, RouteMetaEntry> = {
   "/": { title: ROOT_TITLE },
   "/account": { title: "Account - Stapler Squad" },
   "/analytics/escape": { title: "Escape Analytics - Stapler Squad" },
+  "/artifacts": { title: "Artifacts - Stapler Squad" },
   "/backlog": { title: ROOT_TITLE, guard: "backlog" },
   "/backlog/board": { title: ROOT_TITLE, guard: "backlog" },
   "/changelog": { title: ROOT_TITLE, guard: "changelog" },
