@@ -82,6 +82,7 @@ jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
       type="button"
       onClick={() => onSelect("octocat", "hello-world", [SELECTED_ISSUE])}
     >
+      {/* analytics-exempt */}
       Mock select issue
     </button>
   ),
