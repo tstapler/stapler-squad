@@ -292,6 +292,17 @@ export const titleCell = style({
   fontWeight: vars.fontWeight.medium,
 });
 
+export const rowWidgets = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: vars.space["1"],
+  marginTop: vars.space["1"],
+  whiteSpace: "normal",
+  fontWeight: vars.fontWeight.normal,
+  selectors: { "&:empty": { display: "none" } },
+});
+
 export const acProgressCell = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.xs,

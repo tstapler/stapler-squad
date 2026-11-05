@@ -44,7 +44,8 @@ type tymuxGRPCSession struct {
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
 	// them, capture/introspection methods and IsAlive/HasSession read them,
 	// and nothing here assumes single-threaded callers.
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	closeMu sync.Mutex
 
 	// previousContent is the last successful, banner-filtered activity snapshot.
 	previousContent   string
@@ -103,6 +104,10 @@ type tymuxGRPCSession struct {
 	// restarts, so a failed follow-up capture falls back to "alive" instead of the cached DEAD.
 	restartIsPending bool
 
+	// captureReviveMu serializes capture-triggered revives; captureReviveGen counts the ones that
+	// succeeded, so a caller that lost the race sees the pane was already revived and just retries.
+	captureReviveMu  sync.Mutex
+	captureReviveGen atomic.Uint64
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
 
@@ -397,6 +402,7 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := s.applyLaunch(ctx, req, command); err != nil {
 		return err
 	}
+	req.RestartPolicy = s.restartPolicyFor(ctx)
 	resp, err := s.transport.CreateSession(ctx, connect.NewRequest(req))
 	if err != nil {
 		return classifyRPCError("Start", err)
@@ -939,6 +945,8 @@ func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Sessi
 // is a no-op (nothing to kill) rather than an error, matching the
 // zero-value-friendly shape other ProcessManager implementations use.
 func (s *tymuxGRPCSession) Close() error {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
 	s.mu.RLock()
 	sessionID := s.sessionID
 	recordOwned := s.recordOwned
@@ -972,39 +980,37 @@ func (s *tymuxGRPCSession) Close() error {
 		}
 		recordOwned = true
 	}
-	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
-	// take down a session another Instance adopted.
-	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || (recordOwned && !viewOnly)
+	// Keep the claim until cleanup is confirmed, including across failed Close retries.
+	owned := claimedSessions.holds(sessionID, s) || (recordOwned && !viewOnly)
 	if !owned && recordOwned && viewOnly {
 		_, claimed := claimedSessions.LoadOrStore(sessionID, any(s))
-		if !claimed {
-			owned = claimedSessions.CompareAndDelete(sessionID, any(s))
-		}
+		owned = !claimed
 	}
 	var err error
 	if owned {
-		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
+		ctx, cancel := context.WithTimeout(context.Background(), lifecycleRPCTimeout)
+		defer cancel()
+		_, err = s.transport.KillSession(ctx, connect.NewRequest(&v1.KillSessionRequest{
 			SessionId: sessionID,
 		}))
 	} else {
 		log.Info("tymux: Close skipping kill, claim not held", logKeySessionID, sessionID)
 	}
 	killFailed := err != nil && connect.CodeOf(err) != connect.CodeNotFound
-	switch {
-	case killFailed && unrestored:
-		// Not marked closed, which would hide the id from PersistedSessionID; the
-		// stored id stays so a retry can still kill the session.
-	default:
+	if !killFailed {
+		claimedSessions.CompareAndDelete(sessionID, any(s))
 		s.mu.Lock()
 		s.closed = true
-		s.recordOwned = false // a repeat Close must not kill again
+		s.recordOwned = false
 		s.liveness = v1.Liveness_LIVENESS_DEAD
 		s.restartIsPending = false
-		if killFailed {
-			s.killFailedID = sessionID // still running: keep persisting its id
-		} else {
-			s.setStoredIDLocked("")
-		}
+		s.killFailedID = ""
+		s.setStoredIDLocked("")
+		s.mu.Unlock()
+	} else {
+		s.mu.Lock()
+		s.closed = true
+		s.killFailedID = sessionID
 		s.mu.Unlock()
 	}
 	if connect.CodeOf(err) == connect.CodeNotFound {
@@ -1049,7 +1055,9 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	if paneID == "" || closed {
 		return false
 	}
-	snap, err := s.capturePane(context.Background(), 0)
+	// Status polling must never revive: this layer cannot tell an archived or stopped session
+	// from a live one, so only the explicit capture/resync paths respawn a pane.
+	snap, err := s.capturePaneNoRevive(context.Background(), 0)
 	if err != nil {
 		if connect.CodeOf(err) == connect.CodeNotFound && s.daemonConfirmsPaneGone(sessionID, paneID) {
 			s.mu.Lock()
@@ -1058,6 +1066,11 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 			s.mu.Unlock()
 			log.Warn("tymux: IsAlive: pane gone daemon-side", logKeySessionID, sessionID, logKeyErr, err)
 			return false
+		}
+		if errors.Is(err, ErrPaneNotRunning) {
+			if alive, known := s.paneNotRunningVerdict(paneID); known {
+				return alive
+			}
 		}
 		if errors.Is(err, ErrTymuxdUnreachable) {
 			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
@@ -1074,6 +1087,33 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	s.restartIsPending = pending
 	s.mu.Unlock()
 	return pending || snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+}
+
+// paneNotRunningVerdict settles IsAlive for a pane whose capture answered FAILED_PRECONDITION
+// using tymuxd's lifecycle state: restart pending is alive, FAILED/STOPPED/EXITED is confirmed
+// dead (and cached as such). known is false when the daemon cannot say, so the caller falls back
+// to the cached liveness.
+func (s *tymuxGRPCSession) paneNotRunningVerdict(paneID string) (alive, known bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleRPCTimeout)
+	defer cancel()
+	state, ok := s.paneLifecycleState(ctx, paneID)
+	if !ok {
+		return false, false
+	}
+	switch {
+	case isRestartPending(state):
+		s.mu.Lock()
+		s.restartIsPending = true
+		s.mu.Unlock()
+		return true, true
+	case isTerminalPaneState(state) || state == v1.PaneState_PANE_STATE_EXITED:
+		s.mu.Lock()
+		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
+		s.mu.Unlock()
+		return false, true
+	}
+	return false, false
 }
 
 // daemonConfirmsPaneGone double-checks a CapturePane NotFound with a
@@ -1228,22 +1268,69 @@ func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []b
 // --- Terminal state ---
 
 // capturePane is the shared CapturePane call every read-only introspection
-// method (capture/cursor/dimensions/IsAlive) funnels through.
+// method (capture/cursor/dimensions) funnels through; IsAlive uses capturePaneNoRevive.
 func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uint32) (*v1.PaneSnapshot, error) {
+	return s.capturePaneWith(ctx, scrollbackOffset, true)
+}
+
+// capturePaneNoRevive is capturePane for liveness polling: a pane without a process is reported
+// as ErrPaneNotRunning instead of being respawned.
+func (s *tymuxGRPCSession) capturePaneNoRevive(ctx context.Context, scrollbackOffset uint32) (*v1.PaneSnapshot, error) {
+	return s.capturePaneWith(ctx, scrollbackOffset, false)
+}
+
+func (s *tymuxGRPCSession) capturePaneWith(ctx context.Context, scrollbackOffset uint32, revive bool) (*v1.PaneSnapshot, error) {
 	s.mu.RLock()
 	paneID := s.paneID
 	s.mu.RUnlock()
 	if paneID == "" {
 		return nil, errSessionNotStarted
 	}
-	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(&v1.CapturePaneRequest{
-		PaneId:           paneID,
-		ScrollbackOffset: scrollbackOffset,
-	}))
+	req := &v1.CapturePaneRequest{PaneId: paneID, ScrollbackOffset: scrollbackOffset}
+	reviveGen := s.captureReviveGen.Load()
+	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
+	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
+		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+	}
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		return nil, fmt.Errorf("%w: %w", ErrPaneNotRunning, classifyRPCError("CapturePane", err))
+	}
 	if err != nil {
 		return nil, classifyRPCError("CapturePane", err)
 	}
 	return resp.Msg, nil
+}
+
+// reviveDeadPaneForCapture respawns a pane tymuxd restored from disk without a screen (capture
+// answers FAILED_PRECONDITION), the same revival the reconnect loop does on errPaneDead. It
+// never revives a view-only session, a FAILED/STOPPED pane (operator-only), or a pane whose
+// restart policy is already bringing it back. seenGen is captureReviveGen as read before the
+// failed capture: if it moved, another caller already revived, so this one only retries.
+// Reports whether a retry is worthwhile.
+func (s *tymuxGRPCSession) reviveDeadPaneForCapture(ctx context.Context, paneID string, seenGen uint64) bool {
+	s.mu.RLock()
+	viewOnly := s.viewOnly
+	s.mu.RUnlock()
+	if viewOnly || s.closing.Load() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
+	defer cancel()
+	if state, ok := s.paneLifecycleState(ctx, paneID); ok && (isTerminalPaneState(state) || isRestartPending(state)) {
+		return isRestartPending(state)
+	}
+	s.captureReviveMu.Lock()
+	defer s.captureReviveMu.Unlock()
+	if s.captureReviveGen.Load() != seenGen {
+		return true
+	}
+	if err := s.reviveAfterRestart(ctx); err != nil {
+		log.Warn("tymux: ReviveSession failed after capture hit a dead pane", "pane_id", paneID, "err", err)
+		return false
+	}
+	s.captureReviveGen.Add(1)
+	log.Info("tymux: revived dead pane after capture failed", "pane_id", paneID)
+	return true
 }
 
 // rowsToPlainText concatenates each row's Cell.text (one grapheme cluster

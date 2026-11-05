@@ -292,6 +292,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
 	protoSession.Pinned = snap.Pinned
+	protoSession.TerminalReadOnly, _ = session.TerminalInputBlock(snap)
 
 	// Workflow linkage, name, and archive state.
 	protoSession.WorkflowId = snap.WorkflowID

@@ -15,6 +15,8 @@ type subscriber struct {
 	id         SubscriberID
 	transport  Transport
 	capability SubscriberCapability
+	// upgraded, when set, supersedes capability (see StreamHub.UpgradeSubscriber).
+	upgraded atomic.Pointer[SubscriberCapability]
 
 	outbound  chan []byte
 	done      chan struct{}
@@ -311,4 +313,12 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 			s.replaySent.Add(1)
 		}
 	}
+}
+
+// currentCapability is the attach-time capability unless UpgradeSubscriber replaced it.
+func (s *subscriber) currentCapability() SubscriberCapability {
+	if up := s.upgraded.Load(); up != nil {
+		return *up
+	}
+	return s.capability
 }

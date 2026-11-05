@@ -557,6 +557,7 @@ func TestLifecycleMatrix_IsAlive_BoundsLifecycleRPCs(t *testing.T) {
 
 // A transient GetServerInfo failure must not be remembered as "daemon lacks pane.lifecycle".
 func TestLifecycleMatrix_IsAlive_TransientServerInfoErrorIsNotCached(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // keep Start from caching the capability before the blip
 	dir := t.TempDir()
 	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
 	sess := startedMatrixSession(t, dir, ft)
@@ -592,18 +593,24 @@ func TestLifecycleMatrix_Close_DaemonFaults(t *testing.T) {
 		}
 		assert.NoError(t, sess.Close())
 	})
-	t.Run("kill unavailable surfaces unreachable once", func(t *testing.T) {
+	t.Run("kill unavailable remains retryable until confirmed", func(t *testing.T) {
 		dir := t.TempDir()
 		var kills atomic.Int32
 		ft := matrixTransport(dir, live, &matrixCalls{})
 		sess := startedMatrixSession(t, dir, ft)
-		ft.killSessionFn = func(context.Context, *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
-			kills.Add(1)
-			return nil, connect.NewError(connect.CodeUnavailable, errors.New("refused"))
+		ft.killSessionFn = func(ctx context.Context, _ *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			_, bounded := ctx.Deadline()
+			assert.True(t, bounded, "cleanup RPC must be bounded")
+			if kills.Add(1) < 3 {
+				return nil, connect.NewError(connect.CodeUnavailable, errors.New("refused"))
+			}
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		}
 		require.ErrorIs(t, sess.Close(), ErrTymuxdUnreachable)
-		_ = sess.Close()
-		assert.Equal(t, int32(1), kills.Load(), "bounded: a failed kill is not retried by the next Close")
+		require.ErrorIs(t, sess.Close(), ErrTymuxdUnreachable, "retry must not silently skip the failed kill")
+		require.NoError(t, sess.Close())
+		require.NoError(t, sess.Close(), "successful cleanup remains idempotent")
+		assert.Equal(t, int32(3), kills.Load())
 	})
 }
 

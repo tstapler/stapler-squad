@@ -51,6 +51,13 @@ type RedrawCapturer interface {
 	CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error)
 }
 
+// DaemonReadiness confirms a backend's supervised daemon is reachable (tymuxd). Instance asks
+// before a backend migration tears down the old session, so an unreachable daemon cannot make
+// termination unconfirmable.
+type DaemonReadiness interface {
+	ensureDaemonReady() error
+}
+
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.
 type AltScreenQuerier interface {
 	IsAlternateScreenActive() (bool, error)

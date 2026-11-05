@@ -387,9 +387,14 @@ message Session {
   // older clients, which treat anything unrecognized as unknown.
   string background_outcome = 99;
 
+  // True when a UI terminal attached to this session is read-only (server drops input):
+  // archived, hidden, or a tymux session that is not ACTIVE. Computed by
+  // session.TerminalInputBlock, the same predicate the terminal stream uses.
+  bool terminal_read_only = 100;
+
   // Every pull request attached to this session; the entry with is_active
   // matches the legacy github_pr_* scalars above (25, 26, 33-35).
-  repeated SessionPullRequest pull_requests = 100;
+  repeated SessionPullRequest pull_requests = 102;
 
   // Why cleanup is holding this session's worktree. Detail responses only.
   repeated PrHold pr_holds = 101;

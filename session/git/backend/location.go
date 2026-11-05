@@ -35,14 +35,16 @@ func (r Remote) Dir() string { return string(r.Path) }
 
 // RequiredGitEnv is the environment every Runner must give the git processes it starts. LC_ALL=C
 // pins git's messages to English, which error classification (ErrUnborn, ErrNotARepo, ...) reads;
-// GIT_TERMINAL_PROMPT=0 makes a missing credential fail instead of blocking on a prompt. The
-// caller appends it to its base environment. A fresh slice is returned each call.
+// GIT_TERMINAL_PROMPT=0 makes a missing credential fail instead of blocking on a prompt;
+// GIT_OPTIONAL_LOCKS=0 stops read-only commands (status, diff) from taking index.lock to refresh
+// stat info, so a timeout SIGKILL of one cannot leave a stale lock behind (writers still lock).
+// The caller appends it to its base environment. A fresh slice is returned each call.
 //
 // Who applies it: the local runner in session/gitwiring sets it on every git process; the cli
 // backend prefixes `env <these> git` onto Remote invocations, because an SSH session cannot carry
 // environment. A custom Runner that is handed a bare `git` therefore must supply it itself.
 func RequiredGitEnv() []string {
-	return []string{"LC_ALL=C", "GIT_TERMINAL_PROMPT=0"}
+	return []string{"LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}
 }
 
 // Runner is the execution port: run name with args in dir, return combined stdout and stderr.
