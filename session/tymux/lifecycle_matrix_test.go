@@ -557,6 +557,7 @@ func TestLifecycleMatrix_IsAlive_BoundsLifecycleRPCs(t *testing.T) {
 
 // A transient GetServerInfo failure must not be remembered as "daemon lacks pane.lifecycle".
 func TestLifecycleMatrix_IsAlive_TransientServerInfoErrorIsNotCached(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // keep Start from caching the capability before the blip
 	dir := t.TempDir()
 	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
 	sess := startedMatrixSession(t, dir, ft)

@@ -45,6 +45,8 @@ use) instead of raw `go test`, for readable pass/fail-per-test output — see
 Makefile's `GOTESTSUM_BIN`. One-off single-package/single-test runs below still use
 plain `go test`.
 
+**Parallel by default.** Every new Go test calls `t.Parallel()` (and its subtests too) unless it mutates process-global state (`t.Setenv`, global caches, a fixed file path, `os.Chdir`); inject those dependencies instead of mutating them so the test stays eligible. `make test`'s `-p 1` is package-level serialization for a few contention-prone packages, not a reason to skip `t.Parallel()` inside a package. See the `deterministic-fast-tests` skill.
+
 ```bash
 make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)

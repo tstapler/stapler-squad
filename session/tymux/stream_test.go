@@ -182,6 +182,7 @@ var _ attachStream = (*wedgedAttachStream)(nil)
 // fakeTransport itself (for attachCalls assertions).
 func startedSessionWithStream(t *testing.T) (TymuxManager, *fakeAttachStream, *fakeTransport) {
 	t.Helper()
+	t.Setenv(restartModeEnv, "never") // Start must not cache the capability before a test sets its own
 	resetClaims(t)
 	dir := t.TempDir()
 	var stream *fakeAttachStream

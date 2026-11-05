@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 func startDaemonMonitorTest(ctx context.Context, m daemonMonitor) <-chan struct{} {
@@ -171,15 +169,18 @@ func TestDaemonMonitor_HealthyProbeResetsFailureThreshold(t *testing.T) {
 }
 
 func TestCheckDaemonHealthy_ReleasesConnections(t *testing.T) {
+	t.Parallel()
 	var open atomic.Int32
 	// An empty, successful gRPC ListSessions reply, so the client connection ends up idle
 	// (a protocol error would make the client close it and hide the leak).
-	srv := httptest.NewUnstartedServer(h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/grpc")
 		w.Header().Set("Trailer", "Grpc-Status")
 		_, _ = w.Write([]byte{0, 0, 0, 0, 0})
 		w.Header().Set("Grpc-Status", "0")
-	}), &http2.Server{}))
+	}))
+	srv.Config.Protocols = new(http.Protocols)
+	srv.Config.Protocols.SetUnencryptedHTTP2(true)
 	srv.Listener = &countingListener{Listener: srv.Listener, open: &open} // h2c hijacks conns, so ConnState can't count them
 	srv.Start()
 	t.Cleanup(srv.Close)

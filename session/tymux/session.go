@@ -400,6 +400,7 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := s.applyLaunch(ctx, req, command); err != nil {
 		return err
 	}
+	req.RestartPolicy = s.restartPolicyFor(ctx)
 	resp, err := s.transport.CreateSession(ctx, connect.NewRequest(req))
 	if err != nil {
 		return classifyRPCError("Start", err)
@@ -1243,6 +1244,9 @@ func (s *tymuxGRPCSession) capturePane(ctx context.Context, scrollbackOffset uin
 	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
 	if connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID) {
 		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+	}
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		return nil, fmt.Errorf("%w: %w", ErrPaneNotRunning, classifyRPCError("CapturePane", err))
 	}
 	if err != nil {
 		return nil, classifyRPCError("CapturePane", err)

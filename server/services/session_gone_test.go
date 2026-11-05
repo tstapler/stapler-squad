@@ -9,6 +9,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 func TestSessionGone_NotFoundMapsToNotFoundEndStreamCode(t *testing.T) {
@@ -54,4 +56,13 @@ func TestDefinitivelyGone_RequiresBackendToAgree(t *testing.T) {
 	assert.True(t, definitivelyGone(notFound, func() bool { return false }))
 	assert.False(t, definitivelyGone(notFound, func() bool { return true }), "backend still alive: paint blank, keep the stream")
 	assert.False(t, definitivelyGone(errors.New("boom"), func() bool { return false }))
+}
+
+func TestLogCurrentPaneFailure_PaneNotRunningIsQuietAndNonFatal(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("failed to capture fresh pane content: %w",
+		fmt.Errorf("%w: %w", tymux.ErrPaneNotRunning, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))))
+
+	assert.NoError(t, logCurrentPaneFailure("mid-stream current pane request", "pane-quiet-test", "r1", err))
+	assert.False(t, goneLogThrottle.allow("pane-not-running:pane-quiet-test", time.Now()), "first failure must have claimed the throttle slot")
 }

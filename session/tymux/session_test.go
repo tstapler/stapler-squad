@@ -186,6 +186,7 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // this test counts launch-path GetServerInfo calls only
 	resetClaims(t)
 	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
 	require.NoError(t, os.WriteFile(promptFile, []byte("fix the bug\n"), 0o600))
@@ -1399,6 +1400,7 @@ func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalStat
 }
 
 func TestCapturePane_RevivesRestoredPaneWithoutScreen(t *testing.T) {
+	t.Parallel()
 	var captures, revives int32
 	transport := &fakeTransport{
 		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
@@ -1422,6 +1424,7 @@ func TestCapturePane_RevivesRestoredPaneWithoutScreen(t *testing.T) {
 }
 
 func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
+	t.Parallel()
 	var revives int32
 	transport := &fakeTransport{
 		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
@@ -1437,6 +1440,6 @@ func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
 	sess.viewOnly = true
 
 	_, err := sess.capturePane(context.Background(), 0)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrPaneNotRunning)
 	assert.Zero(t, atomic.LoadInt32(&revives))
 }

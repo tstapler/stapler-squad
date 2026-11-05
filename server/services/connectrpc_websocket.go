@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
@@ -247,7 +248,11 @@ func fullStateFrame(ctx context.Context, pane any) (snapshotFrame, bool) {
 	}
 	snap, ok, err := f.CapturePaneRedraw(ctx)
 	if err != nil {
-		log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		if errors.Is(err, tymux.ErrPaneNotRunning) {
+			log.Debug("full-state redraw skipped, pane is not running", "err", err)
+		} else {
+			log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		}
 		return snapshotFrame{}, false
 	}
 	if !ok {
@@ -2306,7 +2311,10 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)
 		return wrapSessionGone(captureErr)
 	}
-	if captureErr != nil {
+	if errors.Is(captureErr, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaHub] initial capture", sessionID, captureErr)
+		content = ""
+	} else if captureErr != nil {
 		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
 			"session", sessionID, "err", captureErr)
 		content = ""
@@ -3339,6 +3347,10 @@ func logCurrentPaneFailure(what, sessionID, resyncID string, err error) error {
 		if errors.Is(err, errSessionGone) {
 			return err
 		}
+		return nil
+	}
+	if errors.Is(err, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaControlMode] "+what, sessionID, err)
 		return nil
 	}
 	log.Error("[streamViaControlMode] failed to handle "+what, "session", sessionID, "resync_id", resyncID, "err", err)
