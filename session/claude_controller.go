@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 )
 
 // StatusChangeListener is called when the controller detects a terminal status transition.
@@ -134,7 +135,7 @@ type ClaudeController struct {
 	// lifecycle guards Start/Stop transitions. Write lock is held only for the
 	// brief check-and-set at the beginning of each transition; all slow cleanup
 	// in Stop() (goroutine joins, disk I/O) runs outside the lock.
-	lifecycle Locked[controllerLifecycle]
+	lifecycle ptyio.Locked[controllerLifecycle]
 	_         [64]byte // cache-line padding: prevents lifecycle.mu invalidating adjacent atomic slots (Go #67764)
 
 	// Sub-components initialized atomically in Start(), cleared atomically in Stop().
@@ -142,8 +143,8 @@ type ClaudeController struct {
 	// Using atomic.Pointer lets read-only operations (GetCurrentStatus, GetRecentOutput,
 	// Subscribe, GetIdleState, …) proceed without holding any lifecycle lock, so they
 	// are never blocked when Stop() runs its slow cleanup.
-	ptyAccess        atomic.Pointer[PTYAccess]
-	responseStream   atomic.Pointer[ResponseStream]
+	ptyAccess        atomic.Pointer[ptyio.PTYAccess]
+	responseStream   atomic.Pointer[ptyio.ResponseStream]
 	rateLimitHandler atomic.Pointer[ratelimit.PTYConsumer]
 	statusDetector   atomic.Pointer[detection.StatusDetector]
 	idleDetector     atomic.Pointer[detection.IdleDetector]
@@ -154,7 +155,7 @@ type ClaudeController struct {
 	_ [64]byte // cache-line padding: separates hot atomic slots from Locked fields below (Go #67764)
 
 	// listeners is the fan-out set of status-change callbacks.
-	listeners Locked[[]StatusChangeListener]
+	listeners ptyio.Locked[[]StatusChangeListener]
 
 	// lastEmittedStatus tracks the status most recently broadcast to listeners.
 	// Written only by the single runStatusChangeLoop goroutine; atomic so no lock needed.
@@ -235,15 +236,15 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		}
 
 		// Create circular buffer for PTY output
-		buffer := NewCircularBuffer(256 * 1024) // 256KB: detection needs ≤4KB; scrollback owns long-term history
-		pa := NewPTYAccess(cc.sessionName, ptyReader, buffer)
+		buffer := ptyio.NewCircularBuffer(256 * 1024) // 256KB: detection needs ≤4KB; scrollback owns long-term history
+		pa := ptyio.NewPTYAccess(cc.sessionName, ptyReader, buffer)
 
 		// Create rate limit detection handler
 		rateLimitManager := ratelimit.NewManager(cc.sessionName, leasedSessionAccessor{cc.instance})
 		rlh := ratelimit.NewPTYConsumer(pa, rateLimitManager)
 
 		// Create response stream
-		rs := NewResponseStream(cc.sessionName, pa)
+		rs := ptyio.NewResponseStream(cc.sessionName, pa)
 		// Tag escape analytics with the stable session UUID (not the mutable tmux
 		// name) so escape_event rows can be correlated with the session identifier
 		// used everywhere else in the app (session selectors, RPCs, etc.).
@@ -653,7 +654,7 @@ func (cc *ClaudeController) GetHistoryStatistics() HistoryStatistics {
 }
 
 // Subscribe creates a new subscription to the response stream.
-func (cc *ClaudeController) Subscribe(subscriberID string) (<-chan ResponseChunk, error) {
+func (cc *ClaudeController) Subscribe(subscriberID string) (<-chan ptyio.ResponseChunk, error) {
 	rs := cc.responseStream.Load()
 	if rs == nil {
 		return nil, fmt.Errorf("response stream not initialized")

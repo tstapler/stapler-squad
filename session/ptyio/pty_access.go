@@ -1,4 +1,4 @@
-package session
+package ptyio
 
 import (
 	"fmt"
@@ -148,4 +148,10 @@ func (p *PTYAccess) IsClosed() bool {
 // GetSessionName returns the name of the session this PTY access is for.
 func (p *PTYAccess) GetSessionName() string {
 	return p.sessionName
+}
+
+// ReplaceBufferForTest swaps the captured output history so tests outside the package can stage what detection sees.
+func (p *PTYAccess) ReplaceBufferForTest(data []byte) {
+	p.buffer.Clear()
+	_, _ = p.buffer.Write(data)
 }

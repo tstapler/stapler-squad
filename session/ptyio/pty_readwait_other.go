@@ -1,6 +1,6 @@
 //go:build !unix
 
-package session
+package ptyio
 
 import (
 	"os"

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -27,7 +28,7 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 	inst := &Instance{Title: "stale-preview-session", Status: Running}
 	inst.started.Store(true)
 
-	buf := NewCircularBuffer(1024 * 1024)
+	buf := ptyio.NewCircularBuffer(1024 * 1024)
 	dialogText := "Do you trust the files in this folder?\n1. Yes, proceed\n2. No, exit"
 	if _, err := buf.Write([]byte(dialogText)); err != nil {
 		t.Fatalf("write dialog text: %v", err)
@@ -42,7 +43,7 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 		t.Fatalf("write filler: %v", err)
 	}
 
-	pa := NewPTYAccess(inst.Title, nil, buf)
+	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
 	ctrl.ptyAccess.Store(pa)
 	inst.controllerManager.SetController(ctrl)
@@ -72,11 +73,11 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	inst.started.Store(true)
 
 	// Even if a stale ClaudeController buffer exists, capture-pane must win.
-	buf := NewCircularBuffer(1024)
+	buf := ptyio.NewCircularBuffer(1024)
 	if _, err := buf.Write([]byte("stale pty buffer content")); err != nil {
 		t.Fatalf("write buffer: %v", err)
 	}
-	pa := NewPTYAccess(inst.Title, nil, buf)
+	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
 	ctrl.ptyAccess.Store(pa)
 	inst.controllerManager.SetController(ctrl)
@@ -99,11 +100,11 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 	inst := &Instance{Title: "tmux-preview-fallback", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
 
-	buf := NewCircularBuffer(1024)
+	buf := ptyio.NewCircularBuffer(1024)
 	if _, err := buf.Write([]byte("pty buffer fallback content")); err != nil {
 		t.Fatalf("write buffer: %v", err)
 	}
-	pa := NewPTYAccess(inst.Title, nil, buf)
+	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
 	ctrl.ptyAccess.Store(pa)
 	inst.controllerManager.SetController(ctrl)
@@ -180,11 +181,11 @@ func TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError(t *test
 		return nil, fmt.Errorf("exit status 1: no such session")
 	})
 
-	buf := NewCircularBuffer(1024)
+	buf := ptyio.NewCircularBuffer(1024)
 	if _, err := buf.Write([]byte("pty buffer fallback content")); err != nil {
 		t.Fatalf("write buffer: %v", err)
 	}
-	pa := NewPTYAccess(inst.Title, nil, buf)
+	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
 	ctrl.ptyAccess.Store(pa)
 	inst.controllerManager.SetController(ctrl)
