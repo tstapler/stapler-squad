@@ -127,3 +127,29 @@ func TestMoveLowerRepointsStayingFiles(t *testing.T) {
 		t.Fatalf("staying caller not re-pointed:\n%s", body)
 	}
 }
+
+func TestMoveLeavesStayingTestHelpersUnrenamedAndReportsATwin(t *testing.T) {
+	if os.Getenv("TEST_TMPDIR") != "" {
+		t.Skip("needs the host go and git toolchains, unavailable in the Bazel sandbox")
+	}
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/m\n\ngo 1.21\n")
+	write(t, root, "core/core.go", "package core\n\ntype Core struct{}\n")
+	write(t, root, "core/sat.go", "package core\n\nfunc Sat() int { return 1 }\n")
+	write(t, root, "core/core_test.go", "package core\n\nimport \"testing\"\n\ntype fix struct{ n int }\n\nfunc newFix(t *testing.T) *fix { return &fix{n: 1} }\n\nfunc TestCore(t *testing.T) { _ = newFix(t) }\n")
+	write(t, root, "core/sat_test.go", "package core\n\nimport \"testing\"\n\nfunc TestSat(t *testing.T) {\n\tf := newFix(t)\n\tif Sat() != f.n {\n\t\tt.Fatal(\"bad\")\n\t}\n}\n")
+	run(t, root, "git", "init", "-q")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-q", "-m", "init")
+	var out strings.Builder
+	if err := RunMove(MoveSpec{Root: root, FromDir: "core", ToDir: "core/sat", Files: []string{"sat.go", "sat_test.go"}}, &out); err != nil {
+		t.Fatalf("RunMove: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "TWIN newFix") || strings.Contains(out.String(), "capitalise newFix") {
+		t.Fatalf("a stay-behind test helper must be reported as a twin, not capitalised:\n%s", out.String())
+	}
+	body, _ := os.ReadFile(filepath.Join(root, "core/sat/sat_test.go"))
+	if !strings.Contains(string(body), "newFix(t)") || strings.Contains(string(body), "core.NewFix") {
+		t.Fatalf("the moved test keeps its own spelling:\n%s", body)
+	}
+}

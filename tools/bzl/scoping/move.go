@@ -261,7 +261,7 @@ func (m *mover) unexportedMember(obj types.Object) bool {
 // noteMember marks an unexported method or field of a staying type, used by a moved file, for capitalisation.
 func (m *mover) noteMember(p *packages.Package, sel *ast.Ident) {
 	obj := p.TypesInfo.Uses[sel]
-	if !m.unexportedMember(obj) || m.moved[p.Fset.Position(obj.Pos()).Filename] {
+	if !m.unexportedMember(obj) || m.moved[p.Fset.Position(obj.Pos()).Filename] || isTestFile(filepath.Base(p.Fset.Position(obj.Pos()).Filename)) {
 		return
 	}
 	key := memberKey(p, obj)
@@ -319,6 +319,9 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 		}
 		fe.edits = append(fe.edits, edit{off(id.Pos()), off(id.End()), m.newName + "." + name})
 		fe.addImp[m.newPath] = ""
+	case m.moved[path] && !m.moved[decl] && isTestFile(filepath.Base(decl)):
+		// A stay-behind test helper cannot be imported: the moved file keeps its name and the new package gets its own copy.
+		m.notes = append(m.notes, fmt.Sprintf("TWIN %s (used by %s)", id.Name, filepath.Base(path)))
 	case m.moved[path] && !m.moved[decl]:
 		name := id.Name
 		if !id.IsExported() {
