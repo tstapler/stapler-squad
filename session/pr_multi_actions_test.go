@@ -28,3 +28,18 @@ func TestPRActions_DefaultTargetsActivePR(t *testing.T) {
 
 	require.Equal(t, 12, inst.GitHub().PRNumber, "actions default to the active PR")
 }
+
+func TestResolvePR_ShouldReturnCurrentPRAndRejectNonPRSession(t *testing.T) {
+	t.Parallel()
+	got, err := newTwoPRInstance(t).resolvePR(nil)
+	require.NoError(t, err)
+	require.Equal(t, 12, got.Number())
+
+	explicit := mustPRRef(t, "", "acme", "app", 11)
+	got, err = newTwoPRInstance(t).resolvePR(&explicit)
+	require.NoError(t, err)
+	require.Equal(t, explicit, got)
+
+	_, err = (&Instance{Title: "plain"}).resolvePR(nil)
+	require.ErrorContains(t, err, "is not a PR session")
+}
