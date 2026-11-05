@@ -115,3 +115,18 @@ func readbackScope(t *testing.T, svc *FeatureFlagService, scope string) bool {
 	t.Fatalf("scope %q not in the readback", scope)
 	return false
 }
+
+func TestSessionMultiPRAudit_ShouldLetRefresherOffPersistWithFallback_WhenSinkIsDownButRefuseReaderScopes(t *testing.T) {
+	e := newAuditEnv(t)
+	e.svc.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
+	e.mfs.setFailWrite(errDiskFull)
+
+	err := smprMutate(e.svc, config.SessionMultiPRScopePoller, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED)
+	require.Error(t, err, "opening a reader stays refused while the sink is down")
+	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+
+	require.NoError(t, smprMutate(e.svc, config.SessionMultiPRScopeRefresherOff, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED),
+		"the kill switch is the escape hatch for a sink fault")
+	assert.False(t, config.LoadConfig().SessionMultiPRRefresher())
+	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
+}
