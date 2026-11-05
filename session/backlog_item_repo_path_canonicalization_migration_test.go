@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestRunBacklogItemRepoPathCanonicalizationBackfill_should_CanonicalizeWorktreePath_When_Called
@@ -37,7 +38,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_CanonicalizeWorkt
 	require.NoError(t, err)
 
 	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
-	runGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
+	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
 
 	created, err := repo.client.BacklogItem.Create().
 		SetTitle("item filed from an agent's own worktree").

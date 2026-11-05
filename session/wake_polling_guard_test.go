@@ -9,12 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
-
-// scheduleWakeupToken is the client-side wake tool agents must not use. It is
-// spelled in two parts so this file, and every test that needs the word, does
-// not count as a reference itself.
-const scheduleWakeupToken = "Schedule" + "Wakeup"
 
 // pollingReferences is the number of lines per Go file that mention the
 // client-side wake tool (counts verified 2026-10-17). Every one is a prompt
@@ -57,7 +53,7 @@ func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.
 			return nil
 		}
 		seenDirs[filepath.ToSlash(filepath.Dir(mustRel(t, root, path)))] = true
-		n, countErr := countLinesWith(path, scheduleWakeupToken)
+		n, countErr := countLinesWith(path, sessiontest.ClientWakeToolToken)
 		if countErr != nil {
 			return countErr
 		}

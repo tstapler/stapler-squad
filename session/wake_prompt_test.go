@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // pinScheduleWake sets the flag state for one test. Tests using it must not be
@@ -49,7 +50,7 @@ func assertWakeGolden(t *testing.T, name, got string) {
 func requireForbidsPollingButNamesTheTool(t *testing.T, text, name string) {
 	t.Helper()
 	assert.Contains(t, text, "schedule_wake", name)
-	assert.Contains(t, text, "do NOT use "+scheduleWakeupToken, name, "the polling ban stays")
+	assert.Contains(t, text, "do NOT use "+sessiontest.ClientWakeToolToken, name, "the polling ban stays")
 	assert.Contains(t, text, "/loop", name)
 }
 
@@ -94,8 +95,8 @@ func TestPipelineMode_should_AppendScheduleWakeToReviewAndInitialPrompts_OnlyWhe
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
-				Slug: "sdd", Name: "SDD", ReviewCommandTemplate: "Call request_review for {{item_id}}. Do NOT use " + scheduleWakeupToken + " or /loop to wait.",
-				InitialPromptTemplate: "Work on {{item_title}}. Do NOT use " + scheduleWakeupToken + " or /loop.",
+				Slug: "sdd", Name: "SDD", ReviewCommandTemplate: "Call request_review for {{item_id}}. Do NOT use " + sessiontest.ClientWakeToolToken + " or /loop to wait.",
+				InitialPromptTemplate: "Work on {{item_title}}. Do NOT use " + sessiontest.ClientWakeToolToken + " or /loop.",
 				StatusCommandTemplate: "s", DoneCommandTemplate: "d", FailCommandTemplate: "f", ShipCommandTemplate: "sh", HelpCommandTemplate: "h",
 			}}, nil
 		},

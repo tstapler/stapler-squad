@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -158,7 +159,7 @@ func TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_Items
 	staleItem := newStaleWorkTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.BackfillStuckStates(ctx)
@@ -186,7 +187,7 @@ func TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_Items
 	// directly so that once Phase 2 wires the reconcilers to read it (Story
 	// 2.1.3), the first genuine tick after this restart issues zero new
 	// notifications for these two already-known conditions.
-	assert.Empty(t, notifier.calls, "backfill must not itself fire operator notifications")
+	assert.Empty(t, notifier.Calls, "backfill must not itself fire operator notifications")
 }
 
 // TestBackfillStuckStates_should_notCallGitHubNorSeedPRReady_When_Run verifies
@@ -282,7 +283,7 @@ func TestReconcilePRPending_should_notMarkStuck_When_CIStillPending(t *testing.T
 	newPRPendingTestItem(t, storage, 149)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		status: &git.PRStatus{Mergeable: "MERGEABLE", CIPending: true},
 	})
@@ -309,7 +310,7 @@ func TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved(t *
 	item := newPRPendingTestItem(t, storage, 148)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		merged: false,
@@ -333,16 +334,16 @@ func TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved(t *
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonPRReadyUnmerged, open[0].Reason)
 	assert.Equal(t, item.ID, open[0].ItemID)
-	assert.Empty(t, notifier.calls, "must not notify before the 30-minute threshold elapses")
+	assert.Empty(t, notifier.Calls, "must not notify before the 30-minute threshold elapses")
 
 	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now().Add(-31*time.Minute))
 
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{"PR ready to merge"}, notifier.titles())
+	assert.Equal(t, []string{"PR ready to merge"}, notifier.Titles())
 
 	// Third tick: PR still ready — must not re-notify.
 	listener.ReconcilePRPending(ctx, er)
-	assert.Len(t, notifier.calls, 1, "must not re-notify while the PR stays ready")
+	assert.Len(t, notifier.Calls, 1, "must not re-notify while the PR stays ready")
 }
 
 // TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged verifies that
@@ -428,7 +429,7 @@ func TestReconcileStuckReviewItems_should_markAbandoned_When_OnlyActiveSessionIs
 	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, false, false)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // always dead
 
@@ -907,7 +908,7 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	item := newStaleWorkTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -917,15 +918,15 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	require.Len(t, open, 1)
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
-	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	assert.Equal(t, []string{"Work session may be stuck"}, notifier.Titles())
 	// Push-gate classification table: neither urgent nor important — a routine
 	// self-monitoring poll, not yet a confirmed dead end.
-	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
-	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
+	assert.False(t, notifier.Calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.Calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcileStaleWorkSessions_should_resolveStaleWorkRow_When_SessionResumesWhileStillInProgress
@@ -998,7 +999,7 @@ func TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJ
 	newStaleWorkTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	remediator := newFakeStaleWorkRemediator()
 	listener.SetStaleWorkRemediator(remediator)
 
@@ -1030,7 +1031,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 	item := newStaleWorkTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	remediator := newFakeStaleWorkRemediator()
 	listener.SetStaleWorkRemediator(remediator)
 
@@ -1071,7 +1072,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 	item := newStaleWorkTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	remediator := newFakeStaleWorkRemediator()
 	listener.SetStaleWorkRemediator(remediator)
 
@@ -1113,7 +1114,7 @@ func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressI
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	remediator := newFakeStaleWorkRemediator()
 	listener.SetStaleWorkRemediator(remediator)
@@ -1126,7 +1127,7 @@ func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressI
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a healthy session must never be marked stuck")
-	assert.Empty(t, notifier.calls, "a healthy session must never be notified")
+	assert.Empty(t, notifier.Calls, "a healthy session must never be notified")
 	select {
 	case itemID := <-remediator.calls:
 		t.Fatalf("a healthy session must never be handed to the remediator, got call for item %s", itemID)
@@ -1174,7 +1175,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	remediator := newFakeStaleWorkRemediator()
 	listener.SetStaleWorkRemediator(remediator)
@@ -1193,7 +1194,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 		}
 	}
 
-	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
+	assert.Contains(t, notifier.Titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
 
 	// Past backoff the parked row gets only the bounded cold retries; the
 	// unlimited rework cap must not extend that budget.
@@ -1418,7 +1419,7 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1428,14 +1429,14 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	require.Len(t, open, 1)
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.Titles())
 	// Push-gate classification table: neither urgent nor important.
-	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
-	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
+	assert.False(t, notifier.Calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.Calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected is the
@@ -1543,7 +1544,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwn
 	newOrphanedTriageTestItem(t, storage, er, 2*time.Hour+30*time.Minute)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1551,7 +1552,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwn
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a headless session at 2h30m must not be flagged — it hasn't reached its own (longer) dedicated threshold yet")
-	assert.Empty(t, notifier.titles())
+	assert.Empty(t, notifier.Titles())
 }
 
 // TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
@@ -1573,7 +1574,7 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	respawner := newFakeTriageRespawner()
 	respawner.liveIDs = map[string]bool{item.ID: true}
@@ -1584,7 +1585,7 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a stale-but-genuinely-live headless session must not be marked stuck")
-	assert.Empty(t, notifier.titles(), "a genuinely live session must not trigger a \"may be stuck\" notification")
+	assert.Empty(t, notifier.Titles(), "a genuinely live session must not trigger a \"may be stuck\" notification")
 
 	sessions, listErr := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, listErr)
@@ -1629,7 +1630,7 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	item := newEndedTriageTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1639,12 +1640,12 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	require.Len(t, open, 1, "an ended triage session with the item still in idea must be flagged immediately, with no staleness wait")
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.Titles())
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup) — mirrors the
 	// open-and-stale shape's identical guarantee.
 	listener.reconcileOrphanedTriageItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_TriageSessionEndedWithClassifiedError
@@ -1683,7 +1684,7 @@ func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_Tria
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "process_error"))
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1712,7 +1713,7 @@ func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNev
 	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1759,7 +1760,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "shutdown"))
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
@@ -1776,7 +1777,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a shutdown-caused orphan must not consume a remediation attempt or create a stuck-state row")
-	assert.Empty(t, notifier.titles(), "a shutdown-caused orphan is expected/self-inflicted and must not trigger a \"may be stuck\" notification")
+	assert.Empty(t, notifier.Titles(), "a shutdown-caused orphan is expected/self-inflicted and must not trigger a \"may be stuck\" notification")
 }
 
 // TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists
@@ -1856,7 +1857,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	item := newEndedTriageTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
 
@@ -1888,7 +1889,7 @@ func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHit
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
 
@@ -1923,7 +1924,7 @@ func TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget
 	item := newEndedTriageTestItem(t, storage, er)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	respawner.pointlessIDs = map[string]bool{item.ID: true}
 	listener.SetTriageRespawner(respawner)
@@ -2000,7 +2001,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
 
@@ -2112,7 +2113,7 @@ func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnu
 	item := newQueuedNoTriageResultTestItem(t, storage)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -2123,12 +2124,12 @@ func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnu
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, BacklogStatusQueued, open[0].ItemStatus)
-	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.Titles())
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup), same as the
 	// pre-existing idea-status shapes.
 	listener.reconcileOrphanedTriageItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResultUsable
@@ -2286,7 +2287,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due(t *te
 	require.True(t, applied)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
 
@@ -2362,7 +2363,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 	require.True(t, applied)
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	respawner := newFakeTriageRespawner()
 	listener.SetTriageRespawner(respawner)
 
@@ -2931,7 +2932,7 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -2940,11 +2941,11 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason)
-	assert.Equal(t, []string{"Item is thrashing between work and review"}, notifier.titles())
+	assert.Equal(t, []string{"Item is thrashing between work and review"}, notifier.Titles())
 
 	// Repeat tick must not re-notify.
 	listener.reconcileBouncingItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_When_BouncingWithFailedVerdict
@@ -2992,7 +2993,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3004,9 +3005,9 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	assert.Contains(t, open[0].Context, string(ReviewOutcomeFail), "context must surface which verdict (FAIL), not just that no PASS was recorded")
 	assert.Contains(t, open[0].Context, wantSummary, "context must surface the reviewer's actual summary, not a generic message")
 
-	require.Len(t, notifier.calls, 1)
-	assert.Contains(t, notifier.calls[0].Message, string(ReviewOutcomeFail))
-	assert.Contains(t, notifier.calls[0].Message, wantSummary)
+	require.Len(t, notifier.Calls, 1)
+	assert.Contains(t, notifier.Calls[0].Message, string(ReviewOutcomeFail))
+	assert.Contains(t, notifier.Calls[0].Message, wantSummary)
 }
 
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies
@@ -3059,17 +3060,17 @@ func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testin
 	defer cleanup()
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.notifyTransitionFailed("item-999", "Ship the PR fix",
 		"PR #42 was confirmed merged but the item's transition to done failed",
 		errors.New("precondition failed: expected status \"in_progress\", got \"review\""))
 
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
-	assert.Contains(t, notifier.calls[0].Message, "Ship the PR fix")
-	assert.Contains(t, notifier.calls[0].Message, "PR #42 was confirmed merged")
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, "Status update failed after work completed", notifier.Calls[0].Title)
+	assert.Contains(t, notifier.Calls[0].Message, "Ship the PR fix")
+	assert.Contains(t, notifier.Calls[0].Message, "PR #42 was confirmed merged")
 }
 
 // remediation scheduled three hours *after* its PR #172 had already merged,
@@ -3108,7 +3109,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
 	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-merged")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3121,7 +3122,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a merged item must never be flagged bouncing")
-	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+	assert.Empty(t, notifier.Calls, "no bouncing notification should fire for an already-shipped item")
 }
 
 // TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves
@@ -3172,7 +3173,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
 	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-capped-merged")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3234,7 +3235,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
 	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-verdict-gate")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3315,7 +3316,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, checker)
 	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-race")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3325,9 +3326,9 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
 		"the failed done-transition must not silently succeed; the item stays at whatever the concurrent writer left it")
 
-	require.Len(t, notifier.calls, 1, "the failed transition must surface an operator notification instead of only being logged")
-	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
-	assert.Contains(t, notifier.calls[0].Message, "confirmed merged")
+	require.Len(t, notifier.Calls, 1, "the failed transition must surface an operator notification instead of only being logged")
+	assert.Equal(t, "Status update failed after work completed", notifier.Calls[0].Title)
+	assert.Contains(t, notifier.Calls[0].Message, "confirmed merged")
 }
 
 // TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged verifies
@@ -3363,7 +3364,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3457,7 +3458,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3470,7 +3471,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "an item whose code already shipped to main without a PR must never be flagged bouncing")
-	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+	assert.Empty(t, notifier.Calls, "no bouncing notification should fire for an already-shipped item")
 }
 
 // TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain
@@ -3525,7 +3526,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3604,7 +3605,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3680,7 +3681,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3771,7 +3772,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -3855,12 +3856,12 @@ func TestStayInReviewAndNotify_should_markPushFailedRow_When_PushAndCreatePRFail
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.pushAndCreatePR(ctx, item, is)
 
-	assert.Contains(t, notifier.titles(), "PR creation failed", "existing ERROR toast must still fire")
+	assert.Contains(t, notifier.Titles(), "PR creation failed", "existing ERROR toast must still fire")
 
 	er := storage.repo
 	open, err := er.FindOpenStuckStates(ctx)
@@ -3932,7 +3933,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	// Initial failed push writes the durable push_failed row.
@@ -3987,7 +3988,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	listener.pushAndCreatePR(ctx, item, is)
 
@@ -3999,7 +4000,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.False(t, fakeCreator.pushCalled, "a real content conflict must not be mechanically retried")
-	assert.Contains(t, notifier.titles(), "Manual rebase needed")
+	assert.Contains(t, notifier.Titles(), "Manual rebase needed")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -4068,7 +4069,7 @@ func TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_Failure
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	listener.pushAndCreatePR(ctx, item, is)
 
@@ -4088,7 +4089,7 @@ func TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_Failure
 
 	assert.False(t, reconcilerCalled, "a permission/auth failure cannot be fixed by fetch+merge — the reconciler must not even be invoked")
 	assert.False(t, fakeCreator.pushCalled, "the push must not be blindly retried against an unrecoverable failure")
-	assert.Contains(t, notifier.titles(), "Automated push retry skipped", "expected a distinct notification, not silence or a repeat of the generic push-failed toast")
+	assert.Contains(t, notifier.Titles(), "Automated push retry skipped", "expected a distinct notification, not silence or a repeat of the generic push-failed toast")
 
 	stillOpen, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -4113,7 +4114,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
 	// The reconciler never actually resolves anything here — only the
@@ -4154,7 +4155,7 @@ func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_Ro
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
 	fakeCreator.pushErr = nil
@@ -4187,7 +4188,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
 		return fakeCreator
 	})
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
 	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
@@ -5024,7 +5025,7 @@ func TestReconcilePlanNotApprovedItems_should_writeDurableRowNotifyOnce_When_Que
 	item := newQueuedPlanNotApprovedTestItem(t, storage, 10*time.Minute) // beyond planApprovalStaleness (5m)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcilePlanNotApprovedItems(ctx, er)
@@ -5034,11 +5035,11 @@ func TestReconcilePlanNotApprovedItems_should_writeDurableRowNotifyOnce_When_Que
 	require.Len(t, open, 1)
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonPlanNotApproved, open[0].Reason)
-	assert.Equal(t, []string{"Queued item blocked by unapproved plan"}, notifier.titles())
+	assert.Equal(t, []string{"Queued item blocked by unapproved plan"}, notifier.Titles())
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcilePlanNotApprovedItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcilePlanNotApprovedItems_should_notFlag_When_QueuedRecently verifies
@@ -5110,7 +5111,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnu
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcilePlanNotApprovedItems(ctx, er)
@@ -5175,7 +5176,7 @@ func TestReconcilePRPendingWithoutPRItems_should_writeDurableRowNotifyOnce_When_
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcilePRPendingWithoutPRItems(ctx, er)
@@ -5185,11 +5186,11 @@ func TestReconcilePRPendingWithoutPRItems_should_writeDurableRowNotifyOnce_When_
 	require.Len(t, open, 1)
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonPRPendingNoPR, open[0].Reason)
-	assert.Equal(t, []string{"Backlog item stuck: pr_pending with no PR"}, notifier.titles())
+	assert.Equal(t, []string{"Backlog item stuck: pr_pending with no PR"}, notifier.Titles())
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcilePRPendingWithoutPRItems(ctx, er)
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestReconcilePRPendingWithoutPRItems_should_notFlag_When_PrNumberSet verifies
@@ -5360,7 +5361,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 	require.True(t, applied)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileMultiReasonEscalation(ctx, er)
@@ -5370,7 +5371,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	require.True(t, ok, "an item with 2 open non-escalation reasons must get a multiple_reasons row")
 	assert.Nil(t, row.NotifiedAt, "must not notify on the tick that created the row")
-	assert.Empty(t, notifier.calls, "must not notify on the tick that created the row")
+	assert.Empty(t, notifier.Calls, "must not notify on the tick that created the row")
 }
 
 // TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen
@@ -5396,23 +5397,23 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	// First tick: creates the row, does not notify.
 	listener.reconcileMultiReasonEscalation(ctx, er)
-	require.Empty(t, notifier.calls)
+	require.Empty(t, notifier.Calls)
 
 	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonMultipleReasons, time.Now().Add(-61*time.Second))
 
 	// Second tick: dwell elapsed, condition still holds.
 	listener.reconcileMultiReasonEscalation(ctx, er)
 
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, "Multiple stuck reasons open", notifier.Calls[0].Title)
 	// Push-gate classification table: urgent and important.
-	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
-	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
+	assert.True(t, notifier.Calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.Calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -5422,7 +5423,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	// Third tick: already notified, must not re-notify.
 	listener.reconcileMultiReasonEscalation(ctx, er)
-	assert.Len(t, notifier.calls, 1, "must notify at most once per row lifetime")
+	assert.Len(t, notifier.Calls, 1, "must notify at most once per row lifetime")
 }
 
 // TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold
@@ -5802,7 +5803,7 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 	// Now push a second sdd-mode item past the resolved 3h threshold and confirm the
 	// notify body interpolates "3h0m0s", not the bare maxWorkSessionStaleness ("2h0m0s").
 	pastResolved := newStaleWorkTestItemWithAge(t, storage, er, 3*time.Hour+time.Minute, "sdd")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 	listener.reconcileStaleWorkSessions(ctx, er)
 
@@ -5810,8 +5811,8 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 	require.NoError(t, err)
 	_, ok = findOpenStuckStateFor(openAfter, pastResolved.ID, domain.StuckReasonStaleWork)
 	require.True(t, ok, "3h1m-old sdd-mode progress must be flagged past the resolved 3h threshold")
-	require.Len(t, notifier.calls, 1, "expected exactly one notify call for the newly-stale item")
-	notifyBody := notifier.calls[0].Message
+	require.Len(t, notifier.Calls, 1, "expected exactly one notify call for the newly-stale item")
+	notifyBody := notifier.Calls[0].Message
 	assert.Contains(t, notifyBody, "3h0m0s", "notify body must interpolate the resolved 3h duration")
 	assert.NotContains(t, notifyBody, "2h0m0s", "notify body must not fall back to the bare maxWorkSessionStaleness constant")
 }
@@ -5932,7 +5933,7 @@ func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_En
 	require.NoError(t, storage.UpdateItemSessionEndedWithDetail(ctx, is.ID, time.Now(), "other", "dial tcp: connection refused"))
 
 	listener := NewBacklogLifecycleListener(storage)
-	listener.SetNotifier(&fakeNotifier{})
+	listener.SetNotifier(&sessiontest.FakeNotifier{})
 	listener.reconcileOrphanedTriageItems(ctx, storage.repo)
 
 	open, err := storage.repo.FindOpenStuckStates(ctx)
@@ -5946,18 +5947,18 @@ func TestRecordTriageParkAndMaybeEscalate_should_notifyOnce_When_ThresholdParksW
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	base := time.Now()
 	listener.recordTriageParkAndMaybeEscalate("a", base)
 	listener.recordTriageParkAndMaybeEscalate("b", base.Add(time.Minute))
-	assert.Empty(t, notifier.calls, "below threshold must not escalate")
+	assert.Empty(t, notifier.Calls, "below threshold must not escalate")
 
 	listener.recordTriageParkAndMaybeEscalate("c", base.Add(2*time.Minute))
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.calls[0].Title)
-	assert.Contains(t, notifier.calls[0].Message, "3 items")
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.Calls[0].Title)
+	assert.Contains(t, notifier.Calls[0].Message, "3 items")
 }
 
 func TestRecordTriageParkAndMaybeEscalate_should_notifyOnlyOnce_When_BurstContinuesPastThreshold(t *testing.T) {
@@ -5965,14 +5966,14 @@ func TestRecordTriageParkAndMaybeEscalate_should_notifyOnlyOnce_When_BurstContin
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	base := time.Now()
 	for i := 0; i < 10; i++ {
 		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*time.Second))
 	}
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 func TestRecordTriageParkAndMaybeEscalate_should_countDistinctItems_When_SameItemParksRepeatedly(t *testing.T) {
@@ -5980,14 +5981,14 @@ func TestRecordTriageParkAndMaybeEscalate_should_countDistinctItems_When_SameIte
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	base := time.Now()
 	for i := 0; i < 5; i++ {
 		listener.recordTriageParkAndMaybeEscalate("same-item", base.Add(time.Duration(i)*time.Second))
 	}
-	assert.Empty(t, notifier.calls)
+	assert.Empty(t, notifier.Calls)
 }
 
 func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyondWindow(t *testing.T) {
@@ -5995,14 +5996,14 @@ func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyon
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	listener := NewBacklogLifecycleListener(storage)
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	base := time.Now()
 	for i := 0; i < 5; i++ {
 		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*(batchParkWindow+time.Minute)))
 	}
-	assert.Empty(t, notifier.calls)
+	assert.Empty(t, notifier.Calls)
 }
 
 func TestParkBurstTracker_should_refireForSecondBurst_When_WindowElapsed(t *testing.T) {
@@ -6061,21 +6062,21 @@ func TestRetryOrphanedTriageWithBackoffGate_should_escalateOnceForBatch_And_NotF
 		_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
 		require.NoError(t, err)
 		// One attempt short of the cap, due now: the next gate call parks it.
-		applied, err := er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts-1, timePtr(time.Now().Add(-time.Minute)))
+		applied, err := er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts-1, sessiontest.TimePtr(time.Now().Add(-time.Minute)))
 		require.NoError(t, err)
 		require.True(t, applied)
 		return item.ID
 	}
-	newListener := func() (*BacklogLifecycleListener, *fakeNotifier) {
+	newListener := func() (*BacklogLifecycleListener, *sessiontest.FakeNotifier) {
 		l := NewBacklogLifecycleListener(storage)
-		n := &fakeNotifier{}
+		n := &sessiontest.FakeNotifier{}
 		l.SetNotifier(n)
 		l.SetTriageRespawner(newFakeTriageRespawner())
 		return l, n
 	}
-	countTitle := func(n *fakeNotifier, title string) int {
+	countTitle := func(n *sessiontest.FakeNotifier, title string) int {
 		c := 0
-		for _, call := range n.calls {
+		for _, call := range n.Calls {
 			if call.Title == title {
 				c++
 			}

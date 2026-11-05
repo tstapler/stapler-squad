@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // newPassItemWithNoopSessions creates a review-status item with a PASS verdict
@@ -124,7 +125,7 @@ func TestReconcileRepeatedNoopDispatch_should_resolve_When_NewCommitLands(t *tes
 	listener.reconcileRepeatedNoopDispatch(ctx, er)
 
 	// A newer work session that committed breaks the no-op run.
-	waitForClockDelta(t, 10*time.Millisecond)
+	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 	is, err := storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: SessionRoleWork,
 	})

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivenessOverrideWithZeroCodeChange
@@ -48,7 +49,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	require.NoError(t, err)
 
 	sevenDaysAgo := time.Now().Add(-7*24*time.Hour - time.Hour)
-	applied, err := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts, timePtr(sevenDaysAgo))
+	applied, err := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts, sessiontest.TimePtr(sevenDaysAgo))
 	require.NoError(t, err)
 	require.True(t, applied)
 

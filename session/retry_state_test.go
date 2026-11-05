@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
@@ -557,9 +558,9 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 
 // newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
 // by the crash-loop test's escalating-retry and exhaustion phases.
-func newCrashLoopInstance() (*Instance, *ReviewQueue, *fakeNotifier) {
+func newCrashLoopInstance() (*Instance, *ReviewQueue, *sessiontest.FakeNotifier) {
 	rq := NewReviewQueue()
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	inst := &Instance{
 		Title:       "crash-loop",
 		UUID:        "test-uuid-crash-loop",
@@ -651,8 +652,8 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 	if inst.Status != PermanentlyFailed {
 		t.Fatalf("Status = %v, want PermanentlyFailed after exhausting max_attempts", inst.Status)
 	}
-	if len(notifier.calls) != 1 {
-		t.Fatalf("notifier calls = %d, want exactly 1", len(notifier.calls))
+	if len(notifier.Calls) != 1 {
+		t.Fatalf("notifier calls = %d, want exactly 1", len(notifier.Calls))
 	}
 	if _, found := rq.Get(inst.UUID); !found {
 		t.Error("expected a ReviewQueue entry for the permanently-failed session")
@@ -662,8 +663,8 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 	// driver loop ticking again before it stops) must not re-fire the
 	// one-shot notification.
 	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
-	if len(notifier.calls) != 1 {
-		t.Errorf("notifier calls after redundant failure observation = %d, want still 1 (edge-triggered, no re-fire)", len(notifier.calls))
+	if len(notifier.Calls) != 1 {
+		t.Errorf("notifier calls after redundant failure observation = %d, want still 1 (edge-triggered, no re-fire)", len(notifier.Calls))
 	}
 }
 

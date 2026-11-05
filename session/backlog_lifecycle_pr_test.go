@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestBacklogItemLink locks in the deep-link shape pushAndCreatePR and
@@ -295,7 +296,7 @@ func TestPRNeedsAttention_ShouldStampAutoRemediating_WhenWarningPublishedAtBacko
 	listener.ReconcilePRPending(context.Background(), storage.repo)
 
 	assert.Equal(t, []string{"PR needs attention"}, n.stamped, "one stamped WARNING on first sighting, none on the next tick")
-	assert.Empty(t, n.titles(), "the automation-is-acting WARNING must not also go out unstamped")
+	assert.Empty(t, n.Titles(), "the automation-is-acting WARNING must not also go out unstamped")
 }
 
 // T-AR-02: when the automation gives up (the fifth attempt parks the row), the
@@ -314,9 +315,9 @@ func TestPRNeedsAttention_ShouldHaveUnstampedEscalation_WhenAutomationFails(t *t
 	}
 
 	assert.Equal(t, []string{"PR needs attention"}, n.stamped)
-	require.Equal(t, []string{"Auto-rework paused"}, n.titles(), "the dead-end escalation goes through plain Notify")
-	assert.True(t, n.calls[0].Urgent, "the escalation is urgent")
-	assert.EqualValues(t, 8, n.calls[0].NotificationType)
+	require.Equal(t, []string{"Auto-rework paused"}, n.Titles(), "the dead-end escalation goes through plain Notify")
+	assert.True(t, n.Calls[0].Urgent, "the escalation is urgent")
+	assert.EqualValues(t, 8, n.Calls[0].NotificationType)
 }
 
 // newPreflightFixture is newPushAndCreatePRTestFixture with a real git repo
@@ -352,7 +353,7 @@ func newPreflightFixture(t *testing.T, storage *Storage) (*BacklogItemData, Item
 
 type preflightHarness struct {
 	listener *BacklogLifecycleListener
-	notifier *fakeNotifier
+	notifier *sessiontest.FakeNotifier
 	creator  *fakePRCreator
 	now      time.Time
 	fetches  int32
@@ -361,7 +362,7 @@ type preflightHarness struct {
 func newPreflightHarness(storage *Storage, cached func() (github.RepoSettingsResult, bool)) *preflightHarness {
 	h := &preflightHarness{
 		listener: NewBacklogLifecycleListener(storage),
-		notifier: &fakeNotifier{},
+		notifier: &sessiontest.FakeNotifier{},
 		creator:  &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/1", createNumber: 1},
 		now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
@@ -380,9 +381,9 @@ func newPreflightHarness(storage *Storage, cached func() (github.RepoSettingsRes
 	return h
 }
 
-func (h *preflightHarness) infoCalls() []fakeNotifierCall {
-	var out []fakeNotifierCall
-	for _, c := range h.notifier.calls {
+func (h *preflightHarness) infoCalls() []sessiontest.FakeNotifierCall {
+	var out []sessiontest.FakeNotifierCall
+	for _, c := range h.notifier.Calls {
 		if c.NotificationType == autoMergePreflightType {
 			out = append(out, c)
 		}
@@ -436,12 +437,12 @@ func TestPushAndCreatePR_Preflight_SuppressesAutoMergeFailureNoticeForThatPR(t *
 	item, is := newPreflightFixture(t, storage)
 	h.listener.pushAndCreatePR(context.Background(), item, is)
 	assert.Len(t, h.infoCalls(), 1)
-	assert.NotContains(t, h.notifier.titles(), "Auto-merge not enabled", "one message for this PR")
+	assert.NotContains(t, h.notifier.Titles(), "Auto-merge not enabled", "one message for this PR")
 
 	item2, is2 := newPreflightFixture(t, storage)
 	h.listener.pushAndCreatePR(context.Background(), item2, is2)
 	assert.Len(t, h.infoCalls(), 1, "preflight deduped for the repo")
-	assert.Contains(t, h.notifier.titles(), "Auto-merge not enabled", "existing notice is the single message for the second PR")
+	assert.Contains(t, h.notifier.Titles(), "Auto-merge not enabled", "existing notice is the single message for the second PR")
 }
 
 func TestPushAndCreatePR_Preflight_ColdCacheWarmsInBackgroundAndSendsNothing(t *testing.T) {
@@ -482,7 +483,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener := NewBacklogLifecycleListener(h.storage)
 	listener.SetNotifier(notifier)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
@@ -498,7 +499,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 		assert.Equal(t, CallerReconcilePRPendingMerge, r.caller)
 		assert.Equal(t, DeniedOperatorGate, r.reason)
 	}
-	for _, c := range notifier.calls {
+	for _, c := range notifier.Calls {
 		assert.NotEqual(t, "Status update failed after work completed", c.Title, "the gate's report is the only notification")
 	}
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestParseHeadlessVerdictResult_ValidJSON verifies that well-formed JSON is parsed correctly.
@@ -613,12 +614,12 @@ func TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorStrin
 func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
-	runGit(t, repo, "init", "-b", "main")
-	runGit(t, repo, "config", "user.email", "test@example.com")
-	runGit(t, repo, "config", "user.name", "Test")
+	sessiontest.RunGit(t, repo, "init", "-b", "main")
+	sessiontest.RunGit(t, repo, "config", "user.email", "test@example.com")
+	sessiontest.RunGit(t, repo, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644))
-	runGit(t, repo, "add", "README.md")
-	runGit(t, repo, "commit", "-m", "initial")
+	sessiontest.RunGit(t, repo, "add", "README.md")
+	sessiontest.RunGit(t, repo, "commit", "-m", "initial")
 
 	baseSHA, err := GetGitHeadSHA(repo)
 	require.NoError(t, err)
@@ -626,12 +627,12 @@ func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 	// Feature branch gets a real commit, but the repo directory stays checked
 	// out on main — simulating a fallback diff running in the shared main repo
 	// checkout instead of the work session's own (now-gone) worktree.
-	runGit(t, repo, "branch", "feature")
-	runGit(t, repo, "checkout", "feature")
+	sessiontest.RunGit(t, repo, "branch", "feature")
+	sessiontest.RunGit(t, repo, "checkout", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("new work\n"), 0o644))
-	runGit(t, repo, "add", "feature.txt")
-	runGit(t, repo, "commit", "-m", "feature work")
-	runGit(t, repo, "checkout", "main")
+	sessiontest.RunGit(t, repo, "add", "feature.txt")
+	sessiontest.RunGit(t, repo, "commit", "-m", "feature work")
+	sessiontest.RunGit(t, repo, "checkout", "main")
 
 	// Implicit HEAD (main) sees nothing — this is the bug.
 	diff, _, err := GetGitDiff(context.Background(), repo, baseSHA)
@@ -660,12 +661,12 @@ func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 func TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
-	runGit(t, repo, "init", "-b", "main")
-	runGit(t, repo, "config", "user.email", "test@example.com")
-	runGit(t, repo, "config", "user.name", "Test")
+	sessiontest.RunGit(t, repo, "init", "-b", "main")
+	sessiontest.RunGit(t, repo, "config", "user.email", "test@example.com")
+	sessiontest.RunGit(t, repo, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644))
-	runGit(t, repo, "add", "README.md")
-	runGit(t, repo, "commit", "-m", "initial")
+	sessiontest.RunGit(t, repo, "add", "README.md")
+	sessiontest.RunGit(t, repo, "commit", "-m", "initial")
 
 	// deadbeef..nonexistent-branch is guaranteed to fail to resolve, producing
 	// a real git stderr message ("fatal: ambiguous argument ... unknown
@@ -971,7 +972,7 @@ func TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifi
 // modified files are both reported.
 func TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("new"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\nmodified\n"), 0o644))
@@ -985,7 +986,7 @@ func TestGetWorktreeDirtyPaths_ReturnsPathsForDirtyWorktree(t *testing.T) {
 // no working-tree changes returns an empty, non-error result.
 func TestGetWorktreeDirtyPaths_EmptyForCleanWorktree(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
 	paths, err := GetWorktreeDirtyPaths(repo)
 	require.NoError(t, err)
@@ -997,7 +998,7 @@ func TestGetWorktreeDirtyPaths_EmptyForCleanWorktree(t *testing.T) {
 // handling rather than a naive reimplementation.
 func TestGetWorktreeDirtyPaths_HandlesRenamedFile(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
 	mv := safeexec.CommandContext(context.Background(), "git", "mv", "README.md", "RENAMED.md")
 	mv.Dir = repo
@@ -1054,17 +1055,17 @@ func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T)
 
 	// The session's own dedicated worktree, branched from main, with real committed work.
 	worktreeDir := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
 	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
-	runGitOrFail(t, worktreeDir, "add", "feature.txt")
-	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	sessiontest.RunGitOrFail(t, worktreeDir, "add", "feature.txt")
+	sessiontest.RunGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
 
 	// Simulate a concurrent process leaving the shared repoPath on an unrelated branch
 	// with no common history with "feature" — the exact shape that made the old
 	// implicit-HEAD implementation unreliable (and, for an orphan branch, would make it
 	// fail outright with "no merge base" rather than merely returning a wrong answer).
-	runGitOrFail(t, repoDir, "checkout", "--orphan", "unrelated")
-	runGitOrFail(t, repoDir, "commit", "--allow-empty", "-m", "unrelated history")
+	sessiontest.RunGitOrFail(t, repoDir, "checkout", "--orphan", "unrelated")
+	sessiontest.RunGitOrFail(t, repoDir, "commit", "--allow-empty", "-m", "unrelated history")
 
 	// Called with dir=repoDir (not worktreeDir) — the worst case for the old ambient-HEAD
 	// implementation — to prove the fix no longer depends on which directory it runs in.
@@ -1161,18 +1162,18 @@ func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
 func TestGetGitDiffRef_EmptyBaseSHA_DiffsLastCommit(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
-	runGit(t, repo, "init", "-b", "main")
-	runGit(t, repo, "config", "user.email", "test@example.com")
-	runGit(t, repo, "config", "user.name", "Test")
+	sessiontest.RunGit(t, repo, "init", "-b", "main")
+	sessiontest.RunGit(t, repo, "config", "user.email", "test@example.com")
+	sessiontest.RunGit(t, repo, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\n"), 0o644))
-	runGit(t, repo, "add", "a.txt")
-	runGit(t, repo, "commit", "-m", "first")
+	sessiontest.RunGit(t, repo, "add", "a.txt")
+	sessiontest.RunGit(t, repo, "commit", "-m", "first")
 
 	_, _, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
 	require.Error(t, err, "root commit has no HEAD~1")
 
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("two\n"), 0o644))
-	runGit(t, repo, "commit", "-am", "second")
+	sessiontest.RunGit(t, repo, "commit", "-am", "second")
 
 	diff, truncated, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
 	require.NoError(t, err)

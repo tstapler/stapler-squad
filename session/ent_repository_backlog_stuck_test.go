@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // createStuckTestItem creates a bare backlog item in the given status, for use
@@ -72,7 +73,7 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 	firstDetected := first.FirstDetectedAt
 
 	// Force a measurable delta.
-	waitForClockDelta(t, 10*time.Millisecond)
+	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "second pass")
 	require.NoError(t, err)
@@ -120,7 +121,7 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 	require.NotNil(t, resolvedRow.ResolvedAt)
 	require.NotNil(t, resolvedRow.NotifiedAt)
 
-	waitForClockDelta(t, 10*time.Millisecond)
+	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing again")
 	require.NoError(t, err)

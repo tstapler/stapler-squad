@@ -2,99 +2,14 @@ package session
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
-
-// setupTestGitRepo creates a temporary git repository with an initial commit and a
-// configured test identity, mirroring session/git/worktree_creation_test.go's
-// setupTestRepo helper (duplicated here rather than imported since that one lives in
-// package git and is unexported). Uses go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func setupTestGitRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-
-	repo, err := gogit.PlainInitWithOptions(dir, &gogit.PlainInitOptions{
-		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
-	})
-	if err != nil {
-		t.Fatalf("git init failed: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("failed to write README.md: %v", err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("worktree failed: %v", err)
-	}
-	if _, err := wt.Add("README.md"); err != nil {
-		t.Fatalf("git add failed: %v", err)
-	}
-	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		t.Fatalf("git commit failed: %v", err)
-	}
-
-	return dir
-}
-
-// setupLinkedWorktree builds a real linked worktree (git worktree add topology)
-// on top of an existing main repo — the topology where --git-dir and
-// --git-common-dir resolve to different directories, which a plain setupTestGitRepo
-// fixture cannot exercise.
-func setupLinkedWorktree(t *testing.T, repoPath, sessionName string) string {
-	t.Helper()
-	worktree, _, err := git.NewGitWorktree(repoPath, sessionName)
-	if err != nil {
-		t.Fatalf("git.NewGitWorktree failed: %v", err)
-	}
-	if err := worktree.Setup(); err != nil {
-		t.Fatalf("worktree.Setup failed: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := worktree.Cleanup(); err != nil {
-			t.Logf("worktree.Cleanup failed (non-fatal): %v", err)
-		}
-	})
-	return worktree.GetWorktreePath()
-}
-
-// gitLsFiles returns the list of paths currently tracked in the git index at dir.
-func gitLsFiles(t *testing.T, dir string) []string {
-	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", "ls-files")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git ls-files failed: %v", err)
-	}
-	trimmed := strings.TrimSpace(string(out))
-	if trimmed == "" {
-		return nil
-	}
-	return strings.Split(trimmed, "\n")
-}
-
-// containsPath reports whether paths contains target.
-func containsPath(paths []string, target string) bool {
-	for _, p := range paths {
-		if p == target {
-			return true
-		}
-	}
-	return false
-}
 
 // TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory verifies the self-heal helper
 // degrades gracefully (no error, nothing untracked) for directory-mode sessions that
@@ -117,10 +32,10 @@ func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
 // the index untouched.
 func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
-	before := gitLsFiles(t, repo)
-	if !containsPath(before, "README.md") {
+	before := sessiontest.GitLsFiles(t, repo)
+	if !sessiontest.ContainsPath(before, "README.md") {
 		t.Fatalf("test setup failed: README.md is not tracked")
 	}
 
@@ -132,8 +47,8 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 		t.Errorf("expected nothing to be untracked (no scaffolding files present), got: %v", removed)
 	}
 
-	after := gitLsFiles(t, repo)
-	if !containsPath(after, "README.md") {
+	after := sessiontest.GitLsFiles(t, repo)
+	if !sessiontest.ContainsPath(after, "README.md") {
 		t.Errorf("README.md was unexpectedly untracked")
 	}
 }
@@ -143,7 +58,7 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 // resolve to the same directory there.
 func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
+	repoPath := sessiontest.SetupTestGitRepo(t)
 
 	// Both sides must go through git's own --path-format=absolute resolution.
 	// t.TempDir() on macOS returns a path through the /var -> /private/var

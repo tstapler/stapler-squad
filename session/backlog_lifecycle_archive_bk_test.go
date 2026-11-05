@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // Story 1.5.7a: under Enforce an operator gate on done->archived holds the item
@@ -19,7 +20,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusDone, BacklogStatusArchived, GateKindHumanApproval, nil)
 	item := newDoneTestItem(t, h.storage, h.repo, maxDoneAge+1)
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener := NewBacklogLifecycleListener(h.storage)
 	listener.SetNotifier(notifier)
 
@@ -34,7 +35,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 		assert.Equal(t, DeniedOperatorGate, r.reason)
 		assert.Equal(t, BacklogStatusArchived, r.to)
 	}
-	assert.Empty(t, notifier.calls, "the sweep does not notify on top of the gate's report")
+	assert.Empty(t, notifier.Calls, "the sweep does not notify on top of the gate's report")
 
 	sessDisableGates(t, h)
 	listener.archiveStaleDoneItems(ctx)

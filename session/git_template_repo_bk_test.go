@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // initialCommitRepo makes dir a git repo on branch with one commit containing
@@ -29,9 +30,9 @@ func initConfiguredRepo(t *testing.T, dir, branch string) {
 
 func gitTemplateRepo(t *testing.T, branch string) string {
 	t.Helper()
-	gitTemplateRepos.mu.Lock()
-	defer gitTemplateRepos.mu.Unlock()
-	if dir, ok := gitTemplateRepos.dirs[branch]; ok {
+	sessiontest.GitTemplateRepos.Mu.Lock()
+	defer sessiontest.GitTemplateRepos.Mu.Unlock()
+	if dir, ok := sessiontest.GitTemplateRepos.Dirs[branch]; ok {
 		return dir
 	}
 	dir, err := os.MkdirTemp("", "ssq-git-template-*")
@@ -40,22 +41,22 @@ func gitTemplateRepo(t *testing.T, branch string) string {
 	if isEmpty {
 		branch = empty
 	}
-	runGitOrFail(t, dir, "init", "-b", branch)
-	runGitOrFail(t, dir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, dir, "config", "user.name", "Test")
+	sessiontest.RunGitOrFail(t, dir, "init", "-b", branch)
+	sessiontest.RunGitOrFail(t, dir, "config", "user.email", "test@example.com")
+	sessiontest.RunGitOrFail(t, dir, "config", "user.name", "Test")
 	// Every `git commit` otherwise spawns a detached `git maintenance run --auto`
 	// that briefly creates .git/objects/maintenance.lock, which a concurrent
 	// os.CopyFS of this template can list and then fail to open (ENOENT).
-	runGitOrFail(t, dir, "config", "maintenance.auto", "false")
-	runGitOrFail(t, dir, "config", "gc.auto", "0")
+	sessiontest.RunGitOrFail(t, dir, "config", "maintenance.auto", "false")
+	sessiontest.RunGitOrFail(t, dir, "config", "gc.auto", "0")
 	if isEmpty {
-		gitTemplateRepos.dirs["empty:"+branch] = dir
+		sessiontest.GitTemplateRepos.Dirs["empty:"+branch] = dir
 		return dir
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello\n"), 0o644))
-	runGitOrFail(t, dir, "add", "file.txt")
-	runGitOrFail(t, dir, "commit", "-m", "initial commit")
-	gitTemplateRepos.dirs[branch] = dir
+	sessiontest.RunGitOrFail(t, dir, "add", "file.txt")
+	sessiontest.RunGitOrFail(t, dir, "commit", "-m", "initial commit")
+	sessiontest.GitTemplateRepos.Dirs[branch] = dir
 	return dir
 }
 

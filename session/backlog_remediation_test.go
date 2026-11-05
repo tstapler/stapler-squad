@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState
@@ -274,7 +275,7 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 	// Simulate a row that is ALREADY parked (as if it hit the cap long ago,
 	// e.g. before a fix landed) with its cold-retry deadline already in the
 	// past — no manual reset performed anywhere in this test.
-	applied, recErr := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts, timePtr(time.Now().Add(-time.Minute)))
+	applied, recErr := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts, sessiontest.TimePtr(time.Now().Add(-time.Minute)))
 	require.NoError(t, recErr)
 	require.True(t, applied)
 
@@ -306,10 +307,6 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 	require.NoError(t, gateErr)
 	assert.False(t, due, "after MaxRemediationColdRetries cold retries the row must stay parked until an operator resets it")
 }
-
-// timePtr is a small helper for constructing *time.Time literals inline in
-// table-driven/setup code.
-func timePtr(t time.Time) *time.Time { return &t }
 
 // TestRecordManualRemediationAttempt_should_rejectParked_When_AttemptsAtCap
 // verifies the operator "Retry now" path (RecordManualRemediationAttempt,

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // runGitOutput is runGit's (backlog_review_test.go) sibling for callers that
@@ -143,20 +144,20 @@ func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.
 func TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbientHEAD(t *testing.T) {
 	t.Parallel()
 	origin := t.TempDir()
-	runGit(t, origin, "init", "-b", "main")
-	runGit(t, origin, "config", "user.email", "test@localhost")
-	runGit(t, origin, "config", "user.name", "Test")
+	sessiontest.RunGit(t, origin, "init", "-b", "main")
+	sessiontest.RunGit(t, origin, "config", "user.email", "test@localhost")
+	sessiontest.RunGit(t, origin, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("origin\n"), 0o644))
-	runGit(t, origin, "add", "README.md")
-	runGit(t, origin, "commit", "-m", "initial commit")
+	sessiontest.RunGit(t, origin, "add", "README.md")
+	sessiontest.RunGit(t, origin, "commit", "-m", "initial commit")
 	mainSHA := strings.TrimSpace(runGitOutput(t, origin, "rev-parse", "main"))
 
 	work := t.TempDir()
-	runGit(t, work, "clone", origin, ".")
-	runGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
+	sessiontest.RunGit(t, work, "clone", origin, ".")
+	sessiontest.RunGit(t, work, "checkout", "-b", "unrelated-in-progress-work")
 	require.NoError(t, os.WriteFile(filepath.Join(work, "unrelated.txt"), []byte("unrelated\n"), 0o644))
-	runGit(t, work, "add", "unrelated.txt")
-	runGit(t, work, "commit", "-m", "unrelated in-progress commit")
+	sessiontest.RunGit(t, work, "add", "unrelated.txt")
+	sessiontest.RunGit(t, work, "commit", "-m", "unrelated in-progress commit")
 
 	inst, err := NewInstance(InstanceOptions{
 		Title:       "divergence-check",
@@ -183,15 +184,15 @@ func TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbient
 func TestSetupFirstTimeWorktree_NewWorktree_NoWarning_When_AmbientHEADMatchesBase(t *testing.T) {
 	t.Parallel()
 	origin := t.TempDir()
-	runGit(t, origin, "init", "-b", "main")
-	runGit(t, origin, "config", "user.email", "test@localhost")
-	runGit(t, origin, "config", "user.name", "Test")
+	sessiontest.RunGit(t, origin, "init", "-b", "main")
+	sessiontest.RunGit(t, origin, "config", "user.email", "test@localhost")
+	sessiontest.RunGit(t, origin, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("origin\n"), 0o644))
-	runGit(t, origin, "add", "README.md")
-	runGit(t, origin, "commit", "-m", "initial commit")
+	sessiontest.RunGit(t, origin, "add", "README.md")
+	sessiontest.RunGit(t, origin, "commit", "-m", "initial commit")
 
 	work := t.TempDir()
-	runGit(t, work, "clone", origin, ".")
+	sessiontest.RunGit(t, work, "clone", origin, ".")
 
 	inst, err := NewInstance(InstanceOptions{
 		Title:       "no-divergence-check",

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // newTrackedWorkSession creates a real ItemSession (SessionRoleWork) backed
@@ -336,7 +337,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.reconcileBouncingItems(ctx, er)
@@ -607,7 +608,7 @@ func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeV
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
 	stubMatchingPRByNumberFinder(listener, "someone-elses-branch")
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	listener.ReconcilePRPending(ctx, storage.repo)
@@ -620,7 +621,7 @@ func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeV
 	require.NoError(t, err)
 	_, found := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
 	assert.True(t, found, "the refusal must be recorded as an open merged_pr_unverified stuck row")
-	assert.Len(t, notifier.calls, 1, "the operator must be notified exactly once across ticks")
+	assert.Len(t, notifier.Calls, 1, "the operator must be notified exactly once across ticks")
 }
 
 // TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerificationTransientlyRejected
@@ -651,7 +652,7 @@ func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerifi
 		}
 		return &github.PRInfo{HeadRef: "backlog/mine"}, nil
 	})
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
 	// Tick 1: the ownership check is transiently rejected.
@@ -669,7 +670,7 @@ func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerifi
 // no open merged_pr_unverified stuck row and no operator notification fired —
 // the expected shape immediately after a retryable (not definitive) ownership
 // re-verification failure.
-func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *Storage, itemID string, notifier *fakeNotifier) {
+func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *Storage, itemID string, notifier *sessiontest.FakeNotifier) {
 	t.Helper()
 	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
 	require.NoError(t, err)
@@ -678,7 +679,7 @@ func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *Storage, itemID s
 	require.NoError(t, err)
 	_, found := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
 	assert.False(t, found, "a transient admission-control rejection must never be recorded as a merged_pr_unverified stuck row")
-	assert.Empty(t, notifier.calls, "a retryable error must not trigger the never-auto-resolving operator notification")
+	assert.Empty(t, notifier.Calls, "a retryable error must not trigger the never-auto-resolving operator notification")
 }
 
 func TestPROwnershipFor(t *testing.T) {

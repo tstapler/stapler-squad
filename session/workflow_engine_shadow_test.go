@@ -11,12 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 type shadowRig struct {
 	sel   *SwitchableWorkflowEngine
 	rec   *ShadowLedgerRecorder
-	clock *selectorClock
+	clock *sessiontest.SelectorClock
 	dir   string
 	h     *selectorHarness
 }
@@ -26,7 +27,7 @@ type shadowRig struct {
 func newShadowRig(t *testing.T, label string, opts ...SelectorOption) *shadowRig {
 	t.Helper()
 	cfg, client := newSeededConfiguredWorkflowEngine(t)
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	dir := t.TempDir()
 	rec := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
 	base := make([]SelectorOption, 0, 4+len(opts))
@@ -147,7 +148,7 @@ func TestShadowRecorder_SeparatesReadAndTransitionPaths_WhenUiCallsAllowedTransi
 func TestShadowRecorderLedger_ResumesCountersAndBinaryStartedAt_WhenRestarted(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	first := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
 	first.RecordShadowCall(MethodCanTransition, PathTransition)
 	first.RecordObservation(ShadowObservation{Method: MethodCanTransition, Path: PathTransition, From: BacklogStatusReady, To: BacklogStatusQueued, Config: ConfigSeeded})
@@ -175,7 +176,7 @@ func TestShadowRecorderLedger_ResumesCountersAndBinaryStartedAt_WhenRestarted(t 
 
 func TestShadowRecorderLedger_KeepsRingOf200ReproRecords_UsesConfigDirAndStartsFreshWhenCorrupt(t *testing.T) {
 	t.Parallel()
-	rec := NewShadowLedgerRecorder(t.TempDir(), WithShadowClock(newSelectorClock()))
+	rec := NewShadowLedgerRecorder(t.TempDir(), WithShadowClock(sessiontest.NewSelectorClock()))
 	for i := 0; i < 250; i++ {
 		rec.RecordObservation(ShadowObservation{
 			Method: MethodValidateGates, Path: PathTransition, From: BacklogStatusReady, To: BacklogStatusQueued,
@@ -211,7 +212,7 @@ func TestShadowRecorderLedger_KeepsRingOf200ReproRecords_UsesConfigDirAndStartsF
 
 func TestShadowLedgerRecorder_BoundsDistinctEdges_WhenCustomStagesExplode(t *testing.T) {
 	t.Parallel()
-	rec := NewShadowLedgerRecorder("", WithShadowClock(newSelectorClock()))
+	rec := NewShadowLedgerRecorder("", WithShadowClock(sessiontest.NewSelectorClock()))
 	for i := 0; i < maxLedgerEdges+50; i++ {
 		rec.RecordObservation(ShadowObservation{Path: PathTransition, From: BacklogStatus(string(rune('a'+i%26)) + strings.Repeat("x", i)), To: BacklogStatusDone})
 	}
@@ -221,7 +222,7 @@ func TestShadowLedgerRecorder_BoundsDistinctEdges_WhenCustomStagesExplode(t *tes
 
 func TestShadowLedgerRecorder_IsRaceFree_WhenRecordedAndSnapshottedConcurrently(t *testing.T) {
 	t.Parallel()
-	rec := NewShadowLedgerRecorder(t.TempDir(), WithShadowClock(newSelectorClock()))
+	rec := NewShadowLedgerRecorder(t.TempDir(), WithShadowClock(sessiontest.NewSelectorClock()))
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
 		wg.Add(1)
@@ -244,7 +245,7 @@ func TestShadowLedgerRecorder_IsRaceFree_WhenRecordedAndSnapshottedConcurrently(
 
 func TestNewConfigLabeler_LabelsSeededEditedAndUnlabeled_AndCachesFingerprint(t *testing.T) {
 	t.Parallel()
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	calls := 0
 	fp := SeedFingerprint()
 	var err error
@@ -297,7 +298,7 @@ func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(
 func TestShadowLedger_PerClassSectionsSurviveFlushAndRestart(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	first := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
 	first.RecordShadowCallFor(ClassAgent, MethodValidateGates, PathTransition)
 	first.RecordDivergenceFor(ClassAgent, MethodValidateGates, ClassGuardNew, ConfigSeeded, PathTransition)

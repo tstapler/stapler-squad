@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -469,7 +470,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // fail-open default (which would also return true if "main" didn't resolve).
 func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestGitRepo(t)
+	repoDir := sessiontest.SetupTestGitRepo(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "has-commits-ahead-test")
 	if err != nil {

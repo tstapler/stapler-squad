@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // makeTestBacklogItemWithID creates a *BacklogItemData with a specific string ID.
@@ -542,7 +543,7 @@ func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
 // already tracked.
 func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
 	// Simulate the historical pollution: .backlog-context.md gets committed to the branch.
 	stalePath := filepath.Join(repo, ".backlog-context.md")
@@ -561,7 +562,7 @@ func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testi
 	}
 
 	// Sanity check: the file really is tracked before the fix runs.
-	if !containsPath(gitLsFiles(t, repo), ".backlog-context.md") {
+	if !sessiontest.ContainsPath(sessiontest.GitLsFiles(t, repo), ".backlog-context.md") {
 		t.Fatalf("test setup failed: .backlog-context.md is not tracked in the index")
 	}
 
@@ -573,7 +574,7 @@ func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testi
 	}
 
 	// The file must no longer be tracked in the index...
-	if containsPath(gitLsFiles(t, repo), ".backlog-context.md") {
+	if sessiontest.ContainsPath(sessiontest.GitLsFiles(t, repo), ".backlog-context.md") {
 		t.Errorf(".backlog-context.md is still tracked in the git index after WriteBacklogContextFile — self-heal did not run")
 	}
 
@@ -596,7 +597,7 @@ func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testi
 // untrack backlog context/command files" incident history.
 func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *testing.T) {
 	t.Parallel()
-	repo := setupTestGitRepo(t)
+	repo := sessiontest.SetupTestGitRepo(t)
 
 	cmdDir := filepath.Join(repo, backlogCommandsDir)
 	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
@@ -617,7 +618,7 @@ func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *test
 		t.Fatalf("git commit failed: %s: %v", out, err)
 	}
 
-	if !containsPath(gitLsFiles(t, repo), ".claude/commands/backlog/status.md") {
+	if !sessiontest.ContainsPath(sessiontest.GitLsFiles(t, repo), ".claude/commands/backlog/status.md") {
 		t.Fatalf("test setup failed: status.md is not tracked in the index")
 	}
 
@@ -627,7 +628,7 @@ func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *test
 		t.Fatalf("WriteSlashCommands returned error: %v", err)
 	}
 
-	tracked := gitLsFiles(t, repo)
+	tracked := sessiontest.GitLsFiles(t, repo)
 	for _, p := range tracked {
 		if strings.HasPrefix(p, ".claude/commands/backlog/") {
 			t.Errorf("expected no .claude/commands/backlog/ files to remain tracked, found: %s", p)
@@ -695,8 +696,8 @@ func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) 
 // pre-fix code (--git-dir); see the accompanying commit message for the RED/GREEN record.
 func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
-	worktreePath := setupLinkedWorktree(t, repoPath, "excludes-regression")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	worktreePath := sessiontest.SetupLinkedWorktree(t, repoPath, "excludes-regression")
 
 	if err := os.WriteFile(filepath.Join(worktreePath, ".backlog-context.md"), []byte("scaffolding"), 0o644); err != nil {
 		t.Fatalf("failed to write .backlog-context.md: %v", err)
@@ -719,8 +720,8 @@ func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.
 // worktree containing only scaffolding files must never be reported dirty.
 func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
-	worktreePath := setupLinkedWorktree(t, repoPath, "scaffolding-only")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	worktreePath := sessiontest.SetupLinkedWorktree(t, repoPath, "scaffolding-only")
 
 	addWorktreeExcludes(worktreePath)
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // --- fakes ---------------------------------------------------------------
@@ -23,16 +24,6 @@ import (
 type fixedMode struct{ m EngineMode }
 
 func (f fixedMode) Mode() EngineMode { return f.m }
-
-type selectorClock struct{ now atomic.Int64 }
-
-func newSelectorClock() *selectorClock {
-	c := &selectorClock{}
-	c.now.Store(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC).UnixNano())
-	return c
-}
-func (c *selectorClock) Now() time.Time          { return time.Unix(0, c.now.Load()).UTC() }
-func (c *selectorClock) Advance(d time.Duration) { c.now.Add(int64(d)) }
 
 type divergenceKey struct {
 	Method EngineMethod
@@ -135,12 +126,12 @@ type selectorHarness struct {
 	recorder *recordingShadow
 	warns    *lineSink
 	infos    *lineSink
-	clock    *selectorClock
+	clock    *sessiontest.SelectorClock
 }
 
 func newSelectorHarness(t *testing.T, mode EngineMode, cfg *ConfiguredWorkflowEngine, opts ...SelectorOption) *selectorHarness {
 	t.Helper()
-	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: newSelectorClock()}
+	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: sessiontest.NewSelectorClock()}
 	base := make([]SelectorOption, 0, 4+len(opts))
 	base = append(base,
 		WithShadowRecorder(h.recorder),
@@ -499,7 +490,7 @@ func (r *countingGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUI
 func TestSwitchableWorkflowEngine_ReadsModeFromTtlCache_NotConfigFileEveryCall(t *testing.T) {
 	t.Parallel()
 	var loads atomic.Int64
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	modes := NewCachedModeSource(func() EngineMode { loads.Add(1); return ModeShadow }, time.Second, clock)
 	gateRepo := &countingGateRepo{}
 	repo := NewTestEntRepository(t)

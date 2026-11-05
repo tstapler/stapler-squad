@@ -2,12 +2,10 @@ package session
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
-
-var soakNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
 func TestOverallSoakExit_IsOneForNoVerdictsAndForAnyNotReady(t *testing.T) {
 	t.Parallel()
@@ -41,7 +39,7 @@ func TestExpectedEdgesForClass_TakenFromRegistry_ExpandsArchiveWildcard_SkipsFor
 			require.Empty(t, c.Edges, "a forwarder declares no edge, so it adds none")
 		}
 	}
-	require.Equal(t, ExpectedEdgesForClass(ClassSystem), DefaultSoakParams(ClassSystem, soakNow).ExpectedEdges)
+	require.Equal(t, ExpectedEdgesForClass(ClassSystem), DefaultSoakParams(ClassSystem, sessiontest.SoakNow).ExpectedEdges)
 }
 
 func TestParseSoakAckFile_IsStrict_AndMergesPerClass(t *testing.T) {

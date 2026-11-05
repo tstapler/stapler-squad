@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
 
@@ -30,12 +31,14 @@ func TestAddWorktreeExcludes_ResolvesCommonDirThroughBackend(t *testing.T) {
 func TestResolveBranchTip_RoutesResolveRefThroughBackendInRepoPath(t *testing.T) {
 	rig := gitfake.NewRig(t)
 	rig.Install(t)
-	rig.GoGit.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) { return refsTestSHA, nil }
+	rig.GoGit.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) {
+		return sessiontest.RefsTestSHA, nil
+	}
 
 	got, err := ResolveBranchTip(context.Background(), "/repo", "backlog/x")
 
 	require.NoError(t, err)
-	assert.Equal(t, refsTestSHA, got)
+	assert.Equal(t, sessiontest.RefsTestSHA, got)
 	rig.RequireOnlyGoGit(t, backend.OpResolveRef)
 	call := rig.GoGit.Calls()[0]
 	assert.Equal(t, "backlog/x", call.Arg)
@@ -60,7 +63,7 @@ func TestRecoverBaseCommitSHA_RoutesMergeBaseThroughBackend(t *testing.T) {
 	rig.GoGit.OnMergeBase = func(_ backend.RepoLocation, req backend.MergeBaseRequest) (backend.CommitSHA, error) {
 		if req.Right == "master" {
 			assert.Equal(t, backend.RefName("feature"), req.Left, "explicit branch ref, never ambient HEAD")
-			return refsTestSHA, nil
+			return sessiontest.RefsTestSHA, nil
 		}
 		return "", backend.ErrNoMergeBase
 	}
@@ -68,7 +71,7 @@ func TestRecoverBaseCommitSHA_RoutesMergeBaseThroughBackend(t *testing.T) {
 	got, err := RecoverBaseCommitSHA(context.Background(), "/repo", "feature")
 
 	require.NoError(t, err)
-	assert.Equal(t, refsTestSHA, got)
+	assert.Equal(t, sessiontest.RefsTestSHA, got)
 	rig.RequireOnlyGoGit(t, backend.OpMergeBase)
 	assert.Len(t, rig.GoGit.CallsTo(backend.OpMergeBase), 2, "main fails, master succeeds")
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestCreateItemSessionWithVerdict_Atomic verifies that CreateItemSessionWithVerdict
@@ -190,47 +191,6 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 	assert.Equal(t, item.ID, after[0].ID.String())
 }
 
-// fakeNotifierCall records a single Notify/NotifySession invocation's title, message
-// body, notification type, and urgent/important axes, so tests can assert on
-// interpolated message content (e.g. that a verdict/outcome actually reached
-// the message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity,
-// not just which notification fired. Method/RecipientID (added for
-// session/worktree_consistency_sweep.go's Architecture-A1 regression guard) record which
-// Notifier method fired and the itemID (Notify) or sessionID (NotifySession) it was
-// called with.
-type fakeNotifierCall struct {
-	Method           string // "Notify" or "NotifySession"
-	RecipientID      string // itemID (Notify) or sessionID (NotifySession)
-	Title            string
-	Message          string
-	NotificationType int32
-	Urgent           bool
-	Important        bool
-}
-
-// fakeNotifier is a test double implementing Notifier, recording every call.
-type fakeNotifier struct {
-	calls []fakeNotifierCall // one per Notify/NotifySession call, in order
-}
-
-func (f *fakeNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
-	f.calls = append(f.calls, fakeNotifierCall{Method: "Notify", RecipientID: itemID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
-}
-
-func (f *fakeNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
-	f.calls = append(f.calls, fakeNotifierCall{Method: "NotifySession", RecipientID: sessionID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
-}
-
-// titles returns just the Title of every recorded call, in order — for tests (the
-// majority) that only care which notification fired, not its message body.
-func (f *fakeNotifier) titles() []string {
-	titles := make([]string, len(f.calls))
-	for i, c := range f.calls {
-		titles[i] = c.Title
-	}
-	return titles
-}
-
 // ─── RecordPRCreatedOutOfBand ──────────────────────────────────────────────────
 //
 // Regression coverage for the status-desync bug behind PR #157's linked backlog
@@ -377,7 +337,7 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 	require.NoError(t, err)
 
 	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
-	runGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
+	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
 
 	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "item filed from an agent's own worktree",

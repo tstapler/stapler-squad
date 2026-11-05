@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -145,7 +146,7 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 
 	// A second call bumps the timestamp again.
 	firstTimestamp := got
-	waitForClockDelta(t, time.Millisecond)
+	sessiontest.WaitForClockDelta(t, time.Millisecond)
 	inst.SetCreationProgress("Starting tmux session...")
 	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
 }

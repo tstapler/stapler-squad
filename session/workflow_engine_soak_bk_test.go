@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // readyLedger is a ledger that satisfies every READY criterion for class
@@ -15,18 +16,18 @@ func readyLedger() ShadowLedger {
 	cl := newClassLedger()
 	cl.Calls["CanTransition|transition"] = 300
 	cl.ConfigSeen[ConfigSeeded] = 300
-	cl.FirstSampleAt = soakNow.Add(-8 * 24 * time.Hour)
+	cl.FirstSampleAt = sessiontest.SoakNow.Add(-8 * 24 * time.Hour)
 	for _, e := range ExpectedEdgesForClass(ClassOperator) {
 		cl.Edges[EdgeKey(e.From, e.To)] = EdgeStats{TransitionSamples: 25}
 	}
 	return ShadowLedger{
-		Version: shadowLedgerVersion, BinaryStarts: []time.Time{soakNow.Add(-8 * 24 * time.Hour)},
+		Version: shadowLedgerVersion, BinaryStarts: []time.Time{sessiontest.SoakNow.Add(-8 * 24 * time.Hour)},
 		Classes: map[string]*ClassLedger{string(ClassOperator): cl},
 	}
 }
 
 func evalOperator(l ShadowLedger, mutate func(*SoakParams)) Verdict {
-	p := DefaultSoakParams(ClassOperator, soakNow)
+	p := DefaultSoakParams(ClassOperator, sessiontest.SoakNow)
 	p.ReproPath = "/cfg/workflow-engine-shadow-ledger.json"
 	if mutate != nil {
 		mutate(&p)
@@ -109,7 +110,7 @@ func TestSoakStatus_PrintsReviewDueDate_FromEarliestBinaryStartPlus14Days(t *tes
 
 func TestSoakStatus_PrintsReviewOverdue_WithoutChangingExitCode_WhenDatePassedAndNoClassEnforced(t *testing.T) {
 	t.Parallel()
-	first := soakNow.Add(-20 * 24 * time.Hour)
+	first := sessiontest.SoakNow.Add(-20 * 24 * time.Hour)
 	ready := readyLedger()
 	ready.BinaryStarts = []time.Time{first}
 	ready.Classes[string(ClassOperator)].FirstSampleAt = first
@@ -134,16 +135,16 @@ func TestEvaluateSoak_ReturnsSameVerdictAsSoakStatusCommand_ForEveryClass_AndUna
 	t.Parallel()
 	l := readyLedger()
 	for _, class := range []CallerClass{ClassOperator, ClassAgent, ClassSystem} {
-		p := DefaultSoakParams(class, soakNow)
+		p := DefaultSoakParams(class, sessiontest.SoakNow)
 		direct := EvaluateSoak(class, l, p)
 		viaSource := EvaluateSoakFromSource(class, func() (ShadowLedger, error) { return l, nil }, p)
 		require.Equal(t, direct, viaSource, class)
 		require.Equal(t, direct.Text(), viaSource.Text())
 	}
-	require.Equal(t, 14*24*time.Hour, DefaultSoakParams(ClassSystem, soakNow).Window)
-	require.Equal(t, 7*24*time.Hour, DefaultSoakParams(ClassAgent, soakNow).Window)
+	require.Equal(t, 14*24*time.Hour, DefaultSoakParams(ClassSystem, sessiontest.SoakNow).Window)
+	require.Equal(t, 7*24*time.Hour, DefaultSoakParams(ClassAgent, sessiontest.SoakNow).Window)
 
-	v := EvaluateSoakFromSource(ClassOperator, func() (ShadowLedger, error) { return readyLedger(), errors.New("disk gone") }, DefaultSoakParams(ClassOperator, soakNow))
+	v := EvaluateSoakFromSource(ClassOperator, func() (ShadowLedger, error) { return readyLedger(), errors.New("disk gone") }, DefaultSoakParams(ClassOperator, sessiontest.SoakNow))
 	require.Equal(t, VerdictUnavailable, v.Status)
 	require.Equal(t, 2, v.ExitCode)
 	require.Equal(t, 2, OverallSoakExit([]Verdict{v}))
@@ -205,7 +206,7 @@ func TestEvaluateSoak_LowVolumeNeedsAllFourArtifacts_ToWaiveFloorAndEdgeN_ButNot
 
 	// The span window is never waived.
 	young := thin()
-	young.BinaryStarts = []time.Time{soakNow.Add(-time.Hour)}
-	young.Classes[string(ClassOperator)].FirstSampleAt = soakNow.Add(-time.Hour)
+	young.BinaryStarts = []time.Time{sessiontest.SoakNow.Add(-time.Hour)}
+	young.Classes[string(ClassOperator)].FirstSampleAt = sessiontest.SoakNow.Add(-time.Hour)
 	require.Equal(t, VerdictNotReady, evalOperator(young, func(p *SoakParams) { p.Acks.LowVolume = full }).Status)
 }

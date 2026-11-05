@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // TestReviewGateRunner_SkipReviewGate verifies that Run returns immediately
@@ -510,7 +511,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -527,7 +528,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
+	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -590,7 +591,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -607,7 +608,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a genuine diff-computation failure on the no-worktree path must block with FAIL, not silently fall through")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
+	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -675,7 +676,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -692,7 +693,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "an empty committed diff must block with FAIL, not proceed to a real review that could false-PASS")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — no changes to review")
+	assert.Contains(t, notifier.Titles(), "Review blocked — no changes to review")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -756,7 +757,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 	spawner := &mockReviewGateSpawner{instance: &Instance{UUID: uuid.New().String()}}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -774,7 +775,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 	require.NoError(t, err)
 	assert.Empty(t, outcome, "no synthetic FAIL verdict should be recorded for a duplicate claim")
 
-	assert.NotContains(t, notifier.titles(), "Review blocked — no changes to review")
+	assert.NotContains(t, notifier.Titles(), "Review blocked — no changes to review")
 }
 
 // TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims reproduces
@@ -897,10 +898,10 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	// worktree directory — the same shape as ae1e2070's stelekit worktree, which had a
 	// genuine 302+/88- fix already committed.
 	worktreeDir := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
 	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
-	runGitOrFail(t, worktreeDir, "add", "feature.txt")
-	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	sessiontest.RunGitOrFail(t, worktreeDir, "add", "feature.txt")
+	sessiontest.RunGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
 
 	itemData := BacklogItemData{
 		Title:              "Diff auto-repair test",
@@ -935,7 +936,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -951,8 +952,8 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	prompt := spawner.getLastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via merge-base, not an empty one")
 
-	assert.NotContains(t, notifier.titles(), "Review blocked — diff computation failed", "the review must not be reported as blocked when auto-repair succeeded")
-	assert.Contains(t, notifier.titles(), "Review auto-repaired a broken diff", "the operator must still be told a repair happened, since the stored base_commit_sha is still wrong")
+	assert.NotContains(t, notifier.Titles(), "Review blocked — diff computation failed", "the review must not be reported as blocked when auto-repair succeeded")
+	assert.Contains(t, notifier.Titles(), "Review auto-repaired a broken diff", "the operator must still be told a repair happened, since the stored base_commit_sha is still wrong")
 }
 
 // TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks is a
@@ -1022,7 +1023,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1039,8 +1040,8 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a recovered-but-empty diff must be recorded as FAIL, not UNVERIFIABLE and not PASS")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
-	assert.NotContains(t, notifier.titles(), "Review auto-repaired a broken diff", "an untrusted (empty) recovery must never be reported to the operator as a successful repair")
+	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
+	assert.NotContains(t, notifier.Titles(), "Review auto-repaired a broken diff", "an untrusted (empty) recovery must never be reported to the operator as a successful repair")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -1113,7 +1114,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1134,7 +1135,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+	assert.Contains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 }
 
 // TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict is a
@@ -1164,10 +1165,10 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	// "feature" branch. Simulates the path having been recycled/recreated after this
 	// session's own worktree was torn down.
 	recycledPath := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
 	require.NoError(t, os.WriteFile(recycledPath+"/other-item.txt", []byte("a later item's own commit\n"), 0o644))
-	runGitOrFail(t, recycledPath, "add", "other-item.txt")
-	runGitOrFail(t, recycledPath, "commit", "-m", "later item's real work")
+	sessiontest.RunGitOrFail(t, recycledPath, "add", "other-item.txt")
+	sessiontest.RunGitOrFail(t, recycledPath, "commit", "-m", "later item's real work")
 
 	itemData := BacklogItemData{
 		Title:              "Worktree identity mismatch test",
@@ -1203,7 +1204,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1220,7 +1221,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through against the wrong worktree")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+	assert.Contains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -1247,7 +1248,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	commitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	recycledPath := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
 
 	itemData := BacklogItemData{
 		Title:              "Worktree identity mismatch repeated-failure test",
@@ -1259,7 +1260,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	spawner := &mockReviewGateSpawner{}
@@ -1322,11 +1323,11 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	// commits) intact and reachable from repoDir, exactly like a session whose
 	// worktree was cleaned up after it ended.
 	worktreeDir := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
 	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
-	runGitOrFail(t, worktreeDir, "add", "feature.txt")
-	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
-	runGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
+	sessiontest.RunGitOrFail(t, worktreeDir, "add", "feature.txt")
+	sessiontest.RunGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
 
 	itemData := BacklogItemData{
 		Title:              "Worktree torn down, branch intact test",
@@ -1357,7 +1358,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	spawner := &mockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1369,7 +1370,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 
 	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with an intact branch must fall back to repoPath and proceed, not hard-block as an identity mismatch")
 	assert.False(t, onPassCalled.Load())
-	assert.NotContains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+	assert.NotContains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
 	prompt := spawner.getLastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via the repoPath fallback")
@@ -1404,11 +1405,11 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	// instead of the real (valid) base SHA, so the item.RepoPath fallback at line
 	// ~216 also fails and recovery is actually exercised.
 	worktreeDir := t.TempDir()
-	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
 	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
-	runGitOrFail(t, worktreeDir, "add", "feature.txt")
-	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
-	runGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
+	sessiontest.RunGitOrFail(t, worktreeDir, "add", "feature.txt")
+	sessiontest.RunGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	sessiontest.RunGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
 
 	corruptedBaseSHA := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
@@ -1441,7 +1442,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	spawner := &mockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1453,7 +1454,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 
 	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with a corrupted base SHA must recover via item.RepoPath and proceed, not hard-block")
 	assert.False(t, onPassCalled.Load())
-	assert.NotContains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+	assert.NotContains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
 	prompt := spawner.getLastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via item.RepoPath after base-SHA repair")
@@ -1472,7 +1473,7 @@ func TestWorktreeIdentityMismatch(t *testing.T) {
 	initConfiguredRepo(t, repoDir, "main")
 	commitFile(t, repoDir, "f.txt", "x", "initial")
 	detachedSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "HEAD"))
-	runGitOrFail(t, repoDir, "checkout", detachedSHA)
+	sessiontest.RunGitOrFail(t, repoDir, "checkout", detachedSHA)
 
 	notADir := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o644))
@@ -1536,8 +1537,8 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	initConfiguredRepo(t, origin, "main")
 	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
-	work := cloneWithOrigin(t, origin)
-	runGitOrFail(t, work, "checkout", "-b", "feature")
+	work := sessiontest.CloneWithOrigin(t, origin)
+	sessiontest.RunGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch makes its own real edit to README.md.
@@ -1580,7 +1581,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	reopener := newFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
@@ -1597,7 +1598,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — branch drifted too far behind main")
+	assert.Contains(t, notifier.Titles(), "Review blocked — branch drifted too far behind main")
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -1627,8 +1628,8 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	initConfiguredRepo(t, origin, "main")
 	commitFile(t, origin, "README.md", "# base\n", "initial commit")
 
-	work := cloneWithOrigin(t, origin)
-	runGitOrFail(t, work, "checkout", "-b", "feature")
+	work := sessiontest.CloneWithOrigin(t, origin)
+	sessiontest.RunGitOrFail(t, work, "checkout", "-b", "feature")
 	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch's own unrelated change.
@@ -1855,11 +1856,11 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	runGitOrFail(t, dir, "init", "-q", "-b", "main")
-	runGitOrFail(t, dir, "config", "user.email", "t@example.com")
-	runGitOrFail(t, dir, "config", "user.name", "t")
-	runGitOrFail(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
-	runGitOrFail(t, dir, "checkout", "-q", "-b", "work")
+	sessiontest.RunGitOrFail(t, dir, "init", "-q", "-b", "main")
+	sessiontest.RunGitOrFail(t, dir, "config", "user.email", "t@example.com")
+	sessiontest.RunGitOrFail(t, dir, "config", "user.name", "t")
+	sessiontest.RunGitOrFail(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
+	sessiontest.RunGitOrFail(t, dir, "checkout", "-q", "-b", "work")
 	r := &ReviewGateRunner{}
 	item := &BacklogItemData{RepoPath: dir}
 
@@ -1870,9 +1871,9 @@ func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 
 	// Pre-existing commits ahead of main with recorded base == tip (resumed branch).
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644))
-	runGitOrFail(t, dir, "add", "f.txt")
-	runGitOrFail(t, dir, "commit", "-q", "-m", "feature")
-	tip = runGitOutputOrFail(t, dir, "rev-parse", "HEAD")
+	sessiontest.RunGitOrFail(t, dir, "add", "f.txt")
+	sessiontest.RunGitOrFail(t, dir, "commit", "-q", "-m", "feature")
+	tip = sessiontest.RunGitOutputOrFail(t, dir, "rev-parse", "HEAD")
 	diff, _ = r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
 	require.Contains(t, diff, "+hello")
 }

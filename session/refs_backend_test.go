@@ -11,12 +11,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
 
 // These tests swap the process-wide git backend (gitprovider), so none of them is parallel.
-
-const refsTestSHA = "0123456789abcdef0123456789abcdef01234567"
 
 func TestGetMainRepoPath_RoutesCommonDirThroughBackend(t *testing.T) {
 	rig := gitfake.NewRig(t)
@@ -81,7 +80,7 @@ func TestGitWorktreeManager_GetCurrentCommitSHA_RoutesHeadThroughBackend(t *test
 	rig.Install(t)
 	rig.GoGit.OnResolveRef = func(_ backend.RepoLocation, ref backend.RefName) (backend.CommitSHA, error) {
 		if ref == "HEAD" {
-			return refsTestSHA, nil
+			return sessiontest.RefsTestSHA, nil
 		}
 		return "", backend.ErrRefNotFound
 	}
@@ -91,7 +90,7 @@ func TestGitWorktreeManager_GetCurrentCommitSHA_RoutesHeadThroughBackend(t *test
 	got, err := gm.GetCurrentCommitSHA()
 
 	require.NoError(t, err)
-	assert.Equal(t, refsTestSHA, got)
+	assert.Equal(t, sessiontest.RefsTestSHA, got)
 	rig.RequireOnlyGoGit(t, backend.OpResolveRef)
 	assert.Equal(t, backend.Local{Root: "/repo-wt"}, rig.GoGit.Calls()[0].Loc)
 }
