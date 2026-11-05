@@ -16,8 +16,8 @@ type daemonMonitor struct {
 	threshold            int
 	needed               func() bool
 	healthy              func(context.Context, DaemonConfig) bool
-	tcpUp                func(context.Context, DaemonConfig) bool              // nil: no TCP-liveness signal
-	probe                func(context.Context, DaemonConfig) daemonProbeResult // preferred over healthy when set; lets the monitor tell Busy from Healthy
+	tcpProbe             func(context.Context, DaemonConfig) (daemonProbeResult, bool) // nil: no TCP-liveness signal; false: inconclusive
+	probe                func(context.Context, DaemonConfig) daemonProbeResult         // preferred over healthy when set; lets the monitor tell Busy from Healthy
 	ensure               func(context.Context, DaemonConfig) (TymuxdReady, error)
 	onSpawn              func()
 	onWedged             func() // test hook, called after each wedged report
@@ -50,10 +50,42 @@ func MonitorDaemon(ctx context.Context, cfg DaemonConfig, needed func() bool, on
 }
 
 func newDaemonMonitor(needed func() bool, onSpawn func()) daemonMonitor {
+	probe, tcpProbe := monitorProbes()
 	return daemonMonitor{
 		interval: 5 * time.Second, maxBackoff: time.Minute, threshold: daemonMonitorThreshold,
-		probe: probeDaemon, tcpUp: func(ctx context.Context, cfg DaemonConfig) bool { return probeTCP(ctx, cfg) == daemonProbeHealthy }, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
+		probe: probe, tcpProbe: tcpProbe, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
 	}
+}
+
+// tcpLivenessProbeTimeout bounds the monitor's extra TCP probe so a hung daemon cannot stretch a tick.
+var tcpLivenessProbeTimeout = 2 * time.Second
+
+// tcpObservation is the TCP probe result probeDaemon already obtained on this tick.
+type tcpObservation struct {
+	result daemonProbeResult
+	ok     bool
+}
+
+// monitorProbes returns the default daemon probe and TCP-liveness probe. They share the TCP result
+// probeDaemon obtained, and are only ever called from the monitor's single run goroutine.
+func monitorProbes() (probe func(context.Context, DaemonConfig) daemonProbeResult, tcp func(context.Context, DaemonConfig) (daemonProbeResult, bool)) {
+	var last tcpObservation
+	probe = func(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
+		result, tcpResult, probed := probeDaemonWithTCP(ctx, cfg)
+		last = tcpObservation{result: tcpResult, ok: probed}
+		return result
+	}
+	tcp = func(ctx context.Context, cfg DaemonConfig) (daemonProbeResult, bool) {
+		if o := last; o.ok {
+			last = tcpObservation{}
+			return o.result, true
+		}
+		tctx, cancel := context.WithTimeout(ctx, tcpLivenessProbeTimeout)
+		defer cancel()
+		res := probeTCP(tctx, cfg)
+		return res, tctx.Err() == nil // our own deadline says nothing about the daemon
+	}
+	return probe, tcp
 }
 
 // cachedFor memoizes fn for ttl. A nil fn stays nil.
@@ -159,13 +191,23 @@ func (t *tcpListenerTracker) observe(ctx context.Context, cfg DaemonConfig, up b
 }
 
 // observeTCP updates the TCP-liveness signal for a tick whose daemon probe returned result. A
-// Degraded result already proves TCP answers; a dead daemon is the health gauge's business.
+// Degraded result already proves TCP answers; a dead daemon is the health gauge's business. Only a
+// definite refusal is "down": a busy, forbidden or odd TCP listener is alive, so the gauge and the
+// warning are left alone.
 func (m daemonMonitor) observeTCP(ctx context.Context, cfg DaemonConfig, result daemonProbeResult, t *tcpListenerTracker) {
-	switch {
-	case result == daemonProbeDegraded:
+	if result == daemonProbeDegraded {
 		t.observe(ctx, cfg, true, time.Now())
-	case result >= daemonProbeBusy && m.tcpUp != nil:
-		t.observe(ctx, cfg, m.tcpUp(ctx, cfg), time.Now())
+		return
+	}
+	if result < daemonProbeBusy || m.tcpProbe == nil {
+		return
+	}
+	switch tcp, ok := m.tcpProbe(ctx, cfg); {
+	case !ok:
+	case tcp == daemonProbeHealthy:
+		t.observe(ctx, cfg, true, time.Now())
+	case tcp == daemonProbeNotListening:
+		t.observe(ctx, cfg, false, time.Now())
 	}
 }
 

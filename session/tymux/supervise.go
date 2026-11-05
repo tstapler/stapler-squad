@@ -140,7 +140,7 @@ type daemonProbeResult int
 
 const (
 	daemonProbeNotListening daemonProbeResult = iota // connection refused: definitively down
-	daemonProbeNoSocketFile                          // internal to probeDaemon, never returned: the socket file does not exist (ENOENT)
+	daemonProbeNoSocketFile                          // unix endpoint only: no usable socket (ENOENT or an undialable path); probeDaemon maps it away and never returns it
 	daemonProbeUnhealthy                             // something answered, but not as tymuxd
 	daemonProbeBusy                                  // accepted the connection but did not answer in time: inconclusive
 	daemonProbeAccessDenied                          // alive, but the kernel (EACCES/EPERM) or the daemon (Unauthenticated/PermissionDenied) refuses this user: never killed, never "wedged"
@@ -156,6 +156,13 @@ const (
 // daemon is older than the socket (or has not created it yet): TCP answering is plain Healthy.
 // With no known socket for the address, TCP alone decides.
 func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
+	result, _, _ := probeDaemonWithTCP(ctx, cfg)
+	return result
+}
+
+// probeDaemonWithTCP is probeDaemon that also returns the TCP probe's own result when TCP was
+// consulted (tcpProbed), so the monitor does not probe TCP a second time.
+func probeDaemonWithTCP(ctx context.Context, cfg DaemonConfig) (result, tcpResult daemonProbeResult, tcpProbed bool) {
 	path := unixSocketPath(cfg)
 	noSocketFile := false
 	if path != "" {
@@ -163,23 +170,23 @@ func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 		defer unixHTTP.CloseIdleConnections()
 		switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
 		case daemonProbeHealthy, daemonProbeBusy, daemonProbeAccessDenied:
-			return unixResult // a silent or forbidden socket is inconclusive: never killed, TCP not consulted
+			return unixResult, 0, false // a silent or forbidden socket is inconclusive: never killed, TCP not consulted
 		case daemonProbeNoSocketFile:
 			noSocketFile = true
 		}
 		if ctx.Err() != nil {
-			return daemonProbeNotListening
+			return daemonProbeNotListening, 0, false
 		}
 	}
-	result := probeTCP(ctx, cfg)
-	if path == "" || result != daemonProbeHealthy {
-		return result
+	tcpResult = probeTCP(ctx, cfg)
+	if path == "" || tcpResult != daemonProbeHealthy {
+		return tcpResult, tcpResult, true
 	}
 	if noSocketFile {
 		logOnce("nosocket|"+path, log.Info, "[tymux] tymuxd has no Unix control socket (older daemon?); using TCP", "socket", path, "addr", cfg.Addr)
-		return daemonProbeHealthy
+		return daemonProbeHealthy, tcpResult, true
 	}
-	return daemonProbeDegraded
+	return daemonProbeDegraded, tcpResult, true
 }
 
 // probeTCP probes the TCP listener only.
@@ -236,7 +243,7 @@ func probeEndpoint(ctx context.Context, network, address string, transport rpcTr
 		if ctx.Err() != nil {
 			return daemonProbeNotListening
 		}
-		if network == "unix" && errors.Is(err, syscall.ENOENT) {
+		if network == "unix" && (errors.Is(err, syscall.ENOENT) || socketPathBroken(err)) {
 			return daemonProbeNoSocketFile
 		}
 		if isAccessDenied(err) {
@@ -315,6 +322,13 @@ var socketPathMax = func() int {
 	return 108
 }()
 
+// socketPathBroken reports a dial error proving the path itself can never work (too long, a
+// non-directory component, a symlink loop), as opposed to a daemon that is merely absent or busy.
+func socketPathBroken(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, syscall.ENAMETOOLONG) || errors.Is(err, syscall.ELOOP)
+}
+
 // socketPathUsable reports whether path fits in sockaddr_un.sun_path. Beyond it connect() fails
 // with EINVAL forever, so such a daemon is reached over TCP only.
 func socketPathUsable(path string) bool { return len(path) < socketPathMax }
@@ -352,12 +366,12 @@ func socketPairedWithAddr(cfg DaemonConfig) bool {
 // refusal (timeout, resource error) counts as listening, like portListening.
 func unixSocketListening(cfg DaemonConfig) bool {
 	path := ownedSocketPath(cfg)
-	if path == "" {
-		return false
+	if path == "" || !socketPathUsable(path) {
+		return false // an undialable path cannot hold a live daemon
 	}
 	conn, err := dialFn(context.Background(), "unix", path, portDialTimeout)
 	if err != nil {
-		return !dialRefused("unix", err)
+		return !dialRefused("unix", err) && !socketPathBroken(err)
 	}
 	_ = conn.Close()
 	return true

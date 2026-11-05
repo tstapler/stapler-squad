@@ -222,8 +222,8 @@ func TestMonitor_SocketHealthyTCPDead_StaysHealthy_ButPublishesTCPDown(t *testin
 	var probes atomic.Int32
 	m := daemonMonitor{
 		interval: time.Millisecond, maxBackoff: time.Millisecond, threshold: 3,
-		probe: func(context.Context, DaemonConfig) daemonProbeResult { probes.Add(1); return daemonProbeHealthy },
-		tcpUp: func(context.Context, DaemonConfig) bool { return false },
+		probe:    func(context.Context, DaemonConfig) daemonProbeResult { probes.Add(1); return daemonProbeHealthy },
+		tcpProbe: func(context.Context, DaemonConfig) (daemonProbeResult, bool) { return daemonProbeNotListening, true },
 		ensure: func(context.Context, DaemonConfig) (TymuxdReady, error) {
 			t.Error("must not recover a healthy daemon")
 			return TymuxdReady{}, nil

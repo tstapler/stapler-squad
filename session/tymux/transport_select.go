@@ -213,7 +213,7 @@ func isAccessDenied(err error) bool {
 // isSocketUnusable reports errors proving the socket path can never work (EINVAL: a sun_path over
 // the platform limit), as opposed to a daemon that is merely absent.
 func isSocketUnusable(err error) bool {
-	return errors.Is(err, syscall.EINVAL)
+	return socketPathBroken(err)
 }
 
 // annotate makes an EACCES/EPERM from the control socket a clear, matchable hard error.
