@@ -1,9 +1,12 @@
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { ArtifactsTab, SCAN_SLOW_AFTER_MS } from "../ArtifactsTab";
 import { SessionArtifactsSchema } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
+import { ArtifactRecordProtoSchema } from "@/gen/session/v1/types_pb";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
+import { makePr } from "@/lib/pr/__testUtils__/pullRequests";
 
 const mockAnnounce = jest.fn();
 jest.mock("@/lib/hooks/useAnnounce", () => ({
@@ -271,5 +274,80 @@ describe("ArtifactsTab", () => {
         expect(screen.getByText(/No artifacts found/)).toBeInTheDocument();
       });
     });
+  });
+});
+
+describe("grouped view (ux.md S7)", () => {
+  const at = (hh: number, mm: number) => Date.UTC(2026, 10, 5, hh, mm);
+  const rec = (ms: number, record: object) => create(ArtifactRecordProtoSchema, { firstSeenAt: timestampFromMs(ms), record } as never);
+  const prRec = (ms: number, number: number, source = "created") => rec(ms, { case: "pr", value: { owner: "acme", repo: "app", number, source } });
+  const commitRec = (ms: number, sha: string, subject = "") => rec(ms, { case: "commit", value: { sha, subject, branch: "feat-b" } });
+  const planRec = (ms: number, path: string) => rec(ms, { case: "planDoc", value: { path } });
+  const grouped = (records: ReturnType<typeof rec>[], session: Partial<Session> = {}) =>
+    ({ artifacts: create(SessionArtifactsSchema, { scanState: "has_data", records }), pullRequests: [], ...session }) as unknown as Session;
+
+  it("ArtifactsTab should group commit under PR created before it and plan doc under later PR and rest under Unassigned", () => {
+    render(<ArtifactsTab session={grouped([
+      commitRec(at(9, 0), "aaaaaaa1111", "early"),
+      prRec(at(10, 0), 11),
+      commitRec(at(10, 30), "1a2b3c4d5e6f", "fix: token refresh"),
+      prRec(at(11, 0), 12),
+      planRec(at(11, 15), "project_plans/x/plan.md"),
+    ])} />);
+    expect(within(screen.getByTestId("artifact-group-11")).getByRole("button", { name: "Copy commit SHA 1a2b3c4" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("artifact-group-12")).getByRole("button", { name: "Copy plan path project_plans/x/plan.md" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("artifact-group-unassigned")).getByRole("button", { name: "Copy commit SHA aaaaaaa" })).toBeInTheDocument();
+    expect(screen.getByText("Grouped by when each item appeared relative to PR creation.")).toBeInTheDocument();
+  });
+
+  it("ArtifactsTab should fall back to flat v1 list when records missing", () => {
+    render(<ArtifactsTab session={makeSession(makeArtifacts({ prUrls: ["https://github.com/o/r/pull/1"], commitShas: ["a".repeat(40)], externalUrls: [], scanState: "has_data" }))} />);
+    expect(screen.queryByTestId("artifacts-grouped")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Pull Requests" })).toBeInTheDocument();
+  });
+
+  it("mentioned PRs should be collapsed and labeled not created by this session", () => {
+    render(<ArtifactsTab session={grouped([prRec(at(10, 0), 11), prRec(at(10, 5), 40, "mentioned")])} />);
+    const group = screen.getByTestId("artifact-group-mentioned");
+    const toggle = within(group).getByRole("button", { name: /Mentioned pull requests/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(group).queryByText(/not created by this session/)).toBeNull();
+    fireEvent.click(toggle);
+    expect(within(group).getByText("Mentioned, not created by this session.")).toBeInTheDocument();
+    expect(within(group).getByRole("link", { name: "#40 acme/app" })).toBeInTheDocument();
+  });
+
+  it("tab should show redacted marker never the token value", () => {
+    render(<ArtifactsTab session={grouped([prRec(at(10, 0), 11), rec(at(10, 1), { case: "ciLink", value: { url: "https://ci.example/run?token=[redacted]" } })])} />);
+    expect(screen.getByTestId("artifact-redacted")).toHaveTextContent("[redacted]");
+    expect(screen.queryByText(/ci\.example/)).toBeNull();
+    expect(screen.queryByRole("link", { name: /ci\.example/ })).toBeNull();
+  });
+
+  it("group header should use the PR chip for a tracked PR and a plain link otherwise", () => {
+    const session = grouped([prRec(at(10, 0), 11), prRec(at(11, 0), 12)], { pullRequests: [makePr({ number: 12, state: "merged" })] } as never);
+    render(<ArtifactsTab session={session} />);
+    expect(within(screen.getByTestId("artifact-group-12")).getByTestId("pr-chip")).toHaveTextContent("#12");
+    expect(within(screen.getByTestId("artifact-group-12")).getByTestId("pr-chip")).toHaveTextContent("Merged");
+    expect(within(screen.getByTestId("artifact-group-11")).queryByTestId("pr-chip")).toBeNull();
+    expect(within(screen.getByTestId("artifact-group-11")).getByRole("link", { name: /Open #11 acme\/app on GitHub/ })).toBeInTheDocument();
+  });
+
+  it("group should cap at 50 newest items behind Show all", () => {
+    const commits = Array.from({ length: 55 }, (_, i) => commitRec(at(10, 1) + i * 1000, `${String(i).padStart(2, "0")}${"a".repeat(38)}`));
+    render(<ArtifactsTab session={grouped([prRec(at(10, 0), 11), ...commits])} />);
+    const group = screen.getByTestId("artifact-group-11");
+    expect(within(group).getAllByTestId("artifact-item-commit")).toHaveLength(50);
+    fireEvent.click(within(group).getByRole("button", { name: "Show all (55)" }));
+    expect(within(group).getAllByTestId("artifact-item-commit")).toHaveLength(55);
+  });
+
+  it("copy button should copy the full value and announce it", async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<ArtifactsTab session={grouped([prRec(at(10, 0), 11), commitRec(at(10, 30), "1a2b3c4d5e6f")])} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA 1a2b3c4" }));
+    expect(writeText).toHaveBeenCalledWith("1a2b3c4d5e6f");
+    await waitFor(() => expect(mockAnnounce).toHaveBeenCalledWith("Copied commit 1a2b3c4", "polite", "artifact-copy"));
   });
 });
