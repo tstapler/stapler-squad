@@ -36,7 +36,7 @@ import {
 } from "@/lib/window/useWindowFocusMemory";
 import { containsPaneId } from "@/lib/pane/paneUtils";
 import { WindowOverview } from "@/components/window/WindowOverview";
-import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { CockpitActionsProvider, type CockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -130,6 +130,8 @@ function HomeContent() {
     pinSession,
     unpinSession,
     retrySession,
+    hibernateSession,
+    resumeHibernatedSession,
     clearConversationState,
     createCheckpoint,
     listCheckpoints,
@@ -599,7 +601,7 @@ function HomeContent() {
     },
   });
 
-  const cockpitActions = useMemo(() => ({
+  const cockpitActions = useMemo<CockpitActions>(() => ({
     onSessionClick: handleSessionClick,
     onDeleteSession: handleDeleteSession,
     onPauseSession: pauseSession,
@@ -609,6 +611,8 @@ function HomeContent() {
     onNewWorkspaceSession: handleNewWorkspaceSession,
     onRenameSession: renameSession,
     onRestartSession: restartSession,
+    onHibernateSession: (id: string) => void hibernateSession(id),
+    onResumeFromHibernation: (id: string) => void resumeHibernatedSession(id),
     onRetryNowSession: retrySession,
     onUpdateTags: handleUpdateTags,
     onNewSession: handleNewSession,
@@ -625,7 +629,7 @@ function HomeContent() {
   }), [
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
-    restartSession, retrySession, handleUpdateTags, handleNewSession, createCheckpoint,
+    restartSession, retrySession, hibernateSession, resumeHibernatedSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleSetRateLimitEnabled,
     handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);

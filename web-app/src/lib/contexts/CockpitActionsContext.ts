@@ -13,6 +13,8 @@ export interface CockpitActions {
   onNewWorkspaceSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession: (sessionId: string) => Promise<boolean>;
+  onHibernateSession: (sessionId: string) => void;
+  onResumeFromHibernation: (sessionId: string) => void;
   onRetryNowSession: (sessionId: string) => Promise<boolean>;
   onUpdateTags: (sessionId: string, tags: string[]) => void;
   onNewSession: () => void;

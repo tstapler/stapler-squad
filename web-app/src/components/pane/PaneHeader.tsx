@@ -6,6 +6,7 @@ import type { LeafPane, PaneViewKind } from "@/lib/pane/paneTypes";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOverflow";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { usePaneContext } from "./PaneContext";
 import {
   paneHeader,
@@ -41,11 +42,12 @@ export function PaneHeader({
   onSplitHorizontal,
 }: PaneHeaderProps) {
   const cockpit = useCockpitActions();
-  const { backlogIndex } = usePaneContext();
+  const { backlogIndex, triggerPickerForceNew } = usePaneContext();
   const isListPane = pane.viewKind === "session-list";
   const session = !isListPane && pane.sessionId
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
+  const sessionActions = useSessionActions(session?.id ?? "");
   const titleText = isListPane ? "Sessions" : (session ? session.title : "Empty");
 
   return (
@@ -68,10 +70,13 @@ export function PaneHeader({
               buttonClassName={paneHeaderButton}
               onPause={() => cockpit.onPauseSession(session.id)}
               onResume={() => cockpit.onResumeSession(session)}
+              onHibernate={() => cockpit.onHibernateSession(session.id)}
+              onResumeFromHibernation={() => cockpit.onResumeFromHibernation(session.id)}
               onDelete={() => cockpit.onDeleteSession(session.id)}
               onRestart={(id) => cockpit.onRestartSession(id)}
               onRetryNow={(id) => cockpit.onRetryNowSession(id)}
               onClone={() => cockpit.onCloneSession(session.id)}
+              onOpenInNewPane={() => triggerPickerForceNew(session)}
               onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
@@ -81,6 +86,10 @@ export function PaneHeader({
               onSteerAutonomousSession={(id, msg) => cockpit.onSteerAutonomousSession(id, msg)}
               onClearConversationState={(id) => cockpit.onClearConversationState(id)}
               onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}
+              onChangeProgram={async (_id, program) => {
+                const result = await sessionActions.update({ program });
+                if (!result) throw new Error("Failed to change program.");
+              }}
             />
           </div>
         )}
