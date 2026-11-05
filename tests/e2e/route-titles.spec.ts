@@ -1,8 +1,7 @@
 // @feature ui:header-nav, accessibility
 /**
  * Story 7.1: every page keeps its title across a hard load and a client-side navigation.
- * fixtures/route-titles.json is the settled title captured from the Next build by
- * tools/capture-next-fixtures.spec.ts. Routes that redirect on the test server (flag-guarded
+ * fixtures/route-titles.json is the settled title of each page (originally captured from the Next build; edit by hand when a title changes on purpose). Routes that redirect on the test server (flag-guarded
  * /backlog*, /login without auth, /config, /sessions/new) are recorded as their redirect
  * target's title; fixtures/next-baseline.json `redirects` lists them. The backlog flag is pinned
  * off because /settings/backlog-sources only has its own title when the flag is on.
@@ -13,8 +12,9 @@ import { AppShellPage } from './pages/AppShellPage';
 import { disableBacklogFeatureFlag } from './pages/BacklogMutations';
 import titles from './fixtures/route-titles.json';
 import baseline from './fixtures/next-baseline.json';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const FIXTURE = titles as Record<string, string>;
 const REDIRECTS = baseline.redirects as Record<string, string>;
 const MIN_NAV_ROUTES = 5;

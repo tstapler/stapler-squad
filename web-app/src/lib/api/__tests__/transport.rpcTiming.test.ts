@@ -48,8 +48,10 @@ describe("shared transport rpc timing", () => {
     setRpcTimingSink({ track });
     await listShells();
     expect(measure).toHaveBeenCalledWith("rpc:ListShells", expect.anything());
-    expect(track).toHaveBeenCalledTimes(1);
-    expect(track).toHaveBeenCalledWith(expect.objectContaining({ name: "rpc.ListShells", category: "rpc" }));
+    const rpcEvents = track.mock.calls.filter(([e]) => e.category === "rpc");
+    expect(rpcEvents).toHaveLength(1);
+    expect(rpcEvents[0][0]).toEqual(expect.objectContaining({ name: "rpc.ListShells", category: "rpc" }));
+    expect(rpcEvents[0][0].labels).toMatchObject({ transport: "http", code: "ok" });
     expect(jest.requireMock("@connectrpc/connect-web").createConnectTransport).toHaveBeenCalledTimes(1);
   });
 

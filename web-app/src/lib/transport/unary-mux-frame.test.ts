@@ -77,9 +77,9 @@ describe("unary-mux vectors", () => {
 
 describe("ws-unary-allowlist fixture", () => {
   it("should load with the agreed shape", () => {
-    expect(allowlist.wsUnaryAllowed).toHaveLength(9);
+    expect(allowlist.wsUnaryAllowed).toHaveLength(17);
     expect(allowlist.clientHeaders).toEqual(["Connect-Protocol-Version"]);
-    expect(allowlist.maxInFlight).toBe(6);
+    expect(allowlist.maxInFlight).toBe(64);
   });
 });
 

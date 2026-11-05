@@ -45,6 +45,12 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+// Tuning for --profile's lock profiles; see profiling.Config.
+var (
+	profileMutexFractionFlag int
+	profileBlockRateFlag     int
+)
+
 // version is normally overridden via -X main.version=... (see Makefile's
 // LDFLAGS / GoReleaser's .goreleaser.yaml). "dev" is a placeholder, not a
 // real fallback: resolveDevVersion() below replaces it at startup using
@@ -238,12 +244,14 @@ var (
 			// Start profiling if enabled
 			if profileFlag || traceFlag {
 				cleanup, err := profiling.StartProfiling(profiling.Config{
-					Enabled:      true,
-					HTTPPort:     profilePortFlag,
-					BlockProfile: true, // Enable block profiling for lock-up detection
-					MutexProfile: true, // Enable mutex profiling for lock contention
-					TraceEnabled: traceFlag,
-					TraceFile:    "", // Use default
+					Enabled:       true,
+					HTTPPort:      profilePortFlag,
+					BlockProfile:  true, // Enable block profiling for lock-up detection
+					MutexProfile:  true, // Enable mutex profiling for lock contention
+					MutexFraction: profileMutexFractionFlag,
+					BlockRateNs:   profileBlockRateFlag,
+					TraceEnabled:  traceFlag,
+					TraceFile:     "", // Use default
 				})
 				if err != nil {
 					return fmt.Errorf("failed to start profiling: %w", err)
@@ -415,11 +423,40 @@ var (
 				// entry there triggers startup supervision even when the global default
 				// is tmux, so a session pinned to tymux by a prior process finds a daemon
 				// running when it resumes.
+				monitorTymuxd := func(ctx context.Context, daemonCfg tymux.DaemonConfig) {
+					var onSpawn func()
+					if !tymuxdKeepServerFlag {
+						// A daemon the monitor started has no startup OnStop hook; register one so
+						// it is stopped after the session close hooks (hooks run in reverse order).
+						onSpawn = func() {
+							a.OnStop("tymuxd", func(context.Context) error { return tymux.StopTymuxd() })
+						}
+					}
+					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
+						current := config.LoadConfig()
+						if tymuxNeeded(current, session.ResolveSessionBackend(current, "", "")) {
+							return true
+						}
+						rows, err := coreDeps.Storage.ListInstanceData()
+						if err != nil {
+							log.Warn("Unable to check persisted tymux demand, assuming the daemon is needed", "err", err)
+							return true
+						}
+						for _, row := range rows {
+							if row.Backend == session.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
+								return true
+							}
+						}
+						return false
+					}, onSpawn)
+				}
 				if tymuxNeeded(cfg, resolvedBackend) {
-					if err := superviseTymuxd(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
-						tymux.EnsureDaemonRunning, a.OnStop); err != nil {
+					if err := startTymuxdSupervisor(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
+						tymux.EnsureDaemonRunning, a.OnStop, a.Go, monitorTymuxd); err != nil {
 						return err
 					}
+				} else {
+					a.Go("tymuxd-supervisor", func(ctx context.Context) { monitorTymuxd(ctx, tymux.ResolveDaemonConfig()) })
 				}
 
 				// --tmux-keep-server intentionally keeps the tmux server (and anything
@@ -880,6 +917,8 @@ func init() {
 	// Profiling flags
 	rootCmd.Flags().BoolVar(&profileFlag, "profile", false, "Enable runtime profiling (HTTP server + goroutine monitoring)")
 	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
+	rootCmd.Flags().IntVar(&profileMutexFractionFlag, "profile-mutex-fraction", profiling.DefaultMutexFraction, "With --profile: sample 1/N contended mutex events (1 = every event, costly)")
+	rootCmd.Flags().IntVar(&profileBlockRateFlag, "profile-block-rate", profiling.DefaultBlockRateNs, "With --profile: block profile rate in ns (1 = every event, costly)")
 	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/stapler-squad-trace-<PID>.out")
 
 	// Remote access and passkey flags
@@ -1007,6 +1046,18 @@ func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup,
 	default:
 		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
 	}
+	return nil
+}
+
+func startTymuxdSupervisor(ctx context.Context, cfg tymux.DaemonConfig, strictStartup, keepServer bool,
+	ensure func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error),
+	registerStop func(string, func(context.Context) error),
+	startWorker func(string, func(context.Context)),
+	monitor func(context.Context, tymux.DaemonConfig)) error {
+	if err := superviseTymuxd(ctx, cfg, strictStartup, keepServer, ensure, registerStop); err != nil {
+		return err
+	}
+	startWorker("tymuxd-supervisor", func(ctx context.Context) { monitor(ctx, cfg) })
 	return nil
 }
 

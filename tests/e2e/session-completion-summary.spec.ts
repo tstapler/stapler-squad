@@ -68,7 +68,7 @@ test.describe("session-completion-summary", () => {
       await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-summary-${Date.now()}`;
-      await page.getByLabel("Session Name").fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
 
       await page.getByText("Advanced Options").click();
       await page.getByLabel("Program", { exact: true }).selectOption("bash");

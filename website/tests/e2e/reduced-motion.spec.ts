@@ -14,10 +14,9 @@ test.describe('prefers-reduced-motion — UX acceptance', () => {
 		// have set autoplay on the hero video.
 		await expect(landing.heroVideo).not.toHaveAttribute('autoplay');
 
-		// The one feature-card <video> on this page (the "Live Terminal
-		// Streaming" DemoClip) never gets an autoplay attribute at all, with
-		// or without reduced motion -- FeatureCard.astro's markup simply never
-		// sets it.
+		// Feature-card clips (present only in the deploy build) never get an
+		// autoplay attribute at all, with or without reduced motion --
+		// FeatureCard.astro's markup simply never sets it.
 		const featureCardVideo = page.getByTestId('feature-card-video');
 		if (await featureCardVideo.count() > 0) {
 			await expect(featureCardVideo.first()).not.toHaveAttribute('autoplay');

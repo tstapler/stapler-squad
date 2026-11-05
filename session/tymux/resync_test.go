@@ -28,7 +28,10 @@ func TestApplySnapshotResync_BroadcastsCRLFBetweenRows(t *testing.T) {
 
 	select {
 	case data := <-ch:
-		assert.Equal(t, resyncClearAndHomeSeq+"a\r\nb", string(data))
+		want, err := RenderSnapshotRedraw(snap)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+		assert.Contains(t, want, "a\r\nb", "rows must be CRLF-separated or they stagger in a live vt100 parser")
 	default:
 		t.Fatal("expected a broadcast frame, got none")
 	}

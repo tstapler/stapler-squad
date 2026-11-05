@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -39,6 +41,13 @@ type fakeTransport struct {
 	capabilities []string
 	// serverInfoCalls counts GetServerInfo calls.
 	serverInfoCalls int32
+	// serverInfoErr, when set, makes GetServerInfo fail with it (a transient fault).
+	serverInfoErr atomic.Pointer[error]
+	// lastServerInfoHadDeadline records whether the latest GetServerInfo ctx was bounded.
+	lastServerInfoHadDeadline atomic.Bool
+
+	// paneStatusFn answers GetPaneStatus; nil means the daemon lacks the RPC.
+	paneStatusFn func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
 
 	// attachFn lets a test substitute a custom attachStream (e.g. one that
 	// plays back a scripted sequence of AttachEvents); defaults to a
@@ -87,12 +96,24 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 	return f.capturePaneFn(ctx, req)
 }
 
-func (f *fakeTransport) GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+func (f *fakeTransport) GetServerInfo(ctx context.Context, _ *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
 	atomic.AddInt32(&f.serverInfoCalls, 1)
+	_, hasDeadline := ctx.Deadline()
+	f.lastServerInfoHadDeadline.Store(hasDeadline)
+	if err := f.serverInfoErr.Load(); err != nil {
+		return nil, *err
+	}
 	if f.capabilities == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetServerInfo"))
 	}
 	return connect.NewResponse(&v1.ServerInfo{Capabilities: f.capabilities}), nil
+}
+
+func (f *fakeTransport) GetPaneStatus(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+	if f.paneStatusFn == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetPaneStatus"))
+	}
+	return f.paneStatusFn(ctx, req)
 }
 
 func (f *fakeTransport) Attach(ctx context.Context) attachStream {
@@ -145,6 +166,7 @@ func fakeSession(sessionID, paneID, cwd string, liveness v1.Liveness) *v1.Sessio
 }
 
 func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var gotReq *v1.CreateSessionRequest
 	transport := &fakeTransport{
@@ -165,6 +187,8 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // this test counts launch-path GetServerInfo calls only
+	resetClaims(t)
 	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
 	require.NoError(t, os.WriteFile(promptFile, []byte("fix the bug\n"), 0o600))
 	hostile := "a b'c\"d$e`f\\g"
@@ -268,6 +292,7 @@ func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
+	resetClaims(t)
 	big := filepath.Join(t.TempDir(), "big.txt")
 	require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte("x"), launchcmd.MaxArgBytes), 0o600))
 	dir := t.TempDir()
@@ -284,6 +309,7 @@ func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
 // A prompt at or above MaxArgBytes reaches tymuxd without ever being an argv
 // entry: one-shot via stdin_path, interactive via a short reference instruction.
 func TestTymuxGRPCSession_Start_LargePromptRoutes(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	stdinFile := filepath.Join(dir, "prompt-stdin.txt")
 	require.NoError(t, os.WriteFile(stdinFile, bytes.Repeat([]byte("p"), 2*1024*1024), 0o600))
@@ -342,6 +368,7 @@ func captureCreateSessionRequest(dir string, got **v1.CreateSessionRequest) *fak
 }
 
 func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
+	resetClaims(t)
 	const wantColorterm = "truecolor"
 	tests := []struct {
 		name          string
@@ -351,8 +378,8 @@ func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
 		wantColorterm string
 	}{
 		{"both unset: injects defaults", "", "", "xterm-256color", wantColorterm},
-		{"TERM already set: left alone", "screen-256color", "", "", wantColorterm},
-		{"COLORTERM already set: left alone", "", wantColorterm, "xterm-256color", ""},
+		{"TERM already set: overridden", "screen-256color", "", "xterm-256color", wantColorterm},
+		{"COLORTERM already set: overridden", "", "24bit", "xterm-256color", wantColorterm},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -372,6 +399,7 @@ func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
 	err := sess.Start("")
@@ -382,6 +410,7 @@ func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
 	err := sess.Start(filepath.Join(t.TempDir(), "does-not-exist"))
@@ -391,6 +420,7 @@ func TestTymuxGRPCSession_Start_RejectsNonexistentWorkDir(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_StartThenIsAlive_ReturnsTrueImmediately(t *testing.T) {
+	resetClaims(t)
 	sess := startedSession(t, &v1.PaneSnapshot{PaneId: testPaneID, Liveness: v1.Liveness_LIVENESS_LIVE})
 
 	assert.True(t, sess.IsAlive())
@@ -424,6 +454,7 @@ func TestTymuxGRPCSession_Close_IssuesKillSessionAndIsAliveThenFalse(t *testing.
 }
 
 func TestTymuxGRPCSession_RestoreWithWorkDir_RevivesDeadSession(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var revivedID string
 	// tymuxGRPCSession.Start's Name convention: RestoreWithWorkDir matches
@@ -452,6 +483,7 @@ func TestTymuxGRPCSession_RestoreWithWorkDir_RevivesDeadSession(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_RestoreWithWorkDir_NoMatchFallsBackToStart(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	var created bool
 	transport := &fakeTransport{
@@ -473,6 +505,7 @@ func TestTymuxGRPCSession_RestoreWithWorkDir_NoMatchFallsBackToStart(t *testing.
 }
 
 func TestTymuxGRPCSession_GetCurrentWorkingDirectory_ReturnsCachedCwdWithNoExtraRPC(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	calls := 0
 	transport := &fakeTransport{
@@ -495,6 +528,7 @@ func TestTymuxGRPCSession_GetCurrentWorkingDirectory_ReturnsCachedCwdWithNoExtra
 }
 
 func TestTymuxGRPCSession_GetCurrentWorkingDirectory_EmptyBeforeStart(t *testing.T) {
+	resetClaims(t)
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 	cwd, err := sess.GetCurrentWorkingDirectory()
 	require.NoError(t, err)
@@ -503,6 +537,7 @@ func TestTymuxGRPCSession_GetCurrentWorkingDirectory_EmptyBeforeStart(t *testing
 
 func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	t.Helper()
+	resetClaims(t)
 	dir := t.TempDir()
 	transport := &fakeTransport{
 		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -518,7 +553,179 @@ func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	return sess
 }
 
+// activitySession exercises the real manager's capture path without opening an Attach stream.
+func activitySession(t *testing.T, capture func() (*v1.PaneSnapshot, error)) TymuxManager {
+	t.Helper()
+	transport := &fakeTransport{
+		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			assert.Equal(t, testPaneID, req.Msg.GetPaneId())
+			snap, err := capture()
+			if err != nil {
+				return nil, err
+			}
+			return connect.NewResponse(snap), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	return sess
+}
+
+func activitySnapshot(text string) *v1.PaneSnapshot {
+	lines := strings.Split(text, "\n")
+	rows := make([]*v1.Row, 0, len(lines))
+	for _, line := range lines {
+		rows = append(rows, &v1.Row{Cells: []*v1.Cell{{Text: line}}})
+	}
+	return &v1.PaneSnapshot{Grid: rows}
+}
+
+func TestTymuxGRPCSession_ActivitySnapshots(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	var captureErr error
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, captureErr })
+
+	check := func(wantUpdated bool, wantContent string) {
+		t.Helper()
+		updated, prompt, content := sess.HasUpdated()
+		assert.Equal(t, wantUpdated, updated)
+		assert.False(t, prompt)
+		assert.Equal(t, wantContent, content)
+		assert.Equal(t, wantContent != "", sess.HasMeaningfulContent(content))
+	}
+	check(true, "working")
+	check(false, "working")
+	snap = activitySnapshot("finished")
+	check(true, "finished")
+	captureErr = errors.New("capture unavailable")
+	check(false, "")
+	captureErr = nil
+	check(false, "finished")
+	snap = activitySnapshot("more output")
+	check(true, "more output")
+}
+
+func TestTymuxGRPCSession_ActivityFiltersBanners(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	for _, text := range []string{"", "  \n", "14:23 5-Jan-24"} {
+		snap = activitySnapshot(text)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, prompt)
+		if text == "" {
+			assert.False(t, updated, "an initial empty snapshot is not output")
+		}
+		assert.False(t, sess.HasMeaningfulContent(content), "text: %q", text)
+		filtered, removed := sess.FilterBanners(content)
+		assert.Empty(t, strings.TrimSpace(filtered))
+		if text == "14:23 5-Jan-24" {
+			assert.Equal(t, 1, removed)
+		}
+		updated, prompt, content = sess.HasUpdated()
+		assert.False(t, updated, "identical empty/banner snapshots are stable")
+		assert.False(t, prompt)
+		assert.False(t, sess.HasMeaningfulContent(content))
+	}
+	filtered, removed := sess.FilterBanners("working\n14:23 5-Jan-24")
+	assert.Equal(t, "working", filtered)
+	assert.Equal(t, 1, removed)
+	snap = activitySnapshot("working\n14:23 5-Jan-24")
+	updated, _, _ := sess.HasUpdated()
+	assert.True(t, updated)
+	snap = activitySnapshot("working\n14:24 5-Jan-24")
+	updated, _, content := sess.HasUpdated()
+	assert.False(t, updated, "banner-only changes must not publish activity")
+	assert.True(t, sess.HasMeaningfulContent(content))
+}
+
+func TestTymuxGRPCSession_ActivityPrompts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		program string
+		content string
+		prompt  bool
+	}{
+		{"claude", "❯ 1. Yes\n  2. No", true},
+		{"aider", "(Y)es/(N)o/(D)on't ask again", true},
+		{"gemini", "Yes, allow once", true},
+		{"/usr/local/bin/claude", "❯ 1. Yes\n  2. No", true},
+		{"sh", "Yes, allow once", false},
+	} {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return activitySnapshot(tc.content), nil })
+			sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Literal(tc.program)}})
+			updated, prompt, _ := sess.HasUpdated()
+			assert.True(t, updated)
+			assert.Equal(t, tc.prompt, prompt)
+			updated, prompt, _ = sess.HasUpdated()
+			assert.False(t, updated)
+			assert.Equal(t, tc.prompt, prompt, "stable prompts must remain detectable")
+		})
+	}
+}
+
+func TestTymuxGRPCSession_ActivityOutOfOrderCaptures(t *testing.T) {
+	t.Parallel()
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	var calls atomic.Int32
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) {
+		if calls.Add(1) == 1 {
+			close(oldStarted)
+			<-releaseOld
+			return activitySnapshot("old output"), nil
+		}
+		return activitySnapshot("new output"), nil
+	})
+	oldDone := make(chan struct{})
+	go func() {
+		defer close(oldDone)
+		updated, prompt, content := sess.HasUpdated()
+		assert.False(t, updated, "a stale capture must not overwrite a newer snapshot")
+		assert.False(t, prompt)
+		assert.Empty(t, content)
+	}()
+	<-oldStarted
+	updated, prompt, content := sess.HasUpdated()
+	assert.True(t, updated)
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+	close(releaseOld)
+	<-oldDone
+	updated, prompt, content = sess.HasUpdated()
+	assert.False(t, updated, "the newer snapshot remains the baseline")
+	assert.False(t, prompt)
+	assert.Equal(t, "new output", content)
+}
+
+func TestTymuxGRPCSession_ActivityConcurrentPolls(t *testing.T) {
+	t.Parallel()
+	snap := activitySnapshot("working")
+	sess := activitySession(t, func() (*v1.PaneSnapshot, error) { return snap, nil })
+	command, err := launchcmd.NewShellText("claude")
+	require.NoError(t, err)
+	var updates atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			updated, _, content := sess.HasUpdated()
+			if updated {
+				updates.Add(1)
+				assert.True(t, sess.HasMeaningfulContent(content))
+			}
+			sess.FilterBanners(content)
+			sess.SetCommand(launchcmd.ShellScript{Text: command})
+		})
+	}
+	wg.Wait()
+	assert.EqualValues(t, 1, updates.Load(), "one snapshot is published exactly once")
+}
+
 func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "r", Fg: 1}, {Text: "e", Fg: 1}, {Text: "d"}}}},
 	}
@@ -532,6 +739,7 @@ func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{
 			{Cells: []*v1.Cell{{Text: "h"}, {Text: "e"}, {Text: "l"}, {Text: "l"}, {Text: "o"}}},
@@ -548,6 +756,7 @@ func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_CaptureViewport_TailsToRequestedLines(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{
 			{Cells: []*v1.Cell{{Text: "one"}}},
@@ -565,6 +774,7 @@ func TestTymuxGRPCSession_CaptureViewport_TailsToRequestedLines(t *testing.T) {
 }
 
 func TestTymuxGRPCSession_GetCursorPosition_ReturnsColRowFromSnapshot(t *testing.T) {
+	resetClaims(t)
 	// kibitzer:ignore replace-magic-literal -- fixture cursor row/col; the other "5"/"2"s the check groups these with (viewport line count, SGR selector codes) are unrelated values that just happen to share a digit
 	snap := &v1.PaneSnapshot{CursorRow: 5, CursorCol: 2}
 	sess := startedSession(t, snap)
@@ -577,6 +787,7 @@ func TestTymuxGRPCSession_GetCursorPosition_ReturnsColRowFromSnapshot(t *testing
 }
 
 func TestTymuxGRPCSession_GetPaneDimensions_ReturnsColsRowsFromSnapshot(t *testing.T) {
+	resetClaims(t)
 	snap := &v1.PaneSnapshot{Rows: 24, Cols: 80}
 	sess := startedSession(t, snap)
 
@@ -732,6 +943,7 @@ func TestTymuxGRPCSession_StartStopControlMode_AreNoOps(t *testing.T) {
 // --- Story 2.2.6: ErrTymuxdUnreachable classification ---
 
 func TestTymuxGRPCSession_Start_TransportUnavailable_ClassifiesAsErrTymuxdUnreachable(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	underlying := connect.NewError(connect.CodeUnavailable, errors.New("dial tcp: connection refused"))
 	transport := &fakeTransport{
@@ -750,6 +962,7 @@ func TestTymuxGRPCSession_Start_TransportUnavailable_ClassifiesAsErrTymuxdUnreac
 }
 
 func TestTymuxGRPCSession_Start_OrdinaryRPCError_NotClassifiedAsUnreachable(t *testing.T) {
+	resetClaims(t)
 	dir := t.TempDir()
 	underlying := connect.NewError(connect.CodeInvalidArgument, errors.New("bad request"))
 	transport := &fakeTransport{
@@ -855,6 +1068,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_CancelledContext_ReturnsEarlyW
 }
 
 func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendInputViaControlMode(context.Background(), []byte(testHelloInput))
@@ -876,6 +1090,7 @@ func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *
 // byte, mirroring TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream's
 // pattern of asserting on stream.sentRequests().
 func TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSends(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	err := sess.SendPromptWithEnter("some long driver-generated prompt text")
@@ -902,6 +1117,7 @@ func TestTymuxGRPCSession_SendPromptWithEnter_SendsContentAndEnterAsSeparateSend
 // pane is still live must fire exactly once when the standing stream later
 // delivers Exited.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
@@ -935,6 +1151,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t
 // exactly once — not zero times, which is what a naive
 // store-only-for-future-events implementation would do.
 func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 	concrete := sess.(*tymuxGRPCSession)
 
@@ -972,6 +1189,7 @@ func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyE
 // once, the assertion ResetExitOnce is checked against is that calling it
 // with no subsequent exit never spuriously invokes the callback again.
 func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
+	resetClaims(t)
 	sess, stream, _ := startedSessionWithStream(t) // transport (3rd return) unused here
 
 	var calls int32
@@ -1086,6 +1304,7 @@ func assertCleanExitFires(t *testing.T, sess TymuxManager, stream *fakeAttachStr
 // marker and can't assert on rendered ANSI/SGR content the way this test
 // does via a real ANSI-aware parser (parseSGRSequences, render_test.go).
 func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences(t *testing.T) {
+	resetClaims(t)
 	sess, stream, transport := startedSessionWithStream(t)
 
 	assertAgentPromptSentOverStream(t, sess, stream, "explain the reconnect backoff schedule\n")
@@ -1122,6 +1341,234 @@ func TestParseScrollbackOffset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, parseScrollbackOffset(tt.in))
+		})
+	}
+}
+
+func TestTymuxGRPCSession_CapturePaneRedraw_CarriesTerminalStateAndAltScreen(t *testing.T) {
+	resetClaims(t)
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		Modes:     &v1.TerminalModes{},
+		AltScreen: true,
+		Title:     "vim",
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.True(t, altScreen)
+	assert.Contains(t, data, "\x1b[?1049h", "alt-screen entry must be restored, not just the text")
+	assert.Contains(t, data, "\x1b]2;vim", "title must be restored")
+	assert.Contains(t, data, "hi")
+}
+
+func TestTymuxGRPCSession_CapturePaneRedraw_PropagatesCaptureError(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	sess := NewTymuxGRPCSession(&fakeTransport{
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, errors.New("daemon gone")
+		},
+	})
+	require.NoError(t, sess.Start(dir))
+
+	_, _, _, err := sess.CapturePaneRedraw(context.Background())
+
+	require.Error(t, err)
+}
+
+// A daemon older than v1.9.0 sends no Modes; the redraw must decline so callers keep the text path.
+func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalState(t *testing.T) {
+	resetClaims(t)
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		AltScreen: true, // would be reported if the snapshot were used
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, data)
+	assert.False(t, altScreen)
+}
+
+func TestCapturePane_RevivesRestoredPaneWithoutScreen(t *testing.T) {
+	t.Parallel()
+	var captures, revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if atomic.AddInt32(&captures, 1) == 1 {
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+	assert.EqualValues(t, 2, atomic.LoadInt32(&captures))
+}
+
+func TestCapturePane_ViewOnlyNeverRevives(t *testing.T) {
+	t.Parallel()
+	var revives int32
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.viewOnly = true
+
+	_, err := sess.capturePane(context.Background(), 0)
+	require.ErrorIs(t, err, ErrPaneNotRunning)
+	assert.Zero(t, atomic.LoadInt32(&revives))
+}
+
+// A wedged daemon must not hold captureReviveMu (and every capture/IsAlive caller behind it) past the lifecycle bound.
+func TestReviveDeadPaneForCapture_BoundsWedgedDaemon(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		transport := &fakeTransport{
+			reviveSessionFn: func(ctx context.Context, _ *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+		sess.paneID = testPaneID
+
+		start := time.Now()
+		ok := sess.reviveDeadPaneForCapture(context.Background(), testPaneID, 0)
+
+		assert.False(t, ok)
+		assert.Equal(t, lifecycleRPCTimeout, time.Since(start))
+	})
+}
+
+// Concurrent captures on one dead pane revive it once; the loser retries instead of reviving a live pane.
+func TestCapturePane_ConcurrentCallersReviveOnce(t *testing.T) {
+	t.Parallel()
+	const callers = 8
+	var revived atomic.Bool
+	var revives, entered int32
+	allFailed := make(chan struct{})
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if !revived.Load() {
+				// Barrier: every caller has read the pre-revive generation before any revive runs,
+				// so only the dedup (not scheduling luck) keeps the revive count at one.
+				if atomic.AddInt32(&entered, 1) == callers {
+					close(allFailed)
+				}
+				select {
+				case <-allFailed:
+				case <-time.After(10 * time.Second):
+					return nil, errors.New("barrier timed out")
+				}
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+			}
+			return connect.NewResponse(activitySnapshot("hello")), nil
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			atomic.AddInt32(&revives, 1)
+			revived.Store(true)
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := sess.capturePane(context.Background(), 0)
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revives))
+}
+
+// Status polling cannot tell an archived session from a live one, so IsAlive must never respawn a pane.
+func TestIsAlive_NeverRevivesDeadPane(t *testing.T) {
+	t.Parallel()
+	transport := &fakeTransport{
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+		},
+		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+			t.Error("IsAlive must not call ReviveSession")
+			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess.paneID = testPaneID
+	sess.liveness = v1.Liveness_LIVENESS_DEAD
+
+	assert.False(t, sess.IsAlive())
+}
+
+func TestIsAlive_PaneNotRunning_UsesLifecycleState(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		state     v1.PaneState
+		withState bool
+		cachedLiv v1.Liveness
+		want      bool
+		wantLiv   v1.Liveness
+	}{
+		{"failed is dead despite cached live", v1.PaneState_PANE_STATE_FAILED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"stopped is dead", v1.PaneState_PANE_STATE_STOPPED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"exited is dead", v1.PaneState_PANE_STATE_EXITED, true, v1.Liveness_LIVENESS_LIVE, false, v1.Liveness_LIVENESS_DEAD},
+		{"backoff is alive", v1.PaneState_PANE_STATE_BACKOFF, true, v1.Liveness_LIVENESS_DEAD, true, v1.Liveness_LIVENESS_DEAD},
+		{"unknown state keeps cached live", v1.PaneState_PANE_STATE_UNSPECIFIED, false, v1.Liveness_LIVENESS_LIVE, true, v1.Liveness_LIVENESS_LIVE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			transport := &fakeTransport{
+				capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+					return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("pane is not running"))
+				},
+			}
+			if tc.withState {
+				transport.capabilities = []string{capPaneLifecycle}
+				transport.paneStatusFn = func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+					return connect.NewResponse(&v1.PaneStatus{State: tc.state}), nil
+				}
+			}
+			sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+			sess.paneID = testPaneID
+			sess.liveness = tc.cachedLiv
+
+			assert.Equal(t, tc.want, sess.IsAlive())
+			sess.mu.RLock()
+			defer sess.mu.RUnlock()
+			assert.Equal(t, tc.wantLiv, sess.liveness)
 		})
 	}
 }

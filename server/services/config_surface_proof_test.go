@@ -11,6 +11,10 @@ import (
 // four workflow-engine mode flags (Task 1.5.9c) are proved through the
 // production per-class reader in backlog_gate_classes_test.go.
 var configSurfaceProofs = map[surfaceID]proofEntry{
+	"flag:tcc:enrichment-pre-consent": {
+		testName:   "TestConfigSurfaceProof_TCCEnrichmentConsent_ChangesStartupGate",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"quota.enabled": {
 		testName:   "TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode",
 		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
@@ -191,6 +195,26 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:attention_ack_bypass_fix": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_idle_clock_output": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_inbox_consolidation": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_prose_question_detection": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_prose_question_llm_tiebreak": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:autonomous_stall_nudge_enabled": {
 		testName:   "TestConfigSurfaceProof_AutonomyNudgeFlags_ChangeEffectiveReaders",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -275,6 +299,14 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:handoff-summary": {
 		exempt: "read-only mirror: HandoffSummaryFeatureController.Enable and Disable refuse (feature_flag_service.go), so UpdateFeatureFlag cannot flip it; the real setting is config.json handoff_summary.enabled, read via HandoffSummaryConfig.EnabledOrDefault, which is not a feature_flags surface",
 	},
+	"flag:driver_pane_activity_gate": {
+		testName:   "TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:escape_events_db_migrate": {
+		testName:   "TestConfigSurfaceProof_EscapeEventsDBMigrate_ChangesMigrationEnabled",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:hidden_session_gate": {
 		testName:   "TestConfigSurfaceProof_HiddenSessionGate_ChangesDeliveryGateCache",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -312,14 +344,24 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:unary_over_ws_remote": {
 		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
+	"flag:terminal_ws_pool": {
+		exempt: "client-only: no Go reader; the web client gates the shared terminal socket pool on it (web-app/src/lib/transport/terminal-socket.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the /api/ws/terminal-mux endpoint is always mounted (advertised size 0 makes it answer 404) and covered by ws_terminal_mux_test.go",
+	},
 	"flag:batch_unary": {
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
+	},
+	"flag:ghostty_renderer": {
+		exempt: "client-only: no Go reader; the web client picks the terminal renderer (xterm.js vs ghostty-web) on it (web-app/src/lib/terminal/TerminalPool.tsx via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
 	"flag:window_keep_alive": {
 		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
 	"flag:review:block-approval-on-ci-failure": {
 		testName:   "TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:session_event_log": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:session:workspace-peers-nudge": {

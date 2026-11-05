@@ -1,6 +1,7 @@
 import { APIRequestContext } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 /**
  * Wrappers around the `/api/debug/backlog/mutate-*` endpoints
@@ -123,6 +124,40 @@ export async function archiveBacklogItemDirect(request: APIRequestContext, itemI
   });
   if (!resp.ok()) {
     throw new Error(`archiveBacklogItemDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+}
+
+/**
+ * Lists every backlog item on the e2e server, including done and archived ones. The backlog page's
+ * empty state only renders when the store holds no items at all, archived or not.
+ */
+async function listAllBacklogItems(request: APIRequestContext): Promise<{ id: string; title: string }[]> {
+  const resp = await request.post(`${BASE_URL}/api/session.v1.BacklogService/ListBacklogItems`, {
+    headers: { "Content-Type": "application/json" },
+    data: { includeTerminal: true, includeArchived: true },
+  });
+  if (!resp.ok()) return [];
+  const body = (await resp.json()) as { items?: { id: string; title: string }[] };
+  return body.items ?? [];
+}
+
+/**
+ * Best-effort afterEach cleanup for items a test created through the UI (no id in hand): deletes
+ * every item whose title starts with one of `prefixes`. Deleting rather than archiving keeps the
+ * shared server's backlog genuinely empty for the empty-state tests.
+ */
+export async function deleteBacklogItemsByTitlePrefix(request: APIRequestContext, prefixes: string[]): Promise<void> {
+  for (const item of await listAllBacklogItems(request)) {
+    if (prefixes.some((prefix) => item.title.startsWith(prefix))) {
+      await deleteBacklogItemDirect(request, item.id).catch(() => {});
+    }
+  }
+}
+
+/** Deletes every backlog item. Only reachable on the e2e-local test server (debug endpoints). */
+export async function deleteAllBacklogItemsDirect(request: APIRequestContext): Promise<void> {
+  for (const item of await listAllBacklogItems(request)) {
+    await deleteBacklogItemDirect(request, item.id).catch(() => {});
   }
 }
 

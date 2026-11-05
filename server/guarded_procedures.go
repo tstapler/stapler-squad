@@ -37,6 +37,7 @@ const writeFileProcedurePath = "/api" + sessionv1connect.SessionServiceWriteFile
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
+	"/api" + sessionv1connect.SessionServiceContinueTCCEnrichmentProcedure: middleware.ProfileRebinding,
 	probeProcedurePath: middleware.ProfileProbe,
 	nudgeProcedurePath: middleware.ProfileProbe,
 	pruneProcedurePath: middleware.ProfileRebinding,

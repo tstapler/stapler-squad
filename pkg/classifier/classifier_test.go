@@ -845,6 +845,29 @@ func TestClassify_GitResetHard_AutoDeny(t *testing.T) {
 	}
 }
 
+func TestClassify_Yes_AutoDeny(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"yes",
+		"yes >/dev/null &",
+		"taskpolicy -b yes >/dev/null &",
+		"for i in $(seq 50); do taskpolicy -b yes >/dev/null & done",
+		"yes | rm -i file",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoDeny || result.RuleID != "seed-deny-yes" {
+			t.Errorf("cmd %q: expected AutoDeny by seed-deny-yes, got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
 func TestClassify_GitResetSoft_AutoAllow(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}

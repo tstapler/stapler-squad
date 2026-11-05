@@ -1,0 +1,3 @@
+# Byte-exact terminal replay files: CR/LF and escape bytes must survive checkout.
+corpus/** -text
+golden/** -text

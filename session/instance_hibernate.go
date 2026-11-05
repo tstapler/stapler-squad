@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"time"
 
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
@@ -28,9 +30,11 @@ func (i *Instance) Hibernate(ctx context.Context) error {
 // Called from transitionToLocked when transitioning Active→Hibernated;
 // dispatches the I/O work to a goroutine so the actor is not blocked.
 func hibernateProcessLocked(s *instanceState, ctx context.Context) {
+	s.inst.hibernateTeardownWG.Add(1)
 	s.inst.hibernateWG.Add(1)
 	go func() {
 		defer s.inst.hibernateWG.Done()
+		defer s.inst.hibernateTeardownWG.Done()
 		s.inst.hibernateProcess(ctx)
 	}()
 }
@@ -101,6 +105,9 @@ func (i *Instance) scrollbackPath() string {
 // The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
+		if s.inst.ArchivedAt != nil || s.inst.Status != Hibernated {
+			return fmt.Errorf("session is not an unarchived hibernated session")
+		}
 		return transitionToLocked(s, ctx, Active)
 	})
 }
@@ -110,11 +117,19 @@ func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 // dispatches the re-launch work to a goroutine so the actor is not blocked.
 func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 	i := s.inst
+	i.terminalViewClosedAt.Store(time.Now().UnixNano())
 	i.started.Store(false)
 	i.hibernateWG.Add(1)
 	go func() {
 		defer i.hibernateWG.Done()
-		if err := i.Start(false); err != nil {
+		if err := i.resumeAfterTeardown(func() error {
+			return i.sendSyncErr(func(s *instanceState) error {
+				if s.inst.Status != Active || s.inst.ArchivedAt != nil {
+					return nil
+				}
+				return startLocked(s, false)
+			})
+		}); err != nil {
 			log.Error("hibernation resume: failed to start session",
 				"session", i.Title, "err", err.Error())
 			i.send(rollbackFailedResume)
@@ -150,6 +165,11 @@ func JoinHibernation(i *Instance) {
 		log.Warn("JoinHibernation: hibernate/resume goroutine did not exit within timeout; it may still be running",
 			"session", i.Title, "timeout", stopJoinTimeout)
 	}
+}
+
+func (i *Instance) resumeAfterTeardown(start func() error) error {
+	i.hibernateTeardownWG.Wait()
+	return start()
 }
 
 // rollbackFailedResume reverts Status to Hibernated after a failed resume,

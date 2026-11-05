@@ -96,6 +96,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // Whether Redux knew this session when the effect last ran; its first appearance is hydration, not a change.
   const sessionKnownRef = useRef(false);
   const mountFetchPendingRef = useRef(false);
+  // Fixed per hook instance: re-drawing it on every Redux update would make the slow backstop fire at random.
+  const pollPhaseRef = useRef<number | null>(null);
+  if (pollPhaseRef.current === null) pollPhaseRef.current = Math.random();
+  const pollStartedRef = useRef(false);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -117,14 +121,14 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
 
   // `force` skips a fresh prefetch-cache hit; the first fetch after mount reads
   // the cache and joins any in-flight prefetch (Story 2.1.6a).
-  const loadStatus = useCallback(async (force: boolean) => {
+  const loadStatus = useCallback(async (force: boolean, waitForFresh = false) => {
     if (stoppedRef.current) {
       setStatusLoading(false);
       return;
     }
     const signal = startStatus();
     try {
-      const entry = await fetchVcsEntry(sessionId, force, isActive);
+      const entry = await fetchVcsEntry(sessionId, force, isActive, waitForFresh);
       if (signal.aborted) return;
       if (entry.error) {
         setError(new Error(entry.error));
@@ -148,7 +152,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     }
   }, [sessionId, startStatus, isActive]);
 
-  const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
+  // `waitForFresh` is for user-requested refreshes only; the interval poll leaves it false so the
+  // server may answer from its stale-while-revalidate entry.
+  const fetchStatus = useCallback((waitForFresh = false) => loadStatus(true, waitForFresh), [loadStatus]);
 
   // "<session>:<contextLines>" the diff was last requested for; null until a
   // consumer asks. Keyed on contextLines so changing it refetches, as before.
@@ -193,7 +199,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   }, [pollMode, diffKey, fetchDiff]);
 
   const refresh = useCallback(() => {
-    fetchStatus();
+    fetchStatus(true);
     if (diffRequestedForRef.current === diffKey) void fetchDiff();
   }, [fetchStatus, fetchDiff, diffKey]);
 
@@ -227,21 +233,38 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     // a duplicate. Once that fetch has settled, hydration may carry newer state than the cached
     // entry, and any change to an already-known session also warrants a forced refetch.
     const hydrating = !firstForSession && !knownBefore && sessionUpdatedAt !== null && mountFetchPendingRef.current;
-    const load = loadStatus(!firstForSession && !hydrating);
+    // A re-run after the first fetch is event-driven (session changed in Redux): wait for fresh data.
+    const eventDriven = !firstForSession && !hydrating;
+    const load = loadStatus(eventDriven, eventDriven);
     if (firstForSession) {
       mountFetchPendingRef.current = true;
       void load.finally(() => {
         mountFetchPendingRef.current = false;
       });
     }
-    const fallback = setInterval(() => {
+    let fallback: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
       if (stoppedRef.current) {
         clearInterval(fallback);
         return;
       }
       if (!document.hidden) fetchStatus();
-    }, pollMs);
-    return () => clearInterval(fallback);
+    };
+    // Panes mounted together would otherwise poll in lockstep forever (a 10-minute burst of every
+    // unfocused session at once); a random phase spreads them. The focused pane keeps its own cadence.
+    const phase = setTimeout(
+      () => {
+        tick();
+        if (!stoppedRef.current) fallback = setInterval(tick, pollMs);
+      },
+      // Only the hook's first poll start is jittered; a re-run (session update) restarts a full period as before.
+      pollMode === "fast" || pollStartedRef.current ? pollMs : Math.floor((pollPhaseRef.current ?? 0) * pollMs),
+    );
+    pollStartedRef.current = true;
+    return () => {
+      clearTimeout(phase);
+      clearInterval(fallback);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
@@ -266,7 +289,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     diffLoading,
     loading: statusLoading,
     error,
-    refreshStatus: fetchStatus,
+    refreshStatus: () => fetchStatus(true),
     refreshDiff: fetchDiff,
     diffContextLines,
     setDiffContextLines,

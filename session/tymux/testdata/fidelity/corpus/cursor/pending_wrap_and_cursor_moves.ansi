@@ -1,0 +1,4 @@
+cursor/pending_wrap_and_cursor_moves -- esctest2 cuf.py/cub.py (autowrap pendi
+[1;1Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[1Dxx (CUB from pending wrap)[3;1Hbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb[1Cy (CUF no-op at margin)
+[5;1Hcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccr-clears-pending[7;1Hdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd[7;1He[9;1HeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeMri-from-pending
+[11;1Hffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffbs-from-pending[13;1Hgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg[K[1Gx-after-el

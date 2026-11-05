@@ -1,0 +1,5 @@
+sgr/attributes_on_off -- libvterm 30state_pen !Bold..!Reverse; ECMA-48 8.3.117
+[1mbold[0m [2mfaint[0m [3mitalic[0m [4munderline[0m [5mblink[0m [7mreverse[0m [8mconceal[0m [9mstrike[0m [53moverline[0m
+[1mb[22m-off [2mf[22m-off [3mi[23m-off [4mu[24m-off [5mk[25m-off [7mr[27m-off
+[8mc[28m-off [9ms[29m-off [53mo[55m-off
+[1mb[0m[3mi[0m[4mu[0m[1;3;4;7mall4[0m[1;2;3;4;5;7;9;53meverything[0m

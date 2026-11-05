@@ -1,6 +1,7 @@
 name: E2E Feature Video Capture
 
-# Runs on PRs that touch feature-marked files.
+# Opt-in on PRs: add the `record-video` label (runs only if the PR touches feature-marked files).
+# Was automatic on every PR (6 checks, mostly skipped); non-gating.
 # Only records feature demo specs (not benchmarks or a11y).
 # Sharded across 2 runners for faster execution.
 # GIFs are bundled into a single self-contained HTML preview page (archive:false)
@@ -10,6 +11,7 @@ name: E2E Feature Video Capture
 on:
   pull_request:
     branches: [main]
+    types: [labeled]
 
 permissions:
   contents: read
@@ -20,7 +22,7 @@ permissions:
 # step — safe here because a superseded PR run's videos are stale too, same
 # reasoning ux-analysis.yml uses for its single-job workflow.
 concurrency:
-  group: e2e-video-${{ github.event.pull_request.number }}
+  group: e2e-video-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 # Feature specs recorded — excludes:
@@ -38,6 +40,7 @@ env:
 jobs:
   detect-feature-changes:
     name: Detect Feature Changes
+    if: github.event.label.name == 'record-video'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

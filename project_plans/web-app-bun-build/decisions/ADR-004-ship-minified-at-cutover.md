@@ -1,6 +1,6 @@
 # ADR-004: Minification ships as its own revertible PR (8b) immediately after the cutover; `NODE_ENV` is always explicit
 
-Status: Proposed — default pending owner confirmation (flagged choice F4). Date: 2026-10-19. Amended in the Phase 4 repair (iteration 3), 2026-10-19: the original default "minified at cutover" is replaced by "unminified at cutover, minified in PR 8b" (see Amendments). The file name is kept so links from the plan and requirements stay valid.
+Status: Accepted (flagged choice F4). Date: 2026-10-19. Amended in the Phase 4 repair (iteration 3), 2026-10-19: the original default "minified at cutover" is replaced by "unminified at cutover, minified in PR 8b" (see Amendments). The file name is kept so links from the plan and requirements stay valid.
 Evidence: `research/architecture.md` §7 and F8, `research/features.md` §6, `requirements.md` success metrics, `implementation/pre-mortem.md` failure mode 4.
 
 ## Context

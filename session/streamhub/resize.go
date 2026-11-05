@@ -57,7 +57,7 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	if !ok {
 		return
 	}
-	if !sub.capability.CanResize {
+	if !sub.currentCapability().CanResize {
 		log.Info("streamhub resize vote rejected: subscriber cannot resize",
 			"session", h.sessionName, "subscriber_id", string(id))
 		return
@@ -105,7 +105,7 @@ func (h *StreamHub) collectResizeVotes() []ResizeVote {
 
 	votes := make([]ResizeVote, 0, len(h.subscribers))
 	for id, sub := range h.subscribers {
-		if !sub.capability.CanResize {
+		if !sub.currentCapability().CanResize {
 			continue
 		}
 		if size, voted := sub.currentResizeVote(); voted {
@@ -133,4 +133,22 @@ func negotiateSize(votes []ResizeVote) TerminalSize {
 		}
 	}
 	return result
+}
+
+// UpgradeSubscriber replaces an attached subscriber's capability, so a viewer
+// that attached read-only can start voting on size once it is allowed to write.
+// It reports false for an unknown SubscriberID.
+func (h *StreamHub) UpgradeSubscriber(id SubscriberID, capability SubscriberCapability) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sub, ok := h.subscribers[id]
+	if !ok {
+		return false
+	}
+	capability.ManualFirstPaint = sub.capability.ManualFirstPaint // attach-time only
+	sub.upgraded.Store(&capability)
+	log.Info("streamhub subscriber capability upgraded",
+		"session", h.sessionName, "subscriber_id", string(id),
+		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
+	return true
 }

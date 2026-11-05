@@ -108,3 +108,33 @@ func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 		})
 	}
 }
+
+// A legacy session persisted with no Backend was created as tmux. Flipping the global tymux
+// flag later must not silently re-route it (and its stream) to tymux.
+func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	on := true
+	require.NoError(t, config.LoadConfig().SetTymuxGlobalOverride(&on))
+
+	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-tmux"))
+
+	require.NoError(t, err)
+	assert.Equal(t, BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
+	_, isTmux := inst.processManager.(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
+}
+
+// An empty persisted Backend means tmux whatever the global selection, including "native".
+func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	cfg := config.LoadConfig()
+	cfg.ProcessManagerBackend = string(BackendNative)
+	require.NoError(t, config.SaveConfig(cfg))
+
+	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-native"))
+
+	require.NoError(t, err)
+	assert.Equal(t, BackendTmux, inst.Backend)
+	_, isTmux := inst.processManager.(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
+}

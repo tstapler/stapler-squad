@@ -8,10 +8,13 @@ import (
 	"os"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
 	"golang.org/x/net/http2"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // rpcTransport is the narrow seam between tymuxGRPCSession and the generated
@@ -30,6 +33,7 @@ type rpcTransport interface {
 	ReviveSession(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	CapturePane(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
 	GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error)
+	GetPaneStatus(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
 	// Attach opens the standing bidi stream. The returned attachStream exposes
 	// only Send/Receive/CloseRequest/CloseResponse — the subset of
 	// *connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEvent] that
@@ -73,6 +77,15 @@ var _ attachStream = (*connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEv
 // return type to the other.
 type grpcTransport struct {
 	client tymuxv1connect.TymuxServiceClient
+	http   *http.Client
+}
+
+// closeIdle drops the pooled h2c connections so a one-shot caller does not
+// leave a socket open on tymuxd per call.
+func (t *grpcTransport) closeIdle() {
+	if t.http != nil {
+		t.http.CloseIdleConnections()
+	}
 }
 
 func (t *grpcTransport) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -93,6 +106,10 @@ func (t *grpcTransport) ReviveSession(ctx context.Context, req *connect.Request[
 
 func (t *grpcTransport) CapturePane(ctx context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
 	return t.client.CapturePane(ctx, req)
+}
+
+func (t *grpcTransport) GetPaneStatus(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+	return t.client.GetPaneStatus(ctx, req)
 }
 
 func (t *grpcTransport) GetServerInfo(ctx context.Context, req *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
@@ -149,14 +166,63 @@ func newH2CClient() *http.Client {
 // NewRealTransport constructs an rpcTransport backed by a real Connect-Go
 // gRPC client against a live tymuxd. addr is the tymuxd base URL (e.g.
 // "http://127.0.0.1:7419"); pass "" to use tymuxdAddr()'s
-// TYMUXD_ADDR-or-default resolution.
+// TYMUXD_ADDR-or-default resolution. When the daemon at addr has a known Unix
+// control socket (socketPathForAddr), the result also falls back to that socket
+// while TCP is refused; see selectingTransport.
 func NewRealTransport(addr string) rpcTransport {
+	return newRealTransport(addr, false)
+}
+
+// newRealTransport builds the transport; quiet selects the one-shot-probe variant that leaves
+// the session transport's process-global metrics alone.
+func newRealTransport(addr string, quiet bool) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
 	if sharedDaemonBlockedInTest(addr) {
 		addr = deadLoopbackAddr
 	}
-	client := tymuxv1connect.NewTymuxServiceClient(newH2CClient(), addr, connect.WithGRPC())
-	return &grpcTransport{client: client}
+	tcp := newTCPTransport(addr)
+	sock := socketPathForAddr(addr)
+	if sock == "" {
+		return tcp
+	}
+	unix, unixHTTP := newUnixTransport(sock)
+	if quiet {
+		return newQuietSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+	}
+	return newSelectingTransport(tcp, unix, addr, tcp.http, unixHTTP)
+}
+
+// newTCPTransport is the TCP-only transport; probeDaemon uses it directly so a healthy Unix
+// socket can never mask a dead TCP listener in the probe itself.
+func newTCPTransport(addr string) *grpcTransport {
+	hc := newH2CClient()
+	return &grpcTransport{client: newTymuxClient(hc, addr), http: hc}
+}
+
+// newProbeTransport is NewRealTransport for one-shot calls: the returned
+// release func must be deferred, or each probe leaks a connection to tymuxd.
+func newProbeTransport(addr string) (rpcTransport, func()) {
+	t := newRealTransport(addr, true)
+	if c, ok := t.(interface{ closeIdle() }); ok {
+		return t, c.closeIdle
+	}
+	return t, func() {}
+}
+
+// newTymuxClient builds the generated client with gRPC framing (tymuxd is a
+// strict tonic server) and, so a stapler-squad trace continues into tymuxd
+// as a W3C traceparent header, an otelconnect client interceptor. Traces
+// only: otelconnect's own metrics and per-message span events are off, since
+// the Attach stream would emit one event per output chunk.
+func newTymuxClient(httpClient *http.Client, addr string) tymuxv1connect.TymuxServiceClient {
+	opts := []connect.ClientOption{connect.WithGRPC()}
+	interceptor, err := otelconnect.NewInterceptor(otelconnect.WithoutMetrics(), otelconnect.WithoutTraceEvents())
+	if err != nil {
+		log.Warn("tymux: otelconnect client interceptor unavailable, RPCs will not propagate trace context", "err", err)
+	} else {
+		opts = append(opts, connect.WithInterceptors(interceptor))
+	}
+	return tymuxv1connect.NewTymuxServiceClient(httpClient, addr, opts...)
 }

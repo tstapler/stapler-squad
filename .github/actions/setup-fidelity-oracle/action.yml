@@ -1,0 +1,16 @@
+name: 'Set up the tymux fidelity oracle'
+description: >
+  Installs Bun and the oracle's pinned @xterm/headless so session/tymux's xterm.js round-trip
+  fidelity tests (testdata/fidelity) run instead of skipping. Pair it with
+  FIDELITY_REQUIRE_ORACLE=1 on the test step so a missing oracle fails the job.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Bun
+      uses: ./.github/actions/setup-bun
+
+    - name: Install the oracle's dependencies
+      shell: bash
+      working-directory: session/tymux/testdata/fidelity/oracle
+      run: bun install --frozen-lockfile

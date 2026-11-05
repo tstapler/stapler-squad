@@ -5,8 +5,9 @@ const _features = [FEATURE_CATALOG['triage-related-work']] as const;
 import { test, expect, type Page } from '@playwright/test';
 import { BacklogItemDetailPage, seedHeadlessTriageItem } from './pages/BacklogItemDetailPage';
 import { enableBacklogFeatureFlag } from './pages/BacklogMutations';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 /**
  * Intercepts SearchClaudeHistory and fulfills a fabricated single-hit

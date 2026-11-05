@@ -71,15 +71,14 @@ test.describe('Landing page — UX acceptance', () => {
 
 	// Criterion 10: broken hero media degrades to its poster fallback, never
 	// a blank box. Per the task brief, this is tested against the real,
-	// committed hero video (assets/demo.webm) via route interception, not
-	// the unpublished "terminal-streaming" DemoClip (website-demo-gifs-latest
-	// release asset genuinely 404s today -- documented, not this test's job
-	// to fix).
+	// committed hero video (public/demo.webm) via route interception; feature-card
+	// clips only exist in the deploy build (recorded there), not in the PR gate.
 	test('heroVideoAndFeatureImage_should_ShowPosterOrAltTextFallback_When_SourceIntercept404s', async ({
 		page,
 	}) => {
 		await page.route('**/demo.webm', (route) => route.fulfill({ status: 404, body: '' }));
 		await page.route('**/01-dashboard.png', (route) => route.fulfill({ status: 404, body: '' }));
+		await page.route('**/clips/*.webm', (route) => route.fulfill({ status: 404, body: '' }));
 
 		const landing = new LandingPage(page);
 		await landing.goto();
@@ -93,24 +92,34 @@ test.describe('Landing page — UX acceptance', () => {
 		expect(videoBox?.width).toBeGreaterThan(0);
 		expect(videoBox?.height).toBeGreaterThan(0);
 
-		// The broken <img> keeps its accessible alt text and its reserved box
-		// (explicit width/height attributes + CSS aspect-ratio), so a failed
-		// fetch never collapses to blank, layout-shifting space.
-		const brokenImage = page.getByAltText(
-			'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance',
-		);
-		await expect(brokenImage).toBeVisible();
-		const imageBox = await brokenImage.boundingBox();
-		expect(imageBox?.width).toBeGreaterThan(0);
-		expect(imageBox?.height).toBeGreaterThan(0);
+		// The Dashboard card's media keeps its accessible name and reserved box
+		// whichever form the build gave it: an <img> (PR gate, no clips) or a
+		// <video> (deploy build, where the recorded clip replaces the screenshot).
+		// A failed fetch never collapses to blank, layout-shifting space.
+		const alt =
+			'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance';
+		const card = landing.featureCards().filter({ has: page.getByRole('heading', { name: 'Dashboard', exact: true }) });
+		await expect(card).toHaveCount(1);
+		const clip = card.getByTestId('feature-card-video');
+		const media = (await clip.count()) > 0 ? clip : card.getByAltText(alt);
+		await media.scrollIntoViewIfNeeded();
+		await expect(media).toBeVisible();
+		const mediaBox = await media.boundingBox();
+		expect(mediaBox?.width).toBeGreaterThan(0);
+		expect(mediaBox?.height).toBeGreaterThan(0);
+
+		if ((await clip.count()) > 0) {
+			await expect(clip).toHaveAttribute('aria-label', new RegExp(alt));
+			// Lazy poster (data-poster -> poster once near the viewport) is the
+			// screenshot fallback for a dead clip, so it must have been applied.
+			await expect.poll(() => clip.evaluate((v: HTMLVideoElement) => v.poster)).toMatch(/01-dashboard\.png$/);
+		}
 	});
 
 	// Criterion 18: every <video> has a poster and is adjacent to its own
 	// heading/description, never an unlabeled floating video. Scoped to the
-	// hero video only -- see this file's header comment on the deferred
-	// terminal-streaming DemoClip, whose feature-card <video> has no `poster`
-	// prop support at all today (a real, separate gap; tracked, not fixed
-	// here per the task's explicit scoping instruction).
+	// hero video only: feature-card clips (which do carry a poster, see
+	// tests/unit/feature-card.test.ts) exist only in the deploy build.
 	test('videoEmbed_should_HavePosterAttributeAndAccompanyingCardText_When_Rendered', async ({ page }) => {
 		const landing = new LandingPage(page);
 		await landing.goto();

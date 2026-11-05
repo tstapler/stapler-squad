@@ -57,7 +57,7 @@ func TestCellSGRRenderer_ShouldEmitPlainText_WhenNoCellHasAttributesOrColor(t *t
 		row(cell("h", 0, 0, 0), cell("i", 0, 0, 0)),
 	}
 
-	out, err := CellsToSGR(grid)
+	out, err := CellsToSGR(grid, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, "hi", out)
@@ -73,7 +73,7 @@ func TestCellSGRRenderer_ShouldEmitSingleSGRSequence_WhenAnAttributeRunSpansMult
 		),
 	}
 
-	out, err := CellsToSGR(grid)
+	out, err := CellsToSGR(grid, nil)
 	require.NoError(t, err)
 
 	// Expect exactly one bold-on sequence before "abc" and one reset
@@ -95,7 +95,7 @@ func TestCellSGRRenderer_ShouldEmitNoRedundantSGRCodes_WhenARowHasNoAttributeCha
 		),
 	}
 
-	out, err := CellsToSGR(grid)
+	out, err := CellsToSGR(grid, nil)
 	require.NoError(t, err)
 
 	seqs := parseSGRSequences(t, out)
@@ -119,7 +119,7 @@ func TestCellSGRRenderer_ShouldRoundTripThroughARealANSIParser_WhenColorTransiti
 		),
 	}
 
-	out, err := CellsToSGR(grid)
+	out, err := CellsToSGR(grid, nil)
 	require.NoError(t, err)
 
 	// Exact escape byte sequence for "bold, truecolor red": SGR 1 (bold)
@@ -141,15 +141,150 @@ func TestCellSGRRenderer_ShouldNewlineJoinRows_WhenGridHasMultipleRows(t *testin
 		row(cell("b", 0, 0, 0)),
 	}
 
-	out, err := CellsToSGR(grid)
+	out, err := CellsToSGR(grid, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, "a\nb", out)
 }
 
 func TestCellSGRRenderer_ShouldReturnEmptyString_WhenGridIsEmpty(t *testing.T) {
-	out, err := CellsToSGR(nil)
+	out, err := CellsToSGR(nil, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, "", out)
+}
+
+func TestCellSGRRenderer_ShouldPrintSpace_WhenCellIsEmptyFromCursorSkip(t *testing.T) {
+	grid := []*v1.Row{row(cell("a", 0, 0, 0), cell("", 0, 0, 0), cell("b", 0, 0, 0))}
+
+	out, err := CellsToSGR(grid, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "a b", out)
+}
+
+func TestCellSGRRenderer_ShouldPrintNothing_WhenEmptyCellFollowsWideGlyph(t *testing.T) {
+	grid := []*v1.Row{row(cell("世", 0, 0, 0), cell("", 0, 0, 0), cell("界", 0, 0, 0), cell("", 0, 0, 0), cell("", 0, 0, 0), cell("x", 0, 0, 0))}
+
+	out, err := CellsToSGR(grid, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "世界 x", out)
+}
+
+func TestCellSGRRenderer_ShouldEmitSGR2_WhenCellIsFaint(t *testing.T) {
+	grid := []*v1.Row{row(cell("d", 0, 0, attrFaint), cell("p", 0, 0, 0))}
+
+	out, err := CellsToSGR(grid, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b[2md\x1b[0mp", out)
+}
+
+func TestCellSGRRenderer_ShouldResetBeforeBold_WhenFaintCellIsFollowedByBoldCell(t *testing.T) {
+	grid := []*v1.Row{row(cell("d", 0, 0, attrFaint), cell("b", 0, 0, attrBold))}
+
+	out, err := CellsToSGR(grid, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b[2md\x1b[0;1mb\x1b[0m", out)
+}
+
+func styledCell(text string, attrs, ulStyle, ulColor, link uint32) *v1.Cell {
+	return &v1.Cell{Text: text, Attrs: attrs, UnderlineStyle: ulStyle, UnderlineColor: ulColor, Hyperlink: link}
+}
+
+func TestCellSGRRenderer_ShouldEmitExactBytes_ForExtendedAttributes(t *testing.T) {
+	links := []*v1.Hyperlink{{Uri: "https://example.com/a?x=1;y=2", Id: "k1"}, {Uri: "file:///tmp/b"}}
+	tests := []struct {
+		name  string
+		cells []*v1.Cell
+		want  string
+	}{
+		{"strikethrough", []*v1.Cell{styledCell("s", attrStrike, 0, 0, 0)}, "\x1b[9ms\x1b[0m"},
+		{"blink", []*v1.Cell{styledCell("b", attrBlink, 0, 0, 0)}, "\x1b[5mb\x1b[0m"},
+		{"conceal", []*v1.Cell{styledCell("c", attrConceal, 0, 0, 0)}, "\x1b[8mc\x1b[0m"},
+		{"overline", []*v1.Cell{styledCell("o", attrOverline, 0, 0, 0)}, "\x1b[53mo\x1b[0m"},
+		{"single underline stays plain 4", []*v1.Cell{styledCell("u", attrUnderline, 0, 0, 0)}, "\x1b[4mu\x1b[0m"},
+		{"double underline", []*v1.Cell{styledCell("u", attrUnderline, 1, 0, 0)}, "\x1b[4:2mu\x1b[0m"},
+		{"curly underline", []*v1.Cell{styledCell("u", attrUnderline, 2, 0, 0)}, "\x1b[4:3mu\x1b[0m"},
+		{"dotted underline", []*v1.Cell{styledCell("u", attrUnderline, 3, 0, 0)}, "\x1b[4:4mu\x1b[0m"},
+		{"dashed underline", []*v1.Cell{styledCell("u", attrUnderline, 4, 0, 0)}, "\x1b[4:5mu\x1b[0m"},
+		{"underline color indexed", []*v1.Cell{styledCell("u", attrUnderline, 0, packIndexed(196), 0)}, "\x1b[4;58;5;196mu\x1b[0m"},
+		{"underline color rgb with curly", []*v1.Cell{styledCell("u", attrUnderline, 2, packRGB(1, 2, 3), 0)}, "\x1b[4:3;58;2;1;2;3mu\x1b[0m"},
+		{"underline color ignored without underline", []*v1.Cell{styledCell("u", 0, 2, packIndexed(9), 0)}, "u"},
+		{"underline color dropped forces reset", []*v1.Cell{styledCell("a", attrUnderline, 0, packIndexed(9), 0), styledCell("b", attrUnderline, 0, 0, 0)}, "\x1b[4;58;5;9ma\x1b[0;4mb\x1b[0m"},
+		{"underline style change re-emits", []*v1.Cell{styledCell("a", attrUnderline, 2, 0, 0), styledCell("b", attrUnderline, 0, 0, 0)}, "\x1b[4:3ma\x1b[4mb\x1b[0m"},
+		{"bold and faint together", []*v1.Cell{styledCell("x", attrBold|attrFaint, 0, 0, 0)}, "\x1b[1;2mx\x1b[0m"},
+		{"hyperlink with id", []*v1.Cell{styledCell("a", 0, 0, 0, 1), styledCell("b", 0, 0, 0, 1), styledCell("c", 0, 0, 0, 0)},
+			"\x1b]8;id=k1;https://example.com/a?x=1;y=2\x1b\\ab\x1b]8;;\x1b\\c"},
+		{"hyperlink without id closes at row end", []*v1.Cell{styledCell("a", 0, 0, 0, 2)}, "\x1b]8;;file:///tmp/b\x1b\\a\x1b]8;;\x1b\\"},
+		{"adjacent hyperlinks switch directly", []*v1.Cell{styledCell("a", 0, 0, 0, 1), styledCell("b", 0, 0, 0, 2)},
+			"\x1b]8;id=k1;https://example.com/a?x=1;y=2\x1b\\a\x1b]8;;file:///tmp/b\x1b\\b\x1b]8;;\x1b\\"},
+		{"hyperlink survives SGR change", []*v1.Cell{styledCell("a", 0, 0, 0, 2), styledCell("b", attrBold, 0, 0, 2)},
+			"\x1b]8;;file:///tmp/b\x1b\\a\x1b[1mb\x1b]8;;\x1b\\\x1b[0m"},
+		{"out-of-range link index prints plain", []*v1.Cell{styledCell("a", 0, 0, 0, 9)}, "a"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := CellsToSGR([]*v1.Row{row(tt.cells...)}, links)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out)
+		})
+	}
+}
+
+func TestCellSGRRenderer_ShouldNotLetDaemonStringsInjectEscapes_WhenHyperlinkHasControlBytes(t *testing.T) {
+	links := []*v1.Hyperlink{{Uri: "http://x/\x1b[2Jevil\x07", Id: "a;b:c\x1b"}}
+
+	out, err := CellsToSGR([]*v1.Row{row(styledCell("a", 0, 0, 0, 1))}, links)
+
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b]8;id=abc;http://x/[2Jevil\x1b\\a\x1b]8;;\x1b\\", out)
+}
+
+func TestCellSGRRenderer_ShouldDropTrailingNeverWrittenCells_ButKeepLiteralSpacesAndStyledCells(t *testing.T) {
+	bg := packIndexed(1)
+	cases := []struct {
+		name string
+		row  *v1.Row
+		want string
+	}{
+		{"trailing empty cells", row(cell("a", 0, 0, 0), cell("", 0, 0, 0), cell("", 0, 0, 0)), "a"},
+		{"empty cell in the middle still becomes a space", row(cell("a", 0, 0, 0), cell("", 0, 0, 0), cell("b", 0, 0, 0)), "a b"},
+		{"literal trailing space is kept", row(cell("a", 0, 0, 0), cell(" ", 0, 0, 0)), "a "},
+		{"styled trailing empty cell is kept", row(cell("a", 0, 0, 0), cell("", 0, bg, 0)), "a\x1b[48;5;1m \x1b[0m"},
+		{"wide glyph continuation at the end", row(cell("世", 0, 0, 0), cell("", 0, 0, 0)), "世"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := CellsToSGR([]*v1.Row{c.row}, nil)
+
+			require.NoError(t, err)
+			assert.Equal(t, c.want, out)
+		})
+	}
+}
+
+func TestCellSGRRenderer_ShouldNeverEmitEscapes_WhenCellTextCarriesControlBytes(t *testing.T) {
+	out, err := CellsToSGR([]*v1.Row{row(cell("\x1b[31mX\u009b", 0, 0, 0), cell("\a", 0, 0, 0), cell("y", 0, 0, 0))}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "[31mX y", out, "controls are stripped; a cell left empty by that prints as a space")
+	assert.NotContains(t, out, "\x1b")
+	assert.NotContains(t, out, "\u009b")
+}
+
+func TestCellSGRRenderer_ShouldDropHyperlinksWhoseURIExceedsTheCap(t *testing.T) {
+	long := "https://example.com/" + strings.Repeat("a", maxHyperlinkURIBytes)
+	ok := "https://example.com/" + strings.Repeat("b", maxHyperlinkURIBytes-len("https://example.com/"))
+	linked := func(idx uint32) *v1.Cell { return &v1.Cell{Text: "x", Hyperlink: idx} }
+
+	over, err := CellsToSGR([]*v1.Row{{Cells: []*v1.Cell{linked(1)}}}, []*v1.Hyperlink{{Uri: long}})
+	require.NoError(t, err)
+	atCap, err := CellsToSGR([]*v1.Row{{Cells: []*v1.Cell{linked(1)}}}, []*v1.Hyperlink{{Uri: ok}})
+	require.NoError(t, err)
+
+	assert.Equal(t, "x", over, "an over-long URI is dropped, not truncated into a wrong link")
+	assert.Contains(t, atCap, "\x1b]8;;"+ok+"\x1b\\")
 }

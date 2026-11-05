@@ -26,6 +26,19 @@ var SafeIdleStatusContexts = map[string]bool{
 // command_prompt/vim_normal_mode/bracket_insert_mode share the same
 // DetectedStatus value but mean a raw shell or editor prompt, exactly the
 // state where injected text would be misread as a literal command.
+//
+// StatusSuccess with the turn-complete description is also safe: Claude Code
+// v2.1.312 in auto mode shows no "? for shortcuts" footer, so a finished turn's
+// "✻ <Verb> for <duration>" marker is the last match in the window. A draft typed
+// afterwards, or a newer spinner, is matched first by the reverse line scan and
+// takes over from this status.
 func IsSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
+	if status == detection.StatusSuccess {
+		return statusContext == TurnCompleteStatusContext
+	}
 	return status == detection.StatusIdle && SafeIdleStatusContexts[statusContext]
 }
+
+// TurnCompleteStatusContext is the verb_duration_completion description in
+// session/detection/binaries/claude.go; a test pins it.
+const TurnCompleteStatusContext = "Claude turn complete — '<PastTenseVerb> for <duration>' format"

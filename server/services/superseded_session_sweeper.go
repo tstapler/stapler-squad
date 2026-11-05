@@ -20,6 +20,7 @@ const supersededSessionSweeperCheckInterval = 60 * time.Second
 type supersededSessionStore interface {
 	ListBacklogItems(ctx context.Context, filter session.BacklogItemFilter) ([]session.BacklogItemData, error)
 	ListItemSessions(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+	ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map[string]bool, error)
 }
 
 // SupersededSessionSweeper is a ticker-driven defense-in-depth sweeper
@@ -100,13 +101,30 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 		return
 	}
 
+	var superseded []session.ItemSessionSummary
 	for _, item := range items {
 		sessions, err := s.storage.ListItemSessions(ctx, item.ID)
 		if err != nil {
 			log.Warn("superseded session sweeper: ListItemSessions failed", "item", item.ID, "err", err)
 			continue
 		}
-		for _, is := range findSupersededSessions(sessions) {
+		superseded = append(superseded, findSupersededSessions(sessions)...)
+	}
+	// Already-archived sessions stay superseded forever; one batched lookup
+	// replaces an IsSessionLive plus an archive-by-id query per session per tick.
+	uuids := make([]string, 0, len(superseded))
+	for _, is := range superseded {
+		if is.SessionUUID != "" {
+			uuids = append(uuids, is.SessionUUID)
+		}
+	}
+	archived, err := s.storage.ArchivedSessionUUIDs(ctx, uuids)
+	if err != nil {
+		log.Warn("superseded session sweeper: ArchivedSessionUUIDs failed", "err", err)
+		archived = nil // fall back to checking every session
+	}
+	for _, is := range superseded {
+		if !archived[is.SessionUUID] {
 			s.archiveIfNotLive(ctx, is)
 		}
 	}

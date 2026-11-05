@@ -94,7 +94,7 @@ func TestEndReasonClassification_ShouldCoverEveryLiteralInSource(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "gen", "node_modules", "ent", ".git", "web-app", "dist":
+			case "gen", "node_modules", "ent", ".git", ".claude", "web-app", "dist": // .claude holds gitignored agent worktree checkouts
 				return fs.SkipDir
 			}
 			return nil

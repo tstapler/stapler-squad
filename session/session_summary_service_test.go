@@ -449,7 +449,7 @@ func TestGenerateAndPersist_should_UseFallbackNarrative_When_LLMCallFails(t *tes
 }
 
 func TestGenerateAndPersist_should_TimeoutNarrativeCall_When_PoolBlocksLongerThanLlmNarrativeTimeout(t *testing.T) {
-	t.Parallel()
+	// Not parallel: mutates the package-level llmNarrativeTimeout read by sibling tests.
 	original := llmNarrativeTimeout
 	llmNarrativeTimeout = 200 * time.Millisecond
 	defer func() { llmNarrativeTimeout = original }()

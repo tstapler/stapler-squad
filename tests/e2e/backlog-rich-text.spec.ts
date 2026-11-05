@@ -1,8 +1,10 @@
 // @feature backlog:item-form, upload:backlog-attachment
 import { test, expect } from '@playwright/test';
 import { BacklogPage } from './pages/BacklogPage';
+import { baseUrl, slotTmp } from './helpers/base-url';
+import { deleteBacklogItemsByTitlePrefix } from './pages/BacklogMutations';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Minimal valid 1x1 PNG (magic bytes + IHDR/IDAT/IEND), used to exercise the
 // real upload endpoint's magic-byte validation rather than a fake extension.
@@ -22,6 +24,10 @@ test.describe('Backlog Rich Text', () => {
       headers: { 'Content-Type': 'application/json' },
       data: { name: 'backlog', enabled: false },
     });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await deleteBacklogItemsByTitlePrefix(request, ['rich-text-upload-']);
   });
 
   test.beforeEach(async ({ page }) => {
@@ -53,7 +59,12 @@ test.describe('Backlog Rich Text', () => {
     const itemTitle = `rich-text-upload-${Date.now()}`;
 
     await backlogPage.openNewItemForm();
-    await page.locator('[data-testid="backlog-title-input"]').fill(itemTitle);
+    // repoPath is mandatory for new items; an AC criterion keeps the item from being flagged vague
+    // (which would pop a blocking VaguenessPromptModal after creation).
+    await backlogPage.fillNewItemForm(itemTitle, {
+      repoPath: slotTmp('e2e-rich-text-test'),
+      addAcCriterion: 'Image persists after reload',
+    });
 
     const fileInput = page.locator('[data-testid="backlog-attach-image-input"]');
     await fileInput.setInputFiles({

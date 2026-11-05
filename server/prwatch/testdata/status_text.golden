@@ -1,0 +1,49 @@
+PR watch status
+Feature flag: on
+This process polls: yes
+Inbox: reachable
+GitHub login: resolved
+Watching 3 PRs in 3 repositories; 1 repository not covered. Coverage not yet confirmed for 1 repository.
+
+Settings
+  Comment and review steers: all accounts except you (human_feedback_mode all)
+  Poll interval: 5s; minimum time between comment steers: 5m0s
+  Ignored repositories: acme-corp/internal
+  Corrected: min_steer_interval_seconds 5000 was replaced by 1800
+
+Repositories
+  acme-corp/widget-api   webhook coverage: covered
+  other/repo   webhook coverage: NOT covered (gh-signal said: no admin access to the repository)
+      Run: gh-signal inbox watch other/repo 42 --consumer squad:devbox
+      Or add other/repo to inbox_pr_watch.ignore_repos
+  third/repo   webhook coverage: unknown (not yet confirmed; events may not arrive)
+
+Sessions
+  session 3f9a21c4 "fix flaky login test"   acme-corp/widget-api#123   watching
+    subscribed: yes; webhook coverage: covered
+    last event: 12:03:11
+    last steer: 12:03:11 delivered
+    next steer for comments or reviews: 12:08:00
+    CI failure on a new commit: steers immediately
+  session 5a6b7c8d "retry logic"   other/repo#42   watching
+    subscribed: yes; webhook coverage: NOT covered
+    next steer for comments or reviews: now
+    CI failure on a new commit: steers immediately
+  session 9e8d7c6b "bump deps"   third/repo#7   watching (session paused)
+    subscribed: no; webhook coverage: unknown
+    next steer for comments or reviews: now
+    CI failure on a new commit: steers immediately
+  session 77be0d10 "cache spike"   (not watched: repository is in ignore_repos)
+  session 1c2d3e4f "docs cleanup"   (not watched: its backlog item is waiting on this PR (the backlog path handles it))
+
+Waiting events
+  3f9a21c4  acme-corp/widget-api#123  comment  waiting 3 minutes: batching with an earlier steer; next steer at 12:08
+
+Recent events (newest first, up to 200, cleared on restart)
+  12:05:00  comment    acme-corp/widget-api#123  waiting: batching with an earlier steer in the same window
+  12:03:11  review     acme-corp/widget-api#123  steered
+  12:02:40  comment    acme-corp/widget-api#123  not steered: you wrote it (own comment)
+  12:01:02  CI failure acme-corp/widget-api#123  not steered: same commit as an earlier CI steer
+
+Steers by who triggered them (since start): you 0, bot 1, allowlisted 2, other 2, CI failure 1
+Counts since start: steered 6, waiting 1, not steered 2

@@ -5,8 +5,34 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
+
+type liveTimestampProcessManager struct{ ProcessManager }
+
+func (liveTimestampProcessManager) HasSession() bool { return true }
+
+func TestInstance_TymuxMeaningfulOutputAdvancesWithoutForce(t *testing.T) {
+	t.Parallel()
+	instance, err := NewInstance(InstanceOptions{Title: "tymux-activity-contract", Path: t.TempDir(), Program: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := tymux.NewTymuxGRPCSession(nil)
+	instance.processManager = liveTimestampProcessManager{NewTymuxBackend(manager)}
+	before := time.Now().Add(-time.Hour)
+	instance.SetLastMeaningfulOutput(before)
+
+	instance.UpdateTerminalTimestamps("Implemented the requested change and verified the regression test.", false)
+
+	if !instance.LastMeaningfulOutputTime().After(before) {
+		t.Error("real tymux content classification must publish activity without forced updates")
+	}
+	if !instance.Snapshot().LastMeaningfulOutput.After(before) {
+		t.Error("actor-published activity must agree with the lock-free activity reader")
+	}
+}
 
 // TestInstance_UpdateTerminalTimestamps verifies that terminal timestamps are updated correctly
 func TestInstance_UpdateTerminalTimestamps(t *testing.T) {

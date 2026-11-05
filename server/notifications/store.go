@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,6 +140,47 @@ type NotificationHistoryStore struct {
 	// to at most once per orphanPruneInterval even though enforceRetention runs on
 	// every Append().
 	lastOrphanPruneAt time.Time
+
+	// snap is an immutable copy of records, republished by saveToDisk (and at
+	// construction). The polled readers (List, GetUnreadCount) use it instead of mu,
+	// so they never wait behind a writer holding mu across the fsync in saveToDisk.
+	snap atomic.Pointer[recordSnapshot]
+
+	// beforeDiskWrite is a test seam: runs under mu just before saveToDisk's file I/O.
+	beforeDiskWrite func()
+}
+
+type recordSnapshot struct {
+	records []*NotificationRecord
+	unread  int
+}
+
+// publishLocked copies records into a fresh snapshot. Callers hold mu (or are the
+// constructor). Deep-copies maps and pointers because writers mutate records in place.
+func (s *NotificationHistoryStore) publishLocked() {
+	snap := &recordSnapshot{records: make([]*NotificationRecord, len(s.records))}
+	for i, r := range s.records {
+		c := *r
+		if r.Metadata != nil {
+			c.Metadata = make(map[string]string, len(r.Metadata))
+			for k, v := range r.Metadata {
+				c.Metadata[k] = v
+			}
+		}
+		if r.ReadAt != nil {
+			t := *r.ReadAt
+			c.ReadAt = &t
+		}
+		if r.LastOccurredAt != nil {
+			t := *r.LastOccurredAt
+			c.LastOccurredAt = &t
+		}
+		snap.records[i] = &c
+		if !r.IsRead {
+			snap.unread++
+		}
+	}
+	s.snap.Store(snap)
 }
 
 // orphanPruneInterval is the minimum time between orphan-pruning sweeps triggered
@@ -167,6 +209,7 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 
 	// Enforce retention limits on load in case file was manually edited
 	store.enforceRetention()
+	store.publishLocked()
 
 	// Deduplicate existing records that were persisted before dedup logic was added.
 	// This consolidates duplicates (regardless of read state) into single records
@@ -174,6 +217,7 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 	if err := store.deduplicateExisting(); err != nil {
 		log.Warn("NotificationStore failed to deduplicate existing records", "err", err)
 	}
+	store.publishLocked()
 
 	return store, nil
 }
@@ -334,12 +378,17 @@ func (s *NotificationHistoryStore) moveToFront(record *NotificationRecord) {
 
 // List returns a paginated, filtered slice of notification records and the total count.
 func (s *NotificationHistoryStore) List(opts ListOptions) ([]*NotificationRecord, int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	snap := s.snap.Load()
+	if snap == nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		s.publishLockedIfMissing()
+		snap = s.snap.Load()
+	}
 
 	// Apply filters
 	var filtered []*NotificationRecord
-	for _, r := range s.records {
+	for _, r := range snap.records {
 		if opts.TypeFilter != nil && r.NotificationType != *opts.TypeFilter {
 			continue
 		}
@@ -628,22 +677,29 @@ func (s *NotificationHistoryStore) GetByID(id string) (*NotificationRecord, bool
 // (sessionID, notificationType) group, so this count reflects the number of
 // deduplicated unread groups -- not raw event occurrences.
 func (s *NotificationHistoryStore) GetUnreadCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	count := 0
-	for _, r := range s.records {
-		if !r.IsRead {
-			count++
-		}
+	snap := s.snap.Load()
+	if snap == nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		s.publishLockedIfMissing()
+		snap = s.snap.Load()
 	}
-	return count
+	return snap.unread
+}
+
+// publishLockedIfMissing covers a store built without the constructor (tests that
+// assign records directly); safe under RLock because the first publisher wins.
+func (s *NotificationHistoryStore) publishLockedIfMissing() {
+	if s.snap.Load() == nil {
+		s.publishLocked()
+	}
 }
 
 // deduplicateExisting consolidates duplicate records regardless of read state with the
 // same (sessionID, notificationType) into the newest one. This runs once on startup to
 // clean up pre-dedup persisted data. Idempotent -- safe to run multiple times.
 func (s *NotificationHistoryStore) deduplicateExisting() error {
+	defer s.publishLocked() // also covers the early no-change return, which skips saveToDisk
 	// Group records by (sessionID, notificationType), regardless of read state.
 	type dedupKey struct {
 		sessionID string
@@ -774,6 +830,7 @@ func (s *NotificationHistoryStore) enforceRetention() {
 			log.Info("NotificationHistoryStore: pruned orphaned records", "count", removed)
 		}
 	}
+	s.publishLocked() // trimming changed records; keep the reader snapshot current
 }
 
 // loadFromDisk loads the JSON file into memory. On parse error, logs a warning
@@ -807,6 +864,11 @@ func (s *NotificationHistoryStore) loadFromDisk() error {
 // saveToDisk writes the current records to disk using atomic write (temp file + rename).
 // Must be called with the write lock held.
 func (s *NotificationHistoryStore) saveToDisk() error {
+	// Republish even when the write fails: callers keep the in-memory mutation either way.
+	defer s.publishLocked()
+	if s.beforeDiskWrite != nil {
+		s.beforeDiskWrite()
+	}
 	file := notificationsFile{
 		Version:       1,
 		UpdatedAt:     time.Now(),

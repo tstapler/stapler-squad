@@ -3,8 +3,9 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const FILES_URL = `${BASE_URL}/files`;
 
 // ── Test data setup ──────────────────────────────────────────────────────────

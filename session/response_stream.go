@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -46,14 +48,19 @@ type ResponseStream struct {
 	OnEOF        func()                      // Called when the PTY exits unexpectedly (program exit, not Stop())
 }
 
+// ptyReadPollInterval bounds how long the stream loop waits on a silent PTY
+// before re-checking for cancellation.
+const ptyReadPollInterval = 100 * time.Millisecond
+
 // ptyDeadlineUnsupported tracks, per underlying PTY, whether SetReadDeadline
 // has already failed with "file type does not support deadline" -- a
-// permanent, platform-level property of the fd (confirmed: on Darwin, a PTY
-// master opened via github.com/creack/pty is not always registered with the
-// runtime's netpoller, so os.File.SetReadDeadline never succeeds for it; on
-// Linux it typically does). streamLoop is the only goroutine that reads this
-// stream's PTY, so a plain bool (no lock) is safe -- it is only ever read and
-// written from that single goroutine.
+// permanent, platform-level property of the fd (verified on Darwin: a PTY
+// master opened via github.com/creack/pty is never registered with the
+// runtime's netpoller, so os.File.SetReadDeadline always fails for it and a
+// plain Read cannot be interrupted; on Linux it typically succeeds).
+// streamLoop is the only goroutine that reads this stream's PTY, so a plain
+// bool (no lock) is safe -- it is only ever read and written from that single
+// goroutine.
 type ptyDeadlineUnsupported struct {
 	confirmed bool
 }
@@ -232,6 +239,8 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 	// See ptyDeadlineUnsupported's doc comment: scoped to this loop's single
 	// goroutine, so a plain struct (no lock, no atomic) is safe.
 	deadlineUnsupported := &ptyDeadlineUnsupported{}
+	var lastPTY *os.File
+	waitErrLogged := false
 
 	for {
 		select {
@@ -250,30 +259,54 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			}
 
 			if pty == nil {
-				// PTY not available, wait a bit
-				time.Sleep(100 * time.Millisecond)
+				// PTY not available, wait a bit (but stay cancellable)
+				select {
+				case <-ctx.Done():
+				case <-time.After(ptyReadPollInterval):
+				}
 				continue
 			}
 
-			// Set read deadline to avoid blocking forever. A failure here (e.g. the
+			// Bound each read so cancellation is observed within ptyReadPollInterval
+			// even when the PTY is silent. A SetReadDeadline failure here (e.g. the
 			// PTY was just closed out from under us) means the fd is already
-			// unusable, so the following Read will fail immediately with its own
-			// error rather than block -- fall through into the normal Read/error
-			// handling below instead of skipping the read, which would spin forever
-			// without ever detecting the closed PTY.
+			// unusable, so the following Read fails immediately with its own error
+			// rather than block -- fall through into the normal Read/error handling
+			// instead of skipping the read, which would spin forever without ever
+			// detecting the closed PTY.
 			//
-			// deadlineUnsupported gates this: once SetReadDeadline has failed once
-			// for this stream with the platform-level "file type does not support
-			// deadline" error (see ptyDeadlineUnsupported's doc comment), it will
-			// fail identically on every subsequent iteration -- retrying it (and
-			// logging every failure) every 100ms for the life of the session was
-			// pure log-volume noise with no actionable signal. Log it once, at Warn
-			// (an expected platform limitation, not an application error), and stop
-			// retrying the syscall for the rest of this loop's life.
+			// "file type does not support deadline" is a permanent property of the
+			// fd (see ptyDeadlineUnsupported), so it is probed once per stream and
+			// the rest of the loop bounds the wait with waitReadable instead.
+			if pty != lastPTY {
+				// A swapped-in PTY (UpdatePTY) may differ in poller support.
+				lastPTY, deadlineUnsupported.confirmed = pty, !readDeadlineTrusted
+			}
 			if !deadlineUnsupported.confirmed {
-				if err := pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				if err := pty.SetReadDeadline(time.Now().Add(ptyReadPollInterval)); err != nil {
 					deadlineUnsupported.confirmed = true
-					log.Warn("PTY does not support read deadlines; falling back to blocking reads for this session", "session", rs.sessionName, "err", err)
+					log.Debug("PTY does not support read deadlines; polling for readability instead", "session", rs.sessionName, "err", err)
+				}
+			}
+			if deadlineUnsupported.confirmed {
+				ready, werr := waitReadable(pty, ptyReadPollInterval)
+				switch {
+				case errors.Is(werr, os.ErrClosed):
+					// Fall through: Read reports the closed file via the EOF mapping below.
+				case werr != nil:
+					// The wait itself failed; never fall into a Read that cannot be
+					// interrupted. Back off (cancellably) and retry.
+					if !waitErrLogged {
+						waitErrLogged = true // once per stream; a persistent error would repeat every interval
+						log.Warn("polling PTY for readability failed", "session", rs.sessionName, "err", werr)
+					}
+					select {
+					case <-ctx.Done():
+					case <-time.After(ptyReadPollInterval):
+					}
+					continue
+				case !ready:
+					continue
 				}
 			}
 			n, err := pty.Read(readBuf)

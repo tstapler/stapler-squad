@@ -27,9 +27,14 @@ make build-embedded-tymux  # Build stapler-squad with BOTH tmux and tymuxd embed
 ```
 
 - The release version is pinned by `TYMUX_VERSION` in the `Makefile`
-  (currently `v1.0.0`) — bump it and the
-  `github.com/tstapler/tymux/clients/go/gen/tymux/v1` require in `go.mod`
-  together; nothing enforces that automatically (ADR-001's Consequences).
+  (see the file for the current value), with its release-asset SHA-256s in
+  `scripts/tymuxd-checksums.txt`. Bump it, the
+  `github.com/tstapler/tymux/clients/go` require in `go.mod`, and the cache
+  key in `.github/actions/fetch-tymuxd/action.yml` together.
+  `tools/ci/check-tymux-pin.sh` (the lint workflow's pin check) fails when the
+  Makefile tag and the `go.mod` client pin are not the same tymux commit; the
+  checksums file and the action's cache key are not checked, so update them
+  by hand.
 - `make fetch-tymuxd` shells out to `scripts/fetch-tymuxd.sh`, which resolves
   the release asset for the current `uname -s`/`uname -m`, downloads it, and
   verifies its SHA-256 against a pinned value before extracting
@@ -174,6 +179,10 @@ If this process only *reused* an already-healthy `tymuxd` it didn't start
 registered for it at all, regardless of the flag — `StopTymuxd()` has no
 ownership check beyond a PID file, so stopping a daemon this process doesn't
 own could kill one a sibling process still depends on.
+
+### Unix-socket fallback (TCP listener down)
+
+If tymuxd's TCP listener dies but its Unix control socket still answers, stapler-squad's tymux client (`session/tymux/transport_select.go`) switches every RPC, including a new Attach dial, to that socket and re-probes TCP every 30s; Attach streams already open are not migrated and reconnect through the same choice. Only the socket that belongs to this instance's daemon is used (`STAPLER_SQUAD_INSTANCE`-scoped path, or the shared default daemon's per-user path). The supervisor treats this as degraded, not failed: it reuses the daemon, never kills it, and logs one `[tymux] degraded: tymuxd TCP listener is down` warning per 10 minutes. Watch `tymux_daemon_degraded` (1 while degraded), `tymux_transport{transport}` and `tymux_transport_transitions_total{from,to}`. The fix for the underlying dead listener is to restart tymuxd at a time when its panes can be interrupted.
 
 ## Upgrading and downgrading the running daemon
 

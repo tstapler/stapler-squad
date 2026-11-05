@@ -39,7 +39,7 @@ describe("navigation facade lint ban", () => {
     assert.deepEqual(banned(await messages(source, "src/app/example/page.tsx")), []);
   });
 
-  for (const file of ["src/lib/nav/impl.next.tsx", "src/lib/lazy/impl.next.tsx", "src/lib/foo.test.ts", "src/lib/__tests__/foo.ts"]) {
+  for (const file of ["src/lib/foo.test.ts", "src/lib/__tests__/foo.ts"]) {
     it(`does not apply inside ${file}`, async () => {
       assert.deepEqual(banned(await messages(LINK_IMPORT, file)), []);
     });

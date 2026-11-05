@@ -356,6 +356,18 @@ test_demoPostProcess_should_ProduceValidWebmWithTitleCardFrame_When_RunAgainstSa
 }
 
 echo "=== demo-post-process.test.sh ==="
+test_demoPostProcess_should_SkipGifAndLeaveSiblingsAlone_When_NoGifFlagGiven() {
+  local dir="$WORK/nogif"
+  make_fixture "$dir" "clip.webm" 2
+  echo sentinel > "$dir/demo.gif"
+  "$POSTPROCESS" --no-gif "$dir/clip.webm" &>/dev/null || { fail "NoGif: script failed"; return; }
+  if [[ "$(cat "$dir/demo.gif")" == "sentinel" ]]; then
+    ok "demoPostProcess_should_SkipGifAndLeaveSiblingsAlone_When_NoGifFlagGiven"
+  else
+    fail "NoGif: demo.gif was rewritten despite --no-gif"
+  fi
+}
+
 test_demoPostProcess_should_BuildDrawtextFilterGraph_When_TitleCardFlagProvided
 test_demoPostProcess_should_FallBackToCapitalizedSpecName_When_TitleCardTextNotProvided
 test_demoPostProcess_should_UseSetptsFrameOffset_When_PacingStageApplied
@@ -363,6 +375,7 @@ test_demoPostProcess_should_ProduceByteIdenticalOutput_When_RunTwiceAgainstSameI
 test_demoPostProcess_should_MatchPreEpicBaseline_When_NoFlagsGiven
 test_demoPostProcess_should_PrependTitleCardAfterTrim_When_BothFlagsGiven
 test_demoPostProcess_should_ProduceValidWebmWithTitleCardFrame_When_RunAgainstSampleCapturedVideo
+test_demoPostProcess_should_SkipGifAndLeaveSiblingsAlone_When_NoGifFlagGiven
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="

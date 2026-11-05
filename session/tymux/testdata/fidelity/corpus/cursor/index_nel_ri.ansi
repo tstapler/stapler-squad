@@ -1,0 +1,7 @@
+cursor/index_nel_ri -- esctest2 ind.py ri.py nel.py lf.py vt.py ff.py; libvter
+[2;1HindDx(IND moves down same col)Dy
+[5;1HnelEx-nel-goes-col1[7;1HriMx-up-same-col
+[10;1HLF-only:
+-lf-keeps-col[12;1HVT:-vt-like-lf[14;1HFF:-ff-like-lf
+[17;1HBS:abcX[18;1HCR:abcdefXY
+[20;1HHT:	TAB		TAB2[22;1HMMMup3

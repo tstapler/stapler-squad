@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ type fakeLivenessProcessManager struct {
 	stuckDialogProcessManager
 	alive          bool
 	restoreRelease chan struct{}
+	// onRestore runs inside RestoreWithWorkDir, i.e. mid-restartForRetry.
+	onRestore func()
 }
 
 func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
@@ -32,6 +35,9 @@ func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.ali
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 	if m.restoreRelease != nil {
 		<-m.restoreRelease
+	}
+	if m.onRestore != nil {
+		m.onRestore()
 	}
 	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
 }
@@ -710,4 +716,186 @@ func TestIsRetryPending_should_ReturnFalse_When_NoRetryScheduledOrInFlight(t *te
 	if inst.IsRetryPending() {
 		t.Error("IsRetryPending() = true, want false for a fresh instance")
 	}
+}
+
+// A PermanentlyFailed session that never started this process (boot Start
+// rejected PermanentlyFailed -> Active) must still be restartable by the user,
+// e.g. "migrate to tymux" via RestartSession; it used to fail with ErrCannotRestart.
+func TestRestart_should_RecoverAndActivate_When_PermanentlyFailedAndNotStarted(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{PermanentlyFailed, Failed} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{
+				Title:          "t",
+				Path:           "/tmp",
+				Status:         status,
+				processManager: &fakeLivenessProcessManager{alive: false},
+			}
+
+			if err := inst.Restart(false, ""); err != nil {
+				t.Fatalf("Restart() err = %v, want nil", err)
+			}
+			if inst.Status != Active {
+				t.Errorf("Status = %v, want Active", inst.Status)
+			}
+			if !inst.Started() {
+				t.Error("Started() = false, want true")
+			}
+		})
+	}
+}
+
+// Stopped is a deliberate state and Active/Paused with started=false is a load
+// anomaly; neither may be revived through Restart.
+func TestRestart_should_ReturnErrCannotRestart_When_NotStartedAndNotPermanentlyFailedOrFailed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{Stopped, Active, Paused} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "t", Path: "/tmp", Status: status, processManager: &fakeLivenessProcessManager{alive: false}}
+			if err := inst.Restart(false, ""); !errors.Is(err, ErrCannotRestart) {
+				t.Fatalf("Restart() err = %v, want ErrCannotRestart", err)
+			}
+			if inst.Status != status {
+				t.Errorf("Status = %v, want unchanged %v", inst.Status, status)
+			}
+		})
+	}
+}
+
+// A restart that fails after the terminal reset must hand the session back as
+// PermanentlyFailed so the user can retry, not strand it in Creating.
+type failingStartProcessManager struct{ fakeLivenessProcessManager }
+
+func (m *failingStartProcessManager) Start(string) error { return errors.New("boom") }
+
+func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Path:           "/tmp",
+		Status:         PermanentlyFailed,
+		processManager: &failingStartProcessManager{},
+	}
+	if err := inst.Restart(false, ""); err == nil {
+		t.Fatal("Restart() err = nil, want the Start failure")
+	}
+	if inst.Status != PermanentlyFailed {
+		t.Errorf("Status = %v, want PermanentlyFailed restored", inst.Status)
+	}
+	if inst.Started() {
+		t.Error("Started() = true, want false")
+	}
+}
+
+// A continuation goroutine spawned by restartForRetry must clear driverRunning when it exits,
+// else StartSessionDriver is a permanent no-op for the instance.
+func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	require.NoError(t, inst.RetryNow("/tmp"))
+
+	StopSessionDriver(inst)
+	JoinSessionDriver(inst)
+
+	require.False(t, SessionDriverRunningForTest(inst),
+		"driverRunning stays true after the retry continuation exited, blocking every later StartSessionDriver")
+}
+
+// The in-loop handoff: a real driver fires its scheduled retry, hands off to a continuation and
+// exits; once the continuation exits too, a later StartSessionDriver must start a driver.
+func TestRunSessionDriver_should_AllowRestart_When_RetryContinuationExited(t *testing.T) {
+	inst := &Instance{Title: "handoff", Status: Stopped}
+	inst.NextRetryAt = time.Now().Add(-time.Minute)
+	inst.RetryAttempt = 1
+	// Mid-restart, mark the instance destroyed (without StopSessionDriver, which would set
+	// driverDestroyed): both the original driver and the continuation then exit at their next
+	// tick gate, so Join below observes a fully quiescent instance without any sleeping.
+	inst.processManager = &fakeLivenessProcessManager{alive: true, onRestore: func() { inst.destroyed.Store(true) }}
+	shrinkDriverTiming(t)
+
+	StartSessionDriver(inst, "/tmp")
+	JoinSessionDriver(inst)
+
+	require.False(t, inst.IsRetryPending(), "the driver never fired the scheduled retry; the handoff did not happen")
+	require.False(t, SessionDriverRunningForTest(inst), "driverRunning left set after every driver goroutine exited")
+
+	inst.destroyed.Store(false)
+	var started atomic.Int32
+	SetSessionDriverStartHookForTest(func(*Instance) { started.Add(1) })
+	t.Cleanup(func() { SetSessionDriverStartHookForTest(nil) })
+	StartSessionDriver(inst, "/tmp")
+	t.Cleanup(func() { StopSessionDriver(inst); JoinSessionDriver(inst) })
+	require.Equal(t, int32(1), started.Load(), "a later StartSessionDriver was refused after the continuation exited")
+}
+
+// restartForRetry after Destroy must not spawn a continuation that nothing will stop.
+func TestRestartForRetry_should_NotSpawnContinuation_When_DriverDestroyed(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	StopSessionDriver(inst) // what Destroy does
+	require.NoError(t, inst.RetryNow("/tmp"))
+
+	require.False(t, SessionDriverRunningForTest(inst))
+	require.Zero(t, inst.driverGoroutines)
+	JoinSessionDriver(inst)
+}
+
+// A driver that hands off to a continuation exits first; driverRunning must stay set until the
+// continuation exits too, or a second driver could start alongside it.
+func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRuns(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	inst.driverMu.Lock()
+	inst.driverRunning.Store(true)
+	inst.driverGoroutines = 1
+	inst.driverMu.Unlock()
+
+	_, ok := inst.registerContinuation(nil) // restartForRetry spawns the continuation
+	require.True(t, ok)
+	inst.driverGoroutineExited() // the original driver returns
+	require.True(t, SessionDriverRunningForTest(inst), "cleared while the continuation still runs")
+
+	inst.driverGoroutineExited() // continuation returns
+	inst.driverWG.Done()
+	require.False(t, SessionDriverRunningForTest(inst))
+}
+
+// A real StartSessionDriver followed by a continuation must count both goroutines, so the first
+// one to exit cannot clear driverRunning under the other.
+func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistered(t *testing.T) {
+	inst := &Instance{Title: "count", Status: Ready, processManager: &stuckDialogProcessManager{}}
+	inst.started.Store(true)
+	shrinkDriverTiming(t)
+
+	StartSessionDriver(inst, "/tmp")
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	_, ok := inst.registerContinuation(nil)
+	require.True(t, ok)
+	go func() {
+		defer inst.driverWG.Done()
+		defer inst.driverGoroutineExited()
+		<-release
+	}()
+
+	inst.driverMu.Lock()
+	got := inst.driverGoroutines
+	inst.driverMu.Unlock()
+	require.Equal(t, 2, got, "StartSessionDriver did not count its own goroutine")
 }

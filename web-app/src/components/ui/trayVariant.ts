@@ -27,11 +27,12 @@ export function selectTrayVariant(viewport: TrayViewport): TrayVariant {
 
 /**
  * What the phone entry shows; `floating-bottom` is the no-terminal page only. `none` means
- * there is nothing to say: the bottom nav's Alerts tab is the always-present way into the tray.
+ * there is nothing to say yet, so no entry is shown (the bottom nav's Alerts tab is the way in); `bell` is the
+ * resting content once the entry has appeared, so it never disappears afterwards.
  */
-export type TrayAffordance = "none" | "more-row" | "keyboard-chip" | "floating-bottom";
+export type TrayAffordance = "none" | "bell" | "more-row" | "keyboard-chip" | "floating-bottom";
 
-/** Content of the phone tray entry: overflow, the keyboard chip, or nothing. Never a bell. */
+/** Content of the phone tray entry: overflow, the keyboard chip, or nothing (the deck swaps in `bell` once the entry has appeared). */
 export function trayAffordanceVariant(
   overflowCount: number,
   toastCount: number,

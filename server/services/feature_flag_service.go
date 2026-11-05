@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -322,6 +323,11 @@ var knownFeatureFlags = []struct {
 		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
 	},
 	{
+		name:         config.TCCEnrichmentConsentFlag,
+		description:  "Explain protected-root metadata access and require app consent before background worktree enrichment on macOS. Does not gate other filesystem access or represent OS grants. Default: on on Darwin, no-op elsewhere. Restart required.",
+		defaultValue: config.DefaultTCCEnrichmentConsent,
+	},
+	{
 		name:        worktreeChangeDetectionFlagName,
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
@@ -332,6 +338,11 @@ var knownFeatureFlags = []struct {
 	{
 		name:        piSupportFlagName,
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
+	},
+	{
+		name:         session.FeatureFlagDriverPaneActivityGate,
+		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
+		defaultValue: config.DriverPaneActivityGateDefault,
 	},
 	{
 		name:         "request_coalescing",
@@ -347,8 +358,16 @@ var knownFeatureFlags = []struct {
 		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
 	},
 	{
+		name:        "terminal_ws_pool",
+		description: "Carry terminal streams over a small shared pool of multiplexed WebSockets (/api/ws/terminal-mux) instead of one WebSocket per terminal, so a page with many terminals opens a few sockets instead of one each. Kill switch: turn off to restore one WebSocket per terminal. Pool size: server STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE (default 2) or per-browser localStorage ssq:terminal-pool-size. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:        "batch_unary",
 		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "ghostty_renderer",
+		description: "Render terminals with ghostty-web (Ghostty's VT parser compiled to WASM, drawn on a canvas) instead of xterm.js, for better VT conformance (synchronized output, REP, DECALN, Kitty keyboard). Kill switch: turn off to fall back to xterm.js. Read by the web client; applies on next page load, no rebuild. Default: off.",
 	},
 	{
 		name:        "window_keep_alive",
@@ -368,6 +387,11 @@ var knownFeatureFlags = []struct {
 		name:         config.AutonomousStallNudgeFeatureFlag,
 		defaultValue: config.AutonomousStallNudgeDefault,
 		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
+	},
+	{
+		name:         config.EscapeEventsDBMigrateFeatureFlag,
+		defaultValue: config.EscapeEventsDBMigrateDefault,
+		description:  "Copy existing escape_events rows from analytics.db into the dedicated db/escape_events.db in small background batches after startup (resumable; the old table is left in place). Turn off to skip the copy: the new database then starts empty. Read once at startup. Default: on.",
 	},
 	{
 		name:         config.HiddenSessionGateFeatureFlag,
@@ -455,6 +479,30 @@ var knownFeatureFlags = []struct {
 	{
 		name:        filesEditLargeFlagName,
 		description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionDetectionFlagName,
+		description: "Attention prose-question detection: treat a turn that ends in a plain-prose question as needing you (an Asked a question item). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        sessionEventLogFlagName,
+		description: "Session event log: record per-session attention events (turn ends, state changes) for the timeline. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionAckBypassFixFlagName,
+		description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionIdleClockOutputFlagName,
+		description: "Attention idle clock from output: measure idleness and waiting-for-agent time from the last meaningful output instead of any touch. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionLLMTiebreakFlagName,
+		description: "Attention prose-question LLM tiebreak: ask a model to settle borderline prose-question detections. Needs prose-question detection on. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionInboxConsolidationFlagName,
+		description: "Attention inbox consolidation: show the unified Attention list in place of the separate review queue views. Applies at once; global only. Default: off.",
 	},
 }
 
@@ -570,7 +618,7 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 // named feature flag. GetFeatureFlags calls fn on every request and populates
 // FeatureFlag.StatusDetail with its result (empty string when fn returns "").
 func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
-	f.setStatusDetailSlot(name, providerSlotKey, fn)
+	f.setStatusDetailSlot(name, providerSlotKey, ignoreConfig(fn))
 }
 
 // providerSlotKey names the slot SetStatusDetailProvider owns; a second call
@@ -579,10 +627,15 @@ const providerSlotKey = "provider"
 
 type statusDetailSlot struct {
 	key string
-	fn  func() string
+	fn  func(*config.Config) string
 }
 
-func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() string) {
+// ignoreConfig adapts a config-free source to the cfg-taking slot signature.
+func ignoreConfig(fn func() string) func(*config.Config) string {
+	return func(*config.Config) string { return fn() }
+}
+
+func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func(*config.Config) string) {
 	if f.statusDetailSlots == nil {
 		f.statusDetailSlots = make(map[string][]statusDetailSlot)
 	}
@@ -600,13 +653,20 @@ func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() str
 // line. Several sources (stats writer, explicit global false, per-kind false)
 // each speak for the same flag without replacing one another.
 func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string) {
+	f.setStatusDetailSlot(name, "", ignoreConfig(fn))
+}
+
+// AddConfigStatusDetailSource is AddStatusDetailSource for a source that reads
+// config.json: it is handed the one snapshot GetFeatureFlags loaded, so listing
+// flags parses the file once however many sources are wired.
+func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*config.Config) string) {
 	f.setStatusDetailSlot(name, "", fn)
 }
 
-func (f *FeatureFlagService) statusDetailFor(name string) string {
-	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
+func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
+	parts := autonomyFlagStatusDetail(name, cfg)
 	for _, s := range f.statusDetailSlots[name] {
-		if d := s.fn(); d != "" {
+		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
 		}
 	}
@@ -685,12 +745,18 @@ func (f *FeatureFlagService) GetFeatureFlags(
 			Name:         kf.name,
 			Enabled:      enabled,
 			Description:  kf.description,
-			StatusDetail: f.statusDetailFor(kf.name),
+			StatusDetail: f.statusDetailFor(kf.name, cfg),
 			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
 
-	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+	full := &sessionv1.GetFeatureFlagsResponse{Flags: flags}
+	etag, notModified := conditional.Check("GetFeatureFlags", conditional.Validator(req.Msg.GetIfNoneMatch()), full)
+	if notModified {
+		return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Etag: string(etag), NotModified: true}), nil
+	}
+	full.Etag = string(etag)
+	return connect.NewResponse(full), nil
 }
 
 // +api: feature-flags:update
@@ -745,7 +811,9 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
 	// deferred `result` line is registered before the lock, so it runs after
 	// the unlock.
+	endAuditSpan := flagSpan(ctx, op, flagPhaseAudit)
 	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	endAuditSpan()
 	if err != nil {
 		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
@@ -779,7 +847,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
-			StatusDetail: f.statusDetailFor(name),
+			StatusDetail: f.statusDetailFor(name, cfg),
 			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
@@ -794,16 +862,22 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
 	var previous, hadKey bool
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
 			previous = featureFlagDefault(name)
 		}
+		// In-memory mutators: UpdateConfig saves once, so the saving setters
+		// here would fsync config.json twice per flip.
 		if op.isSet() {
-			return cfg.SetFeatureFlag(name, enabled)
+			cfg.ApplyFeatureFlag(name, enabled)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
@@ -816,6 +890,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 		f.finishApplied(op, audit)
 		return nil
 	}
+	defer flagSpan(ctx, op, flagPhaseApply)()
 	// A failed toggle must not leave disk config and in-memory state disagreeing
 	// about whether the feature is on: GetFeatureFlags and RPC-gating
 	// interceptors read from different sources.
@@ -850,9 +925,11 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 func rollbackFlag(name string, previous, hadKey bool) error {
 	return config.UpdateConfig(func(cfg *config.Config) error {
 		if hadKey {
-			return cfg.SetFeatureFlag(name, previous)
+			cfg.ApplyFeatureFlag(name, previous)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
 }
 

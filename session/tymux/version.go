@@ -50,9 +50,11 @@ const clientProtocolVersion = 1
 
 const (
 	versionProbeTimeout    = 5 * time.Second
-	daemonStopGracePeriod  = 10 * time.Second
 	daemonStopPollInterval = 100 * time.Millisecond
 )
+
+// daemonStopGracePeriod is how long a stopped daemon gets to exit on SIGTERM before SIGKILL; a var so tests can shrink it.
+var daemonStopGracePeriod = 10 * time.Second
 
 // Injection seams so tests need no real daemon, lsof, or /proc.
 var (
@@ -155,6 +157,12 @@ func processExe(ctx context.Context, pid int) (string, error) {
 // DetectDaemonVersions probes the running daemon and the configured binary. Individual
 // probe failures leave the matching field empty rather than failing the whole call.
 func DetectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionInfo {
+	info := detectDaemonVersions(ctx, cfg)
+	recordVersionMismatch(info.Direction)
+	return info
+}
+
+func detectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionInfo {
 	info := DaemonVersionInfo{}
 	if v, err := binaryVersionFn(ctx, cfg.BinaryPath); err == nil {
 		info.InstalledVersion = v
@@ -194,7 +202,9 @@ func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVe
 func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
-	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +212,9 @@ func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, err
 }
 
 func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {
-	resp, err := NewRealTransport(cfg.Addr).ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return 0, err
 	}
@@ -233,7 +245,7 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 			return before, err
 		}
 	}
-	if _, err := EnsureDaemonRunning(ctx, cfg); err != nil {
+	if _, err := ensureDaemonRunning(ctx, cfg, daemonRestartReplace); err != nil {
 		return before, err
 	}
 	log.Info("[tymux] replaced tymuxd", "from", before.RunningVersion, "to", cfg.BinaryPath)

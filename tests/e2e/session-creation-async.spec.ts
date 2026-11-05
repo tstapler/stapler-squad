@@ -4,8 +4,9 @@ const _features = [FEATURE_CATALOG['session-create']] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 import { SessionClient } from './helpers/session-client';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -174,7 +175,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
 
     await sessionsPage.newSessionButton.click({ timeout: 20000 });
     await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-    await page.getByLabel('Session Name').fill(sessionTitle);
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
     await page.getByText('Advanced Options').click();
     await page.getByLabel('Program', { exact: true }).selectOption('bash');
 
@@ -236,7 +237,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
       // the exact same title below.
       await sessionsPage.newSessionButton.click({ timeout: 20000 });
       await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
       await page.getByText('Advanced Options').click();
       await page.getByLabel('Program', { exact: true }).selectOption('bash');
       await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
@@ -264,7 +265,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
 
       await sessionsPage.newSessionButton.click({ timeout: 20000 });
       await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
       await page.getByText('Advanced Options').click();
       await page.getByLabel('Program', { exact: true }).selectOption('bash');
       await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
@@ -461,7 +462,8 @@ test.describe('async session creation (Epic 5.2: SessionCard Failed-state render
       if (target) {
         Object.assign(target, fields);
       }
-      await route.fulfill({ response, json });
+      // A reload can abort a still-pending handler from the previous navigation; fulfilling it then throws.
+      await route.fulfill({ response, json }).catch(() => {});
     });
 
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });

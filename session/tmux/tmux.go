@@ -1467,45 +1467,40 @@ func (t *TmuxSession) filterStatusLine(content string) string {
 
 // detectPromptInContent checks if the given content contains a prompt from the configured program
 func (t *TmuxSession) detectPromptInContent(content string) bool {
-	switch t.programKind {
+	return DetectPromptInContent(t.programKind, content)
+}
+
+// DetectPromptInContent reports whether content contains an approval prompt for kind.
+func DetectPromptInContent(kind ProgramKind, content string) bool {
+	switch kind {
 	case KindClaude:
-		// Claude Code approval dialogs have a distinctive pattern:
-		// An arrow selector (❯) followed by numbered options (1., 2., 3.)
-		// This is more reliable than checking for specific text that might change.
-		//
-		// Example:
-		// ❯ 1. Yes
-		//   2. Yes, allow all edits during this session (shift+tab)
-		//   3. No, and tell Claude what to do differently (esc)
-
-		// Check for the arrow selector with numbered option pattern
-		// Look for: arrow (❯) followed by number and period (1., 2., etc.) on subsequent lines
-		if strings.Contains(content, "❯") {
-			// If we have the arrow, check for numbered options nearby
-			// Split into lines and look for the pattern
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				if strings.Contains(line, "❯") {
-					// Found the arrow, check next few lines for numbered options
-					for j := i; j < i+5 && j < len(lines); j++ {
-						trimmed := strings.TrimSpace(lines[j])
-						// Check for numbered options (1., 2., 3., etc.)
-						if len(trimmed) > 0 && (trimmed[0] >= '1' && trimmed[0] <= '9') &&
-							len(trimmed) > 1 && trimmed[1] == '.' {
-							return true
-						}
-					}
-				}
-			}
-		}
-
-		// Fallback: Check for legacy patterns in case the UI changes
-		return strings.Contains(content, "No, and tell Claude what to do differently") ||
+		return hasClaudeApprovalOptions(content) ||
+			strings.Contains(content, "No, and tell Claude what to do differently") ||
 			strings.Contains(content, "Yes, allow all edits during this session")
 	case KindAider:
 		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	case KindGemini:
 		return strings.Contains(content, "Yes, allow once")
+	}
+	return false
+}
+
+func hasClaudeApprovalOptions(content string) bool {
+	if !strings.Contains(content, "❯") {
+		return false
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "❯") {
+			continue
+		}
+		// Numbered choices within five lines of the selector identify an approval dialog.
+		for _, option := range lines[i:min(i+5, len(lines))] {
+			trimmed := strings.TrimSpace(option)
+			if len(trimmed) > 1 && trimmed[0] >= '1' && trimmed[0] <= '9' && trimmed[1] == '.' {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -2331,76 +2326,41 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 	return v.(bool)
 }
 
-// RefreshClient sends a refresh signal to the tmux client,
-// forcing the process running inside to redraw at current dimensions.
-// This is critical after resizing to update cursor positions and line wrapping.
+// RefreshClient forces the process running inside the pane to redraw at the
+// current dimensions, by sending SIGWINCH to the pane's PID.
+//
+// It deliberately does not call "refresh-client -t <session>": -t names a
+// *client* (tmux matches it against client names/ttys only, cmd_find_client in
+// cmd-find.c, unchanged 3.4 -> 3.8), so a session name always fails with
+// "can't find client", over control mode and as a subprocess alike.
 func (t *TmuxSession) RefreshClient() error {
-	// CM path: send refresh-client over the existing control mode connection.
-	if t.cmEnabledForBackground() {
-		ctx, cancel := cmCtx()
-		defer cancel()
-		if _, cmErr := t.sendCMCommand(ctx, "refresh-client", "-t", t.sanitizedName); cmErr == nil {
-			return nil
-		}
-		// Fall through to subprocess path if CM fails (open question: refresh-client
-		// targeting the CM connection itself may behave differently).
-		log.Debug("RefreshClient CM path failed, falling back to subprocess", "session", t.sanitizedName)
-	}
-
-	// Methods 1/2 below both go through t.cmdExec, which is always local
-	// (see buildTmuxCommandContext's doc comment) -- there is no
-	// commandRunner()-routed equivalent of the circuit-breaker-gated
-	// *exec.Cmd path t.cmdExec.Run/Output require. For a remote session that
-	// already reached here (i.e. the CM path above either wasn't available
-	// or failed), Method 1 would run "refresh-client" against the LOCAL
-	// tmux server -- a no-op at best -- and Method 2 would compound it by
-	// resolving a LOCAL pane PID and sending kill -WINCH for that PID via
-	// t.commandRunner() (which IS remote), targeting a PID on the wrong
-	// host entirely. Refusing outright is strictly safer than silently
-	// doing either: previously-accepted as a known gap "to resolve when
-	// Phase 4 actually wires RefreshClient into a live remote session" (see
-	// git blame) -- ssh-remote-workspaces Phase 4 Epic 4.4 is that phase;
-	// the CM path above is the actual fix (tmux resize-window/refresh-client
-	// travel over the SSH-backed control-mode connection once
-	// startRemoteControlMode is running), so this refusal is the fallback's
-	// fallback, only reached if CM itself is down.
+	// display-message below goes through t.cmdExec, which is always local
+	// (see buildTmuxCommandContext's doc comment), and the kill goes through
+	// t.commandRunner(); for a remote session that would resolve a LOCAL pane
+	// PID and signal it on the REMOTE host. Refuse instead.
 	if t.commandRunner().IsRemote() {
-		return fmt.Errorf("refresh-client: control mode unavailable for remote session %q and there is no local-subprocess fallback for a remote host", t.sanitizedName)
+		return fmt.Errorf("refresh-client: no remote implementation for session %q (display-message/kill would target the wrong host)", t.sanitizedName)
 	}
 
-	// Method 1: Use refresh-client command (preferred)
-	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
-	refreshErr := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(cmd)
+	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName, "#{pane_pid}")
+	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+		return t.cmdExec.Output(cmd)
 	})
-	if err := refreshErr; err != nil {
-		log.Warn("refresh-client failed, trying alternative", "session", t.sanitizedName, "err", err)
-
-		// Method 2: Send SIGWINCH via kill command
-		cmd = t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName, "#{pane_pid}")
-		output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
-			return t.cmdExec.Output(cmd)
-		})
-		if err != nil {
-			return fmt.Errorf("failed to get pane PID: %w", err)
-		}
-
-		panePID := strings.TrimSpace(string(output))
-		winchCtx, winchCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer winchCancel()
-		// Deliberately NOT wrapped via wrapRemoteCommand: "kill" never reads
-		// $TERM or $TMUX, so the wrapper closes no pitfall here (unlike the
-		// real tmux invocations in listSessionsRaw/EnsureRemoteSession) --
-		// wrapping it would be mechanical over-application of "every
-		// commandRunner() call gets wrapped" rather than "every tmux call
-		// gets wrapped". t.commandRunner() is LocalRunner{} on this path
-		// (the IsRemote() guard above already returned for a remote one),
-		// so this always targets the same host panePID was resolved on.
-		if _, err := t.commandRunner().Run(winchCtx, "", "kill", "-WINCH", panePID); err != nil {
-			return fmt.Errorf("failed to send SIGWINCH: %w", err)
-		}
+	if err != nil {
+		return fmt.Errorf("failed to get pane PID: %w", err)
 	}
 
+	panePID := strings.TrimSpace(string(output))
+	winchCtx, winchCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer winchCancel()
+	// Deliberately NOT wrapped via wrapRemoteCommand: "kill" never reads
+	// $TERM or $TMUX, so the wrapper closes no pitfall here. t.commandRunner()
+	// is LocalRunner{} on this path (the IsRemote() guard above already
+	// returned for a remote one), so this targets the host panePID was
+	// resolved on.
+	if _, err := t.commandRunner().Run(winchCtx, "", "kill", "-WINCH", panePID); err != nil {
+		return fmt.Errorf("failed to send SIGWINCH: %w", err)
+	}
 	return nil
 }
 
@@ -2565,27 +2525,20 @@ func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string
 	})
 	if err != nil {
 		log.Warn("failed to capture raw pane content for session (fast lane)", t.capturePaneFailureLogArgs(err)...)
-		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %w", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
 }
 
-// RefreshClientPriority mirrors RefreshClient's Method 1 subprocess path but
-// routes through the resync exec-gate fast lane (runGatedFastLane) instead of
-// the default pool (Epic 4.2). Unlike RefreshClient, it does not attempt the
-// control-mode path or the SIGWINCH fallback (Method 2) — resync's priority
-// caller wants a bounded, fast-lane-only refresh, not the full fallback
-// chain.
-//
-// ctx is caller-supplied — see CapturePaneContentRawPriority's doc comment:
-// handleCurrentPaneRequest calls this up to 3 times per resync, and all 3
-// must share one overall deadline rather than each getting its own fresh
-// ResyncFastLaneTimeout allowance.
-func (t *TmuxSession) RefreshClientPriority(ctx context.Context) error {
-	return runFastLaneSubprocessErr(ctx, t.serverSocket, func(ctx context.Context) error {
-		cmd := t.buildTmuxCommandContext(ctx, "refresh-client", "-t", t.sanitizedName)
-		return t.cmdExec.Run(cmd)
-	})
+// RefreshClientPriority is the resync fast lane's refresh step. It spawns
+// nothing: the previous body ran "refresh-client -t <session>", which tmux
+// always rejects with "can't find client" (-t takes a client, not a session;
+// see RefreshClient), so each call cost a failed fork plus a Warn log and
+// refreshed nothing. Returning nil keeps the observable behaviour (no redraw
+// signal is sent on this lane) without the fork. ctx is unused; the signature
+// stays so the resync caller's shared-deadline plumbing is unchanged.
+func (t *TmuxSession) RefreshClientPriority(_ context.Context) error {
+	return nil
 }
 
 // CapturePaneContentRaw captures the pane content with ANSI codes preserved and WITHOUT joining wrapped lines.
@@ -2613,7 +2566,7 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 		recordFailure(time.Now())
 		t.invalidateExistsCache()
 		log.Warn("failed to capture raw pane content for session", "session", t.sanitizedName, "err", err)
-		return "", fmt.Errorf("error capturing raw pane content: %v", err)
+		return "", fmt.Errorf("error capturing raw pane content: %w", err)
 	}
 	return sanitizeUTF8String(output), nil
 }

@@ -10,11 +10,12 @@
  * `**\/session.v1.<Service>/<Method>` (see pages/InsightsPage.ts).
  */
 import { expect as baseExpect, type APIRequestContext, type Page, type Route } from "@playwright/test";
+import { baseUrl } from './base-url';
 
 /** `expect` with a timeout that tolerates a loaded machine: page loads under load outran the 5 s default. */
 export const expect = baseExpect.configure({ timeout: 15_000 });
 
-export const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+export const BASE_URL = baseUrl();
 
 export type Reply =
   | { json: unknown; status?: number }

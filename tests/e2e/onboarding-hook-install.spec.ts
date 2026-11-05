@@ -8,8 +8,9 @@
 // Intentionally does NOT click "Install" — that would mutate the runner's real
 // ~/.claude/settings.json. GetHookStatus is read-only and safe to exercise.
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 
 test.describe('onboarding-hook-install', () => {

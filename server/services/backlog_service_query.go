@@ -106,19 +106,49 @@ func (s *BacklogService) GetBacklogItem(
 // component's watch subscription received always overwrote the enriched
 // worktreePath with an empty one.
 func enrichItemSessionsWorktreeData(ctx context.Context, storage *session.Storage, p *sessionv1.BacklogItem) {
-	if storage == nil || p == nil {
+	enrichItemsSessionsWorktreeData(ctx, storage, []*sessionv1.BacklogItem{p})
+}
+
+// enrichItemsSessionsWorktreeData is enrichItemSessionsWorktreeData for many
+// items, resolving every distinct session's worktree in one batched query
+// instead of one query per item session.
+func enrichItemsSessionsWorktreeData(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
+	if storage == nil {
 		return
 	}
-	for _, is := range p.ItemSessions {
-		if is.SessionUuid == "" {
+	var uuids []string
+	seen := make(map[string]struct{})
+	for _, p := range items {
+		if p == nil {
 			continue
 		}
-		wt, wtErr := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
-		if wtErr == nil && wt.BranchName != "" {
-			is.WorktreeBranch = wt.BranchName
+		for _, is := range p.ItemSessions {
+			if _, dup := seen[is.SessionUuid]; is.SessionUuid == "" || dup {
+				continue
+			}
+			seen[is.SessionUuid] = struct{}{}
+			uuids = append(uuids, is.SessionUuid)
 		}
-		if wtErr == nil && wt.WorktreePath != "" {
-			is.WorktreePath = wt.WorktreePath
+	}
+	if len(uuids) == 0 {
+		return
+	}
+	worktrees, err := storage.GetWorktreeDataBySessionUUIDs(ctx, uuids)
+	if err != nil {
+		return
+	}
+	for _, p := range items {
+		if p == nil {
+			continue
+		}
+		for _, is := range p.ItemSessions {
+			wt := worktrees[is.SessionUuid]
+			if wt.BranchName != "" {
+				is.WorktreeBranch = wt.BranchName
+			}
+			if wt.WorktreePath != "" {
+				is.WorktreePath = wt.WorktreePath
+			}
 		}
 	}
 }
@@ -163,7 +193,7 @@ func (s *BacklogService) ListBacklogItems(
 	costFor := s.buildCostLookup()
 	for i := range summaries {
 		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
-		s.annotateDuplicatePending(ctx, protoItems[i])
+		annotateDuplicatePending(protoItems[i], summaries[i].ItemSessions)
 	}
 	s.attachUnresolvedBlockers(ctx, protoItems)
 
@@ -565,14 +595,10 @@ func (s *BacklogService) GetSessionBacklogIndex(
 }
 
 // annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
-// item (summaries carry no ItemSessions). Only review items can be pending, so
-// the per-item session lookup is limited to that status.
-func (s *BacklogService) annotateDuplicatePending(ctx context.Context, p *sessionv1.BacklogItem) {
+// item from the item sessions ListBacklogItemSummaries already batch-loaded, so
+// no per-item query is needed. Only review items can be pending.
+func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []session.ItemSessionSummary) {
 	if p.Status != string(session.BacklogStatusReview) {
-		return
-	}
-	sessions, err := s.storage.ListItemSessions(ctx, p.Id)
-	if err != nil {
 		return
 	}
 	if ref := session.PendingDuplicateRef(sessions); ref != "" {

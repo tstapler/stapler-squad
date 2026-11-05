@@ -681,9 +681,12 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	}
 
 	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
-		Title:            "active-restore-test",
-		Path:             t.TempDir(),
-		Program:          "bash -c 'echo test session; exec bash'",
+		Title: "active-restore-test",
+		Path:  t.TempDir(),
+		// Whitespace-split, no shell quoting (see buildBaseLaunchCommand): a quoted
+		// "bash -c '...'" program dies instantly, and tmux 3.8 reports an empty
+		// #{pane_pid} for a dead pane (3.7 still reported the old pid).
+		Program:          "sleep 3600",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),

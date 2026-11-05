@@ -174,9 +174,13 @@ func TestMirror_should_FailOpenWithinBound_WhenRepositoryBlocksOrErrors(t *testi
 			if tc.store.release != nil {
 				t.Cleanup(func() { close(tc.store.release) })
 			}
+			// A short bound keeps the test fast; the store stays blocked until cleanup, so returning at all
+			// proves Mirror gave up at its bound. The wall-clock ceiling only catches a hang, not CI jitter.
+			const bound = 20 * time.Millisecond
+			m.bound = bound
 			start := time.Now()
 			id, ok := m.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
-			assert.Less(t, time.Since(start), 300*time.Millisecond)
+			assert.Less(t, time.Since(start), 100*bound)
 			assert.False(t, ok)
 			assert.Empty(t, id)
 			assert.Equal(t, []string{tc.reason}, counts.failures(), "counted exactly once")

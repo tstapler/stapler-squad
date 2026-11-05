@@ -75,6 +75,7 @@ func (m funcMigration) Run(ctx context.Context, er *EntRepository) error {
 // see funcMigration's doc comment above for what adding a migration
 // actually takes.
 var startupMigrations = []Migration{ //nolint:gochecknoglobals
+	funcMigration{"drop obsolete indexes", dropObsoleteIndexes}, // first: cheap, and later migrations shell out to git per item
 	funcMigration{"backlog item updated_at UTC backfill", runBacklogItemUpdatedAtUTCBackfill},
 	funcMigration{"workflow updated_at UTC backfill", runWorkflowUpdatedAtUTCBackfill},
 	funcMigration{"github pr url backfill", runGitHubPRURLBackfill},

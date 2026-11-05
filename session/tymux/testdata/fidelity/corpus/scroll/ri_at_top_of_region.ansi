@@ -1,0 +1,2 @@
+scroll/ri_at_top_of_region -- esctest2 ri.py; libvterm 12state_scroll
+[1;1HL01[2;1HL02[3;1HL03[4;1HL04[5;1HL05[6;1HL06[7;1HL07[8;1HL08[9;1HL09[10;1HL10[11;1HL11[12;1HL12[13;1HL13[14;1HL14[15;1HL15[16;1HL16[17;1HL17[18;1HL18[19;1HL19[20;1HL20[21;1HL21[22;1HL22[23;1HL23[24;1HL24[5;10r[5;1HMri-at-region-top[6;1HMMMMMmany[r[1;1HMri-at-screen-topMM

@@ -12,7 +12,7 @@ import { renderHook, act } from "@testing-library/react";
 import React from "react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
-import backlogItemsReducer, { selectBacklogItemById, selectAllBacklogItems } from "@/lib/store/backlogItemsSlice";
+import backlogItemsReducer, { selectBacklogItemById, selectAllBacklogItems, upsertItem } from "@/lib/store/backlogItemsSlice";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -138,6 +138,44 @@ describe("useWatchBacklogItems", () => {
 
     expect(mockListBacklogItems).toHaveBeenCalledTimes(1);
     expect(mockWatchBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the mount REST call on a warm store but still opens the stream", async () => {
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+    const store = makeStore();
+    store.dispatch(upsertItem(makeItem("warm-1")));
+
+    renderHook(() => useWatchBacklogItems({ statusFilter: ["in_progress"] }), {
+      wrapper: makeWrapper(store),
+    });
+
+    await act(async () => {
+      await flush();
+    });
+
+    expect(mockListBacklogItems).not.toHaveBeenCalled();
+    expect(mockWatchBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches via REST when the status filter changes on a warm store", async () => {
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+    const store = makeStore();
+    store.dispatch(upsertItem(makeItem("warm-1")));
+
+    const { rerender } = renderHook(({ f }) => useWatchBacklogItems({ statusFilter: [f] }), {
+      wrapper: makeWrapper(store),
+      initialProps: { f: "in_progress" },
+    });
+    await act(async () => {
+      await flush();
+    });
+    expect(mockListBacklogItems).not.toHaveBeenCalled();
+
+    rerender({ f: "review" });
+    await act(async () => {
+      await flush();
+    });
+    expect(mockListBacklogItems).toHaveBeenCalledTimes(1);
   });
 
   // R11 error path — Task 4.2.1c

@@ -1,7 +1,7 @@
 # ESLint rules formerly supplied by `next/core-web-vitals`
 
-`web-app/eslint.config.mjs` (flat config) lists these rules explicitly. `eslint-config-next` is still
-installed (rollback path) but nothing extends it.
+`web-app/eslint.config.mjs` (flat config) lists these rules explicitly. `eslint-config-next` was removed
+with Next.js (PR 9); nothing extends it.
 
 Inventory taken with `eslint --print-config src/app/page.tsx` before and after the change: the
 effective rule sets are identical except for the 21 `@next/next/*` rules, which no longer exist.
@@ -31,13 +31,12 @@ changed-files gate.
 | `bash scripts/eslint-gate.sh <files>` | the given files | any warning or error (`--max-warnings 0`) |
 | `bun run lint:affected` | files changed vs `origin/main` | any warning or error, via the gate |
 
-CI (`.github/workflows/lint.yml`, job `web-lint`) runs the gate over files changed by the push or PR.
+CI (`.github/workflows/lint.yml`, the `lint` job) runs the gate over files changed by the push or PR.
 Files outside `src/**` are skipped silently, as `next lint` covered only `src/`.
 
 ## Rollback
 
-Revert the PR that introduced `eslint.config.mjs`. `eslint-config-next` is still installed, so the
-`.eslintrc.json` path and `next lint` return whole.
+Revert the commit that changed `eslint.config.mjs`. There is no `next lint` path to fall back to: Next was removed in PR 9.
 
 ## Verifying a config change
 

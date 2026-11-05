@@ -1,0 +1,2 @@
+modes/mouse_button -- xterm ctlseqs mouse tracking button-event tracking (?1002)
+[?1002hmouse protocol button-event tracking (?1002) on

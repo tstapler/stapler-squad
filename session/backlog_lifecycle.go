@@ -158,6 +158,15 @@ type BacklogLifecycleListener struct {
 	ciRerunner ciRerunClient
 	ciReruns   ciRerunLedger
 
+	// conflictRetries throttles conflict-only PR fixes (see remediatePRFixWithBackoffGate).
+	conflictRetries    conflictRetryLedger
+	conflictRetryClock func() time.Time // nil: time.Now
+
+	// terminalSettled lets the 60s done/archived safety-net sweeps skip items they
+	// already fully handled (see terminalSweepSettleTTL); sweepClock nil: time.Now.
+	terminalSettled settledTracker
+	sweepClock      func() time.Time
+
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex
 	prCreatorFactory func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator

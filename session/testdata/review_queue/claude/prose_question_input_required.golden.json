@@ -1,0 +1,22 @@
+{
+  "label": "prose_question",
+  "source": "captured",
+  "detected_status": "Input Required",
+  "label_matched": true,
+  "no_controller": {
+    "action": "add",
+    "reason": "input_required",
+    "priority": "Medium",
+    "context": "Selection prompt with numbered options",
+    "claude_status": "Input Required",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "add",
+    "reason": "input_required",
+    "priority": "Medium",
+    "context": "Selection prompt with numbered options",
+    "claude_status": "Input Required",
+    "clean_worktree": false
+  }
+}

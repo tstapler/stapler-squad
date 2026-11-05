@@ -1,8 +1,10 @@
 package services
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,11 @@ import (
 // A SessionDriver left running after its test polls every 2s, and each poll's
 // config.LoadConfig() can write config.json into whichever test's
 // STAPLER_SQUAD_TEST_DIR is current, racing that test's TempDir RemoveAll.
+
+// Tests must start drivers they own with session.StartSessionDriverForTest; the
+// nosessiondrivertest analyzer rejects a raw session.StartSessionDriver.
+// Drivers started by production code under test (CreateSession etc.) are
+// covered by stopSessionDriverOnCleanup / setupForkTestFixture below.
 
 // stopSessionDriverOnCleanup stops and joins inst's SessionDriver when the test
 // ends. Use it for instances that never enter the fixture's poller (e.g. built
@@ -33,18 +40,21 @@ func stopPollerSessionDrivers(poller *session.ReviewQueuePoller) {
 	}
 }
 
-// liveSessionDriverCount counts running SessionDriver goroutines in this process.
-func liveSessionDriverCount() int {
+// liveSessionDriverStacks returns the stack of each running SessionDriver goroutine.
+func liveSessionDriverStacks() []string {
 	buf := make([]byte, 1<<24)
 	buf = buf[:runtime.Stack(buf, true)]
-	n := 0
+	var stacks []string
 	for _, g := range strings.Split(string(buf), "\n\n") {
 		if strings.Contains(g, "session.StartSessionDriver.func") {
-			n++
+			stacks = append(stacks, g)
 		}
 	}
-	return n
+	return stacks
 }
+
+// liveSessionDriverCount counts running SessionDriver goroutines in this process.
+func liveSessionDriverCount() int { return len(liveSessionDriverStacks()) }
 
 // awaitNoSessionDrivers waits briefly for just-stopped drivers to exit and
 // returns the count still alive.
@@ -57,4 +67,35 @@ func awaitNoSessionDrivers(timeout time.Duration) int {
 		}
 		<-time.After(50 * time.Millisecond) // no *testing.T in TestMain, so no require.Eventually
 	}
+}
+
+// driverStartLog remembers the creating stack of every driver started in this
+// test binary, so a leak report can name the code path that started it.
+var driverStartLog struct {
+	mu     sync.Mutex
+	starts map[*session.Instance]string
+}
+
+func recordSessionDriverStarts() {
+	driverStartLog.starts = map[*session.Instance]string{}
+	session.SetSessionDriverStartHookForTest(func(inst *session.Instance) {
+		stack := make([]byte, 1<<14)
+		stack = stack[:runtime.Stack(stack, false)]
+		driverStartLog.mu.Lock()
+		driverStartLog.starts[inst] = fmt.Sprintf("session %q started by:\n%s", inst.Snapshot().Title, stack)
+		driverStartLog.mu.Unlock()
+	})
+}
+
+// leakedSessionDriverStarts returns the creation record of each driver still running.
+func leakedSessionDriverStarts() []string {
+	driverStartLog.mu.Lock()
+	defer driverStartLog.mu.Unlock()
+	var leaked []string
+	for inst, rec := range driverStartLog.starts {
+		if session.SessionDriverRunningForTest(inst) {
+			leaked = append(leaked, rec)
+		}
+	}
+	return leaked
 }

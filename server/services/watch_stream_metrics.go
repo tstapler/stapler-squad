@@ -23,6 +23,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -88,5 +89,32 @@ func TrackOpenStream(method string) (done func()) {
 	v, _ := openStreamCounts.LoadOrStore(method, new(atomic.Int64))
 	counter := v.(*atomic.Int64)
 	counter.Add(1)
-	return func() { counter.Add(-1) }
+	start := time.Now()
+	return func() {
+		counter.Add(-1)
+		recordStreamAge(method, time.Since(start))
+	}
+}
+
+// streamAgeBucketsSeconds run from a quick open/close churn (a stream that dies
+// within seconds is a reconnect storm) to multi-hour healthy streams.
+var streamAgeBucketsSeconds = []float64{1, 5, 15, 30, 60, 300, 900, 3600, 14400}
+
+var streamAgeHistogram atomic.Pointer[metric.Float64Histogram]
+
+func recordStreamAge(method string, age time.Duration) {
+	h := streamAgeHistogram.Load()
+	if h == nil {
+		created, err := telemetry.GetMeter().Float64Histogram("rpc.server.stream_age_seconds",
+			metric.WithUnit("s"),
+			metric.WithDescription("How long a server-streaming RPC or terminal WebSocket stayed open, observed at close, by method"),
+			metric.WithExplicitBucketBoundaries(streamAgeBucketsSeconds...))
+		if err != nil {
+			log.Error("services: failed to register rpc.server.stream_age_seconds", "error", err)
+			return
+		}
+		streamAgeHistogram.CompareAndSwap(nil, &created)
+		h = streamAgeHistogram.Load()
+	}
+	(*h).Record(context.Background(), age.Seconds(), metric.WithAttributes(attribute.String("method", method)))
 }

@@ -1,0 +1,7 @@
+sgr/colors_16 -- ECMA-48 SGR 30-37/40-47; xterm aixterm 90-97/100-107; esctest
+[30m 30[0m[31m 31[0m[32m 32[0m[33m 33[0m[34m 34[0m[35m 35[0m[36m 36[0m[37m 37[0m [90m 90[0m[91m 91[0m[92m 92[0m[93m 93[0m[94m 94[0m[95m 95[0m[96m 96[0m[97m 97[0m
+[40m  40[0m[41m  41[0m[42m  42[0m[43m  43[0m[44m  44[0m[45m  45[0m[46m  46[0m[47m  47[0m [100m 100[0m[101m 101[0m[102m 102[0m[103m 103[0m[104m 104[0m[105m 105[0m[106m 106[0m[107m 107[0m
+[31;42mred-on-green[0m [1;33;44mbold-yellow-on-blue[0m [7;36mrev-cyan[0m [91;102mbright-red-on-bright-green[0m
+[31mred[39m-fg-default[0m [42mgreen[49m-bg-default[0m [31;42mboth[39;49m-both-default[0m
+[1;31mbold-red[0m [1;91mbold-bright-red[0m [2;31mfaint-red[0m [31;7mrev-red[0m [7;31;44mrev-red-on-blue[0m
+[30;47mblack-on-white[0m [37;40mwhite-on-black[0m [90;107mgray-on-white[0m

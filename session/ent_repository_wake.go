@@ -155,7 +155,7 @@ func utcPtr(t *time.Time) *time.Time {
 // CreateWakeTrigger inserts a trigger, or returns the existing live row with
 // the same dedup key (created=false). Dedup resolves before the owner cap, so
 // re-creating an identical trigger at the cap is not rejected. The cap count
-// runs in the same transaction as the insert (SQLite's single connection
+// runs in the same transaction as the insert (SQLite's single writer connection
 // serializes it against concurrent creates).
 func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in CreateWakeTriggerInput) (data *WakeTriggerData, created bool, err error) {
 	key, specJSON, err := validateCreateWakeTriggerInput(in)

@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -557,6 +558,21 @@ func TestRemoteWorktreeOps_Location_IsAlwaysRemote(t *testing.T) {
 		}
 		if (loc.Runner == nil) != (runner == nil) {
 			t.Fatalf("%s: Runner = %v", name, loc.Runner)
+		}
+	}
+}
+
+// The remote init script must carry every variable git needs, derived from backend.RequiredGitEnv
+// rather than a hand-kept copy that can drift (GIT_OPTIONAL_LOCKS=0 was missing from it).
+func TestRequiredGitEnvExports_ExportsEveryRequiredVariableToAShell(t *testing.T) {
+	t.Parallel()
+	out, err := safeexec.CommandContext(context.Background(), "sh", "-c", "export "+requiredGitEnvExports()+"; env").Output()
+	if err != nil {
+		t.Fatalf("sh: %v", err)
+	}
+	for _, kv := range backend.RequiredGitEnv() {
+		if !strings.Contains("\n"+string(out), "\n"+kv+"\n") {
+			t.Errorf("shell env lacks %q", kv)
 		}
 	}
 }

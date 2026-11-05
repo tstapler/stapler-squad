@@ -1,6 +1,6 @@
 # ADR-005: Bundle budgets are re-expressed as Total JS, Initial JS and Largest chunk, with one source of truth
 
-Status: Proposed — default pending owner confirmation (flagged choice F5). Date: 2026-10-19
+Status: Accepted (flagged choice F5). Date: 2026-10-19
 Evidence: `research/stack.md` §9, `research/architecture.md` §5, `research/pitfalls.md` §2.2 (size-limit row).
 
 ## Context
