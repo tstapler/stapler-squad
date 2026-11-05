@@ -196,24 +196,36 @@ func newRealTransport(addr string, quiet bool) rpcTransport {
 	if quiet {
 		return build(newQuietSelectingTransport)
 	}
-	return sharedTransportFor(addr+"|"+sock, func() *selectingTransport { return build(newSelectingTransport) })
+	return sharedTransportFor(addr+"|"+sock, func() *selectingTransport {
+		s := build(newSelectingTransport)
+		recordTransportActive(addr, transportUnix)
+		return s
+	})
 }
 
 // sharedSelectors holds one long-lived selector per daemon (addr+socket) so every session's
 // transport shares one fallback state, one probe claim and one Warn per genuine transition,
 // instead of N sessions each rediscovering and logging the same switch.
-var sharedSelectors sync.Map // string -> *selectingTransport
+var (
+	sharedSelectorsMu sync.Mutex
+	sharedSelectors   = map[string]*selectingTransport{}
+)
 
+// sharedTransportFor returns the selector for key, building it under the lock so concurrent first
+// callers neither build (and leak http clients for) a loser nor race its side effects.
 func sharedTransportFor(key string, mk func() *selectingTransport) *selectingTransport {
-	if v, ok := sharedSelectors.Load(key); ok {
-		return v.(*selectingTransport)
+	sharedSelectorsMu.Lock()
+	defer sharedSelectorsMu.Unlock()
+	if s, ok := sharedSelectors[key]; ok {
+		return s
 	}
-	v, _ := sharedSelectors.LoadOrStore(key, mk())
-	return v.(*selectingTransport)
+	s := mk()
+	sharedSelectors[key] = s
+	return s
 }
 
-// newTCPTransport is the TCP-only transport; probeDaemon uses it directly so a healthy Unix
-// socket can never mask a dead TCP listener in the probe itself.
+// newTCPTransport is the TCP-only transport; probeDaemon and the monitor's TCP-liveness check use
+// it directly so the Unix socket cannot answer for the TCP listener.
 func newTCPTransport(addr string) *grpcTransport {
 	hc := newH2CClient()
 	return &grpcTransport{client: newTymuxClient(hc, addr), http: hc}

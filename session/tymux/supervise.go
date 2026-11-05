@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -252,7 +254,33 @@ func unixSocketPath(cfg DaemonConfig) string {
 	if path != "" && cfg.SocketPath != "" && !socketPairedWithAddr(cfg) {
 		return ""
 	}
+	if path != "" && !socketPathUsable(path) {
+		warnOverlongSocketPath(path)
+		return ""
+	}
 	return path
+}
+
+// socketPathMax is the longest sun_path the platform accepts, including the NUL terminator.
+var socketPathMax = func() int {
+	if runtime.GOOS == "darwin" {
+		return 104
+	}
+	return 108
+}()
+
+// socketPathUsable reports whether path fits in sockaddr_un.sun_path. Beyond it connect() fails
+// with EINVAL forever, so such a daemon is reached over TCP only.
+func socketPathUsable(path string) bool { return len(path) < socketPathMax }
+
+var warnedOverlongSockets sync.Map
+
+func warnOverlongSocketPath(path string) {
+	if _, dup := warnedOverlongSockets.LoadOrStore(path, struct{}{}); dup {
+		return
+	}
+	log.Warn("[tymux] control socket path is too long for this platform; using TCP only",
+		"path", path, "len", len(path), "max", socketPathMax-1)
 }
 
 // socketPairedWithAddr rejects the env-resolved combinations where only one half was overridden,

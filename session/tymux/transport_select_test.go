@@ -28,6 +28,8 @@ type fakeEndpoint struct {
 	err     atomic.Pointer[error]
 	calls   atomic.Int32
 	streams atomic.Int32
+	// lastInfoTimeout is the deadline budget (ns) of the latest GetServerInfo call, 0 if unbounded.
+	lastInfoTimeout atomic.Int64
 }
 
 func (f *fakeEndpoint) fail(err error) { f.err.Store(&err) }
@@ -48,7 +50,10 @@ func (f *fakeEndpoint) ListSessions(context.Context, *connect.Request[v1.ListSes
 	return connect.NewResponse(&v1.ListSessionsResponse{}), nil
 }
 
-func (f *fakeEndpoint) GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+func (f *fakeEndpoint) GetServerInfo(ctx context.Context, _ *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	if dl, ok := ctx.Deadline(); ok {
+		f.lastInfoTimeout.Store(int64(time.Until(dl)))
+	}
 	if err := f.result(); err != nil {
 		return nil, err
 	}
@@ -427,14 +432,15 @@ func TestRealTransport_UnixOnlyDaemon_RPCsSucceedOverSocket(t *testing.T) {
 	require.Equal(t, 1, n)
 }
 
-func transportGauge(t *testing.T, kind string) int64 {
+func transportGauge(t *testing.T, daemon, kind string) int64 {
 	t.Helper()
 	m := collectMetric(t, "tymux_transport")
 	require.NotNil(t, m)
 	g, ok := m.Data.(metricdata.Gauge[int64])
 	require.True(t, ok)
 	for _, dp := range g.DataPoints {
-		if v, ok := dp.Attributes.Value("transport"); ok && v.AsString() == kind {
+		d, _ := dp.Attributes.Value("daemon")
+		if v, ok := dp.Attributes.Value("transport"); ok && v.AsString() == kind && d.AsString() == daemon {
 			return dp.Value
 		}
 	}
@@ -464,7 +470,7 @@ func TestProbeTransport_DoesNotTouchSessionTransportMetrics(t *testing.T) {
 	t.Setenv("TYMUXD_ADDR", addr)
 	t.Setenv("TYMUXD_SOCKET_PATH", sock)
 
-	recordTransportActive(transportUnix) // the session transport's state
+	recordTransportActive(addr, transportUnix) // the session transport's state
 	before := transitionTotal(t)
 
 	probe, release := newProbeTransport(addr)
@@ -472,8 +478,8 @@ func TestProbeTransport_DoesNotTouchSessionTransportMetrics(t *testing.T) {
 	_, err := probe.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
 	require.NoError(t, err, "the probe still falls back to the socket")
 
-	require.EqualValues(t, 1, transportGauge(t, transportUnix), "probe construction must not reset the gauge to tcp")
-	require.EqualValues(t, 0, transportGauge(t, transportTCP))
+	require.EqualValues(t, 1, transportGauge(t, addr, transportUnix), "probe construction must not reset the gauge to tcp")
+	require.EqualValues(t, 0, transportGauge(t, addr, transportTCP))
 	require.Equal(t, before, transitionTotal(t), "probe fallback must not count as a session transition")
 }
 
