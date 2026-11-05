@@ -103,10 +103,20 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		grpcOKServer(t, ln)
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), DaemonConfig{Addr: "http://" + ln.Addr().String()}))
 	})
-	t.Run("unix socket answering must not mask a dead TCP listener", func(t *testing.T) {
+	t.Run("unix socket answering a dead TCP listener is degraded, still usable", func(t *testing.T) {
 		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t)}
-		require.Equal(t, daemonProbeNotListening, probeDaemon(context.Background(), cfg))
-		require.False(t, checkDaemonHealthy(context.Background(), cfg), "squad's clients are TCP-only")
+		require.Equal(t, daemonProbeDegraded, probeDaemon(context.Background(), cfg), "not Healthy: the monitor must still see TCP is down")
+		require.True(t, checkDaemonHealthy(context.Background(), cfg), "the client falls back to the socket")
+	})
+	t.Run("silent unix socket with TCP refused is busy, never degraded", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: silentUnixSocket(t)}
+		require.Equal(t, daemonProbeBusy, probeDaemon(context.Background(), cfg), "only a healthy socket reply may be Degraded")
+	})
+	t.Run("TCP squatter stays unhealthy even when the unix socket is healthy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
+		t.Cleanup(srv.Close)
+		cfg := DaemonConfig{Addr: srv.URL, SocketPath: answeringUnixSocket(t)}
+		require.Equal(t, daemonProbeUnhealthy, probeDaemon(context.Background(), cfg))
 	})
 	t.Run("caller deadline mid-answer is unhealthy, not busy", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -128,17 +138,39 @@ func answeringUnixSocket(t *testing.T) string {
 	return sock
 }
 
-// TCP dead, Unix socket alive: report an error and keep the daemon (it may hold live panes).
-func TestEnsureDaemonRunning_TCPDeadUnixUp_ReportsAndDoesNotKill(t *testing.T) {
+// silentUnixSocket accepts connections on a Unix socket and never answers.
+func silentUnixSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "s.sock"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// TCP dead, Unix socket alive: degraded but usable, so the daemon is reused: no error, no stop, no spawn.
+func TestEnsureDaemonRunning_TCPDeadUnixUp_ReusesDaemon(t *testing.T) {
 	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
 	shrinkProbeTimeouts(t)
 	stop, spawn := neverCalled(t)
 	defer stubStopTymuxd(stop)()
 	defer stubStartDaemonAttempt(spawn)()
 
-	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
+	ready, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
 
-	require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+	require.NoError(t, err)
+	require.Equal(t, TymuxdReady{}, ready)
 }
 
 func dialErr(errno syscall.Errno) error {
@@ -244,7 +276,13 @@ func TestEnsureDaemonRunning_ListenerUpButUnhealthy_IsNotStopped(t *testing.T) {
 
 			_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19982", BinaryPath: "tymuxd"})
 
-			require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			if tc.tcp {
+				require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			} else {
+				require.ErrorIs(t, err, ErrTymuxdControlSocketUnresponsive)
+				require.NotErrorIs(t, err, ErrTymuxdPortSquatted, "nothing listens on TCP, so nothing is squatting the port")
+				require.NotContains(t, err.Error(), "something is listening")
+			}
 		})
 	}
 }
