@@ -32,8 +32,8 @@
   path: buf-generate+protoc-gen-es-from-bun-install
   cost: S
 - spike: S13
-  verdict: Fail
-  path: "owner-gated: GitHub-side merge check pending (replay favours commit lock + driver + regen)"
+  verdict: FallbackWorkaround
+  path: commit-lock + client-merge-driver + CI-auto-regen-workflow + required-check (GitHub merges ignore the driver; scratch repo 32 pairs, 32 green)
   cost: S
 - spike: S11
   verdict: Pass
