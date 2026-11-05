@@ -1669,6 +1669,11 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 	return !res.Tombstoned, nil
 }
 
+// ItemPRs returns the item's derived PR set (see PRSetReader).
+func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]PRView, error) {
+	return s.repo.ItemPRsByID(ctx, itemID)
+}
+
 // ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
 // from one data path; see ItemGuardView.
 func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {

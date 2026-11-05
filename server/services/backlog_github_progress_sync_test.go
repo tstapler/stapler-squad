@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -244,3 +245,21 @@ type stubHostRecorder struct{ id string }
 
 func (stubHostRecorder) RecordClaim(context.Context, session.ClaimRecord) error { return nil }
 func (s stubHostRecorder) LocalHostID() string                                  { return s.id }
+
+func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
+	body := progressReviewComments([]progressPR{
+		{URL: "https://github.com/acme/app/pull/21", State: session.PRStateMerged},
+		{URL: "https://github.com/acme/app/pull/22", State: session.PRStateOpen},
+		{URL: "https://github.com/acme/app/pull/23"},
+		{URL: "javascript:alert(1)//pull/9", State: session.PRStateOpen},
+	})
+	assert.Contains(t, body, "- https://github.com/acme/app/pull/21 (merged)")
+	assert.Contains(t, body, "- https://github.com/acme/app/pull/22 (open)")
+	assert.Contains(t, body, "- https://github.com/acme/app/pull/23 (unknown)")
+	assert.NotContains(t, body, "javascript:")
+}
+
+func TestProgressSync_ShouldKeepSinglePRWording(t *testing.T) {
+	assert.Equal(t, progressReviewComment("https://github.com/acme/app/pull/21"),
+		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: session.PRStateOpen}}))
+}

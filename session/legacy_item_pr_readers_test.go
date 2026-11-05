@@ -33,7 +33,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"server/mcp/tools_stuck_report.go":                {itemScalarOK, "stuck detector checks only the tracked scalar; moves to via-itemPRs in T5.2.2"},
 	"server/services/backlog_debug_seed_handler.go":   {itemScalarOK, "debug seed writes the scalars onto a fixture item"},
 	"server/services/backlog_github_forward_sync.go":  {itemScalarOK, "close comment links the item's tracked PR URL"},
-	"server/services/backlog_github_progress_sync.go": {itemScalarOK, "review comment links the item's tracked PR URL"},
+	"server/services/backlog_github_progress_sync.go": {itemPRsSeam, "review comment lists the whole item PR set under reader:backlog; the tracked URL is the flag-off fallback"},
 	"server/services/backlog_service.go":              {itemScalarOK, "maps the stored scalars onto the item proto"},
 	"server/services/backlog_service_lifecycle.go":    {itemScalarOK, "request validation for the explicit PR link/reassign RPC"},
 	"server/services/backlog_service_pr_fix_steer.go": {itemScalarOK, "derives the steering link key from the tracked PR URL"},
