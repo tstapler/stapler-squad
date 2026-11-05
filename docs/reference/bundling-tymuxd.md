@@ -199,8 +199,10 @@ stapler-squad's tymux client (`session/tymux/transport_select.go`) talks to tymu
   | `EACCES`/`EPERM`, or a `Unauthenticated`/`PermissionDenied` reply | not consulted | AccessDenied | alive, never killed, never "wedged"; one Warn with the socket path and the permission diagnosis |
   | no socket file or refused | refused | NotListening | down |
 
+  AccessDenied counts as alive: `EnsureDaemonRunning` returns ready (never spawns or kills), and callers then see `ErrTymuxdSocketAccessDenied` on their RPCs. A socket path the kernel cannot dial at all (over the `sun_path` limit, `ENOTDIR`, `ELOOP`, `ENAMETOOLONG`) is treated like a missing socket, so TCP is consulted and a dead daemon is respawned rather than reported as unresponsive.
+
   Any live socket or TCP listener still vetoes stopping the daemon. Watch `tymux_daemon_degraded` (1 while Degraded), `tymux_tcp_listener_up`, `tymux_transport{daemon,transport}` and `tymux_transport_transitions_total{daemon,from,to}`.
-- **TCP liveness is informational.** The monitor probes the TCP listener once per tick (only while sessions need the daemon) and publishes `tymux_tcp_listener_up`. It never affects health; a Warn every 10 minutes says other TCP-only clients of the daemon will fail while it is down.
+- **TCP liveness is informational.** The monitor probes the TCP listener once per tick (only while sessions need the daemon) and publishes `tymux_tcp_listener_up`. It never affects health, and only a definite refusal counts as down (a busy or forbidden listener leaves the gauge alone); a Warn every 10 minutes says other TCP-only clients of the daemon will fail while it is down.
 - **Follow-up: `--disable-tcp-loopback`.** tymuxd has `--disable-tcp-loopback` (`TYMUXD_DISABLE_TCP_LOOPBACK`) to run socket-only. Squad does not set it, and enabling it later breaks things that are still keyed on the TCP port:
   - `waitPortFree`/`stopListener` (`session/tymux/version.go`) would see the port "free" immediately, skip the SIGKILL escalation and race the respawn.
   - The `portListening`-based squatter and "control socket unresponsive" classification in `EnsureDaemonRunning` would misfire.
