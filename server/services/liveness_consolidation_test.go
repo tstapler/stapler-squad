@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -476,3 +478,47 @@ func TestClaimConversationUUID_should_LetExactlyOneWin_When_ManyGoroutinesRaceTh
 // --------------------------------------------------------------------------
 // findConfirmedLiveWorkSession (spawnSessionAfterGates' 8b2 cap)
 // --------------------------------------------------------------------------
+
+// fakePtyFactory is a tmux.PtyFactory test double that never forks a real
+// subprocess (this sandboxed test environment does not permit it — see
+// session_service_test.go's newRealControllerForTest doc comment for the
+// same constraint). On success, StartWithSize hands back a genuine PTY pair
+// via github.com/creack/pty's Open (which allocates the master/slave devices
+// directly rather than forking) and an unstarted *exec.Cmd — safe because
+// RestoreWithWorkDir only ever calls cmd.Wait() on it (never cmd.Start()),
+// and Wait on a never-started Cmd just returns "exec: not started" instead
+// of spawning anything.
+type fakePtyFactory struct {
+	startErr error
+
+	mu      sync.Mutex
+	created []*os.File
+}
+
+func (f *fakePtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
+	return f.StartWithSize(cmd, nil)
+}
+
+func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	if f.startErr != nil {
+		return nil, nil, f.startErr
+	}
+	master, slave, err := pty.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = slave.Close()
+	f.mu.Lock()
+	f.created = append(f.created, master)
+	f.mu.Unlock()
+	return master, safeexec.CommandContext(context.Background(), "true"), nil
+}
+
+func (f *fakePtyFactory) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range f.created {
+		_ = file.Close()
+	}
+	f.created = nil
+}

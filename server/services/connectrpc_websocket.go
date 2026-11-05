@@ -23,7 +23,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
@@ -698,28 +697,6 @@ func init() {
 	streamhub.SetSessionOverrideLookup(func(sessionName string) (bool, bool) {
 		return config.LoadConfig().GetStreamHubSessionOverride(sessionName)
 	})
-}
-
-// streamHubSessionKey computes the StreamOwnershipLock/HubRegistry key from a
-// session's title and TmuxPrefix (empty meaning "staplersquad_").
-// tmuxSessionNameForStreamPath and SetStreamHubSessionOverride must derive it
-// identically — they used to duplicate this independently and diverged,
-// silently no-opping every canary override (2026-09-01).
-func streamHubSessionKey(title, tmuxPrefix string) string {
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_"
-	}
-	return tmux.NewSessionName(title, tmuxPrefix).String()
-}
-
-// tmuxSessionNameForStreamPath computes the tmux session name StreamPath
-// resolution keys on for instance, mirroring streamViaHub's own derivation
-// (session title + tmux prefix, default "staplersquad_"). Resolution must
-// use this same name so a session's StreamOwnershipLock lookup here and its
-// hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
-func tmuxSessionNameForStreamPath(instance *session.Instance) string {
-	snap := instance.Snapshot()
-	return streamHubSessionKey(snap.Title, snap.TmuxPrefix)
 }
 
 // waitForQuiescence waits until no updates arrive for quietFor duration, or timeout elapses.
@@ -3788,7 +3765,7 @@ func handleCapturePaneResize(p capturePaneStreamParams, targetCols, targetRows i
 	if p.cpt.effectiveManaged {
 		resizeManagedCapturePaneTarget(p, targetCols, targetRows)
 	} else {
-		p.writer.Sender().Resize(p, targetCols, targetRows)
+		p.writer.Sender().Resize(ExternalPaneTarget{Instance: p.instance, Snap: p.snap, TmuxSession: p.cpt.tmuxSessionName, SessionID: p.cpt.sessionID}, targetCols, targetRows)
 	}
 }
 
@@ -3809,36 +3786,6 @@ func resizeManagedCapturePaneTarget(p capturePaneStreamParams, targetCols, targe
 		log.Warn("[streamViaTmuxCapture] dimension mismatch after resize", "session", p.cpt.sessionID, "target_cols", targetCols, "target_rows", targetRows, "actual_cols", actualCols, "actual_rows", actualRows)
 	} else {
 		log.ForSession(p.cpt.sessionID).Debug("resize verified", "cols", actualCols, "rows", actualRows)
-	}
-}
-
-// resizeExternalCapturePaneSession best-effort resizes an external session's
-// tmux window and pane via tmux commands, then verifies the result.
-func resizeExternalCapturePaneSession(p capturePaneStreamParams, targetCols, targetRows int) {
-	socket := p.snap.TmuxServerSocket
-	runResize := func(cmd string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		args := tmux.ResolveSocket(socket).Args(cmd, "-t", p.cpt.tmuxSessionName,
-			"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
-		return runTmuxGatedErr(ctx, socket, func() error {
-			return safeexec.CommandContext(ctx, tmux.Binary(), args...).Run()
-		})
-	}
-	if err := runResize("resize-window"); err != nil {
-		log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", p.cpt.tmuxSessionName, "err", err)
-	}
-	if err := runResize("resize-pane"); err != nil {
-		log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", p.cpt.tmuxSessionName, "err", err)
-	}
-
-	actualCols, actualRows, verifyErr := p.instance.GetPaneDimensions()
-	if verifyErr != nil {
-		log.Warn("[streamViaTmuxCapture] failed to verify external resize", "session", p.cpt.sessionID, "err", verifyErr)
-	} else if actualCols != targetCols || actualRows != targetRows {
-		log.Warn("[streamViaTmuxCapture] external dimension mismatch", "session", p.cpt.sessionID, "target_cols", targetCols, "target_rows", targetRows, "actual_cols", actualCols, "actual_rows", actualRows)
-	} else {
-		log.ForSession(p.cpt.sessionID).Debug("external resize verified", "cols", actualCols, "rows", actualRows)
 	}
 }
 
@@ -3945,98 +3892,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 	log.Info("[streamViaTmuxCapture] connection closed", "session", sessionID)
 	return err
-}
-
-// sendInputToTmux sends input bytes to a tmux session using tmux send-keys.
-// Each byte is sent individually using -H (hex) format to handle special characters properly.
-// serverSocket must be the same socket the target session's tmux server is bound to
-// (e.g. instance.TmuxServerSocket) — an empty string targets the default socket.
-// Without routing through ResolveSocket/Args here, send-keys unconditionally hits the
-// default tmux server, silently missing any session running on an isolated socket.
-func sendInputToTmux(serverSocket, tmuxSessionName string, data []byte) error {
-	// Build send-keys command with hex-encoded bytes
-	// Using -H flag to send hex bytes, which handles all special characters correctly
-	baseArgs := make([]string, 0, 4+len(data))
-	baseArgs = append(baseArgs, "send-keys", "-t", tmuxSessionName, "-H")
-	for _, b := range data {
-		baseArgs = append(baseArgs, fmt.Sprintf("%02x", b))
-	}
-	args := tmux.ResolveSocket(serverSocket).Args(baseArgs...)
-
-	gateCtx, gateCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer gateCancel()
-	err := runTmuxInputGatedErr(gateCtx, serverSocket, func() error {
-		// Use a fresh context for the command itself, not gateCtx. Gate
-		// acquisition can consume most of gateCtx's budget under contention,
-		// leaving the exec below racing an already-expiring deadline: if
-		// tmux send-keys reaches the server just before cancellation kills
-		// the client process, the caller sees an error and retries
-		// (sendInputToTmuxWithRetry), re-sending keystrokes that already
-		// landed — producing duplicated input in the pane. A fresh timeout
-		// here guarantees the command always gets its full run budget.
-		cmdCtx, cmdCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cmdCancel()
-		return safeexec.CommandContext(cmdCtx, tmux.Binary(), args...).Run()
-	})
-	if err != nil {
-		return fmt.Errorf("tmux send-keys failed: %w", err)
-	}
-	return nil
-}
-
-// sendInputToTmuxInputRetries bounds how many times sendInputToTmux is retried
-// on failure before the input is given up on. Failures here are almost always
-// transient exec-gate contention (the 5s acquire timeout in sendInputToTmux
-// expiring under concurrent tmux subprocess load) rather than a real tmux
-// error, so a short bounded retry recovers keystrokes that would otherwise be
-// silently dropped with no client-visible signal.
-const sendInputToTmuxInputRetries = 2
-
-// sendInputToTmuxRetryBackoff is the delay between retries of sendInputToTmux.
-const sendInputToTmuxRetryBackoff = 100 * time.Millisecond
-
-// sendInputToTmuxWithRetry calls sendInputToTmux, retrying a bounded number of
-// times on failure. See sendInputToTmuxInputRetries for why this exists.
-func sendInputToTmuxWithRetry(serverSocket, tmuxSessionName string, data []byte) error {
-	var err error
-	for attempt := 0; attempt <= sendInputToTmuxInputRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(sendInputToTmuxRetryBackoff)
-		}
-		if err = sendInputToTmux(serverSocket, tmuxSessionName, data); err == nil {
-			return nil
-		}
-	}
-	return err
-}
-
-// runTmuxGatedErr acquires a tmux exec-gate slot for serverSocket (bounded by
-// ctx), runs fn, then releases the slot. Used for resize-window/resize-pane
-// calls against external (unmanaged) sessions — see session/tmux's runGated,
-// which this mirrors, for the primary call-site pattern.
-func runTmuxGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
-	release, err := tmux.AcquireExecSlot(ctx, serverSocket)
-	if err != nil {
-		return fmt.Errorf("exec gate: %w", err)
-	}
-	defer release()
-	return fn()
-}
-
-// runTmuxInputGatedErr acquires a tmux input-fast-lane exec-gate slot for
-// serverSocket (bounded by ctx), runs fn, then releases the slot. Used
-// specifically for keystroke input traffic (the legacy per-keystroke
-// send-keys path, sendInputToTmux): it draws from tmux.AcquireInputExecSlot's
-// pool, separate from the shared default pool runTmuxGatedErr uses, so user
-// input never queues behind a background poller's capture-pane calls on the
-// same tmux server.
-func runTmuxInputGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
-	release, err := tmux.AcquireInputExecSlot(ctx, serverSocket)
-	if err != nil {
-		return fmt.Errorf("input exec gate: %w", err)
-	}
-	defer release()
-	return fn()
 }
 
 // parseConnectHeaders parses HTTP headers from ConnectRPC format (key: value\r\n)

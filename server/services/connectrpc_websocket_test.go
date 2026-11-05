@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
@@ -30,7 +29,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 
-	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/require"
@@ -1147,50 +1145,6 @@ func (alwaysAbsentExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
 func (alwaysAbsentExecutor) Run(_ *exec.Cmd) error { return fmt.Errorf("unsupported") }
 func (alwaysAbsentExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported")
-}
-
-// fakePtyFactory is a tmux.PtyFactory test double that never forks a real
-// subprocess (this sandboxed test environment does not permit it — see
-// session_service_test.go's newRealControllerForTest doc comment for the
-// same constraint). On success, StartWithSize hands back a genuine PTY pair
-// via github.com/creack/pty's Open (which allocates the master/slave devices
-// directly rather than forking) and an unstarted *exec.Cmd — safe because
-// RestoreWithWorkDir only ever calls cmd.Wait() on it (never cmd.Start()),
-// and Wait on a never-started Cmd just returns "exec: not started" instead
-// of spawning anything.
-type fakePtyFactory struct {
-	startErr error
-
-	mu      sync.Mutex
-	created []*os.File
-}
-
-func (f *fakePtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
-	return f.StartWithSize(cmd, nil)
-}
-
-func (f *fakePtyFactory) StartWithSize(_ *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
-	if f.startErr != nil {
-		return nil, nil, f.startErr
-	}
-	master, slave, err := pty.Open()
-	if err != nil {
-		return nil, nil, err
-	}
-	_ = slave.Close()
-	f.mu.Lock()
-	f.created = append(f.created, master)
-	f.mu.Unlock()
-	return master, safeexec.CommandContext(context.Background(), "true"), nil
-}
-
-func (f *fakePtyFactory) Close() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, file := range f.created {
-		_ = file.Close()
-	}
-	f.created = nil
 }
 
 // newTestTmuxInstance builds a real *session.Instance whose tmux backend is

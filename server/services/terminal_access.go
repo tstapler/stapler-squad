@@ -121,7 +121,7 @@ type TerminalWriter interface {
 // zero calls instead of an exec the test cannot see.
 type tmuxInputSender interface {
 	SendInput(serverSocket, tmuxSession string, data []byte) error
-	Resize(p capturePaneStreamParams, cols, rows int)
+	Resize(p ExternalPaneTarget, cols, rows int)
 }
 
 // realTmuxInputSender wraps the subprocess helpers unchanged.
@@ -131,7 +131,7 @@ func (realTmuxInputSender) SendInput(serverSocket, tmuxSession string, data []by
 	return sendInputToTmuxWithRetry(serverSocket, tmuxSession, data)
 }
 
-func (realTmuxInputSender) Resize(p capturePaneStreamParams, cols, rows int) {
+func (realTmuxInputSender) Resize(p ExternalPaneTarget, cols, rows int) {
 	resizeExternalCapturePaneSession(p, cols, rows)
 }
 
