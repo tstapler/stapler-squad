@@ -203,3 +203,31 @@ func TestRefreshSessionPullRequests_ShouldRefreshOpenAndUnverifiedRowsOnly_WhenC
 	assert.ElementsMatch(t, []int{9, 12}, polled, "unverified-terminal #9 and open #12; verified merged #11 is not polled")
 	assert.Len(t, resp.Msg.PullRequests, 3)
 }
+
+func TestListSessions_ShouldFilterByPR_WhenPRSetAndNotZero(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{12, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u2", "uuid-u2", prSpec{13, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u3", "uuid-u3")
+	ctx := context.Background()
+	titles := func(req *sessionv1.ListSessionsRequest) []string {
+		resp, err := fix.svc.ListSessions(ctx, connect.NewRequest(req))
+		require.NoError(t, err)
+		var out []string
+		for _, s := range resp.Msg.Sessions {
+			out = append(out, s.Title)
+		}
+		return out
+	}
+
+	assert.Equal(t, []string{"u1"}, titles(&sessionv1.ListSessionsRequest{Pr: protoRef(12)}))
+	upper := &sessionv1.PullRequestRef{Host: "GitHub.com", Owner: "Acme", Repo: "App", Number: 12}
+	assert.Equal(t, []string{"u1"}, titles(&sessionv1.ListSessionsRequest{Pr: upper}), "identity is canonical, not case sensitive")
+	assert.ElementsMatch(t, []string{"u1", "u2", "u3"}, titles(&sessionv1.ListSessionsRequest{}), "unset means no filter")
+	assert.Empty(t, titles(&sessionv1.ListSessionsRequest{Pr: protoRef(99)}))
+
+	_, err := fix.svc.ListSessions(ctx, connect.NewRequest(&sessionv1.ListSessionsRequest{Pr: &sessionv1.PullRequestRef{Owner: "acme", Repo: "app"}}))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "a selector without a number is never PR 0")
+}
