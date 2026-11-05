@@ -2,6 +2,7 @@ package tymux
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -16,28 +17,50 @@ type daemonMonitor struct {
 	needed               func() bool
 	healthy              func(context.Context, DaemonConfig) bool
 	ensure               func(context.Context, DaemonConfig) (TymuxdReady, error)
-	stop                 func() error
+	onSpawn              func()
 }
+
+// daemonMonitorThreshold is how many consecutive failed probes (5s apart, each up to ~15s) it
+// takes before repair: restarting tymuxd kills every pane child, so only a sustained outage
+// justifies it.
+const daemonMonitorThreshold = 6
+
+// neededCacheTTL spares the persisted-session query the monitor's 5s tick would otherwise repeat.
+const neededCacheTTL = 15 * time.Second
 
 // MonitorDaemon repairs an unavailable daemon until ctx is cancelled. It does not revive
 // session processes; existing streams retain their own reconnect and archival policies.
-func MonitorDaemon(ctx context.Context, cfg DaemonConfig, needed func() bool, stop func() error) {
+// onSpawn, if non-nil, runs once when the monitor first starts a daemon, so the caller can
+// register that daemon's shutdown with its own lifecycle (the monitor never stops it itself:
+// stopping before the sessions' own close hooks ran would make their KillSession hit a dead daemon).
+func MonitorDaemon(ctx context.Context, cfg DaemonConfig, needed func() bool, onSpawn func()) {
 	m := daemonMonitor{
-		interval: 5 * time.Second, maxBackoff: time.Minute, threshold: 3,
-		healthy: checkDaemonHealthy, ensure: EnsureDaemonRunning, needed: needed, stop: stop,
+		interval: 5 * time.Second, maxBackoff: time.Minute, threshold: daemonMonitorThreshold,
+		healthy: checkDaemonHealthy, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
 	}
 	m.run(ctx, cfg)
 }
 
-func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
-	spawned := false
-	defer func() {
-		if spawned && m.stop != nil {
-			if err := m.stop(); err != nil {
-				log.Warn("[tymux] failed to stop supervised daemon", "addr", cfg.Addr, "err", err)
-			}
+// cachedFor memoizes fn for ttl. A nil fn stays nil.
+func cachedFor(ttl time.Duration, now func() time.Time, fn func() bool) func() bool {
+	if fn == nil {
+		return nil
+	}
+	var mu sync.Mutex
+	var at time.Time
+	var val bool
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if t := now(); at.IsZero() || t.Sub(at) >= ttl {
+			val, at = fn(), t
 		}
-	}()
+		return val
+	}
+}
+
+func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
+	owned := false
 	failures := 0
 	delay := m.interval
 	for {
@@ -76,7 +99,12 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 		}
 		log.Warn("[tymux] daemon unhealthy, attempting recovery", "addr", cfg.Addr, "consecutive_failures", failures)
 		ready, err := m.ensure(ctx, cfg)
-		spawned = spawned || ready.Spawned
+		if ready.Spawned && !owned {
+			owned = true
+			if m.onSpawn != nil {
+				m.onSpawn()
+			}
+		}
 		if ctx.Err() != nil {
 			return
 		}

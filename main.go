@@ -423,9 +423,13 @@ var (
 				// is tmux, so a session pinned to tymux by a prior process finds a daemon
 				// running when it resumes.
 				monitorTymuxd := func(ctx context.Context, daemonCfg tymux.DaemonConfig) {
-					var stop func() error
+					var onSpawn func()
 					if !tymuxdKeepServerFlag {
-						stop = tymux.StopTymuxd
+						// A daemon the monitor started has no startup OnStop hook; register one so
+						// it is stopped after the session close hooks (hooks run in reverse order).
+						onSpawn = func() {
+							a.OnStop("tymuxd", func(context.Context) error { return tymux.StopTymuxd() })
+						}
 					}
 					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
 						current := config.LoadConfig()
@@ -434,8 +438,8 @@ var (
 						}
 						rows, err := coreDeps.Storage.ListInstanceData()
 						if err != nil {
-							log.Warn("Unable to check persisted tymux demand", "err", err)
-							return false
+							log.Warn("Unable to check persisted tymux demand, assuming the daemon is needed", "err", err)
+							return true
 						}
 						for _, row := range rows {
 							if row.Backend == session.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
@@ -443,7 +447,7 @@ var (
 							}
 						}
 						return false
-					}, stop)
+					}, onSpawn)
 				}
 				if tymuxNeeded(cfg, resolvedBackend) {
 					if err := startTymuxdSupervisor(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,

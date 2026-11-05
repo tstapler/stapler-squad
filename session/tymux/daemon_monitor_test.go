@@ -25,29 +25,56 @@ func startDaemonMonitorTest(ctx context.Context, m daemonMonitor) <-chan struct{
 	return done
 }
 
-func TestDaemonMonitor_StopsOnlyDaemonItSpawned(t *testing.T) {
-	t.Run("reused", func(t *testing.T) { checkDaemonMonitorStopOwnership(t, TymuxdReady{}, 0) })
-	t.Run("spawned", func(t *testing.T) { checkDaemonMonitorStopOwnership(t, TymuxdReady{Spawned: true}, 1) })
+func TestDaemonMonitor_ClaimsOwnershipOnlyOfDaemonItSpawned(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		ready TymuxdReady
+		err   error
+		want  int64
+	}{
+		{"reused", TymuxdReady{}, nil, 0},
+		{"spawned", TymuxdReady{Spawned: true}, nil, 1},
+		{"spawned then failed", TymuxdReady{Spawned: true}, errors.New("never became healthy"), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var claims atomic.Int64
+				m := daemonMonitor{interval: time.Second, maxBackoff: time.Second, threshold: 1,
+					healthy: func(context.Context, DaemonConfig) bool { return false },
+					ensure:  func(context.Context, DaemonConfig) (TymuxdReady, error) { return tc.ready, tc.err },
+					onSpawn: func() { claims.Add(1) },
+				}
+				done := startDaemonMonitorTest(ctx, m)
+				for range 3 {
+					time.Sleep(time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
+					synctest.Wait()
+				}
+				cancel()
+				<-done
+				require.Equal(t, tc.want, claims.Load(), "ownership is claimed once, as soon as a spawn happened")
+			})
+		})
+	}
 }
 
-func checkDaemonMonitorStopOwnership(t *testing.T, ready TymuxdReady, expectedStops int64) {
-	t.Helper()
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var stops atomic.Int64
-		m := daemonMonitor{interval: time.Second, maxBackoff: time.Second, threshold: 1,
-			healthy: func(context.Context, DaemonConfig) bool { return false },
-			ensure:  func(context.Context, DaemonConfig) (TymuxdReady, error) { return ready, nil },
-			stop:    func() error { stops.Add(1); return nil },
-		}
-		done := startDaemonMonitorTest(ctx, m)
-		time.Sleep(time.Second) //nolint:notimesleeptest synctest advances virtual time, not wall-clock time
-		synctest.Wait()
-		cancel()
-		<-done
-		require.Equal(t, expectedStops, stops.Load())
-	})
+func TestCachedFor_QueriesOncePerTTL(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	var calls int
+	f := cachedFor(10*time.Second, func() time.Time { return now }, func() bool { calls++; return calls > 1 })
+
+	require.False(t, f())
+	now = now.Add(9 * time.Second)
+	require.False(t, f(), "within the TTL the cached answer is reused")
+	require.Equal(t, 1, calls)
+	now = now.Add(time.Second)
+	require.True(t, f())
+	require.Equal(t, 2, calls)
+	require.Nil(t, cachedFor(time.Second, time.Now, nil))
 }
 
 func TestDaemonMonitor_DisabledDoesNotProbeOrRepair(t *testing.T) {
