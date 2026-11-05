@@ -69,23 +69,8 @@ func (p *sweepPRData) prEligible(d session.InstanceData) (bool, string) {
 }
 
 func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
-	rows := p.views[d.UUID]
-	switch {
-	case len(rows) == 0 && d.GitHubPRNumber == 0:
-		return true, ""
-	case len(rows) == 0:
-		// A legacy number with no link is decided by the persisted flag alone,
-		// never by the empty row set.
-		if session.LegacyOnlyPRSafe(d) {
-			return true, ""
-		}
-		return false, "legacy PR number with no link and no terminal flag"
-	}
-	if !session.PRsAllTerminal(rows, d.GitHubPRNumber) {
-		return false, "a linked PR is open, unknown or unverified"
-	}
-	if d.GitHubPRNumber > 0 && !session.LegacyNumberRepresented(d, rows) && !session.LegacyOnlyPRSafe(d) {
-		return false, "legacy PR number not carried by the links and not terminal"
+	if reason := session.OwnPRsBlockReason(d, p.views[d.UUID]); reason != "" {
+		return false, reason
 	}
 	return true, ""
 }
@@ -96,16 +81,8 @@ func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
 func (p *sweepPRData) itemsEligible(d session.InstanceData) (bool, string) {
 	for _, id := range p.itemIDs[d.UUID] {
 		g, ok := p.guards[id]
-		switch {
-		case !ok:
-			return false, "no PR evidence for item " + id
-		case g.LegacyUnrepresented:
-			return false, "item " + id + " has a PR number no link represents"
-		}
-		for _, v := range g.Direct {
-			if !v.Terminal() {
-				return false, "item " + id + " has an item-direct PR that is not terminal"
-			}
+		if reason := session.ItemGuardBlockReason(id, g, ok); reason != "" {
+			return false, reason
 		}
 	}
 	return true, ""

@@ -9,6 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -249,4 +250,26 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	assert.Contains(t, text, "Held longer than 1h0m0s")
 
 	assert.NotContains(t, run(false), "Pull requests (", "flag off leaves the report unchanged")
+}
+
+func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+	n, url := 5, ""
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	outcome := svc.CleanupTerminalItem(t.Context(), item.ID)
+	require.Equal(t, session.CleanupBlocked, outcome.Status, "pr_number=5 with no link fails closed")
+
+	h := &backlogHandlers{storage: storage, backlogSvc: svc}
+	res, err := h.getBacklogStuckReport(t.Context(), makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+
+	text := res.Content[0].(mcpgo.TextContent).Text
+	assert.Contains(t, text, "Worktree cleanup blocked")
+	assert.Contains(t, text, "item "+item.ID, "the report names the holding owner")
 }

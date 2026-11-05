@@ -561,7 +561,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
 	if err := p.storage.GatedSetPRAndTransition(ctx,
 		TransitionRequest{Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: TriggeredBySystem},
-		PRAssociation{URL: prURL, Number: prNumber, Summary: summary}); err != nil {
+		PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: AttachSourceJules}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, row.ID, now, "jules_completed"); err != nil {

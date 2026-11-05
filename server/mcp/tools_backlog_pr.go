@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -259,7 +260,13 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 	// and the currently tracked PR is hard-checked for already being merged
 	// (AC2) before anything else, since a merged PR's association must never
 	// be silently swapped.
-	isReassignment := item.Status == string(session.BacklogStatusPRPending)
+	// With the multi-PR backlog scope on, a different PR reported without
+	// replaces_pr_number is an ADDITIONAL PR (a follow-up), not a reassignment: no
+	// override_reason, no reassignment guard, status unchanged. The branch check below
+	// still applies. Scope off: today's reassignment rules.
+	_, replacesPresent := args["replaces_pr_number"]
+	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.multiPRBacklogOn()
+	isReassignment := item.Status == string(session.BacklogStatusPRPending) && !additive
 	if isReassignment && overrideReason == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
@@ -386,7 +393,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 
 	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
 		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard}); setErr != nil {
+	}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
 		}
@@ -431,7 +438,20 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		)
 	}
 
+	if additive {
+		return mcpgo.NewToolResultText(fmt.Sprintf(
+			"PR #%d added to item %s as an additional PR. The item stays pr_pending.", prNumber, itemID,
+		)), nil
+	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
 	)), nil
+}
+
+// multiPRBacklogOn reports whether reader:backlog of session_multi_pr is effective.
+func (h *backlogHandlers) multiPRBacklogOn() bool {
+	if h.multiPRBacklog != nil {
+		return h.multiPRBacklog()
+	}
+	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
 }

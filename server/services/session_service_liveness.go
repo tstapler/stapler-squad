@@ -30,6 +30,16 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 	return s.reviewQueuePoller.FindInstance(id)
 }
 
+// LiveSnapshot implements session.LiveSnapshotSource for the live-work probe: the
+// lock-free Snapshot() of a session tracked live in this process.
+func (s *SessionService) LiveSnapshot(sessionUUID string) (*session.InstanceSnapshot, bool) {
+	inst := s.findLifecycleInstance(nil, sessionUUID)
+	if inst == nil {
+		return nil, false
+	}
+	return inst.Snapshot(), true
+}
+
 // findInstanceByID returns the first of instances whose MatchesID(id) is
 // true, or nil — the shared linear-scan lookup behind every RPC handler
 // below that resolves a request's Id (UUID or legacy title) against an

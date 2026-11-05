@@ -79,3 +79,60 @@ func TestDetachItemPullRequest_ShouldRejectBadRequests(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, call(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID}))
 	assert.Equal(t, connect.CodeFailedPrecondition, call(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(99)}))
 }
+
+type recordingCleaner struct{ items []string }
+
+func (r *recordingCleaner) CleanupTerminalItem(_ context.Context, itemID string) session.CleanupOutcome {
+	r.items = append(r.items, itemID)
+	return session.CleanupDoneOutcome()
+}
+
+// An item detach of a PR the current round's session also links removes it from the
+// item's verdict (the item tombstone filters the derived set) but keeps the session link.
+func TestDetachItemPullRequest_ShouldRemovePRFromVerdict_WhenAlsoReachableViaCurrentRoundSession(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	ctx := context.Background()
+	itemID, _ := seedItemDirectPR(t, fix, session.BacklogStatus("in_progress"), 42)
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, session.PRStateOpen, false})
+	_, err := fix.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+	before, err := fix.storage.ItemPRs(ctx, itemID)
+	require.NoError(t, err)
+	require.Equal(t, session.ItemVerdictOpen, session.ItemPRVerdict(before))
+
+	_, err = fix.svc.DetachItemPullRequest(ctx, connect.NewRequest(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(42)}))
+	require.NoError(t, err)
+
+	after, err := fix.storage.ItemPRs(ctx, itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ItemVerdictNoPRs, session.ItemPRVerdict(after), "the round's own link no longer counts for the item")
+	views, err := fix.storage.ListSessionPRViewsByUUIDs(ctx, []string{"uuid-u1"})
+	require.NoError(t, err)
+	assert.Len(t, views["uuid-u1"], 1, "but the session keeps its link (and its worktree hold)")
+}
+
+func TestDetachItemPullRequest_ShouldRerunCleanupGate_ForFinishedItemsOnly(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[session.BacklogStatus]bool{session.BacklogStatus("done"): true, session.BacklogStatus("archived"): true, session.BacklogStatus("in_progress"): false} {
+		status, want := status, want
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			fix := setupForkTestFixture(t)
+			defer fix.cleanup()
+			cleaner := &recordingCleaner{}
+			fix.svc.SetItemCleaner(cleaner)
+			itemID, _ := seedItemDirectPR(t, fix, status, 44)
+
+			_, err := fix.svc.DetachItemPullRequest(context.Background(), connect.NewRequest(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(44)}))
+			require.NoError(t, err)
+
+			if want {
+				assert.Equal(t, []string{itemID}, cleaner.items)
+			} else {
+				assert.Empty(t, cleaner.items)
+			}
+		})
+	}
+}

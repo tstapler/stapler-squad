@@ -726,9 +726,12 @@ type fakePRPendingChecker struct {
 	// TransitionBacklogItemStatus call (the precondition race these calls
 	// guard against), deterministically rather than via a real goroutine race.
 	onIsPRMerged func()
+
+	isMergedCalls int
 }
 
 func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
+	f.isMergedCalls++
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
@@ -5168,12 +5171,14 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 type fakeWorktreeCleaner struct {
 	mu           sync.Mutex
 	cleanedItems []string
+	outcome      CleanupOutcome // zero value is CleanupDone
 }
 
-func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) {
+func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) CleanupOutcome {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleanedItems = append(f.cleanedItems, itemID)
+	return f.outcome
 }
 
 func (f *fakeWorktreeCleaner) calls() []string {

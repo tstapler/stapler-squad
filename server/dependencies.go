@@ -1764,6 +1764,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// runs inline, instead of relying solely on the 60s
 	// reconcileTerminalItemSessions safety-net sweep.
 	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
+	// One live-work probe for the lifecycle listener (merge hold), BacklogService
+	// (RULE L) and the cleanup gate; a missed site would silently revert to
+	// kill-at-done, so the wiring is asserted and exported as a gauge.
+	if probeErr := wireLiveWorkProbe(backlogLifecycleListener, backlogSvc, sessionService, storage); probeErr != nil {
+		return nil, probeErr
+	}
+	backlogLifecycleListener.SetPRRowRefresher(svc.PRStatusPoller)
+	sessionService.SetItemCleaner(backlogSvc)
+	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
+	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
+	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI

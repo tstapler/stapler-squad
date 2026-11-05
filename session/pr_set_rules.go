@@ -140,9 +140,20 @@ func HasNoPRs(prs []PRView, legacyNumber int) bool {
 	return len(prs) == 0 && legacyNumber == 0
 }
 
+// Live-work timing, owner-confirmed. The idle window is how long an unended
+// session that stopped its turn still counts as live; the other three are hard
+// ceilings so a wrongly-live session can never hold a worktree, pane or item forever.
+const (
+	LiveWorkIdleWindow   = 10 * time.Minute
+	LiveWorkMaxHold      = time.Hour // merged-PR hold before the item may go done
+	liveWorkWorkingCap   = time.Hour // Working && !TurnEnded with no change for this long is not live
+	liveWorkErrorHoldCap = time.Hour // a probe failing this long stops counting as live
+)
+
 // LiveWorkFacts are the Snapshot() facts IsLiveWork needs. Working is the
-// caller's "non-idle status" reading; TurnEnded is true once the agent stopped
-// its turn and is waiting.
+// caller's "non-idle status" reading. TurnEnded is true once the agent recorded
+// a turn end and nothing meaningful has changed since: Instance.TurnEnded.At is
+// set and LastMeaningfulChangeAt is not after it (see LiveWorkFactsFromSnapshot).
 type LiveWorkFacts struct {
 	Unended                bool
 	Working                bool
@@ -152,18 +163,30 @@ type LiveWorkFacts struct {
 
 // IsLiveWork reports whether a work session is still active enough to hold an
 // item in pr_pending: unended, and either mid-turn or changed within window.
-// A zero LastMeaningfulChangeAt never counts as recent.
+// A zero LastMeaningfulChangeAt never counts as recent, and cannot cap a
+// mid-turn session (callers substitute the creation time when they have it).
 func IsLiveWork(facts LiveWorkFacts, now time.Time, window time.Duration) bool {
+	live, _ := evaluateLiveWork(facts, now, window)
+	return live
+}
+
+// evaluateLiveWork is IsLiveWork plus whether the working-cap decided it: a
+// session that is Working and mid-turn but has had no meaningful change for
+// liveWorkWorkingCap is reported not live (a hung status must not hold forever).
+func evaluateLiveWork(facts LiveWorkFacts, now time.Time, window time.Duration) (live, capped bool) {
 	if !facts.Unended {
-		return false
+		return false, false
 	}
 	if facts.Working && !facts.TurnEnded {
-		return true
+		if !facts.LastMeaningfulChangeAt.IsZero() && now.Sub(facts.LastMeaningfulChangeAt) >= liveWorkWorkingCap {
+			return false, true
+		}
+		return true, false
 	}
 	if facts.LastMeaningfulChangeAt.IsZero() {
-		return false
+		return false, false
 	}
-	return now.Sub(facts.LastMeaningfulChangeAt) < window
+	return now.Sub(facts.LastMeaningfulChangeAt) < window, false
 }
 
 // LiveWorkProbe is the consumer-side seam for the live-work hold. A nil probe
@@ -172,13 +195,39 @@ type LiveWorkProbe interface {
 	IsLive(ctx context.Context, sessionUUID string, now time.Time) (bool, error)
 }
 
-// LiveWorkHoldExpired reports that the hold has lasted maxHold since the latest
-// merge. A zero latestMergedAt never expires.
-func LiveWorkHoldExpired(now, latestMergedAt time.Time, maxHold time.Duration) bool {
-	if latestMergedAt.IsZero() {
+// LiveWorkHoldExpired reports that the hold has lasted maxHold since holdStart
+// (LiveWorkHoldStart). A zero holdStart never expires, so callers always pass a
+// first-observation fallback.
+func LiveWorkHoldExpired(now, holdStart time.Time, maxHold time.Duration) bool {
+	if holdStart.IsZero() {
 		return false
 	}
-	return now.Sub(latestMergedAt) >= maxHold
+	return now.Sub(holdStart) >= maxHold
+}
+
+// LiveWorkHoldStart is when the live-work hold began: the FIRST merge among the
+// item's merged PRs (not the latest, so a chain of follow-up PRs cannot extend
+// it). A merged row without merged_at uses last_polled_at (terminal rows are no
+// longer polled, so it stays put); with neither, firstObserved, the first time the
+// hold was seen, so a missing timestamp can never hold forever.
+func LiveWorkHoldStart(prs []PRView, firstObserved time.Time) time.Time {
+	var first time.Time
+	for _, v := range distinctPRs(prs) {
+		if v.State != PRStateMerged {
+			continue
+		}
+		at := v.MergedAt
+		if at.IsZero() {
+			at = v.LastPolledAt
+		}
+		if !at.IsZero() && (first.IsZero() || at.Before(first)) {
+			first = at
+		}
+	}
+	if first.IsZero() {
+		return firstObserved
+	}
+	return first
 }
 
 // AssignRole picks the display role for a PR about to be attached to a session

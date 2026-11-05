@@ -28,7 +28,13 @@ type prRefsSeams struct {
 	// refresh re-polls one PR and returns once the state row is updated. Nil
 	// until the awaited poller refresh (T3.3.2) is wired.
 	refresh func(ctx context.Context, inst *session.Instance, ref session.PRRef) error
+	// itemCleaner re-runs the (gated) terminal-item cleanup after an item-scoped
+	// detach releases a hold. Nil leaves the 60 s sweep to do it.
+	itemCleaner session.WorktreeCleaner
 }
+
+// SetItemCleaner wires the cleanup re-run used by DetachItemPullRequest.
+func (s *SessionService) SetItemCleaner(c session.WorktreeCleaner) { s.prRefs.itemCleaner = c }
 
 func (s prRefsSeams) lookupPR(ctx context.Context, ref github.RepoRef, number int) (*github.PRInfo, error) {
 	if s.lookup != nil {

@@ -86,6 +86,9 @@ type PRStatusPoller struct {
 	// Intended for EventBus notification; injected from the server layer.
 	onUpdated func(*Instance)
 
+	// terminalListener is told which PullRequestState rows just went terminal.
+	terminalListener PRTerminalListener
+
 	// multiPRScope reports whether a session_multi_pr reader scope is effective.
 	// A field so tests can pin scopes without a config file; production reads the live config.
 	multiPRScope func(scope string) bool
