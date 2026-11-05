@@ -1,8 +1,5 @@
 "use client";
 
-import type { PrChipView } from "@/lib/pr/chipView";
-import { PrStateGlyph } from "./PrStateGlyph";
-import { stateClass, staleMark } from "./PullRequestChip.css";
 import {
   badge, compact as compactClass, prBadge, repoBadge,
   prBadgeBlocking, prBadgeReady, prBadgePending, prBadgeDraft, prBadgeComplete,
@@ -36,10 +33,6 @@ interface GitHubBadgeProps {
 
   // Display mode
   compact?: boolean;
-
-  // Multi-PR chip view (session_multi_pr). When set it replaces the priority variant, label, tooltip and
-  // accessible name, and the state glyph is drawn so the state is never colour-only.
-  chip?: PrChipView;
 }
 
 /** Map PRPriority string → CSS module class name for the badge variant. */
@@ -93,7 +86,6 @@ export function GitHubBadge({
   changesRequestedCount,
   checkConclusion,
   compact = false,
-  chip,
 }: GitHubBadgeProps) {
   // Don't render if no GitHub information
   const hasPR = prNumber && prNumber > 0;
@@ -118,8 +110,8 @@ export function GitHubBadge({
       }
     };
 
-    const priorityVariant = chip ? stateClass[chip.state] : priorityClass(prPriority);
-    const statusLabel = chip ? chip.label : priorityLabel(prPriority, isDraft);
+    const priorityVariant = priorityClass(prPriority);
+    const statusLabel = priorityLabel(prPriority, isDraft);
 
     // Build tooltip with full status detail
     const tooltipParts = [`GitHub PR #${prNumber}`];
@@ -127,10 +119,7 @@ export function GitHubBadge({
     if (approvedCount && approvedCount > 0) tooltipParts.push(`${approvedCount} approval${approvedCount > 1 ? "s" : ""}`);
     if (changesRequestedCount && changesRequestedCount > 0) tooltipParts.push(`${changesRequestedCount} change request${changesRequestedCount > 1 ? "s" : ""}`);
     if (checkConclusion) tooltipParts.push(`CI: ${checkConclusion}`);
-    const tooltip = chip ? chip.title : tooltipParts.join(" · ");
-    const accessibleName = chip
-      ? chip.ariaLabel
-      : `View GitHub Pull Request #${prNumber}${statusLabel ? `, status: ${statusLabel}` : ""}`;
+    const tooltip = tooltipParts.join(" · ");
 
     return (
       <a
@@ -140,10 +129,9 @@ export function GitHubBadge({
         className={`${badge} ${prBadge} ${priorityVariant} ${compact ? compactClass : ""}`}
         onClick={handleClick}
         title={tooltip}
-        aria-label={accessibleName}
-        data-testid={chip ? "pr-chip" : undefined}
+        aria-label={`View GitHub Pull Request #${prNumber}${statusLabel ? `, status: ${statusLabel}` : ""}`}
       >
-        {chip ? <PrStateGlyph state={chip.state} className={`${icon}`} /> : <svg
+        <svg
           className={icon}
           viewBox="0 0 16 16"
           fill="currentColor"
@@ -151,10 +139,9 @@ export function GitHubBadge({
         >
           {/* GitHub PR icon - simplified version */}
           <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
-        </svg>}
+        </svg>
         <span className={text}>#{prNumber}</span>
         {statusLabel && <span className={priorityLabelClass}>{statusLabel}</span>}
-        {chip?.stale && <span className={staleMark} aria-hidden="true">!</span>}
       </a>
     );
   }

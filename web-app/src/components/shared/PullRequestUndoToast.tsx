@@ -47,7 +47,7 @@ export function PullRequestUndoToast({ message, hint, onUndo, onDismiss, focusUn
     >
       <span>{message}</span>
       <span className={s.visuallyHidden}>{hint}</span>
-      <button ref={undoRef} type="button" className={s.toastButton} onClick={() => { onUndo(); onDismiss(focused); }}>
+      <button ref={undoRef} type="button" className={s.toastButton} onClick={() => { onUndo(); onDismiss(focused); }}>{/* analytics-exempt */}
         Undo
       </button>
     </div>

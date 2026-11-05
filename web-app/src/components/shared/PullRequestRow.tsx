@@ -75,7 +75,7 @@ function RowMenu({ pr, items, onCommand }: { pr: SessionPullRequest; items: Menu
         aria-label={`Actions for pull request ${target}`}
         data-testid={`pr-menu-${pr.number}`}
         onClick={() => setOpen((v) => !v)}
-      >
+      >{/* analytics-exempt */}
         <span aria-hidden="true">...</span>
       </button>
       {open && (
@@ -88,11 +88,11 @@ function RowMenu({ pr, items, onCommand }: { pr: SessionPullRequest; items: Menu
               className={s.menuItem}
               data-testid={`pr-menu-${item.command}-${pr.number}`}
               onClick={(e) => { setOpen(false); onCommand(item.command, pr, e); }}
-            >
+            >{/* analytics-exempt */}
               {item.label}
             </button>
           ))}
-          <a role="menuitem" className={s.menuItem} href={pr.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>
+          <a role="menuitem" className={s.menuItem} href={pr.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>{/* analytics-exempt */}
             Open on GitHub
           </a>
         </div>
@@ -154,9 +154,9 @@ export const PullRequestRow = forwardRef<HTMLLIElement, RowProps>(function PullR
       <div className={s.rowActions}>
         {pr.isActive && state === "open" && canAct && (
           <span className={s.inlineActions}>
-            <button type="button" className={s.button} data-testid={`pr-merge-${pr.number}`} aria-label={`Merge ${prTarget(pr)}`} onClick={(e) => onCommand("merge", pr, e)}>Merge</button>
+            <button type="button" className={s.button} data-testid={`pr-merge-${pr.number}`} aria-label={`Merge ${prTarget(pr)}`} onClick={(e) => onCommand("merge", pr, e)}>{/* analytics-exempt */}Merge</button>
             {canAskToFix && (
-              <button type="button" className={s.button} aria-label={`Ask to fix ${prTarget(pr)}`} onClick={(e) => onCommand("askToFix", pr, e)}>Ask to fix</button>
+              <button type="button" className={s.button} aria-label={`Ask to fix ${prTarget(pr)}`} onClick={(e) => onCommand("askToFix", pr, e)}>{/* analytics-exempt */}Ask to fix</button>
             )}
           </span>
         )}

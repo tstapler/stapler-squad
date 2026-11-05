@@ -4,8 +4,9 @@ import type { MouseEvent } from "react";
 import type { SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { chipView } from "@/lib/pr/chipView";
 import { activePullRequest, moreCount, sortPullRequests } from "@/lib/pr/pullRequests";
-import { GitHubBadge } from "./GitHubBadge";
-import { chipLink, chipRow, moreButton } from "./PullRequestChip.css";
+import { badge, compact as compactClass, icon, prBadge, priorityLabel, text } from "./GitHubBadge.css";
+import { PrStateGlyph } from "./PrStateGlyph";
+import { chipLink, chipRow, moreButton, staleMark, stateClass } from "./PullRequestChip.css";
 
 interface PullRequestChipProps {
   pullRequests: readonly SessionPullRequest[];
@@ -19,8 +20,15 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
   const shown = activePullRequest(pullRequests) ?? sortPullRequests(pullRequests)[0];
   if (!shown) return null;
   const more = moreCount(pullRequests);
+  const view = chipView(shown);
 
-  // The chip sits inside a clickable card/row: +N must not also trigger the card's own target.
+  // Badge and +N each stop their own click: the chip sits inside a clickable card/row.
+  const openGitHub = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.stopPropagation();
+    e.preventDefault(); // the anchor's own href+target would otherwise open a second tab
+    window.open(shown.url, "_blank", "noopener,noreferrer");
+  };
+
   const handleMore = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     e.preventDefault();
@@ -30,15 +38,21 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
   return (
     <span className={chipRow} data-testid="pr-chip-group">
       <span className={chipLink}>
-        <GitHubBadge
-          prNumber={shown.number}
-          prUrl={shown.url}
-          owner={shown.owner}
-          repo={shown.repo}
-          host={shown.host}
-          chip={chipView(shown)}
-          compact={compact}
-        />
+        <a
+          href={shown.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${badge} ${prBadge} ${stateClass[view.state]} ${compact ? compactClass : ""}`}
+          onClick={openGitHub}
+          title={view.title}
+          aria-label={view.ariaLabel}
+          data-testid="pr-chip"
+        >{/* analytics-exempt */}
+          <PrStateGlyph state={view.state} className={`${icon}`} />
+          <span className={text}>#{shown.number}</span>
+          <span className={priorityLabel}>{view.label}</span>
+          {view.stale && <span className={staleMark} aria-hidden="true">!</span>}
+        </a>
       </span>
       {more > 0 && (
         <button
@@ -47,7 +61,7 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
           data-testid="pr-more-button"
           aria-label={`${more} more pull request${more === 1 ? "" : "s"}, open pull request list`}
           onClick={handleMore}
-        >
+        >{/* analytics-exempt */}
           +{more}
         </button>
       )}

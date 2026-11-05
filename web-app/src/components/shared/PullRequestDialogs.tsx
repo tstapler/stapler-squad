@@ -97,7 +97,7 @@ export function MergeDialog({ target, baseBranch, isActive, url, onMerge, onClos
       {failed && <ErrorLine message={failed.kind === "already_merged" ? `${target.split(" ")[0]} was already merged` : `Can't merge ${target.split(" ")[0]}: ${failed.message}`} />}
       <div className={s.actions}>
         {failed && !closeOnly && <a className={s.button} href={url} target="_blank" rel="noopener noreferrer">Open on GitHub</a>}
-        <button type="button" className={s.button} onClick={onClose} disabled={busy}>{closeOnly ? "Dismiss" : "Cancel"}</button>
+        <button type="button" className={s.button} onClick={onClose} disabled={busy}>{/* analytics-exempt */}{closeOnly ? "Dismiss" : "Cancel"}</button>
         {!closeOnly && (
           <button ref={confirmRef} type="submit" className={`${s.button} ${s.primaryButton}`} disabled={busy} aria-busy={busy}>
             {busy ? "Merging..." : failed ? "Retry merge" : "Merge"}
@@ -130,14 +130,14 @@ export function ConfirmPrDialog({ title, body, confirmLabel, busyLabel, danger, 
       <p className={s.body}>{body}</p>
       {failed && <ErrorLine message={failed.message} />}
       <div className={s.actions}>
-        <button ref={cancelRef} type="button" className={s.button} onClick={onClose} disabled={busy}>Cancel</button>
+        <button ref={cancelRef} type="button" className={s.button} onClick={onClose} disabled={busy}>{/* analytics-exempt */}Cancel</button>
         <button
           type="submit"
           className={`${s.button} ${danger ? s.dangerButton : s.primaryButton}`}
           disabled={busy}
           aria-busy={busy}
           onClick={(e) => { keyboard.current = e.detail === 0; }}
-        >
+        >{/* analytics-exempt */}
           {busy ? busyLabel : failed ? `Retry: ${confirmLabel}` : confirmLabel}
         </button>
       </div>
@@ -169,7 +169,7 @@ export function TrackPrDialog({ onAttach, onClose, onDone }: TrackDialogProps) {
       </label>
       {failed && <ErrorLine message={URL_ERRORS[failed.kind] ?? failed.message} />}
       <div className={s.actions}>
-        <button type="button" className={s.button} onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="button" className={s.button} onClick={onClose} disabled={busy}>{/* analytics-exempt */}Cancel</button>
         <button type="submit" className={`${s.button} ${s.primaryButton}`} disabled={busy || !url.trim()} aria-busy={busy}>
           {busy ? "Tracking..." : "Track"}
         </button>

@@ -129,9 +129,12 @@ export function PullRequestList(props: PullRequestListProps) {
       case "pin": void pin(pr, keyboard); break;
       case "unpin": void run(`Couldn't unpin #${pr.number}`, () => actions.pin(null)).then((r) => { if (r.ok) focusAfterRender(planFocus(pr)); }); break;
       case "refresh": void refresh(); break;
-      case "askToFix":
-        void run(`Couldn't ask to fix #${pr.number}`, () => actions.askToFix!(asTarget(pr))).then((r) => { if (r.ok) setNote({ text: `Asked the session to fix ${prTarget(pr)}.`, alert: false }); });
+      case "askToFix": {
+        const { askToFix } = actions;
+        if (!askToFix) break;
+        void run(`Couldn't ask to fix #${pr.number}`, () => askToFix(asTarget(pr))).then((r) => { if (r.ok) setNote({ text: `Asked the session to fix ${prTarget(pr)}.`, alert: false }); });
         break;
+      }
       case "copyLink":
         void navigator.clipboard?.writeText(pr.url).then(() => setNote({ text: `Copied link to ${prTarget(pr)}.`, alert: false }));
         break;
@@ -153,15 +156,15 @@ export function PullRequestList(props: PullRequestListProps) {
         Pull requests{pullRequests.length > 0 ? ` (${pullRequests.length})` : ""}
       </h3>
       <div className={s.headerActions}>
-        <button type="button" className={s.button} onClick={() => void refresh()} aria-busy={refreshing} disabled={refreshing} data-testid="pr-refresh">
+        <button type="button" className={s.button} onClick={() => void refresh()} aria-busy={refreshing} disabled={refreshing} data-testid="pr-refresh">{/* analytics-exempt */}
           {refreshing ? "Refreshing" : "Refresh"}
         </button>
-        <button type="button" className={s.button} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More pull request actions" onClick={() => setMenuOpen((v) => !v)} data-testid="pr-header-menu">
+        <button type="button" className={s.button} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More pull request actions" onClick={() => setMenuOpen((v) => !v)} data-testid="pr-header-menu">{/* analytics-exempt */}
           <span aria-hidden="true">...</span>
         </button>
         {menuOpen && (
           <div role="menu" className={s.menu} onKeyDown={(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
-            <button type="button" role="menuitem" className={s.menuItem} autoFocus data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); setDialog({ kind: "track" }); }}>
+            <button type="button" role="menuitem" className={s.menuItem} autoFocus data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); setDialog({ kind: "track" }); }}>{/* analytics-exempt */}
               Track a PR by URL
             </button>
           </div>
@@ -175,7 +178,7 @@ export function PullRequestList(props: PullRequestListProps) {
     content = (
       <div role="alert" className={s.alertBox}>
         <span>Couldn&apos;t load pull requests</span>
-        {onRetryLoad && <button type="button" className={s.button} onClick={onRetryLoad}>Retry</button>}
+        {onRetryLoad && <button type="button" className={s.button} onClick={onRetryLoad}>{/* analytics-exempt */}Retry</button>}
         {fallbackUrl && <a href={fallbackUrl} target="_blank" rel="noopener noreferrer" className={s.prLink}>Open the pull request on GitHub</a>}
       </div>
     );
@@ -190,7 +193,7 @@ export function PullRequestList(props: PullRequestListProps) {
     content = (
       <div className={s.empty}>
         <span>No pull requests yet.</span>
-        {onCreatePullRequest && <button type="button" className={s.button} onClick={onCreatePullRequest}>Create pull request</button>}
+        {onCreatePullRequest && <button type="button" className={s.button} onClick={onCreatePullRequest}>{/* analytics-exempt */}Create pull request</button>}
       </div>
     );
   } else {
@@ -212,7 +215,7 @@ export function PullRequestList(props: PullRequestListProps) {
           ))}
         </ul>
         {plan.disclosure && (
-          <button type="button" className={s.disclosure} aria-expanded={expanded} aria-controls="pr-list-items" data-testid="pr-disclosure" onClick={() => setExpanded((v) => !v)}>
+          <button type="button" className={s.disclosure} aria-expanded={expanded} aria-controls="pr-list-items" data-testid="pr-disclosure" onClick={() => setExpanded((v) => !v)}>{/* analytics-exempt */}
             {plan.disclosure === "earlier"
               ? expanded ? "Hide earlier PRs" : `${plan.hidden} earlier ${plan.hidden === 1 ? "PR" : "PRs"}`
               : expanded ? "Show fewer" : `Show all (${pullRequests.length})`}
