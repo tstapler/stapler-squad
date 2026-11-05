@@ -309,6 +309,27 @@ func (p *PRStatusPoller) checkAllSessions() {
 	}
 	p.mu.RUnlock()
 
+	for _, captured := range pollableSessions(instances, now, noPRPollAfter) {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
+			p.fetchAndUpdatePRStatus(ctx, captured)
+		}()
+	}
+
+	wg.Wait()
+}
+
+// pollableSessions filters instances to those the legacy per-session loop should
+// fetch now: not suspended, with GitHub info, not terminal, not a fork and past
+// any no-PR backoff. noPRPollAfter is a copy, so no lock is held here.
+func pollableSessions(instances []*Instance, now time.Time, noPRPollAfter map[string]time.Time) []*Instance {
+	var out []*Instance
 	for _, inst := range instances {
 		// Lock-free snapshot replaces both the unguarded GitHubOwner/GitHubRepo reads and
 		// the explicit stateMutex.RLock() for GitHubPRStatusTerminal / GitHubIsFork.
@@ -333,21 +354,9 @@ func (p *PRStatusPoller) checkAllSessions() {
 		if pollAfter, ok := noPRPollAfter[instSnap.Title]; ok && now.Before(pollAfter) {
 			continue // no-PR backoff still in effect
 		}
-
-		captured := inst
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
-			defer cancel()
-			ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
-			p.fetchAndUpdatePRStatus(ctx, captured)
-		}()
+		out = append(out, inst)
 	}
-
-	wg.Wait()
+	return out
 }
 
 // isAuthOK returns true if gh auth check passes, using a time-based cache.
@@ -386,57 +395,66 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *Insta
 		return // owner/repo empty — already guarded by caller, but stay defensive
 	}
 
-	// Auto-discovery: find PR for branch when PR number not yet known.
-	// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
 	if prNumber == 0 {
-		branch := inst.CurrentBranch()
-		if branch == "" {
-			return
-		}
-		listKey := owner + "/" + repo + "/" + branch
-		var listEtag string
-		if v, ok := p.listEtags.Load(listKey); ok {
-			listEtag = v.(string)
-		}
-		prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, listEtag)
-		if newEtag != "" {
-			p.listEtags.Store(listKey, newEtag)
-		}
-		if err != nil {
-			if errors.Is(err, github.ErrNoPR) {
-				p.applyNoPR(inst)
-				return
-			}
-			if p.handleFetchError(err) {
-				return
-			}
-			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
-			return
-		}
-		if !changed {
-			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
-			if p.config.NoPRBackoff > 0 {
-				p.mu.Lock()
-				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
-				p.mu.Unlock()
-			}
-			return
-		}
-		// Persist discovered PR number and clear no-PR backoff.
-		inst.SetGitHubPRNumber(prInfo.Number)
-		p.mu.Lock()
-		delete(p.noPRPollAfter, inst.Title)
-		p.mu.Unlock()
-		if p.storage != nil {
-			if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
-				log.Warn("PR status poller: failed to persist PR number", "session", inst.Title, "err", err)
-			}
-		}
-		p.applyPRUpdate(inst, prInfo)
+		p.discoverPRsForBranch(ctx, inst, ref)
 		return
 	}
+	p.pollOne(ctx, inst, ref, prNumber)
+}
 
-	// Conditional fetch using ETag cache (304 = no change)
+// discoverPRsForBranch finds the PR for the session's current branch when no PR
+// number is known yet, persisting it and clearing the no-PR backoff.
+// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
+func (p *PRStatusPoller) discoverPRsForBranch(ctx context.Context, inst *Instance, ref github.RepoRef) {
+	owner, repo := ref.Owner(), ref.Repo()
+	branch := inst.CurrentBranch()
+	if branch == "" {
+		return
+	}
+	listKey := owner + "/" + repo + "/" + branch
+	var listEtag string
+	if v, ok := p.listEtags.Load(listKey); ok {
+		listEtag = v.(string)
+	}
+	prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, listEtag)
+	if newEtag != "" {
+		p.listEtags.Store(listKey, newEtag)
+	}
+	if err != nil {
+		if errors.Is(err, github.ErrNoPR) {
+			p.applyNoPR(inst)
+			return
+		}
+		if p.handleFetchError(err) {
+			return
+		}
+		log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
+		return
+	}
+	if !changed {
+		// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+		if p.config.NoPRBackoff > 0 {
+			p.mu.Lock()
+			p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+			p.mu.Unlock()
+		}
+		return
+	}
+	// Persist discovered PR number and clear no-PR backoff.
+	inst.SetGitHubPRNumber(prInfo.Number)
+	p.mu.Lock()
+	delete(p.noPRPollAfter, inst.Title)
+	p.mu.Unlock()
+	if p.storage != nil {
+		if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
+			log.Warn("PR status poller: failed to persist PR number", "session", inst.Title, "err", err)
+		}
+	}
+	p.applyPRUpdate(inst, prInfo)
+}
+
+// pollOne fetches prNumber conditionally (ETag cache: 304 = no change) and applies the result.
+func (p *PRStatusPoller) pollOne(ctx context.Context, inst *Instance, ref github.RepoRef, prNumber int) {
 	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, ref, prNumber, p.etagCache)
 	if err != nil {
 		if p.handleFetchError(err) {
