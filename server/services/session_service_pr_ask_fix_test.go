@@ -62,7 +62,7 @@ func (f *askFixFixture) ask(pr *sessionv1.PullRequestRef) (*sessionv1.AskSession
 
 func TestAskSessionToFixPullRequest_ShouldDeliverOnceToTargetPR_WhenIdleAndFailingCheck(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Running)
+	f := newAskFixFixture(t, session.Active)
 
 	got, err := f.ask(protoRef(12))
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestAskSessionToFixPullRequest_ShouldDeliverOnceToTargetPR_WhenIdleAndFaili
 
 func TestAskSessionToFixPullRequest_ShouldFailPrecondition_WhenPRNotAttached(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Running)
+	f := newAskFixFixture(t, session.Active)
 
 	_, err := f.ask(protoRef(99))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -90,7 +90,7 @@ func TestAskSessionToFixPullRequest_ShouldFailPrecondition_WhenPRNotAttached(t *
 
 func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenForPR(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Running)
+	f := newAskFixFixture(t, session.Active)
 
 	got, err := f.ask(protoRef(11)) // only #12 has a token
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenFor
 
 func TestAskSessionToFixPullRequest_ShouldReportNothingToFix_WhenPRClean(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Running)
+	f := newAskFixFixture(t, session.Active)
 	f.fetcher.detail.FailingChecks = nil
 
 	got, err := f.ask(protoRef(12))
@@ -124,7 +124,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPausedWithoutFetching_WhenSessio
 
 func TestAskSessionToFixPullRequest_ShouldTargetActivePR_WhenSelectorUnset(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Running)
+	f := newAskFixFixture(t, session.Active)
 
 	got, err := f.ask(nil)
 	require.NoError(t, err)

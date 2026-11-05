@@ -64,7 +64,7 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	seedStateRow(t, storage.repo, SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 	require.True(t, viewOf(t, inst, 9).UnverifiedTerminal())
 
-	var seen []int
+	seen := make([]int, 0, 6)
 	for range 6 {
 		p.checkAllSessions()
 		seen = append(seen, viewOf(t, inst, 9).PollFailCount)
