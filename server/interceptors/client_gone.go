@@ -27,9 +27,16 @@ func isClientGone(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
+	// connect wraps a failed client write as CodeUnknown, so look through that code to the cause;
+	// any other deliberate code (Internal, Unavailable, ...) is a real server verdict.
 	var ce *connect.Error
 	if errors.As(err, &ce) {
-		return ce.Code() == connect.CodeCanceled
+		if ce.Code() == connect.CodeCanceled {
+			return true
+		}
+		if ce.Code() != connect.CodeUnknown {
+			return false
+		}
 	}
 	if ctx.Err() != nil {
 		return errors.Is(err, context.Canceled)
@@ -42,8 +49,7 @@ func asCanceled(ctx context.Context, err error) error {
 	if !isClientGone(ctx, err) {
 		return err
 	}
-	var ce *connect.Error
-	if errors.As(err, &ce) {
+	if connect.CodeOf(err) == connect.CodeCanceled {
 		return err
 	}
 	return connect.NewError(connect.CodeCanceled, err)
