@@ -104,6 +104,49 @@ func (s *SessionService) LocalPaneSnapshot(sessionID string) (string, error) {
 // SetFederation enables merging peer sessions into ListSessions.
 func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f }
 
+// instanceMatchesListFilters applies ListSessions' status, category, hidden,
+// archived and workflow filters to a managed instance.
+func instanceMatchesListFilters(inst *session.Instance, msg *sessionv1.ListSessionsRequest) bool {
+	// Read the status directly off the instance instead of building the full proto
+	// just to inspect one field: the proto build runs the expensive
+	// GetEffectiveStatus/DetectStateFromContent chain, so doing it twice per
+	// instance roughly doubles ListSessions' allocation cost under a status filter.
+	if msg.Status != nil && *msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		effProto, err := adapters.StatusToProto(inst.GetEffectiveStatus())
+		if err != nil {
+			log.Error("ListSessions: unrecognized session.Status", "status", int(inst.GetEffectiveStatus()), "err", err)
+			return false
+		}
+		if effProto != *msg.Status {
+			return false
+		}
+	}
+	if msg.Category != nil && *msg.Category != "" && inst.Category != *msg.Category {
+		return false
+	}
+	// hidden_only keeps only hidden sessions and implies include_hidden.
+	if !hiddenVisibleInList(inst.Hidden, msg) {
+		return false
+	}
+	if inst.ArchivedAt != nil && !msg.IncludeArchived {
+		return false
+	}
+	return msg.WorkflowId == nil || *msg.WorkflowId == "" || inst.WorkflowID == *msg.WorkflowId
+}
+
+// externalMatchesListFilters applies the status, category and hidden filters to
+// a mux-discovered external session (always running, hence ACTIVE).
+func externalMatchesListFilters(ext *session.Instance, msg *sessionv1.ListSessionsRequest) bool {
+	if msg.Status != nil && *msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED &&
+		*msg.Status != sessionv1.SessionStatus_SESSION_STATUS_ACTIVE {
+		return false
+	}
+	if msg.Category != nil && *msg.Category != "" && ext.Category != *msg.Category {
+		return false
+	}
+	return hiddenVisibleInList(ext.Hidden, msg)
+}
+
 func (s *SessionService) listLocalSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionsRequest],
@@ -125,41 +168,7 @@ func (s *SessionService) listLocalSessions(
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	var hiddenManaged []hiddenOutcomeEntry
 	for _, inst := range instances {
-		// Apply optional status filter. Read the status directly off the instance
-		// instead of building the full proto just to inspect one field — building it
-		// runs the full GetEffectiveStatus/GetStatusAndIdleInfo/DetectStateFromContent
-		// chain, which is expensive enough that doing it twice per instance (once here,
-		// once for the real output below) roughly doubles ListSessions' allocation cost
-		// whenever a status filter is applied.
-		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			effProto, err := adapters.StatusToProto(inst.GetEffectiveStatus())
-			if err != nil {
-				log.Error("ListSessions: unrecognized session.Status", "status", int(inst.GetEffectiveStatus()), "err", err)
-				continue
-			}
-			if effProto != *req.Msg.Status {
-				continue
-			}
-		}
-
-		// Apply optional category filter
-		if req.Msg.Category != nil && *req.Msg.Category != "" && inst.Category != *req.Msg.Category {
-			continue
-		}
-
-		// Exclude hidden (system/background) sessions unless explicitly requested;
-		// hidden_only keeps only them and implies include_hidden.
-		if !hiddenVisibleInList(inst.Hidden, req.Msg) {
-			continue
-		}
-
-		// Exclude archived sessions unless explicitly requested
-		if inst.ArchivedAt != nil && !req.Msg.IncludeArchived {
-			continue
-		}
-
-		// Filter by workflow_id when specified
-		if req.Msg.WorkflowId != nil && *req.Msg.WorkflowId != "" && inst.WorkflowID != *req.Msg.WorkflowId {
+		if !instanceMatchesListFilters(inst, req.Msg) {
 			continue
 		}
 
@@ -179,21 +188,7 @@ func (s *SessionService) listLocalSessions(
 	// Include external sessions from mux discovery if available
 	if s.externalDiscovery != nil {
 		for _, extInst := range s.externalDiscovery.GetSessions() {
-			// Apply optional status filter (external sessions are always "running")
-			if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				// External sessions are running
-				if *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_ACTIVE {
-					continue
-				}
-			}
-
-			// Apply optional category filter
-			if req.Msg.Category != nil && *req.Msg.Category != "" && extInst.Category != *req.Msg.Category {
-				continue
-			}
-
-			// Exclude hidden external sessions unless requested
-			if !hiddenVisibleInList(extInst.Hidden, req.Msg) {
+			if !externalMatchesListFilters(extInst, req.Msg) {
 				continue
 			}
 

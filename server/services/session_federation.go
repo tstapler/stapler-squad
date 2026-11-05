@@ -204,7 +204,7 @@ func (f *FederatedSessions) Sessions() []*sessionv1.Session {
 		hostIDs = append(hostIDs, id)
 	}
 	sort.Strings(hostIDs)
-	var out []*sessionv1.Session
+	out := make([]*sessionv1.Session, 0, len(hostIDs))
 	for _, hostID := range hostIDs {
 		out = append(out, tagPeerSessions(hostID, f.hosts[hostID])...)
 	}

@@ -20,9 +20,6 @@ import (
 )
 
 const (
-	// federationTerminalPollInterval is how often the owning host re-captures the
-	// pane; a snapshot is only sent when it changed.
-	federationTerminalPollInterval = 250 * time.Millisecond
 	// maxFederationTerminalFrame bounds one snapshot line a peer can make us buffer.
 	maxFederationTerminalFrame = 8 << 20
 	maxFederatedSessionIDLen   = 512

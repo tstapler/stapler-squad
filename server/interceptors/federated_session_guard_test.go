@@ -24,7 +24,7 @@ func guardCode(t *testing.T, msg any) (connect.Code, bool) {
 		req = connect.NewRequest(m)
 	}
 	_, err := NewFederatedSessionGuard()(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		return nil, nil
+		return connect.NewResponse(&sessionv1.GetSessionResponse{}), nil
 	})(context.Background(), req)
 	if err == nil {
 		return 0, false
