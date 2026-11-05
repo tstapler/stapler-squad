@@ -102,10 +102,16 @@ func (s *selectingTransport) closeIdle() {
 func (s *selectingTransport) pick(ctx context.Context) (rpcTransport, string) {
 	s.mu.Lock()
 	if s.useUnix && !s.now().Before(s.nextTCPProbe) {
+		prev := s.nextTCPProbe
 		s.nextTCPProbe = s.now().Add(transportReprobeInterval) // claim the probe: other callers skip it
 		s.mu.Unlock()
-		if probeTransport(ctx, s.tcp) {
+		switch {
+		case probeTransport(ctx, s.tcp):
 			s.switchTo(transportTCP, "tcp listener answers again")
+		case ctx.Err() != nil:
+			s.mu.Lock() // our own cancellation says nothing about TCP: give the probe back
+			s.nextTCPProbe = prev
+			s.mu.Unlock()
 		}
 		s.mu.Lock()
 	}
@@ -231,6 +237,12 @@ type failoverStream struct {
 	sel   *selectingTransport
 	kind  string
 	ctx   context.Context //nolint:containedctx // the Attach ctx bounds the failover probe
+
+	mu        sync.Mutex
+	rxStarted bool          // a Receive has begun: the stream has a reader, so Send must never Receive
+	drained   bool          // the one-time drain already ran
+	drainDone chan struct{} // non-nil while a drain's Receive is in flight
+	stash     *v1.AttachEvent
 }
 
 func (f *failoverStream) observe(err error) error {
@@ -242,19 +254,58 @@ func (f *failoverStream) observe(err error) error {
 
 // Send surfaces the real dial error: connect-go reports only io.EOF from Send when the request
 // failed, with the cause on Receive, and a bare EOF would hide a refused dial from the selector.
-// The failover probe runs on the stream's own goroutine but is bounded by the Attach ctx and
-// transportProbeTimeout.
+// It drains at most once and only before any Receive has begun: Receive is not safe to call
+// concurrently, and on a live stream the reader goroutine owns it. An event the drain consumes is
+// stashed for the next Receive.
 func (f *failoverStream) Send(r *v1.AttachRequest) error {
 	err := f.inner.Send(r)
 	if errors.Is(err, io.EOF) {
-		if _, rxErr := f.inner.Receive(); rxErr != nil {
-			err = rxErr
-		}
+		err = f.drainOnce(err)
 	}
 	return f.observe(err)
 }
 
+func (f *failoverStream) drainOnce(eof error) error {
+	f.mu.Lock()
+	if f.rxStarted || f.drained {
+		f.mu.Unlock()
+		return eof
+	}
+	f.drained = true
+	done := make(chan struct{})
+	f.drainDone = done
+	f.mu.Unlock()
+
+	ev, rxErr := f.inner.Receive()
+
+	f.mu.Lock()
+	f.drainDone = nil
+	if rxErr == nil {
+		f.stash = ev
+	}
+	f.mu.Unlock()
+	close(done)
+	if rxErr != nil {
+		return rxErr
+	}
+	return eof // the send still failed; the drained event is kept for Receive
+}
+
 func (f *failoverStream) Receive() (*v1.AttachEvent, error) {
+	f.mu.Lock()
+	f.rxStarted = true
+	done := f.drainDone
+	f.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	f.mu.Lock()
+	if ev := f.stash; ev != nil {
+		f.stash = nil
+		f.mu.Unlock()
+		return ev, nil
+	}
+	f.mu.Unlock()
 	ev, err := f.inner.Receive()
 	return ev, f.observe(err)
 }

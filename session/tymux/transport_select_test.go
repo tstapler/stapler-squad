@@ -432,3 +432,110 @@ func TestReconnect_DeadTCPThenSocket_SecondDialSucceeds(t *testing.T) {
 	require.NotNil(t, stream)
 	require.NotNil(t, first)
 }
+
+// blockingRxStream models connect-go's BidiStreamForClient: Send reports io.EOF (the cause is on
+// Receive) and Receive is not safe to call concurrently.
+type blockingRxStream struct {
+	release    chan struct{}
+	inReceive  atomic.Int32
+	maxReceive atomic.Int32
+	receives   atomic.Int32
+	sendErr    error
+}
+
+func (b *blockingRxStream) Send(*v1.AttachRequest) error { return b.sendErr }
+func (b *blockingRxStream) Receive() (*v1.AttachEvent, error) {
+	b.receives.Add(1)
+	n := b.inReceive.Add(1)
+	defer b.inReceive.Add(-1)
+	for {
+		m := b.maxReceive.Load()
+		if n <= m || b.maxReceive.CompareAndSwap(m, n) {
+			break
+		}
+	}
+	<-b.release
+	return &v1.AttachEvent{}, nil
+}
+func (b *blockingRxStream) CloseRequest() error  { return nil }
+func (b *blockingRxStream) CloseResponse() error { return nil }
+
+// A Send that sees io.EOF on a live stream (a reader goroutine is already inside Receive) must not
+// start a second Receive: that races the reader and can wedge the input gate.
+func TestFailoverStream_SendEOFDuringReaderReceive_NeverCallsReceiveConcurrently(t *testing.T) {
+	t.Parallel()
+	inner := &blockingRxStream{release: make(chan struct{}), sendErr: io.EOF}
+	sel, _, _, _ := newTestSelector()
+	f := &failoverStream{inner: inner, sel: sel, kind: transportTCP, ctx: context.Background()}
+
+	readerDone := make(chan struct{})
+	go func() { defer close(readerDone); _, _ = f.Receive() }()
+	require.Eventually(t, func() bool { return inner.inReceive.Load() == 1 }, 5*time.Second, time.Millisecond)
+
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- f.Send(&v1.AttachRequest{}) }()
+	select {
+	case err := <-sendDone:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(5 * time.Second):
+		close(inner.release)
+		t.Fatal("Send blocked behind the reader's Receive")
+	}
+	require.EqualValues(t, 1, inner.maxReceive.Load(), "never two concurrent Receive calls")
+	close(inner.release)
+	<-readerDone
+}
+
+// Before any Receive, the drain runs once and an event it consumes is not lost.
+func TestFailoverStream_SendEOFBeforeAnyReceive_DrainsOnceAndKeepsTheEvent(t *testing.T) {
+	t.Parallel()
+	inner := &blockingRxStream{release: make(chan struct{}), sendErr: io.EOF}
+	close(inner.release)
+	sel, _, _, _ := newTestSelector()
+	f := &failoverStream{inner: inner, sel: sel, kind: transportTCP, ctx: context.Background()}
+
+	require.ErrorIs(t, f.Send(&v1.AttachRequest{}), io.EOF, "the send failed even though the drain read an event")
+	require.EqualValues(t, 1, inner.receives.Load())
+	require.ErrorIs(t, f.Send(&v1.AttachRequest{}), io.EOF, "second EOF does not drain again")
+	require.EqualValues(t, 1, inner.receives.Load())
+
+	ev, err := f.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, ev, "the stashed event comes back first")
+	require.EqualValues(t, 1, inner.receives.Load(), "served from the stash, no extra inner Receive")
+}
+
+func TestEnsureDaemonRunning_NamedInstanceCustomAddr_TCPDeadSocketLive_NeverStops(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "uds-veto-1")
+	t.Setenv("TYMUXD_ADDR", closedAddr(t))
+	t.Setenv("TYMUXD_SOCKET_PATH", "")
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	cfg := ResolveDaemonConfig()
+	require.NotEmpty(t, cfg.SocketPath)
+	require.Empty(t, unixSocketPath(cfg), "the client fallback does not pair this addr with the instance socket")
+	ln, err := net.Listen("unix", cfg.SocketPath)
+	require.NoError(t, err)
+	grpcOKServer(t, ln)
+	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
+	shrinkProbeTimeouts(t)
+	stop, spawn := neverCalled(t)
+	defer stubStopTymuxd(stop)()
+	defer stubStartDaemonAttempt(spawn)()
+
+	_, err = EnsureDaemonRunning(context.Background(), cfg)
+
+	require.ErrorIs(t, err, ErrTymuxdControlSocketUnresponsive, "reported, never killed")
+}
+
+func TestUnixSocketListening_UnpairedSocketStillVetoesKill(t *testing.T) {
+	sock := answeringUnixSocket(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "")
+	t.Setenv("TYMUXD_ADDR", "")
+	t.Setenv("TYMUXD_SOCKET_PATH", sock)
+	t.Setenv(allowSharedDaemonInTestEnv, "1") // only the Unix socket is dialed here, never the shared TCP port
+	cfg := ResolveDaemonConfig()
+	require.Equal(t, sock, cfg.SocketPath)
+	require.Empty(t, unixSocketPath(cfg), "unpaired: not used for the client fallback")
+
+	require.True(t, unixSocketListening(cfg), "but spawn exports this socket to the daemon, so a live answer vetoes killing it")
+}
