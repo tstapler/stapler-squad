@@ -104,3 +104,30 @@ Final tree: `scoping t9` prints T9a PASS, T9b FAIL (universal touch 70.97% again
 | `importer`, `session` p4 | not re-measured this pass | | | | | |
 
 Method notes: `scoping closure` (declaration-level cut of staying tests that use a cluster), `scoping peel` (cluster declarations the staying code uses that do not need the anchor type), `scoping move` reporting stay-behind test helpers as twins. Hand work needed after the codemod: exported `TransitionWithGuard` and `HasUnresolvedBlockers` (core jules guard interface), a nudge-guard clock constructor, backlogsvc copies of five fixtures, and path-keyed guards (workflow bypass inventory and strict, terminal-write pins, `TransitionCallers`, wake-polling map, source-scanning data deps). Test function names are unchanged (3752 before and after; the grep also sees one raw-string line `func TestQualified` and a second `TestMain`).
+
+## Epic 13 continuation 3 (branch `sdd/bazel-epic13-session`)
+
+Method: the file set of each candidate was found by a declaration-graph fixpoint over the real package (eject any file whose used declarations
+drag more than 25 declarations along, or whose declarations are mostly used by the core; relocate the rest). Marginal effect is
+`scoping replay` on a throwaway commit of the move against its parent (the SC6 definition); pp = percentage points, negative is better.
+Parent values: T9a 0.4391, T9b 0.6895, T9c 0.3852, `session` 90,866 LOC.
+
+| Step | Decision | T9a test share | T9c lib share | Universal touch (500) | `server/services` / `session` LOC | Inversions |
+|---|---|---|---|---|---|---|
+| parent | | 0.4391 | 0.3852 | 0.6895 | 77,709 / 90,866 | 0 |
+| tierB `session` p0 (research list, 32 files) | not executable as listed: 519 core uses and a 178-declaration closure behind `BacklogLifecycleListener`, 35 behind `NewChainFirer`; after two interface inversions (`BacklogListener`, `ChainDispatcher`) and 28 relocated declarations the cluster is 27 files | | | | | |
+| tierB `session` p0 (27 files, 28 declarations relocated) | executed (b6f9f465b): SC1 0 core uses; SC6 passes (lib -0.50 pp, test -0.58 pp, universal -3.2 pp, fewer 14.8%) | 0.4333 | 0.3802 | 0.6573 | 77,715 / 77,473 | 0 |
+| tierB `session` p1 (21 files) | rejected: `Instance`, `session_driver.go`, `health.go`, `startup_scanner.go`, `import_commit.go` and seven more core files construct or hold 12 of its collaborators (`ControllerManager`, `InstanceStatusManager`, `resolveHistoryAdapter`, `PortSessionHistory`, `NewPiStatusSource`, ...). Moving it needs those built outside the core and injected or registered, which changes every `Instance` construction path. The SC1-compliant remainder (3 files, 2.4k LOC) fails SC6 | 0.4329 | 0.3792 (-0.08 pp, needs 0.10) | 0.6532 (-0.41 pp, needs 1.0) | 77,727 / 75,107 | 0 |
+| tierA `importer` (11 files) | skipped by criterion SC6 (lib +0.01 pp, test 0.00, universal 0.00; the `newLiveInstance` collision is moot) | 0.4333 | 0.3801 | 0.6573 | 77,719 / 75,980 | 0 |
+| tierB `session` p4 (4 files + the windows-only file, moved by hand because `go/packages` loads linux only) | skipped by criteria SC1 and SC6: `backend_factory.go` in the core constructs `NewTymuxBackend`, `NewTmuxBackend`, `NewNativeProcessManager` and `Instance` reads `processManagerBackendLabel` (5 core uses); lib 0.00, test -0.01 pp, universal -0.41 pp | 0.4332 | 0.3800 | 0.6532 | 77,715 / 76,305 | 0 |
+| tierB `session` p2 | stays rejected: the backfills are run by `NewEntRepository` itself; an identical migration run at all 86 call sites in 45 files cannot be proven while the list lives above `session` | | | | | |
+
+Final tree: `scoping t9` T9a PASS (0.4333), T9b FAIL (0.6573 against 0.61), T9c PASS (0.3802), T9d FAIL (`server/services` 77,715 and `session`
+77,473 against 72,000), T9e PASS. T9b and T9d now depend on `server/services` p2 and on Tier C work (`Instance`, `EntRepository`, `Storage`).
+
+What the p0 move needed beyond the codemod (so the next cluster can reuse it): `BacklogController` holds a `BacklogListener`, `EntRepository`
+holds a `ChainDispatcher`, `WireChainFirer` is a package function over `Storage.Repository()`, 28 shared declarations live in
+`backlog_shared.go` and `workflow_engine_types.go`, 44 test files were split into `*_bk_test.go` before the move, the 18 helpers free of core
+types became `session/internal/sessiontest` (with the hermetic `TestMain` body) and the 17 bound ones were copied as twins, git CLI helpers
+went to the sanctioned `testutil/gitfixture`, and the path-keyed guards were re-pointed (wake-polling map, workflow bypass inventory and
+strict test, `transition_callers.go` file constants, denied-guard source scans, golden `testdata`, `go_sources` filegroups).
