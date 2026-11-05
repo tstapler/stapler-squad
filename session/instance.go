@@ -396,8 +396,10 @@ type Instance struct {
 	// prPersistMu serializes this session's PR persists; prPersister is the
 	// storage seam (nil until injected); prPersistPending marks a PR set change
 	// the next full save must write. See instance_pr_set.go.
-	prPersistMu      sync.Mutex
-	prPersister      prSetPersister
+	prPersistMu sync.Mutex
+	prPersister prSetPersister
+	// prActions is the GitHub client the PR actions use; nil means the real one.
+	prActions        prActionClient
 	prPersistPending atomic.Bool
 	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
 	prLegacyPathLogged atomic.Bool
