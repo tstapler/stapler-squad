@@ -70,6 +70,8 @@ interface SessionRowProps {
   onResume?: () => void;
   onDelete?: () => Promise<void> | void;
   onClone?: () => void;
+  /** Opens the session on its Info tab, where the "Pull requests" section is (the chip's "+N"). Falls back to `onClick`. */
+  onOpenInfo?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
@@ -219,6 +221,7 @@ function SessionRowInner({
   onDelete,
   onClone,
   onOpenInNewPane,
+  onOpenInfo,
   onNewWorkspace,
   onRestart,
   onRetryNow,
@@ -297,7 +300,7 @@ function SessionRowInner({
 
   // "+N" stops its click, so it opens the session itself, then points the URL at the PR section.
   const openPullRequests = () => {
-    onClick?.();
+    (onOpenInfo ?? onClick)?.();
     openPullRequestsAnchor();
   };
 

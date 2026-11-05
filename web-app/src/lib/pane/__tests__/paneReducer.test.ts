@@ -182,6 +182,13 @@ describe("ASSIGN_SESSION", () => {
     expect((next.root as LeafPane).activeTab).toBe("terminal");
   });
 
+  it("paneReducer_should_openTheNamedTabInTheNewDetailPane_When_aSessionListAutoSplits", () => {
+    const list = { ...leaf("list", null), viewKind: "session-list" as const };
+    const next = paneReducer(stateOf(list, "list"), { type: "ASSIGN_SESSION", paneId: "list", sessionId: "session-A", tab: "info" });
+    const detail = getAllLeaves(next.root).find((l) => l.viewKind === "session-detail");
+    expect([detail?.sessionId, detail?.activeTab]).toEqual(["session-A", "info"]);
+  });
+
   it("paneReducer_should_moveSessionAndClearSource_When_sessionAlreadyPresentInAnotherPane", () => {
     const leaf1 = leaf("pane-1", "session-A");
     const leaf2 = leaf("pane-2", null);

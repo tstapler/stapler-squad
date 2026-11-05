@@ -45,7 +45,7 @@ export type PaneAction =
   | { type: "CLOSE_PANE";    paneId: PaneId }
   | { type: "RESIZE_PANE";   splitId: PaneId; ratio: number }
   | { type: "FOCUS_PANE";    paneId: PaneId }
-  | { type: "ASSIGN_SESSION"; paneId: PaneId; sessionId: string }
+  | { type: "ASSIGN_SESSION"; paneId: PaneId; sessionId: string; /** Tab of the detail pane an auto-split creates (default terminal). */ tab?: SessionDetailTab }
   | { type: "ASSIGN_TAB";    paneId: PaneId; tab: SessionDetailTab }
   | { type: "ZOOM_PANE";     paneId: PaneId | null }
   | { type: "NUDGE_RESIZE";  paneId: PaneId; direction: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; amountPx: number; containerSizePx: number }
