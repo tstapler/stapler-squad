@@ -92,3 +92,18 @@ it("does not render on other platforms or when disabled", async () => {
  await waitFor(() => expect(mockStatus).toHaveBeenCalled());
  expect(container).toBeEmptyDOMElement();
 });
+
+it("links to System Settings when macOS denied access", async () => {
+ const settingsUrl = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
+ mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "denied", settingsUrl }] });
+ render(<TCCEnrichmentBanner />);
+ expect(await screen.findByTestId("tcc-settings-link")).toHaveAttribute("href", settingsUrl);
+ expect(screen.getByTestId("tcc-settings-link")).toHaveAttribute("rel", "noreferrer noopener");
+});
+
+it("re-checks a denied root through the consent RPC", async () => {
+ mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "denied", settingsUrl: "x-apple.systempreferences:a" }] });
+ render(<TCCEnrichmentBanner />);
+ fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+ await waitFor(() => expect(mockContinue).toHaveBeenCalledWith({ rootId: "opaque-id" }));
+});
