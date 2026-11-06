@@ -89,6 +89,7 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
+	federation        *FederatedSessions // nil unless host gossip is running
 
 	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
 	prRefs prRefsSeams

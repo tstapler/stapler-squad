@@ -65,7 +65,7 @@ func stubPortListening(fn func(DaemonConfig) bool) func() {
 
 func stubStopTymuxd(fn func() error) func() {
 	orig := stopTymuxdFn
-	stopTymuxdFn = fn
+	stopTymuxdFn = func(StopReason) error { return fn() }
 	return func() { stopTymuxdFn = orig }
 }
 
@@ -270,7 +270,7 @@ func TestEnsureDaemonRunning_should_StopStuckDaemon_BeforeSpawningReplacement(t 
 func TestStopTymuxd_IdempotentWhenNoPIDFile(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
 
-	err := StopTymuxd()
+	err := StopTymuxd(StopReason{Kind: StopManual})
 
 	require.NoError(t, err)
 }
