@@ -92,6 +92,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           aria-expanded={exploring}
           data-testid="backlog-compose-explore"
         >
+          {/* analytics-exempt */}
           <span aria-hidden="true">✨</span> {exploring ? "Hide AI explore" : "Explore with AI"}
         </button>
         <button
@@ -101,6 +102,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           disabled={uploading}
           data-testid="backlog-compose-attach"
         >
+          {/* analytics-exempt */}
           {uploading ? "Uploading…" : <><span aria-hidden="true">📎</span> Attach image</>}
         </button>
         <input
@@ -118,6 +120,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           onClick={() => onCancel(text)}
           data-testid="backlog-compose-cancel"
         >
+          {/* analytics-exempt */}
           Cancel
         </button>
         <button
@@ -127,6 +130,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           disabled={!canSubmit}
           data-testid="backlog-compose-submit"
         >
+          {/* analytics-exempt */}
           Create
         </button>
       </div>

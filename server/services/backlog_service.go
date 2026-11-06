@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -906,7 +907,15 @@ func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *sessi
 // path, cloning it if necessary (mirrors SessionService.CreateSession's handling
 // of GitHub URLs). Plain filesystem paths pass through unchanged.
 func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
-	if input == "" || !session.IsGitHubURL(input) {
+	if input == "" {
+		return input, nil
+	}
+	if !session.IsGitHubURL(input) {
+		// A URL that is not a recognized GitHub repo (e.g. "https://github.com/")
+		// is never a usable filesystem path; reject it instead of persisting it.
+		if strings.Contains(input, "://") {
+			return "", fmt.Errorf("repo_path %q is not a local path or a recognized GitHub URL", input)
+		}
 		return input, nil
 	}
 	localPath, _, err := s.resolveGitHubInput(input)
