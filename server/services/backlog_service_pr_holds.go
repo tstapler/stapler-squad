@@ -59,13 +59,10 @@ func countItemPRs(prs []session.PRView) (total, merged int32) {
 // of the derived set, superseded rounds' non-terminal PRs, a live work session, and a
 // live session past the max hold. The client never recomputes a hold.
 func (s *BacklogService) prHolds(ctx context.Context, item *session.BacklogItemData, prs []session.PRView) []*sessionv1.PrHold {
-	var holds []*sessionv1.PrHold
+	holds := nonTerminalPRHolds(prs, "")
 	inSet := map[session.PRRef]bool{}
 	for _, v := range prs {
 		inSet[v.Ref] = true
-		if kind, held := holdKindOf(v); held {
-			holds = append(holds, &sessionv1.PrHold{Kind: kind, Pr: prRefToProto(v.Ref), OwnerSessionId: v.SessionUUID})
-		}
 	}
 	sessions, err := s.storage.ListItemSessions(ctx, item.ID)
 	if err != nil {
@@ -73,6 +70,25 @@ func (s *BacklogService) prHolds(ctx context.Context, item *session.BacklogItemD
 	}
 	holds = append(holds, s.supersededRoundHolds(ctx, sessions, inSet)...)
 	return append(holds, s.liveWorkHolds(ctx, sessions, prs)...)
+}
+
+// nonTerminalPRHolds is one hold per PR that keeps its owner's worktree. ownerOverride,
+// when set, names the owning session for every hold; otherwise each view's own
+// SessionUUID is used.
+func nonTerminalPRHolds(prs []session.PRView, ownerOverride string) []*sessionv1.PrHold {
+	var holds []*sessionv1.PrHold
+	for _, v := range prs {
+		kind, held := holdKindOf(v)
+		if !held {
+			continue
+		}
+		owner := v.SessionUUID
+		if ownerOverride != "" {
+			owner = ownerOverride
+		}
+		holds = append(holds, &sessionv1.PrHold{Kind: kind, Pr: prRefToProto(v.Ref), OwnerSessionId: owner})
+	}
+	return holds
 }
 
 func holdKindOf(v session.PRView) (sessionv1.PrHold_Kind, bool) {
