@@ -15,9 +15,11 @@ import (
 type prMaintenanceRecorder struct {
 	calls   atomic.Int32
 	storage atomic.Pointer[session.Storage]
+	ctx     atomic.Value // context.Context
 }
 
-func (r *prMaintenanceRecorder) run(_ context.Context, st *session.Storage) error {
+func (r *prMaintenanceRecorder) run(ctx context.Context, st *session.Storage) error {
+	r.ctx.Store(&ctx)
 	r.calls.Add(1)
 	r.storage.Store(st)
 	return nil
@@ -45,6 +47,19 @@ func TestBuildCoreDepsWithOptions_ShouldRunPRMaintenanceOnce_WhenRequested(t *te
 	require.NotNil(t, core.StopPRMaintenance)
 	core.StopPRMaintenance() // idempotent, safe with no ticker running
 	core.StopPRMaintenance()
+}
+
+// The caller's context reaches the maintenance run, so SIGTERM during boot cancels
+// its retries.
+func TestBuildCoreDepsWithOptions_ShouldPassContextToMaintenance(t *testing.T) {
+	rec := &prMaintenanceRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	buildCoreWithClient(t, BuildOptions{RunPRMaintenance: true, PRMaintenanceRunner: rec.run, Context: ctx})
+	got := *rec.ctx.Load().(*context.Context)
+	require.NoError(t, got.Err())
+	cancel()
+	assert.Error(t, got.Err(), "cancelling the boot context cancels the maintenance run")
 }
 
 // buildMCPDeps uses the plain BuildCoreDeps(): no maintenance, no ticker.

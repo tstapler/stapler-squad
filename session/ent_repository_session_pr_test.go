@@ -236,6 +236,20 @@ func TestUpsertSessionPR_ShouldRejectEleventhLink_WhenCapReached(t *testing.T) {
 	assert.False(t, res.Created)
 }
 
+func TestUpsertSessionPR_ShouldRejectLink_WhenItemOwnerCapReached(t *testing.T) {
+	t.Parallel()
+	repo := newPRRepo(t)
+	ctx := context.Background()
+	for n := 1; n <= maxSessionPRLinks; n++ {
+		_, err := repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), mustPRRef(t, "", "acme", "app", n), PRLink{Source: AttachSourceReportPRCreated})
+		require.NoError(t, err)
+	}
+	_, err := repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), mustPRRef(t, "", "acme", "app", 999), PRLink{Source: AttachSourceReportPRCreated})
+	assert.ErrorIs(t, err, ErrSessionPRLinkCap)
+	_, err = repo.UpsertSessionPR(ctx, ItemPROwner("item-2"), mustPRRef(t, "", "acme", "app", 999), PRLink{Source: AttachSourceReportPRCreated})
+	require.NoError(t, err, "the cap is per owner")
+}
+
 func TestSetPinned_ShouldClearOtherPins_WhenPinningAnotherPR(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)

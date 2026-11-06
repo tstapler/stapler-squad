@@ -292,8 +292,6 @@ type backlogHandlers struct {
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
-	// multiPRBacklog replaces the reader:backlog flag lookup (tests); nil reads config.
-	multiPRBacklog func() bool
 	// waitTimeouts counts consecutive wait_for_backlog_event timeouts per
 	// session+item so a session that keeps re-waiting is parked; see waitCapKey.
 	waitMu       sync.Mutex

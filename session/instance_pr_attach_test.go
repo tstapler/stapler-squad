@@ -77,6 +77,7 @@ func attachNumbers(t *testing.T, inst *Instance) []int {
 }
 
 func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	r12, r13 := mustPRRef(t, "", "acme", "app", 12), mustPRRef(t, "", "acme", "app", 13)
 
@@ -108,6 +109,7 @@ func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
 }
 
 func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{}); err != nil {
 		t.Fatal(err)
@@ -125,6 +127,7 @@ func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
 }
 
 func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testing.T) {
+	t.Parallel()
 	h := installRecordingHandler(t)
 	inst := newPRTestInstance(t)
 	r11 := mustPRRef(t, "", "acme", "app", 11)
@@ -159,6 +162,7 @@ func loggedActivePRChange(h *recordingHandler, from, to int64) bool {
 }
 
 func TestAttachPR_ShouldShowNewestNonTerminal_WhenNoBranchMatch(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
 	if err := inst.AttachPR(r11, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen, HeadBranch: "other-a"}); err != nil {
@@ -176,6 +180,7 @@ func TestAttachPR_ShouldShowNewestNonTerminal_WhenNoBranchMatch(t *testing.T) {
 }
 
 func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.UUID = ""
 	finishInstanceConstruction(inst)
@@ -197,6 +202,7 @@ func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
 }
 
 func TestSetGitHubPR_ShouldAttachThroughAttachPR_WhenRepoAndUUIDResolved(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetGitHubPR("https://github.com/acme/app/pull/12", 12)
 	if got := attachNumbers(t, inst); len(got) != 1 || got[0] != 12 {
@@ -208,6 +214,7 @@ func TestSetGitHubPR_ShouldAttachThroughAttachPR_WhenRepoAndUUIDResolved(t *test
 }
 
 func TestAttachPR_ShouldPersistFromSnapshot_WhenPersisterInjected(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	p := &fakePRPersister{}
 	inst.SetPRPersister(p)
@@ -231,11 +238,13 @@ func TestAttachPR_ShouldPersistFromSnapshot_WhenPersisterInjected(t *testing.T) 
 }
 
 func TestAttachPR_ShouldMarkPending_WhenSessionRowMissingOrPersistFails(t *testing.T) {
+	t.Parallel()
 	for name, perr := range map[string]error{
 		"row not yet persisted": ErrSessionNotPersisted,
 		"database error":        errors.New("disk I/O error"),
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.SetPRPersister(&fakePRPersister{err: perr})
 			if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceCreatedFromURL, PRInitial{}); err != nil {
@@ -252,6 +261,7 @@ func TestAttachPR_ShouldMarkPending_WhenSessionRowMissingOrPersistFails(t *testi
 }
 
 func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{res: PRLinkResult{Tombstoned: true}})
 	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{}); err != nil {
@@ -263,6 +273,7 @@ func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
 }
 
 func TestDetachPinApply_ShouldUpdateSetAndFlags(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
 	_ = inst.AttachPR(r11, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen})
@@ -291,12 +302,14 @@ func TestDetachPinApply_ShouldUpdateSetAndFlags(t *testing.T) {
 }
 
 func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumber(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		attach  int
 		wantSet bool
 	}{{"unrelated number keeps the flag", 12, true}, {"legacy number clears it", 11, false}} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.GitHubPRNumber, inst.LegacyPRUnrepresented = 11, true
 			finishInstanceConstruction(inst)
@@ -309,6 +322,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 }
 
 func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	ref := mustPRRef(t, "", "acme", "app", 12)
 	require.NoError(t, inst.AttachPR(ref, AttachSourceManual, PRInitial{State: PRStateOpen, Terminal: true}))
@@ -331,6 +345,7 @@ func intAttr(r capturedRecord, key string) int64 {
 }
 
 func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
 
@@ -346,6 +361,7 @@ func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR
 }
 
 func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T) {
+	t.Parallel()
 	inst, err := NewInstance(InstanceOptions{
 		Title: "from-pr", Path: t.TempDir(), Program: "echo",
 		GitHubOwner: "acme", GitHubRepo: "app",
@@ -361,6 +377,7 @@ func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T)
 }
 
 func TestInstanceToSession_ShouldMapActivePR_WhenSessionHoldsSeveral(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	r11 := mustPRRef(t, "", "acme", "app", 11)
 	require.NoError(t, inst.AttachPR(r11, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
@@ -375,6 +392,7 @@ func TestInstanceToSession_ShouldMapActivePR_WhenSessionHoldsSeveral(t *testing.
 }
 
 func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	before := SessionPRCountObservations(3)
 	for _, n := range []int{11, 12, 13} {

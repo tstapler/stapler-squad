@@ -52,6 +52,8 @@ func newPRSweeper(fix *forkTestFixture) (*SessionRetentionSweeper, *fakeSweepPRS
 	sweeper := NewSessionRetentionSweeper(fix.storage, config.DefaultConfig(), fix.svc)
 	fake := &fakeSweepPRSource{real: sweeper.prSource}
 	sweeper.prSource = fake
+	// Never reach GitHub from a test: closed PRs stay closed unless a test says otherwise.
+	sweeper.reverifyClosed = func(context.Context, session.PRRef) (bool, error) { return false, nil }
 	return sweeper, fake
 }
 
@@ -326,4 +328,69 @@ func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *tes
 
 	assert.True(t, hasStoredTitle(t, fix, "raced"), "evidence re-read right before delete: the new open PR holds the session")
 	assert.GreaterOrEqual(t, calls, 2, "the per-session re-check ran")
+}
+
+func TestRetentionSweeper_ShouldKeepSession_WhenClosedPRWasReopenedOrCheckFails(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "reopened", "u-reo")
+	linkPR(t, fix, "u-reo", 61, session.PRStateClosed, true)
+	addArchivedWithUUID(t, fix, "errored", "u-err")
+	linkPR(t, fix, "u-err", 62, session.PRStateClosed, true)
+	addArchivedWithUUID(t, fix, "stays-closed", "u-ok")
+	linkPR(t, fix, "u-ok", 63, session.PRStateClosed, true)
+
+	sweeper, _ := newPRSweeper(fix)
+	sweeper.reverifyClosed = func(_ context.Context, ref session.PRRef) (bool, error) {
+		switch ref.Number() {
+		case 61:
+			return true, nil
+		case 62:
+			return false, errors.New("github unreachable")
+		}
+		return false, nil
+	}
+	sweeper.sweep(context.Background())
+
+	assert.True(t, hasStoredTitle(t, fix, "reopened"), "a PR reopened on GitHub holds the session")
+	assert.True(t, hasStoredTitle(t, fix, "errored"), "a failed re-verify fails closed")
+	assert.False(t, hasStoredTitle(t, fix, "stays-closed"), "a PR GitHub still reports closed releases the session")
+}
+
+func TestRetentionSweeper_ShouldNotDelete_WhenSessionUnarchivedAfterCycleLoad(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "revived", "u-rev")
+	sweeper, _ := newPRSweeper(fix)
+	sweeper.reread = func(string) (*session.InstanceData, error) {
+		return &session.InstanceData{UUID: "u-rev"}, nil // ArchivedAt cleared since the cycle load
+	}
+	sweeper.sweep(context.Background())
+	assert.True(t, hasStoredTitle(t, fix, "revived"))
+}
+
+func TestRetentionSweeper_ShouldSurfaceSessionPRHold_OnceWhenOverMax(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "held", "u-held")
+	linkPR(t, fix, "u-held", 71, session.PRStateOpen, false)
+	sweeper, _ := newPRSweeper(fix)
+	sweeper.now = func() time.Time { return time.Now().Add(48 * time.Hour) }
+
+	sweeper.sweep(context.Background())
+	afterFirst := sweeper.sessionHolds.reportedTotal
+	sweeper.sweep(context.Background())
+
+	snap := sweeper.sessionHolds.snapshot()
+	keys := make([]string, 0, len(snap))
+	for _, h := range snap {
+		keys = append(keys, h.ItemID)
+	}
+	assert.Contains(t, keys, "u-held", "the over-max session hold is surfaced")
+	assert.Equal(t, afterFirst, sweeper.sessionHolds.reportedTotal, "reported once per hold window, not every sweep")
+	assert.Positive(t, SessionPRHoldOverMaxCount())
+	assert.True(t, hasStoredTitle(t, fix, "held"))
 }
