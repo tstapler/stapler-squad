@@ -33,8 +33,8 @@ type prPollMetrics struct {
 	unverified    atomic.Int64
 
 	pollOtel, failOtel, discoveryOtel, pinOtel metric.Int64Counter
-	sessionPRCount                    metric.Int64Histogram
-	unverifiedGauge                   metric.Int64Gauge
+	sessionPRCount                             metric.Int64Histogram
+	unverifiedGauge                            metric.Int64Gauge
 }
 
 var prMetrics = newPRPollMetrics()
