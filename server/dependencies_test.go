@@ -722,3 +722,15 @@ func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStored
 	close(ready)
 	require.Eventually(t, func() bool { return idx.DocCount() == 1 }, 5*time.Second, 5*time.Millisecond)
 }
+
+func TestWireDepsIntoServer_should_StartSessionPRLinkGC_When_StoragePresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	require.NotNil(t, srv.prLinkGC, "wireDepsIntoServer must construct the orphan session-PR link collector")
+	assert.True(t, srv.prLinkGC.Started(), "and start it")
+}

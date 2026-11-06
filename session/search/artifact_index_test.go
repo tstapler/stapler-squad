@@ -204,3 +204,16 @@ func TestArtifactIndex_ShouldReportDocCountMetric(t *testing.T) {
 		t.Fatalf("ssq_artifact_index_docs = %d, want 2", got)
 	}
 }
+
+func TestArtifactIndex_Update_ShouldNotIndexSecrets_WhenLegacyBlobIsUnredacted(t *testing.T) {
+	t.Parallel()
+	x := NewArtifactIndex(nil)
+	x.Update("u1", blobOf(artifacts.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret"}))
+	hits := x.Search("runs", 10)
+	if len(hits) != 1 {
+		t.Fatalf("hits = %d, want 1", len(hits))
+	}
+	if got := hits[0].Text; got != "https://ci.example.com/runs/9?token=[redacted]" {
+		t.Fatalf("display text = %q", got)
+	}
+}

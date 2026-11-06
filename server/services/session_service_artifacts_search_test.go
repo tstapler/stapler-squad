@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,4 +244,19 @@ func TestArtifactSearch_ShouldFailPrecondition_WhenIndexNotWired(t *testing.T) {
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	_, err = svc.FindSessionsByPullRequest(context.Background(), findByPRReq("a", "b", 1))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+func TestSearchSessionArtifacts_ShouldRejectOversizedQueries(t *testing.T) {
+	t.Parallel()
+	svc := newArtifactSvc(nil)
+	for name, q := range map[string]string{
+		"too long":       strings.Repeat("a", maxArtifactQueryLen+1),
+		"too many terms": strings.TrimSpace(strings.Repeat("ab ", maxArtifactQueryTerms+1)),
+	} {
+		_, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq(q))
+		require.Error(t, err, name)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), name)
+	}
+	_, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq(strings.TrimSpace(strings.Repeat("ab ", maxArtifactQueryTerms))))
+	assert.NoError(t, err, "exactly the term cap is accepted")
 }

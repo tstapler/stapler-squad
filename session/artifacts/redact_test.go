@@ -56,3 +56,67 @@ func TestBlobRedacted_ShouldCleanLegacyBlobsForExport(t *testing.T) {
 		t.Fatal("Redacted must not mutate the receiver")
 	}
 }
+
+func TestRedact_ShouldReplaceSecretValues_WhenFormIsQuotedOrUncommon(t *testing.T) {
+	t.Parallel()
+	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlMTIz"
+	for name, tc := range map[string]struct{ in, want string }{
+		"flag double quoted":   {`curl --token "abc123secret" x`, `curl --token [redacted] x`},
+		"flag equals single":   {`run --password='hunter2' go`, `run --password=[redacted] go`},
+		"flag quoted w/ space": {`run --api-key "abc def" go`, `run --api-key [redacted] go`},
+		"env double quoted":    {`GITHUB_TOKEN="ghs_x" gh pr view`, `GITHUB_TOKEN=[redacted] gh pr view`},
+		"export single spaced": {`export API_KEY='abc def'`, `export API_KEY=[redacted]`},
+		"postgres userinfo":    {`psql postgres://admin:s3cret@db:5432/x`, `psql postgres://[redacted]@db:5432/x`},
+		"mysql userinfo":       {`mysql://root:pw@host/db`, `mysql://[redacted]@host/db`},
+		"curl -u":              {`curl -u alice:pw123 https://x.io`, `curl -u [redacted] https://x.io`},
+		"curl --user quoted":   {`curl --user "alice:pw 1" https://x.io`, `curl --user [redacted] https://x.io`},
+		"auth basic":           {`-H "Authorization: Basic dXNlcjpwYXNz"`, `-H "Authorization: [redacted]"`},
+		"auth custom scheme":   {`Authorization: Token abc123def`, `Authorization: [redacted]`},
+		"x-api-key header":     {`-H 'X-Api-Key: abc123def'`, `-H 'X-Api-Key: [redacted]'`},
+		"mysql -p":             {`mysql -u root -p hunter2 db`, `mysql -u root -p [redacted] db`},
+		"mysql -ppw":           {`mysql -u root -phunter2 db`, `mysql -u root -p[redacted] db`},
+		"sshpass -p":           {`sshpass -p hunter2 ssh host`, `sshpass -p [redacted] ssh host`},
+		"aws lowercase spaced": {`aws_secret_access_key = wJalrXUtnFEMI/K7MDENG`, `aws_secret_access_key = [redacted]`},
+		"npm authToken":        {`//registry.npmjs.org/:_authToken=abc123xyz`, `//registry.npmjs.org/:_authToken=[redacted]`},
+		"npm token shape":      {`token npm_` + strings.Repeat("a1", 18), `token [redacted]`},
+		"jwt":                  {`see ` + jwt + ` end`, `see [redacted] end`},
+		"password colon":       {`password: hunter2`, `password: [redacted]`},
+		"json quoted":          {`{"password": "hunter2"}`, `{"password": [redacted]}`},
+		"idempotent":           {`--token [redacted]`, `--token [redacted]`},
+	} {
+		if got := Redact(tc.in); got != tc.want {
+			t.Errorf("%s: Redact(%q)\n got %q\nwant %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestRedact_ShouldLeaveOrdinaryText_WhenNoSecretIsPresent(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{
+		`git commit -m "fix password reset"`,
+		`https://github.com/o/r/pull/12`,
+		`https://example.com:8080/path?x=1`,
+		`git push -u origin main`,
+		`curl -u`,
+		`mysql -u root -p`,
+		`set max_tokens: 100`,
+		`the author wrote this`,
+		`deploy --token --env prod`,
+	} {
+		if got := Redact(in); got != in {
+			t.Errorf("Redact(%q) = %q, want unchanged", in, got)
+		}
+	}
+}
+
+func TestRedactedRecords_ShouldScrubWithoutMutatingInput(t *testing.T) {
+	t.Parallel()
+	in := RecordList{CILinkRecord{URL: "https://x.io/r?token=abcd1234"}}
+	out := RedactedRecords(in)
+	if got := out[0].(CILinkRecord).URL; strings.Contains(got, "abcd1234") {
+		t.Fatalf("leak: %s", got)
+	}
+	if !strings.Contains(in[0].(CILinkRecord).URL, "abcd1234") {
+		t.Fatal("input mutated")
+	}
+}

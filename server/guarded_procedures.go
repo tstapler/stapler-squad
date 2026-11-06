@@ -53,6 +53,15 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 
 	writeFileProcedurePath: middleware.ProfileRebinding,
 
+	// Session/item PR link writes (session_multi_pr). Called from the browser
+	// like UpdateFeatureFlag and WriteFile, so they take the same rebinding
+	// profile (POST + Host/Origin verdict; no loopback-bind condition).
+	"/api" + sessionv1connect.SessionServiceAttachSessionPullRequestProcedure:   middleware.ProfileRebinding,
+	"/api" + sessionv1connect.SessionServiceDetachSessionPullRequestProcedure:   middleware.ProfileRebinding,
+	"/api" + sessionv1connect.SessionServicePinSessionPullRequestProcedure:      middleware.ProfileRebinding,
+	"/api" + sessionv1connect.SessionServiceRefreshSessionPullRequestsProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.SessionServiceDetachItemPullRequestProcedure:      middleware.ProfileRebinding,
+
 	// Config writes that change engine or gate behavior on the unauthenticated
 	// local listener (Task 2.1.1e). Reads (Get*/List*) stay unguarded.
 	"/api" + sessionv1connect.QuotaServiceUpdateQuotaConfigProcedure:       middleware.ProfileRebinding,
