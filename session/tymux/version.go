@@ -249,10 +249,13 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 			if hErr == nil {
 				return after, nil
 			}
-			if !allowInterrupt {
+			// Only a failure that provably changed nothing may fall back to killing the daemon; after
+			// an unverified handoff it may already be the new image holding every pane.
+			changedNothing := errors.Is(hErr, ErrHandoffRefused) || errors.Is(hErr, ErrHandoffUnavailable)
+			if !allowInterrupt || !changedNothing {
 				return before, hErr
 			}
-			log.Warn("[tymux] graceful handoff failed, operator allowed interruption: replacing the daemon the lossy way", "err", hErr)
+			log.Warn("[tymux] graceful handoff not possible, operator allowed interruption: replacing the daemon the lossy way", "err", hErr)
 		}
 		if live > 0 && !allowInterrupt {
 			return before, fmt.Errorf("%w (%d live)", ErrLiveSessionsWouldBeInterrupted, live)

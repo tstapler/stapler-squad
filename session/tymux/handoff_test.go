@@ -2,10 +2,12 @@ package tymux
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -15,14 +17,15 @@ import (
 // stubHandoff fakes a running daemon that advertises graceful_handoff and records every request,
 // signal and spawn so tests can assert the daemon is never killed.
 type stubHandoff struct {
-	reqs    []handoffRequest
-	signals int
-	spawns  int
-	version *string // the version the fake daemon reports; replaced by a successful handoff
-	live    int
-	liveNow func() int
-	reply   func(handoffRequest) (handoffReply, error)
-	noSwap  bool // an accepted handoff leaves the old version reporting
+	reqs     []handoffRequest
+	signals  int
+	spawns   int
+	version  *string // the version the fake daemon reports; replaced by a successful handoff
+	live     int
+	liveNow  func() int
+	reply    func(handoffRequest) (handoffReply, error)
+	noSwap   bool // an accepted handoff leaves the old version reporting
+	infoErrs int  // GetServerInfo fails this many times first, as during the exec gap
 }
 
 func installHandoffStubs(t *testing.T, running, installed string, live int) *stubHandoff {
@@ -40,6 +43,10 @@ func installHandoffStubs(t *testing.T, running, installed string, live int) *stu
 	s.version = &running
 	s.liveNow = func() int { return s.live }
 	serverInfoFn = func(context.Context, DaemonConfig) (*v1.ServerInfo, error) {
+		if s.infoErrs > 0 && len(s.reqs) == 2 {
+			s.infoErrs--
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New("daemon is exec'ing"))
+		}
 		return &v1.ServerInfo{Version: *s.version, Pid: 4242, Capabilities: []string{"graceful_handoff"}}, nil
 	}
 	liveSessionsFn = func(context.Context, DaemonConfig) (int, error) { return s.liveNow(), nil }
@@ -164,4 +171,66 @@ func TestReplaceDaemon_NoLivePanesSkipsHandoff(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, s.reqs, "an idle daemon is replaced the ordinary way")
+}
+
+func TestReplaceDaemon_HandoffToleratesTheExecGap(t *testing.T) {
+	s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+	s.infoErrs = 5
+	handoffVerifyTimeout = time.Second
+
+	after, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, "1.14.0", after.RunningVersion)
+	assert.Zero(t, s.signals)
+}
+
+func TestReplaceDaemon_TransportErrorOnTheRealRequestIsVerifiedNotAssumedFatal(t *testing.T) {
+	s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+	s.reply = func(r handoffRequest) (handoffReply, error) {
+		if r.DryRun {
+			return handoffReply{}, nil
+		}
+		// The daemon swapped, then the connection dropped under the exec.
+		v := r.ExpectedVersion
+		s.version = &v
+		return handoffReply{}, connect.NewError(connect.CodeUnavailable, errors.New("connection reset"))
+	}
+	s.noSwap = true
+
+	after, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, "1.14.0", after.RunningVersion)
+	assert.Zero(t, s.signals)
+}
+
+func TestReplaceDaemon_UnverifiedHandoffNeverFallsBackEvenWithOperatorOverride(t *testing.T) {
+	s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+	s.noSwap = true
+
+	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
+
+	require.ErrorIs(t, err, ErrHandoffVerifyFailed)
+	assert.Zero(t, s.signals, "the daemon may already be the new image; never kill it")
+	assert.Zero(t, s.spawns)
+}
+
+func TestReplaceDaemon_HandoffToTheSameVersionIsRefusedNotFalselyVerified(t *testing.T) {
+	s := installHandoffStubs(t, "1.14.0", "1.14.0", 3)
+
+	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
+
+	require.ErrorIs(t, err, ErrHandoffRefused)
+	assert.Empty(t, s.reqs, "no request may be sent when completion cannot be verified")
+	assert.Zero(t, s.signals)
+}
+
+func TestReplaceDaemon_ExtraSessionsCreatedDuringHandoffAreNotAFailure(t *testing.T) {
+	s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+	s.liveNow = func() int { return 4 }
+
+	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
+
+	require.NoError(t, err)
 }

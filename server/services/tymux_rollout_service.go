@@ -104,8 +104,14 @@ func (s *TymuxRolloutService) ReplaceTymuxd(
 	req *connect.Request[sessionv1.ReplaceTymuxdRequest],
 ) (*connect.Response[sessionv1.TymuxRolloutStatus], error) {
 	after, err := s.replaceDaemon(ctx, tymux.ResolveDaemonConfig(), req.Msg.GetAllowInterruptLiveSessions())
-	if errors.Is(err, tymux.ErrLiveSessionsWouldBeInterrupted) {
+	// A refused or unavailable handoff changed nothing, so it takes the same "interrupt anyway?"
+	// path as a daemon without handoff. An unverified one may have succeeded: surface it distinctly.
+	if errors.Is(err, tymux.ErrLiveSessionsWouldBeInterrupted) ||
+		errors.Is(err, tymux.ErrHandoffRefused) || errors.Is(err, tymux.ErrHandoffUnavailable) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if errors.Is(err, tymux.ErrHandoffVerifyFailed) {
+		return nil, connect.NewError(connect.CodeAborted, err)
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)

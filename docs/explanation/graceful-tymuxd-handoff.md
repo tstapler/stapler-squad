@@ -43,8 +43,12 @@ exit hangs up every pane; its release notes say to restart the server after an u
 4. The new image adopts the inherited fds, rebuilds each pane, and commits (`handoff_generation`
    increments in `GetServerInfo`). Clients reconnect with `resume_from_seq`; the preserved seq and
    replay buffer make that `resumed_from_buffer` rather than a screen reset.
-5. Squad polls `GetServerInfo` until the same pid reports the target version, and checks the live
-   session count equals the count before. Any mismatch is reported, never "fixed" by killing.
+5. Squad polls `GetServerInfo` directly (not the process-probe fallback, which would read the already
+   renamed binary) until the same pid reports the target version with at least as many live sessions
+   as before. Any mismatch is reported, never "fixed" by killing. A transport error from the real
+   `PrepareHandoff` call is verified the same way, since the daemon execs mid-request. Squad does not
+   check `handoff_generation` yet, so a handoff to the version already running is refused rather than
+   falsely verified.
 
 Verified by prototype (design.md section 9): the pty master survives `exec` only when CLOEXEC is
 cleared, the child never sees SIGHUP, output buffered during the gap arrives gapless, and a client
@@ -78,7 +82,13 @@ use the same rule, so a downgrade works exactly as far as the older binary can r
 | Pane exits during the freeze | freeze to adopt | New image reaps it (still the parent) and the restart policy applies. |
 
 Squad's side of failure: a refused or failed handoff never falls through to `stopListener` or the
-respawn path while sessions are live. Only `allowInterrupt` restores the old kill-and-respawn.
+respawn path while sessions are live. `allowInterrupt` restores the old kill-and-respawn only when the
+handoff provably changed nothing (refused, or unavailable in this build); after an unverified handoff
+the daemon may already be the new image, so it is never killed. The rollout service reports refused
+and unavailable as `FailedPrecondition` (the "interrupt anyway?" path) and unverified as `Aborted`.
+
+Statements about the daemon in this page (schema ranges, preflight, rollback exec, the 2 s freeze)
+are the tymux design (ADR 0008), not behavior this repo can check; they are tracked in the tymux PRs.
 
 ## Wire and proto compatibility rules
 
@@ -86,7 +96,8 @@ respawn path while sessions are live. Only `allowInterrupt` restores the old kil
 - New: `rpc PrepareHandoff`, `ServerInfo.handoff_generation`, `ServerInfo.handoff_schema_range`,
   `ServerInfo.executable_path`, capability `graceful_handoff`, `AttachEvent.reconnect`.
 - A daemon older than the feature answers `PrepareHandoff` with `UNIMPLEMENTED`; squad treats that as
-  "no capability", never as an error to retry.
+  "no capability", never as an error to retry. (The real adapter must map `UNIMPLEMENTED` to
+  `ErrHandoffUnavailable`; the current stub already returns it.)
 - A daemon sends `Reconnect{HANDOFF}` only to clients that declared support for it in `Attach`;
   others just see the stream close, as on any restart. The Go and TS clients learn the arm first.
 - The handoff state is its own versioned format, separate from the on-disk `CURRENT_SCHEMA_VERSION`;

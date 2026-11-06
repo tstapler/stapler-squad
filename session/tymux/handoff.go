@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -50,11 +51,21 @@ var (
 
 // replaceViaHandoff swaps the running daemon for cfg.BinaryPath without ending any pane. The
 // caller must have installed that binary by rename (never overwritten in place). Order: dry run
-// (validation and preflight, changes nothing), the real request, then wait for the same pid to
-// report the target version with the same live-session count. Every failure leaves the daemon
-// alone: the old image resumes on a refusal and a rollback exec restores it on a failed adopt.
+// (validation and preflight, changes nothing), the real request, then wait until a successful
+// GetServerInfo shows the same pid at the target version with no fewer live sessions. Per the
+// tymux design the old image resumes on a refusal and a rollback exec restores it on a failed
+// adopt; squad itself never signals the daemon here.
+//
+// A refusal or an unavailable adapter happens before anything changed. An error from the real
+// request is ambiguous (the daemon freezes and execs, so the connection can drop mid-call) and
+// goes to verification, never straight to a fallback.
 func replaceViaHandoff(ctx context.Context, cfg DaemonConfig, before DaemonVersionInfo, live int) (DaemonVersionInfo, error) {
 	target := before.InstalledVersion
+	if target == "" || before.Direction == VersionSame {
+		// The same pid reporting the same version cannot show a handoff happened (squad does not
+		// read handoff_generation yet), and an unknown target cannot be verified at all.
+		return before, fmt.Errorf("%w: target version %q is unknown or equals the running version, so completion cannot be verified", ErrHandoffRefused, target)
+	}
 	req := handoffRequest{BinaryPath: cfg.BinaryPath, ExpectedVersion: target}
 
 	dry := req
@@ -63,26 +74,47 @@ func replaceViaHandoff(ctx context.Context, cfg DaemonConfig, before DaemonVersi
 		return before, err
 	}
 	if err := requestHandoff(ctx, cfg, req); err != nil {
-		return before, err
+		if errors.Is(err, ErrHandoffRefused) || errors.Is(err, ErrHandoffUnavailable) {
+			return before, err
+		}
+		log.Warn("[tymux] PrepareHandoff errored mid-request; verifying instead of assuming failure", "err", err)
 	}
+	return verifyHandoff(ctx, cfg, before, target, live)
+}
 
+// verifyHandoff polls until the daemon at before.PID answers GetServerInfo at the target version
+// and still has at least live sessions. It asks GetServerInfo directly: the process-probe
+// fallback in DetectDaemonVersions would read the already-renamed binary's version and could pass
+// before the exec. More live sessions than before is fine (squad may have created one).
+func verifyHandoff(ctx context.Context, cfg DaemonConfig, before DaemonVersionInfo, target string, live int) (DaemonVersionInfo, error) {
 	deadline := time.Now().Add(handoffVerifyTimeout)
+	lastSeen := "no GetServerInfo answer"
 	for {
-		after := DetectDaemonVersions(ctx, cfg)
-		if after.Running && after.PID == before.PID && after.RunningVersion == target {
-			n, err := liveSessionsFn(ctx, cfg)
-			if err != nil || n != live {
-				return after, fmt.Errorf("%w: %d live sessions before, %d after (count error: %v)", ErrHandoffVerifyFailed, live, n, err)
+		if si, err := serverInfoFn(ctx, cfg); err == nil {
+			lastSeen = fmt.Sprintf("pid %d version %q", si.GetPid(), si.GetVersion())
+			if int(si.GetPid()) == before.PID && si.GetVersion() == target {
+				n, lerr := liveSessionsFn(ctx, cfg)
+				switch {
+				case lerr != nil:
+					lastSeen += fmt.Sprintf(", live count error: %v", lerr)
+				case n < live:
+					lastSeen += fmt.Sprintf(", %d live sessions (was %d)", n, live)
+				default:
+					log.Info("[tymux] replaced tymuxd by graceful handoff", "from", before.RunningVersion, "to", target, "pid", before.PID, "live", n)
+					after := before
+					after.RunningVersion, after.ProtocolVersion = si.GetVersion(), si.GetProtocolVersion()
+					after.Direction = VersionSame
+					after.GracefulHandoff = slices.Contains(si.GetCapabilities(), capGracefulHandoff)
+					return after, nil
+				}
 			}
-			log.Info("[tymux] replaced tymuxd by graceful handoff", "from", before.RunningVersion, "to", target, "pid", after.PID, "live", live)
-			return after, nil
 		}
 		if time.Now().After(deadline) {
-			return after, fmt.Errorf("%w: pid %d did not report version %q within %s (daemon left running)", ErrHandoffVerifyFailed, before.PID, target, handoffVerifyTimeout)
+			return before, fmt.Errorf("%w: wanted pid %d at version %q with >= %d live sessions within %s, last saw %s (daemon left running)", ErrHandoffVerifyFailed, before.PID, target, live, handoffVerifyTimeout, lastSeen)
 		}
 		select {
 		case <-ctx.Done():
-			return after, fmt.Errorf("%w: %v", ErrHandoffVerifyFailed, ctx.Err())
+			return before, fmt.Errorf("%w: %v", ErrHandoffVerifyFailed, ctx.Err())
 		case <-time.After(handoffVerifyPoll):
 		}
 	}
