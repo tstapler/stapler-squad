@@ -67,3 +67,7 @@ func classifyRPCError(op string, err error) error {
 	}
 	return fmt.Errorf("tymux: %s: %w", op, err)
 }
+
+// ErrTymuxdUnresponsive means both tymuxd's TCP listener and its Unix control socket accept
+// connections but neither answers: the daemon is alive but wedged. Reported, never killed.
+var ErrTymuxdUnresponsive = errors.New("tymux: tymuxd listeners accept connections but do not answer")

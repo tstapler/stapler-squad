@@ -997,6 +997,8 @@ func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, m
 		recordTerminalClose(closeCauseError)
 		if errors.Is(err, errSessionGone) {
 			log.Debug("StreamTerminal ended: session gone", "err", err) // already logged, throttled, at the capture site
+		} else if errors.Is(err, errMuxSocketClosed) {
+			log.Debug("StreamTerminal ended: mux socket closed", "err", err) // the socket logs once: "terminal mux socket closed"
 		} else {
 			log.Error("StreamTerminal error", "err", err)
 		}
@@ -1139,6 +1141,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	sessionID := terminalData.SessionId
 	shellID := terminalData.ShellId
 	log.Info("StreamTerminal called", "session", sessionID, "shell", shellID)
+
+	if fid := session.ParseFederatedSessionID(sessionID); !fid.IsLocal() {
+		return h.streamFederatedTerminal(stream, fid, sessionID)
+	}
 
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
@@ -3093,7 +3099,7 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 			log.Debug("[streamViaControlMode] input loop interrupted by server-initiated close", "session", p.sessionID)
 			p.errChan <- nil
 		} else {
-			log.Error("[streamViaControlMode] WebSocket read error", "session", p.sessionID, "err", err)
+			logStreamReadError("[streamViaControlMode]", p.sessionID, err)
 			p.errChan <- err
 		}
 		return true
@@ -4228,8 +4234,22 @@ func sendEndStreamError(stream *connectWebSocketStream, err error) {
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+		if errors.Is(err, errMuxStreamClosed) {
+			log.Debug("EndStreamError not sent: mux stream already closed", "err", err)
+			return
+		}
 		log.Error("failed to send EndStreamError", "err", err)
 	}
+}
+
+// logStreamReadError logs a failed WebSocket read, except the synthetic close a dropped
+// mux socket hands every pane: that socket logs once itself.
+func logStreamReadError(prefix, sessionID string, err error) {
+	if errors.Is(err, errMuxSocketClosed) {
+		log.Debug(prefix+" WebSocket read ended: mux socket closed", "session", sessionID)
+		return
+	}
+	log.Error(prefix+" WebSocket read error", "session", sessionID, "err", err)
 }
 
 // detectContentWidth analyzes captured terminal content to determine the actual
