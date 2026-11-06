@@ -1,9 +1,12 @@
 "use client";
 
+import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { CompareFlowWindowsResponse, FlowSummary } from "@/gen/session/v1/backlog_flow_pb";
 import { FlowCauses } from "./FlowCauses";
 import { FlowFunnel } from "./FlowFunnel";
+import { FlowPR } from "./FlowPR";
 import { FlowReview } from "./FlowReview";
+import { FlowStuck } from "./FlowStuck";
 import { FlowTiles } from "./FlowTiles";
 
 export type FlowSectionBodyId = "tiles" | "leaks" | "causes" | "review" | "pr" | "stuck" | "anomalies" | "notes";
@@ -15,6 +18,8 @@ export interface FlowSectionBodyProps {
   /** Every number is a button that sets the `drill` URL parameter through this. */
   onDrill: (key: string) => void;
 }
+
+const captureSince = (summary: FlowSummary): Date | null => (summary.meta?.captureSince ? timestampDate(summary.meta.captureSince) : null);
 
 /** Maps a section id to its component; the page owns status, skeleton and error blocks. */
 export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectionBodyProps) {
@@ -32,6 +37,14 @@ export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectio
     case "review":
       return summary.review ? (
         <FlowReview review={summary.review} estimated={summary.review.meta?.estimated ?? []} onDrill={onDrill} />
+      ) : null;
+    case "pr":
+      return summary.pr ? (
+        <FlowPR pr={summary.pr} causes={summary.causes} estimated={summary.pr.meta?.estimated ?? []} captureSince={captureSince(summary)} onDrill={onDrill} />
+      ) : null;
+    case "stuck":
+      return summary.stuck ? (
+        <FlowStuck stuck={summary.stuck} estimated={summary.stuck.meta?.estimated ?? []} captureSince={captureSince(summary)} onDrill={onDrill} />
       ) : null;
     default:
       return null;

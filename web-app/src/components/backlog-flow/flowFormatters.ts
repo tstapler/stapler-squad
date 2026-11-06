@@ -40,3 +40,6 @@ export function durationText(metric: FlowDurationMetric | undefined): DurationTe
 
 /** `2 items` / `1 item`. */
 export const plural = (n: number, one: string, many = `${one}s`): string => `${formatInt(n)} ${n === 1 ? one : many}`;
+
+/** `2026-10-20` in UTC, the date form used in capture-gap notes. */
+export const formatIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
