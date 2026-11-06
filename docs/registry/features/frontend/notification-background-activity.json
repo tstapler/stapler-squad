@@ -1,0 +1,20 @@
+{
+  "id": "notification-background-activity",
+  "type": "frontend",
+  "name": "Background activity tab in the notification tray: hidden-session failures and needs-human rows, routine completions as a summary line",
+  "component": "BackgroundActivity",
+  "path": "web-app/src/components/ui/BackgroundActivity.tsx",
+  "filePath": "web-app/src/components/ui/BackgroundActivity.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/ui/BackgroundActivity.test.tsx",
+    "web-app/src/components/ui/NotificationPanel.test.tsx",
+    "web-app/src/components/ui/__tests__/NotificationItem.hidden.test.tsx",
+    "web-app/src/lib/utils/__tests__/backgroundActivity.test.ts",
+    "web-app/src/lib/hooks/__tests__/useBackgroundSessions.test.ts",
+    "web-app/src/lib/__tests__/include_hidden_guard.test.ts",
+    "tests/e2e/background-activity.spec.ts"
+  ],
+  "lastModified": "2026-10-09T00:00:00Z"
+}

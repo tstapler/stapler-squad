@@ -210,16 +210,22 @@ func TestJoinWithinDir(t *testing.T) {
 }
 
 // TestCanonicalizeWorktreePath_NonexistentPath verifies AC2: a path that doesn't
-// exist on disk (the pre-`git worktree add` case for a freshly-computed
-// worktreePath) must never error or panic — EvalSymlinks fails with ENOENT here,
-// and the function must fall back to filepath.Clean rather than propagate that.
+// exist on disk (the pre-`git worktree add` case for a freshly-computed worktreePath)
+// must never error or panic, and must resolve its nearest existing ancestor so the
+// result matches what the path canonicalizes to once git creates it (macOS /var ->
+// /private/var), with the missing tail kept as-is.
 func TestCanonicalizeWorktreePath_NonexistentPath(t *testing.T) {
 	t.Parallel()
-	nonexistent := filepath.Join(t.TempDir(), "does-not-exist", "leaf_1234")
+	base := t.TempDir()
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonexistent := filepath.Join(base, "does-not-exist", "leaf_1234")
 	got := CanonicalizeWorktreePath(nonexistent)
-	want := filepath.Clean(nonexistent)
+	want := filepath.Join(resolvedBase, "does-not-exist", "leaf_1234")
 	if got != want {
-		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q (filepath.Clean fallback)", nonexistent, got, want)
+		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q (nearest existing ancestor resolved)", nonexistent, got, want)
 	}
 }
 

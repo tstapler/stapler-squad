@@ -1,10 +1,12 @@
 "use client";
 // +feature: approval-enter-detection
 
-import { createContext, useContext, ReactNode, useCallback, useMemo, useState, useRef } from "react";
+import type { ReactNode} from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
 import { toErrorOrNull } from "@/lib/utils/rtkQueryError";
+import { usePageVisible } from "@/lib/utils/pageVisibility";
 
 export interface ApprovalsContextValue {
   approvals: PlainApproval[];
@@ -17,6 +19,9 @@ export interface ApprovalsContextValue {
   clearForSession: (sessionId: string) => void;
   clearedSessions: ReadonlySet<string>;
 }
+
+const PENDING_POLL_MS = 5_000;
+const IDLE_POLL_MS = 15_000;
 
 const ApprovalsContext = createContext<ApprovalsContextValue | null>(null);
 
@@ -36,10 +41,20 @@ const FALLBACK_CONTEXT: ApprovalsContextValue = {
 };
 
 export function ApprovalsProvider({ children }: { children: ReactNode }) {
-  // RTK Query with 5s polling — single authoritative source for the entire app
+  // RTK Query, the single authoritative source for the entire app. Polls every 5 s while approvals are
+  // pending, every 15 s when none are (a new one also arrives as a notification), and not at all in a
+  // background tab; one refetch on return catches up.
+  const visible = usePageVisible();
+  const [anyPending, setAnyPending] = useState(false);
   const { data, isLoading, error: queryError, refetch } = useGetApprovalsQuery(undefined, {
-    pollingInterval: 5000,
+    pollingInterval: !visible ? 0 : anyPending ? PENDING_POLL_MS : IDLE_POLL_MS,
   });
+  useEffect(() => setAnyPending((data?.approvals.length ?? 0) > 0), [data]);
+  const wasVisible = useRef(visible);
+  useEffect(() => {
+    if (visible && !wasVisible.current) void refetch();
+    wasVisible.current = visible;
+  }, [visible, refetch]);
 
   const [resolveApproval] = useResolveApprovalMutation();
   const [clearedSessions, setClearedSessions] = useState<Set<string>>(new Set());

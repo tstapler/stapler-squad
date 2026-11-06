@@ -106,9 +106,13 @@ export function markAcknowledged(sessionId: string): void {
  * - Never notified before
  * - Previous notification expired (> TTL)
  * - Acknowledgment expired (> grace period)
+ *
+ * Pass `records` when checking many ids so localStorage is parsed once, not per id.
  */
-export function shouldNotify(sessionId: string): boolean {
-  const records = getNotifiedSessions();
+export function shouldNotify(
+  sessionId: string,
+  records: Map<string, NotificationRecord> = getNotifiedSessions(),
+): boolean {
   const record = records.get(sessionId);
 
   if (!record) {
@@ -136,21 +140,6 @@ export function shouldNotify(sessionId: string): boolean {
 
   // Already notified within TTL - don't duplicate
   return false;
-}
-
-/**
- * Check if a session is currently within the acknowledgment grace period.
- */
-export function isInGracePeriod(sessionId: string): boolean {
-  const records = getNotifiedSessions();
-  const record = records.get(sessionId);
-
-  if (!record?.acknowledgedAt) {
-    return false;
-  }
-
-  const timeSinceAck = Date.now() - record.acknowledgedAt;
-  return timeSinceAck < GRACE_PERIOD_MS;
 }
 
 /**

@@ -1,0 +1,4 @@
+✓ Done. Renamed the helper and updated all call sites.
+Shift+Tab to accept edits                                          1 GEMINI.md file · 63 skills
+> ▌
+[INSERT]         ~/project          main          untrusted          Auto (Gemini 3)          312.0 MB

@@ -50,6 +50,9 @@ export const hint = style({
   margin: 0,
 });
 
+// No opacity: dimming textMuted drops it below the 4.5:1 AA contrast ratio.
+export const setupHint = style([hint, { marginTop: "1rem" }]);
+
 export const button = style({
   marginTop: "0.5rem",
   width: "100%",

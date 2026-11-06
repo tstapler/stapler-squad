@@ -55,6 +55,55 @@ service GitHubUserService {
   // the keychain on success — the same outcome as AddGitHubAccountWithToken
   // but without the user needing to locate/paste the token by hand.
   rpc AddGitHubAccountFromCLI(AddGitHubAccountFromCLIRequest) returns (AddGitHubAccountWithTokenResponse) {}
+
+  // NudgeSessionForPR asks one linked local session to fix what is currently
+  // wrong with a PR (failing checks, unresolved threads, merge conflict). The
+  // server re-fetches fresh PR state with the PR's owning account, builds the
+  // prompt (link, path and author only; never third-party comment bodies) and
+  // delivers it through the per-session guard. Outcomes are typed in
+  // NudgeOutcome; unsupported programs return FailedPrecondition.
+  rpc NudgeSessionForPR(NudgeSessionForPRRequest) returns (NudgeSessionForPRResponse) {}
+
+  // MergePRDirect merges a PR identified by (owner, repo, number, host), with
+  // no session required. Refreshes the PR cache on success.
+  rpc MergePRDirect(MergePRDirectRequest) returns (PRActionResponse) {}
+
+  // ClosePRDirect closes a PR without merging, with no session required.
+  rpc ClosePRDirect(ClosePRDirectRequest) returns (PRActionResponse) {}
+
+  // ConvertPRToDraft marks an open PR as draft. FailedPrecondition when the cached PR has no node_id.
+  rpc ConvertPRToDraft(PRDraftToggleRequest) returns (PRActionResponse) {}
+
+  // MarkPRReady marks a draft PR as ready for review. FailedPrecondition when the cached PR has no node_id.
+  rpc MarkPRReady(PRDraftToggleRequest) returns (PRActionResponse) {}
+}
+
+message MergePRDirectRequest {
+  string owner  = 1;
+  string repo   = 2;
+  int32  number = 3;
+  string host   = 4;           // empty means github.com
+  optional string method = 5;  // "merge" | "squash" | "rebase"; default "merge"
+}
+
+message ClosePRDirectRequest {
+  string owner  = 1;
+  string repo   = 2;
+  int32  number = 3;
+  string host   = 4;
+}
+
+// The node ID is looked up server-side from the cached PR, never client-supplied.
+message PRDraftToggleRequest {
+  string owner   = 1;
+  string repo    = 2;
+  int32  number  = 3;
+  string host    = 4;
+}
+
+message PRActionResponse {
+  bool   success = 1;
+  string message = 2;
 }
 
 // GitHubAccount is a single connected GitHub account.
@@ -77,6 +126,23 @@ message ListUserPRsRequest {}
 message ListUserPRsResponse {
   repeated UserPR    prs        = 1;
   GitHubAuthState    auth_state = 2;
+  repeated AccountPollStatus account_statuses = 3;
+}
+
+enum AccountPollState {
+  ACCOUNT_POLL_STATE_UNSPECIFIED  = 0;
+  ACCOUNT_POLL_STATE_OK           = 1;
+  ACCOUNT_POLL_STATE_UNAUTHORIZED = 2;
+  ACCOUNT_POLL_STATE_RATE_LIMITED = 3;
+  ACCOUNT_POLL_STATE_ERROR        = 4;
+}
+
+// AccountPollStatus is the per-account outcome of the last PR poll.
+message AccountPollStatus {
+  string           host          = 1;
+  string           account_login = 2;
+  AccountPollState state         = 3;
+  string           detail        = 4; // short sanitized reason, never a token
 }
 
 message WatchUserPRsRequest {}
@@ -86,6 +152,7 @@ message UserPREvent {
   string          event_type = 1;
   repeated UserPR prs        = 2; // full list for "snapshot"; changed PRs otherwise
   GitHubAuthState auth_state = 3;
+  repeated AccountPollStatus account_statuses = 4;
 }
 
 message GetGitHubAuthStateRequest {}
@@ -166,4 +233,47 @@ message ListGitHubCLIHostsResponse {
 
 message AddGitHubAccountFromCLIRequest {
   string host = 1; // host to import, as returned by ListGitHubCLIHosts
+}
+
+// PRKey identifies one pull request. An empty host means github.com.
+message PRKey {
+  string host   = 1;
+  string owner  = 2;
+  string repo   = 3;
+  int32  number = 4;
+}
+
+// NudgeOutcome is the typed result of NudgeSessionForPR.
+enum NudgeOutcome {
+  NUDGE_OUTCOME_UNSPECIFIED        = 0;
+  NUDGE_OUTCOME_DELIVERED          = 1;
+  NUDGE_OUTCOME_BUSY               = 2;
+  NUDGE_OUTCOME_PAUSED             = 3;
+  NUDGE_OUTCOME_DUPLICATE          = 4;
+  NUDGE_OUTCOME_NOTHING_TO_FIX     = 5;
+  NUDGE_OUTCOME_SESSION_NOT_LINKED = 6;
+  NUDGE_OUTCOME_PR_NOT_FOUND       = 7;
+  // The linked session no longer exists or is not running (deleted or crashed),
+  // as opposed to PAUSED, which Open session can resume.
+  NUDGE_OUTCOME_NOT_RUNNING        = 8;
+}
+
+// NudgeReason is one kind of problem a nudge prompt covers.
+enum NudgeReason {
+  NUDGE_REASON_UNSPECIFIED        = 0;
+  NUDGE_REASON_FAILING_CHECKS     = 1;
+  NUDGE_REASON_UNRESOLVED_THREADS = 2;
+  NUDGE_REASON_MERGE_CONFLICT     = 3;
+}
+
+message NudgeSessionForPRRequest {
+  PRKey  pr         = 1;
+  string session_id = 2; // title of a session linked to the PR
+}
+
+message NudgeSessionForPRResponse {
+  NudgeOutcome outcome = 1;
+  repeated NudgeReason reasons = 2; // what the delivered prompt covered
+  string session_id = 3;
+  string detail     = 4; // human-readable, sanitized; never a token
 }

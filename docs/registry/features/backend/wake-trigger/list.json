@@ -1,0 +1,16 @@
+{
+  "id": "wake-trigger:list",
+  "type": "backend",
+  "service": "WakeTriggerService",
+  "method": "ListWakeTriggers",
+  "protoFile": "proto/session/v1/wake_trigger.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/wake_trigger_service.go",
+  "tested": true,
+  "testIds": [
+    "TestWakeTriggerService_ListWakeTriggers_should_ListOwnerPlainLanguageConditionAndNextFire_When_TwoPending",
+    "TestWakeTriggerService_ListWakeTriggers_should_ShowMissedRowsWithReason_And_ReportPaused_When_FlagOff",
+    "TestWakeTriggerService_ListWakeTriggers_should_ListExpiredRowAsMissed_When_ExpirySweepRunsBeforeTheList"
+  ],
+  "lastModified": "2026-10-19T04:10:44.741910841-07:00"
+}

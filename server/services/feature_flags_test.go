@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 )
@@ -48,7 +47,7 @@ func (f *fakeFeatureController) IsEnabled() bool { return f.enabled }
 // tests are isolated from the developer's real ~/.stapler-squad config.
 func newFeatureFlagService(t *testing.T) *SessionService {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -154,9 +153,12 @@ func TestGetFeatureFlags_should_PopulateStatusDetailForBacklogOnly_When_QuotaGat
 	require.NotNil(t, resp.Msg)
 
 	for _, f := range resp.Msg.Flags {
-		if f.Name == "backlog" {
+		switch f.Name {
+		case "backlog":
 			assert.Equal(t, "Paused: session-quota headroom below threshold.", f.StatusDetail)
-		} else {
+		case config.DiagnoseNudgeFeatureFlag, config.AutonomousStallNudgeFeatureFlag:
+			assert.Contains(t, f.StatusDetail, "not set explicitly", "nudge flags always report their value source")
+		default:
 			assert.Empty(t, f.StatusDetail, "flag %q should have empty StatusDetail (no provider wired)", f.Name)
 		}
 	}

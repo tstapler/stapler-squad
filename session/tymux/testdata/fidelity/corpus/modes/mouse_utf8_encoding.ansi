@@ -1,0 +1,2 @@
+modes/mouse_utf8_encoding -- xterm ctlseqs ?1005 UTF-8 mouse encoding
+[?1000h[?1005hnormal tracking + UTF-8 encoding

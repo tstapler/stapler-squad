@@ -214,3 +214,29 @@ func TestGraphValidator_should_TreatUnknownStageAsZeroLiveItems_When_MapHasNoEnt
 	require.NoError(t, err)
 	require.False(t, errors.Is(err, ErrDisableWouldStrandLiveItems))
 }
+
+func TestValidateDisableSystemRequiredEdge_should_RejectSystemEdgesAndAllowOthers(t *testing.T) {
+	t.Parallel()
+	for _, e := range SystemRequiredEdges() {
+		err := ValidateDisableSystemRequiredEdge(string(e.From), string(e.To))
+		require.ErrorIsf(t, err, ErrDisableSystemRequiredEdge, "%s->%s", e.From, e.To)
+	}
+	require.ErrorIs(t, ValidateDisableSystemRequiredEdge("custom-stage", "archived"), ErrDisableSystemRequiredEdge)
+	require.NoError(t, ValidateDisableSystemRequiredEdge("done", "refining"))
+}
+
+func TestStrandedStatuses_should_FlagOnlyPopulatedStatusesWithNoEnforcedOutgoingEdge(t *testing.T) {
+	t.Parallel()
+	edges := []TransitionDefinition{
+		{FromSlug: "refining", ToSlug: "ready", Enabled: false},
+		{FromSlug: "custom", ToSlug: "ready", Enabled: true},
+	}
+	counts := map[string]int{
+		"refining":    2, // configured edge disabled, no system edge: stranded
+		"custom":      1, // has an enabled edge
+		"in_progress": 3, // no configured edge but system-required in_progress->review
+		"empty":       0,
+		"archived":    5,
+	}
+	require.Equal(t, []string{"refining"}, StrandedStatuses(edges, counts))
+}

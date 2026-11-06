@@ -269,6 +269,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -333,6 +334,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	}, 750*time.Millisecond, 20*time.Millisecond, "no send should have been attempted")
 }
 
+// T-OS-01: Slack payload characterization (see slack_gate_test.go).
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {
 	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
@@ -488,11 +490,16 @@ func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testin
 
 func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close so a still-hanging handler returns
 
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -514,17 +521,23 @@ func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 }
 
 // signalingLogHandler wraps a slog.Handler and signals sigCh (non-blocking)
-// after each Handle call completes. Used instead of polling the underlying
+// after each Handle call for a record whose message contains match completes. Matching matters:
+// the slog default is process-global, so unrelated goroutines (e.g. another parallel test's tmux
+// cleanup) also log through it, and signalling on those woke the test before its own record existed. Used instead of polling the underlying
 // buffer from another goroutine, which would race with slog's own writes
 // (bytes.Buffer is not safe for concurrent use) — receiving from sigCh
 // establishes a happens-before edge, so reading the buffer afterward is race-free.
 type signalingLogHandler struct {
 	slog.Handler
 	sigCh chan struct{}
+	match string
 }
 
 func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	err := h.Handler.Handle(ctx, r)
+	if !strings.Contains(r.Message, h.match) {
+		return err
+	}
 	select {
 	case h.sigCh <- struct{}{}:
 	default:
@@ -542,6 +555,7 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(&signalingLogHandler{
 		Handler: slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		sigCh:   sigCh,
+		match:   "recovered from panic",
 	}))
 	t.Cleanup(func() {
 		ssqlog.SetSlogDefaultForTest(prev)

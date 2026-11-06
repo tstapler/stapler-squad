@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -44,6 +45,18 @@ type SyncLoop struct {
 	// continue to compile unchanged.
 	workflowEngine WorkflowEngine
 }
+
+// SetWorkflowEngine replaces the engine that guards backward-sync transitions
+// (server/dependencies.go injects the shared SwitchableWorkflowEngine). nil is
+// ignored so a loop never ends up with no engine. Call before Start.
+func (sl *SyncLoop) SetWorkflowEngine(engine WorkflowEngine) {
+	if engine != nil {
+		sl.workflowEngine = engine
+	}
+}
+
+// WorkflowEngine returns the engine guarding backward-sync transitions.
+func (sl *SyncLoop) WorkflowEngine() WorkflowEngine { return sl.workflowEngine }
 
 // NewSyncLoop creates a SyncLoop with the default interval and no key provider.
 func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
@@ -99,6 +112,8 @@ func (sl *SyncLoop) Stop() {
 
 // runAllSources fetches all enabled sources and syncs each one.
 func (sl *SyncLoop) runAllSources(ctx context.Context) {
+	ctx = github.WithGitHubCallOrigin(ctx, github.OriginBacklogSync)
+
 	sources, err := sl.storage.ListItemSources(ctx)
 	if err != nil {
 		log.ErrorLog().Printf("[SyncLoop] ListItemSources error: %v", err)
@@ -285,6 +300,43 @@ func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.I
 	return itemCount, sampleTitles, possiblyIncomplete, nil
 }
 
+// backwardSyncOutcome is the SyncOne counter delta of one backward-sync write.
+type backwardSyncOutcome struct{ updated, skipped, errored int }
+
+// transitionBackward archives-or-rewinds an item for a closed GitHub issue
+// through the gate. A concurrent mover or a gate denial is a skip retried on the
+// next tick (the gate has already reported a denial); anything else is an error.
+//
+// from is the status target was chosen for: pinning the write to it stops a
+// live item that moved since the sync read from being archived.
+func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target BacklogStatus) backwardSyncOutcome {
+	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
+		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(from)},
+	})
+	switch {
+	case err == nil:
+		return backwardSyncOutcome{updated: 1}
+	case isGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
+		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
+		return backwardSyncOutcome{skipped: 1}
+	default:
+		log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", itemID, err)
+		return backwardSyncOutcome{errored: 1}
+	}
+}
+
+// backwardPrecheckAllows is the cheap pre-check before the gated write. A
+// SwitchableWorkflowEngine answers as the operator class, not the system class
+// the write runs as, so a denial there would skip the gate and its
+// transition_denied row; the gate is the authority, so it decides instead.
+func (sl *SyncLoop) backwardPrecheckAllows(in BacklogItemTransitionInput, target BacklogStatus) bool {
+	if _, selector := sl.workflowEngine.(*SwitchableWorkflowEngine); selector {
+		return true
+	}
+	return GuardedTransitionAllowed(sl.workflowEngine, in, target)
+}
+
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
 // for the same source (e.g. a manual TriggerSync racing the periodic tick)
 // are serialized via a per-source lock — see syncSourceLocks.
@@ -339,7 +391,14 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		}
 
 		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
-			// New item — create it.
+			// New item — create it, unless another host already holds the claim.
+			// Local-only on purpose: a background sweep must not fan out to peers.
+			if claim, blocked := sl.storage.ForeignClaim(data.ExternalURL); blocked {
+				log.Info("sync.blocked_by_claim", "external_id", extItem.ExternalID,
+					"claiming_host_id", claim.ClaimingHostID.String(), "external_url", data.ExternalURL)
+				skipped++
+				continue
+			}
 			if _, createErr := sl.storage.CreateBacklogItem(ctx, data); createErr != nil {
 				log.ErrorLog().Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)
 				errored++
@@ -436,14 +495,11 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 							SkipPlanning:      existing.SkipPlanning,
 							PlanArtifactsPath: existing.PlanArtifactsPath,
 						}
-						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
-							if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
-								log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
-								errored++
-								advanceWatermark = false
-							} else {
-								updated++
-							}
+						if sl.backwardPrecheckAllows(guardInput, target) {
+							// A skip or failure leaves the watermark alone so the next tick retries.
+							res := sl.transitionBackward(ctx, existing.ID.String(), BacklogStatus(existing.Status), target)
+							updated, skipped, errored = updated+res.updated, skipped+res.skipped, errored+res.errored
+							advanceWatermark = res.updated > 0
 						} else {
 							log.InfoLog().Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
 							skipped++

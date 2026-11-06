@@ -22,6 +22,7 @@ export function itemFixture(overrides: Record<string, unknown> = {}) {
 
 export function nextNavigationMock() {
   return {
+    ...jest.requireActual("@/lib/nav/impl.memory"),
     useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
     useSearchParams: () => new URLSearchParams(),
   };
@@ -79,7 +80,19 @@ export function configMock() {
 }
 
 export function storeMock() {
-  return { useAppDispatch: () => jest.fn() };
+  const state = { backlogBulkSelection: { selectedIds: [] as string[], selectMode: false } };
+  return {
+    useAppDispatch: () => jest.fn(),
+    useAppSelector: (selector: (s: typeof state) => unknown) => selector(state),
+  };
+}
+
+// Stable identity: the page's claims effect depends on it, so a fresh jest.fn() per render would loop.
+export const mockListForeignClaims = jest.fn().mockResolvedValue([]);
+const STABLE_NO_STUCK_ITEMS: never[] = [];
+
+export function useStuckBacklogItemsMock() {
+  return { useStuckBacklogItems: () => ({ items: STABLE_NO_STUCK_ITEMS }) };
 }
 
 export function useBacklogServiceMockFactory() {
@@ -87,9 +100,12 @@ export function useBacklogServiceMockFactory() {
   return {
     ...actual,
     useBacklogService: () => ({
+      listForeignClaims: mockListForeignClaims,
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),
+      archiveBacklogItem: jest.fn(),
+      deleteBacklogItem: jest.fn(),
     }),
   };
 }

@@ -3,6 +3,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { useDatabases } from "@/lib/hooks/useDatabase";
 import { DatabaseInfo } from "@/gen/session/v1/types_pb";
+import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
 import * as styles from "./WorkspaceSwitcher.css";
 
 /**
@@ -157,7 +158,7 @@ export function WorkspaceSwitcher() {
                           </span>
                           {db.cwd && (
                             <span className={styles.workspacePath} title={db.cwd}>
-                              {abbreviatePath(db.cwd)}
+                              {truncateWorkspacePath(db.cwd, 36)}
                             </span>
                           )}
                         </span>
@@ -203,14 +204,6 @@ export function WorkspaceSwitcher() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Abbreviate a long path for display, e.g. /Users/me/projects/foo → ~/projects/foo */
-function abbreviatePath(p: string): string {
-  const abbreviated = p.replace(/^\/(?:home|Users)\/[^/]+/, "~");
-  if (abbreviated.length <= 36) return abbreviated;
-  const tail = abbreviated.split("/").slice(-2).join("/");
-  return "…/" + tail;
-}
 
 // ── Icon components ───────────────────────────────────────────────────────────
 

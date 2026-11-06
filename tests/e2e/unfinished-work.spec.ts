@@ -13,9 +13,11 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
-const UNFINISHED_URL = `${BASE_URL}/unfinished`;
+const BASE_URL = baseUrl();
+// Worktree content lives on the Worktrees tab; the default tab is PRs.
+const UNFINISHED_URL = `${BASE_URL}/unfinished?tab=worktrees`;
 
 // ── Test data setup ──────────────────────────────────────────────────────────
 // We create a real bare git repo + worktree with uncommitted changes AND a
@@ -95,7 +97,8 @@ test.beforeAll(async () => {
   testRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-'));
   testWorktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-wt-'));
 
-  execSync(`git init --bare "${testRepoDir}"`);
+  // Pin the branch: the clone's default comes from init.defaultBranch, which is `master` on the CI image.
+  execSync(`git init --bare --initial-branch=main "${testRepoDir}"`);
 
   testSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-'));
   execSync(`git clone "${testRepoDir}" "${testSeedDir}"`);
@@ -130,6 +133,13 @@ test.afterAll(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe('unfinished-work', () => {
+  // Mark the first-visit onboarding dialog dismissed so its overlay can't intercept clicks.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
+    });
+  });
+
   test('unfinished-work > page loads with title and filter controls', async ({ page }) => {
     await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -224,7 +234,7 @@ test.describe('unfinished-work', () => {
     // stays pinned alongside it so later tests are unaffected.
     const noSessionRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-nosession-'));
     const noSessionSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-nosession-'));
-    execSync(`git init --bare "${noSessionRepoDir}"`);
+    execSync(`git init --bare --initial-branch=main "${noSessionRepoDir}"`);
     execSync(`git clone "${noSessionRepoDir}" "${noSessionSeedDir}"`);
     execSync('git config user.email "test@example.com"', { cwd: noSessionSeedDir });
     execSync('git config user.name "Test"', { cwd: noSessionSeedDir });
@@ -251,8 +261,11 @@ test.describe('unfinished-work', () => {
       await expect(openBtn).toBeVisible({ timeout: 5000 });
 
       await openBtn.click();
-      // Should navigate to home with ?worktree= param to pre-fill wizard
-      await expect(page).toHaveURL(/[?&]worktree=/, { timeout: 5000 });
+      // The ?worktree= param is cleared right after it is read, so assert the outcome:
+      // the omnibar opens with path@branch prefilled.
+      const sourceInput = page.locator('[aria-label="Session source input"]');
+      await expect(sourceInput).toBeVisible({ timeout: 10000 });
+      await expect(sourceInput).toHaveValue(new RegExp(`${repoName}.*@main$`));
     } finally {
       await addPinnedRepoViaApi(testSeedDir);
       fs.rmSync(noSessionRepoDir, { recursive: true, force: true });

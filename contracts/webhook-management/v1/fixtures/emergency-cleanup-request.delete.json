@@ -1,0 +1,13 @@
+{
+  "request_id": "fixture-emergency-0001",
+  "expected_version": 1,
+  "action": "delete",
+  "compat": {
+    "contract_version": "v1",
+    "capability_revision": 1,
+    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "signer_key_id": "fixture-signer-1",
+    "client_name": "example-client",
+    "client_version": "0.0.0"
+  }
+}

@@ -150,12 +150,8 @@ func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
 }
 
 // TestStatusDetector_DetectCompacting verifies that the compaction-in-progress fixture
-// classifies as StatusCompacting.
-//
-// NOTE: fixture is INFERRED, not verified against a live Claude Code capture — see
-// project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1. A
-// follow-up backlog item tracks live-capture verification; a temporary canary log
-// (detector.go's compactingCanary) flags any unmatched "compact" line in the interim.
+// classifies as StatusCompacting. The fixture is a verbatim pane capture from a live
+// Claude Code session.
 func TestStatusDetector_DetectCompacting(t *testing.T) {
 	t.Parallel()
 	sd := NewStatusDetector()

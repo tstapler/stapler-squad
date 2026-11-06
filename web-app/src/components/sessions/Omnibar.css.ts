@@ -33,6 +33,7 @@ export const overlay = style({
   // Advanced Options can push modal content taller than the viewport; without
   // this the footer (Cancel/Create Session) is clipped and unreachable.
   overflowY: "auto",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
@@ -237,6 +238,7 @@ export const collapsibleContent = style({
 
 export const footer = style({
   display: "flex",
+  flexWrap: "wrap",
   justifyContent: "flex-end",
   gap: 8,
   padding: 16,
@@ -244,13 +246,19 @@ export const footer = style({
   background: vars.color.hoverBackground,
 });
 
+// Pushes the backlog action to the left edge of the footer row.
+export const backlogButton = style({ marginRight: "auto" });
+
+// Right-aligns the backlog action at the end of the discovery shortcuts row.
+export const shortcutsBacklogButton = style({ marginLeft: "auto" });
+
 export const button = style({
   padding: "8px 16px",
   borderRadius: 6,
   fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s",
+  transition: "background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s",
   border: "none",
 });
 
@@ -259,9 +267,13 @@ export const buttonSecondary = style({
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       color: vars.color.textPrimary,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
     },
   },
 });

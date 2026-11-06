@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -245,6 +247,54 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 }
 
 // --- Story 2.1.1: pr_ready_unmerged ---
+
+// TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails pins the
+// detection-failure signal: a failed IsPRMerged/GetPRStatus must be operator-visible.
+func TestReconcilePRPending_should_logWarning_When_PRStatusLookupFails(t *testing.T) {
+	t.Parallel()
+	for name, checker := range map[string]*fakePRPendingChecker{
+		"IsPRMerged":  {mergedErr: errors.New("gh: auth expired")},
+		"GetPRStatus": {statusErr: errors.New("gh: rate limited")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			newPRPendingTestItem(t, storage, 150)
+
+			listener := NewBacklogLifecycleListener(storage)
+			overridePRPendingChecker(t, listener, checker)
+			buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
+
+			listener.ReconcilePRPending(context.Background(), storage.repo)
+
+			assert.Contains(t, buf.String(), "ReconcilePRPending "+name)
+		})
+	}
+}
+
+// TestReconcilePRPending_should_notMarkStuck_When_CIStillPending guards the
+// "CI running looks like no CI configured" gap: a mergeable PR whose checks are
+// still in flight must not be flagged pr_ready_unmerged.
+func TestReconcilePRPending_should_notMarkStuck_When_CIStillPending(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 149)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{Mergeable: "MERGEABLE", CIPending: true},
+	})
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "pending CI must not flag pr_ready_unmerged")
+}
 
 // TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved
 // verifies the flagship single-user case (pre-mortem F1): a PR that is green,
@@ -648,7 +698,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemRee
 	// whatever put it there live (a separate, already-fixed bug). No new
 	// review-role session is created: the only one on record is the one
 	// whose verdict already shipped the item above.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
@@ -727,6 +777,92 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	}
 }
 
+// TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked
+// is a follow-up BUG-046 regression test: BUG-046 fixed handleReviewSessionExited's
+// own notify+log for a no-verdict exit to check RemediationBlocked(bouncing) first,
+// but this sweep's OWN detection log — fired here, before
+// handleReviewSessionExited is even reached — was never covered by that guard.
+// Live-confirmed 2026-09-11: item 09e91e3e-e13d-4166-a5f2-447242447f77 / session
+// 7ce35db9 logged "exited without ever writing a verdict" once a minute for 20+
+// minutes straight (Story: same dead SessionUUID re-matched every ~60s tick
+// because nothing transitions the item out of "review" while the "bouncing"
+// gate is blocked/parked). Reproduces the realistic timeline: tick 1 fires
+// before any "bouncing" row exists (a genuinely fresh detection — must log),
+// then a "bouncing" row opens mid-backoff between ticks (mirroring
+// reconcileBouncingItems tripping independently, the same live DB shape
+// TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
+// seeds), then tick 2 reprocesses the identical dead SessionUUID with the gate
+// now blocked and must NOT log the detection line a second time.
+func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRepeatedSweepTicksWhileBouncingBlocked(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// FindReviewItemsWithUnprocessedVerdict's item-level filter requires SOME
+	// review-role session on the item to have a verdict — newStuckReviewTestItem
+	// (older, dead, FAIL-verdicted review session) satisfies that, mirroring
+	// TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_NewestReviewSessionHasNoVerdictButIsDead's
+	// identical fixture shape. A newer, dead, verdict-less review session on top
+	// of it is what actually exercises this test's target: the "latest" the
+	// sweep inspects has no verdict of its own.
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictFail, true, false)
+
+	newerReviewUUID := "headless-review-" + uuid.New().String()
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: newerReviewUUID,
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
+	reopener := newFakeAutoReopenSpawner()
+	listener.SetAutoReopener(reopener)
+	er := storage.repo
+
+	const detectionMsg = "exited without ever writing a verdict"
+
+	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
+	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
+
+	// Sweep tick 1: no "bouncing" row exists yet, so RemediationBlocked reports
+	// false (ungated default) — a genuinely fresh detection, must log and reach
+	// the auto-reopener (which is itself ungated for the same reason).
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case <-reopener.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"tick 1 is a fresh detection and must log the WARNING once")
+
+	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
+	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+
+	// Sweep tick 2: the item never left "review" (nothing transitioned it), so
+	// the SAME dead SessionUUID is reprocessed. The bouncing gate is now
+	// mid-backoff, so the reopen correctly no-ops, and the detection log must
+	// not fire a second time either.
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	select {
+	case gotItemID := <-reopener.called:
+		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", gotItemID)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), detectionMsg),
+		"must not log the detection WARNING a second time for the same dead session once the bouncing gate is blocking")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still
@@ -788,6 +924,10 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonStaleWork, open[0].Reason)
 	assert.Equal(t, []string{"Work session may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important — a routine
+	// self-monitoring poll, not yet a confirmed dead end.
+	assert.False(t, notifier.calls[0].Urgent, "Work session may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Work session may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileStaleWorkSessions(ctx, er)
@@ -1069,15 +1209,17 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 
 	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
 
-	// 6th call, well past backoff: must not consume another attempt — the
-	// unlimited rework cap does not un-park a MaxRemediationAttempts-exhausted row.
-	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
-	listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	// Past backoff the parked row gets only the bounded cold retries; the
+	// unlimited rework cap must not extend that budget.
+	for i := 0; i < int(MaxRemediationColdRetries)+2; i++ {
+		backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	}
 
 	rows, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+	assert.Equal(t, MaxRemediationAttempts+MaxRemediationColdRetries, rows[0].RemediationAttempts, "attempt count must stop at the cold-retry ceiling even with an unlimited rework override")
 }
 
 // --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration
@@ -1326,6 +1468,9 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+	// Push-gate classification table: neither urgent nor important.
+	assert.False(t, notifier.calls[0].Urgent, "Triage may be stuck must not be urgent")
+	assert.False(t, notifier.calls[0].Important, "Triage may be stuck must not be important")
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1354,6 +1499,43 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.NotNil(t, sessions[0].EndedAt, "a confirmed-stale triage session must be tombstoned, not left open indefinitely")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists
+// covers durable-guidance-request AC2/Story 5.1.3: a triage session that has
+// gone stale (or ended without a plan) but deliberately halted behind an open
+// GuidanceRequest for this item must not be tombstoned/MarkStuck-ed as an
+// anomaly — that would retry-with-backoff-penalize a legitimately-halted item
+// and defeat the halt.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExists(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond staleness, would normally be flagged
+	itemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = storage.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope:        domain.RequestScopeBacklogItem,
+		ItemID:       &itemID,
+		QuestionText: "Should this include the mobile client changes?",
+		QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a triage session halted behind an open GuidanceRequest must not be tombstoned")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item halted behind an open GuidanceRequest must not be marked stuck")
 }
 
 func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t *testing.T) {
@@ -1728,14 +1910,89 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	}
 }
 
+// TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling
+// pins ADR-029: a deterministic fan-out overrun must not be auto-retried by the
+// shared backoff (30m..72h, then cold heartbeat), each attempt re-spending up to the ceiling.
+func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHitFanoutCeiling(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: SessionRoleTriage})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the abort still surfaces to the operator as a stuck row")
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case <-respawner.calls:
+		t.Fatal("a fan-out-ceiling abort must not be auto-retried")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless
+// pins the fix for items 404b362c/ec050b7d: content-unchanged (needs a human to approve the
+// plan or edit the item) is just as deterministic a dead end as a fan-out/cost-ceiling abort,
+// but — unlike that case — the self-skip itself is free, so AutoRespawnTriage IS still called
+// (it idempotently posts the real "needs human action" note) while RemediationDue's
+// attempt/park bookkeeping is never touched, so the row can never reach the misleading
+// "use Reset to try again automatically" park notification for a retry that could not have
+// helped regardless of how many times it ran.
+func TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	respawner.pointlessIDs = map[string]bool{item.ID: true}
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID, "the free self-skip must still run so it can post its note")
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the pointless-retriage self-skip")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	require.True(t, ok, "the orphaned_triage row must stay open")
+	assert.Zero(t, row.RemediationAttempts, "a pointless retriage must never spend the shared remediation budget")
+}
+
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording
 // every AutoRespawnTriage call on a buffered channel (not a plain counter)
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
 // mirrors fakeStaleWorkRemediator's identical rationale.
 type fakeTriageRespawner struct {
-	calls   chan string
-	err     error
-	liveIDs map[string]bool
+	calls        chan string
+	err          error
+	liveIDs      map[string]bool
+	pointlessIDs map[string]bool
 }
 
 func newFakeTriageRespawner() *fakeTriageRespawner {
@@ -1749,6 +2006,10 @@ func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID stri
 
 func (f *fakeTriageRespawner) IsTriageLive(itemID string) bool {
 	return f.liveIDs[itemID]
+}
+
+func (f *fakeTriageRespawner) IsRetriagePointless(ctx context.Context, itemID string) bool {
+	return f.pointlessIDs[itemID]
 }
 
 // TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds
@@ -1823,7 +2084,7 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 	// A human already re-triggered triage manually — the item moved off
 	// "idea" while the orphaned_triage row is still open (selfHealStuck would
 	// resolve it on its own next tick, but that must not race this test).
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -2100,7 +2361,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 	// Simulate a successful automated retry: queued -> idea (reset) -> ready
 	// (fresh triage succeeded).
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, precondition, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, precondition, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -2110,7 +2371,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 	require.Len(t, open, 1, "row must stay open while the retry is in flight (item reset to idea, still an anchor status)")
 
 	precondition = &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)}
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, precondition, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, precondition, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.selfHealStuck(ctx, er)
@@ -2309,6 +2570,40 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
 }
 
+// TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone
+// guards the fix for diagnose sessions never getting cleaned up: a finished
+// Diagnose & Nudge dispatch (Hidden+OneShot, like review) used to be excluded
+// from IsTmuxBackedSessionRole and so was never archived/killed, leaking
+// indefinitely as a Stopped+Hidden session — the same leak class the
+// 2026-07-29 OOM incident this predicate exists to prevent.
+func TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live diagnose session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-diagnose-session",
+		SessionRole: SessionRoleDiagnose,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-diagnose-session")
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-diagnose-session")
+}
+
 // TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork
 // guards Story 2.1.1: a Jules session has no local tmux pane (IsTmuxBackedSessionRole
 // excludes SessionRoleJulesWork), so the sweep must not attempt to archive/kill it —
@@ -2488,11 +2783,143 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 	archiver := &fakeSessionArchiver{}
 	listener.SetSessionArchiver(archiver)
 
-	listener.reconcileTerminalItemSessions(ctx)
-	listener.reconcileTerminalItemSessions(ctx)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	listener.sweepClock = func() time.Time { return clock }
 
+	listener.reconcileTerminalItemSessions(ctx)
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"swept-twice-work-session"}, archiver.archivedUUIDs,
+		"a fully-processed terminal item is skipped inside the settle TTL")
+
+	clock = clock.Add(terminalSweepSettleTTL)
+	listener.reconcileTerminalItemSessions(ctx)
 	assert.Equal(t, []string{"swept-twice-work-session", "swept-twice-work-session"}, archiver.archivedUUIDs,
-		"the sweep itself calls ArchiveSessionByUUID once per tick per session — idempotency is the archiver's responsibility (CAS), proven separately for SessionService.ArchiveSessionByUUID")
+		"the safety net still re-verifies once the TTL elapses (idempotency is the archiver's CAS)")
+}
+
+// --- cleanup_terminal_worktrees: safety-net sweep for backlog item worktrees that
+// accumulate forever because WorktreeCleaner.CleanupTerminalItem was previously only
+// invoked synchronously, on specific internal transition paths — see
+// reconcileTerminalItemWorktrees' doc comment. ---
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone proves the
+// sweep invokes the wired WorktreeCleaner for a done item, mirroring
+// TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyDone above.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-done item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived mirrors
+// the done case for an already-archived item.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-archived item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusArchived),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal guards
+// against sweeping an item that is still in flight.
+func TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "still in-flight item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Empty(t, cleaner.calls(), "an in-flight item's worktree must not be swept")
+}
+
+// TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired proves the
+// detector degrades gracefully (and skips the ListBacklogItems query entirely) when no
+// WorktreeCleaner has been wired, matching WorktreeCleaner's nil-safety contract.
+func TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with no cleaner wired",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	// SetWorktreeCleaner deliberately not called — must degrade gracefully, not panic.
+	assert.NotPanics(t, func() {
+		listener.reconcileTerminalItemWorktrees(ctx)
+	})
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees proves the
+// cleanup_terminal_worktrees detector is actually wired into the periodic ReconcileStuck
+// sweep (not just callable in isolation), mirroring
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue's pattern for a different
+// detector.
+func TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item relying on the ReconcileStuck-level sweep",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.ReconcileStuck(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"ReconcileStuck must invoke the cleanup_terminal_worktrees detector, which must in turn call the wired WorktreeCleaner")
 }
 
 // --- Story 2.1.4: bouncing ---
@@ -2515,9 +2942,9 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 
 	// 3 in_progress->review round trips.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2548,9 +2975,9 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	})
 	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2595,9 +3022,9 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	})
 	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2650,9 +3077,9 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	})
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2723,9 +3150,9 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2787,9 +3214,9 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags (mirrors the sibling merged-PR test above).
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2843,9 +3270,9 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-verdict-gate", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2919,9 +3346,9 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-race", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -2979,9 +3406,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3074,9 +3501,9 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3142,9 +3569,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3221,9 +3648,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3297,9 +3724,9 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3388,9 +3815,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	runGitTestCmd(t, repoPath, "checkout", "other-item-branch")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3448,9 +3875,9 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -3588,7 +4015,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 		return &git.MergeMainResult{Merged: true}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.True(t, fakeCreator.pushCalled, "the retried push must actually be attempted")
 	assert.True(t, fakeCreator.createCalled, "PR creation should proceed once the push succeeds")
@@ -3631,7 +4058,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 		return &git.MergeMainResult{Conflicted: true, ConflictedFiles: []string{"src/edit.ts"}}, nil
 	})
 
-	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 
 	assert.False(t, fakeCreator.pushCalled, "a real content conflict must not be mechanically retried")
 	assert.Contains(t, notifier.titles(), "Manual rebase needed")
@@ -3640,6 +4067,95 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason, "row stays open — a human needs to resolve the real conflict")
+}
+
+// TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature
+// and its companion below cover isNonFastForwardRecoverable, the classifier
+// backing docs/tasks/backlog-feature-improvement.md's "attemptPushRemediation
+// only handles non-fast-forward rejections and otherwise reruns the
+// identical failing pushAndCreatePR call" finding: an auth/permission/
+// branch-protection failure cannot be fixed by attemptPushRemediation's only
+// remediation action (fetch+merge+retry), so it must be recognized and
+// skipped rather than blindly retried forever.
+func TestIsNonFastForwardRecoverable_should_returnFalse_When_KnownUnrecoverableSignature(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: remote: Permission denied to user (403)",
+		"push failed: fatal: Authentication failed for 'https://github.com/x/y.git'",
+		"push failed: remote: error: GH006: Protected branch update failed",
+		"PR creation failed: HTTP 401: Bad credentials",
+	}
+	for _, c := range cases {
+		assert.False(t, isNonFastForwardRecoverable(c), "expected %q to be classified unrecoverable-by-merge", c)
+	}
+}
+
+// TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown
+// verifies the fail-open default: a genuine non-fast-forward rejection, and
+// anything this classifier doesn't recognize at all, must still be treated
+// as recoverable (attempt the merge+retry) rather than skipped — see the
+// function's own doc comment on why a false "unrecoverable" is worse than
+// one extra harmless retry.
+func TestIsNonFastForwardRecoverable_should_returnTrue_When_FastForwardOrUnknown(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"push failed: push rejected: non-fast-forward",
+		"push failed: ! [rejected] backlog/foo -> backlog/foo (fetch first)",
+		"",
+		"push failed: some completely unclassified transient network blip",
+	}
+	for _, c := range cases {
+		assert.True(t, isNonFastForwardRecoverable(c), "expected %q to be classified recoverable (fail-open)", c)
+	}
+}
+
+// TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable
+// is the integration-level counterpart: attemptPushRemediation must not call
+// the branch reconciler (or push again) at all when the recorded push_failed
+// context matches a known unrecoverable-by-merge signature — it must
+// instead surface a distinct, differently-titled notification explaining
+// why, so an operator isn't shown the same generic "PR creation failed"
+// toast on every backoff tick with no new information.
+func TestAttemptPushRemediation_should_skipRetryAndNotifyDistinctly_When_FailureLooksUnrecoverable(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("remote: Permission denied (403)")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	require.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+
+	reconcilerCalled := false
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		reconcilerCalled = true
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+	fakeCreator.pushCalled = false
+
+	listener.attemptPushRemediation(ctx, item.ID, item.Title, open[0].Context)
+
+	assert.False(t, reconcilerCalled, "a permission/auth failure cannot be fixed by fetch+merge — the reconciler must not even be invoked")
+	assert.False(t, fakeCreator.pushCalled, "the push must not be blindly retried against an unrecoverable failure")
+	assert.Contains(t, notifier.titles(), "Automated push retry skipped", "expected a distinct notification, not silence or a repeat of the generic push-failed toast")
+
+	stillOpen, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, stillOpen, 1)
+	assert.Equal(t, domain.StuckReasonPushFailed, stillOpen[0].Reason, "row stays open — a human needs to fix the underlying auth/permission issue")
 }
 
 // TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
@@ -3671,7 +4187,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	})
 
 	for i := 0; i < 10; i++ {
-		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title)
+		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title, "push failed: push rejected: non-fast-forward")
 	}
 
 	wait.RequireEventually(t, func() bool {
@@ -3736,7 +4252,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	listener.SetNotifier(&fakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	reconcileCalled := false
@@ -3895,6 +4411,104 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, open[0].Reason)
 }
 
+// TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview pins the
+// fix for item a0fb3466: its autonomous_stuck row stayed open after the item cycled all the
+// way back to "ready" (via its abandoned_review resolving, not a driver success) — a
+// transition resolveAutonomousStuck's point-of-success call never observes. Mirrors
+// StuckReasonBouncing's identical two-status anchor; the negative case (the item merely
+// cycling forward into review, not yet leaving the anchor) is already pinned by
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState.
+func TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous-stuck item back to ready",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress, "turn-cap stop, awaiting manual attention")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item's abandoned_review resolves and sends it all the way back to "ready" for a
+	// fresh dispatch — not a driver success, and not a status onAutonomousDriverComplete's
+	// forced in_progress->review path ever produces, so the two-status anchor is safe to
+	// resolve here.
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "autonomous_stuck row must resolve once the item's status leaves in_progress/review")
+}
+
+// TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview is
+// the backstop test for StuckReasonVerdictUndelivered's single-status {review}
+// anchor: resolveVerdictUndeliveredLogged (server/services/backlog_service_verdict_steer.go)
+// is the point-of-success resolve, but any other way the item leaves review
+// (ships, is manually moved, etc.) must also clear the row via this sweep.
+func TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item back to in_progress",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "verdict_undelivered row must resolve once the item's status leaves review")
+}
+
+// TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview
+// is the negative counterpart: the row must stay open while the item is still
+// in review, even after an unrelated self-heal tick.
+func TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item still in review",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "verdict_undelivered row must stay open while the item is still in review")
+	assert.Equal(t, domain.StuckReasonVerdictUndelivered, open[0].Reason)
+}
+
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
 // verifies rework_cap rows — the one remaining reason with no non-terminal
 // anchor at all — stay open while the item has not yet reached done/archived.
@@ -3951,7 +4565,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3996,6 +4610,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 		{"autonomous_stuck", domain.StuckReasonAutonomousStuck, BacklogStatusInProgress},
 		{"push_failed", domain.StuckReasonPushFailed, BacklogStatusReview},
 		{"rework_cap", domain.StuckReasonReworkCap, BacklogStatusInProgress},
+		{"verdict_undelivered", domain.StuckReasonVerdictUndelivered, BacklogStatusReview},
 	}
 	terminals := []BacklogStatus{BacklogStatusDone, BacklogStatusArchived}
 
@@ -4023,10 +4638,10 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 				// done from a non-idea/refining/ready status, so route through
 				// done first — mirrors how these transitions actually happen
 				// (auto-archive only ever acts on items already done).
-				_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+				_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 				require.NoError(t, err)
 				if terminal == BacklogStatusArchived {
-					_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil, TriggeredBySystem)
+					_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil, TriggeredBySystem)
 					require.NoError(t, err)
 				}
 
@@ -4066,7 +4681,7 @@ func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCust
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, customTerminal, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, customTerminal, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4107,7 +4722,7 @@ func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testin
 	// Before this fix, rework_cap's row would have stayed open forever: it
 	// was excluded from the sweep entirely with no anchor, terminal or
 	// otherwise.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4177,7 +4792,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 
 	// The item cycles forward into review — a real transition (e.g. a human
 	// pushed the stuck work through manually), but not yet a terminal one.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4255,7 +4870,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 
 	// The item cycles backward into in_progress — a real transition (e.g. a
 	// human sent it back for rework), but not yet a terminal one.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4619,7 +5234,7 @@ func TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued(t 
 	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PlanApproved: &approved}, nil)
 	require.NoError(t, err)
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, precondition, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, precondition, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.selfHealStuck(ctx, er)
@@ -4715,7 +5330,7 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	require.Len(t, open, 1, "row must be open before the item leaves pr_pending")
 
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, precondition, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, precondition, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.selfHealStuck(ctx, er)
@@ -4764,7 +5379,7 @@ func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHa
 	require.True(t, applied)
 
 	// The blocker ships.
-	_, err = storage.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4896,6 +5511,9 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, "Multiple stuck reasons open", notifier.calls[0].Title)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Multiple stuck reasons open must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Multiple stuck reasons open must be important")
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -4982,6 +5600,41 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	require.NoError(t, err)
 	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
+}
+
+// TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason
+// is the regression guard for the false ERROR on healthy PR-pending items:
+// respawn_blocked_active and pr_ready_unmerged only say "a session is acting /
+// the PR awaits merge", so beside one real reason they must not reach the threshold.
+func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReasonsAccompanyOneRealReason(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "PR waiting on review",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	for _, reason := range []domain.StuckReason{
+		domain.StuckReasonPRNeedsFix,
+		domain.StuckReasonRespawnBlockedActive,
+		domain.StuckReasonPRReadyUnmerged,
+	} {
+		_, err = er.MarkStuck(ctx, item.ID, reason, BacklogStatusInProgress, string(reason))
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileMultiReasonEscalation(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	assert.False(t, ok, "waiting reasons must not count toward multi-reason escalation")
 }
 
 // TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBouncingAndAbandonedReviewOpen
@@ -5286,9 +5939,9 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 	})
 	require.NoError(t, err)
 	for i := 0; i < bounceThreshold; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -5340,9 +5993,9 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 		})
 		require.NoError(t, itemErr)
 		for i := 0; i < 4; i++ {
-			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 			require.NoError(t, err)
-			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, err)
 		}
 		return item
@@ -5361,4 +6014,339 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	_, defaultFlagged := findOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
 	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
+}
+
+func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_EndReasonOther(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Other-ended triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithDetail(ctx, is.ID, time.Now(), "other", "dial tcp: connection refused"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	listener.reconcileOrphanedTriageItems(ctx, storage.repo)
+
+	open, err := storage.repo.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Contains(t, open[0].Context, "ended (other: dial tcp: connection refused)")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnce_When_ThresholdParksWithinWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	listener.recordTriageParkAndMaybeEscalate("a", base)
+	listener.recordTriageParkAndMaybeEscalate("b", base.Add(time.Minute))
+	assert.Empty(t, notifier.calls, "below threshold must not escalate")
+
+	listener.recordTriageParkAndMaybeEscalate("c", base.Add(2*time.Minute))
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Multiple auto-triage retries exhausted", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "3 items")
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notifyOnlyOnce_When_BurstContinuesPastThreshold(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 10; i++ {
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Len(t, notifier.calls, 1)
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_countDistinctItems_When_SameItemParksRepeatedly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate("same-item", base.Add(time.Duration(i)*time.Second))
+	}
+	assert.Empty(t, notifier.calls)
+}
+
+func TestRecordTriageParkAndMaybeEscalate_should_notNotify_When_ParksSpreadBeyondWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		listener.recordTriageParkAndMaybeEscalate(fmt.Sprintf("item-%d", i), base.Add(time.Duration(i)*(batchParkWindow+time.Minute)))
+	}
+	assert.Empty(t, notifier.calls)
+}
+
+func TestParkBurstTracker_should_refireForSecondBurst_When_WindowElapsed(t *testing.T) {
+	t.Parallel()
+	var tr parkBurstTracker
+	base := time.Now()
+	for i, id := range []string{"a", "b", "c"} {
+		_, fire := tr.record(id, base.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "first burst fires only at the threshold")
+	}
+
+	second := base.Add(2*time.Second + batchParkWindow + time.Second) // past the last first-burst park + window
+	for i, id := range []string{"d", "e", "f"} {
+		count, fire := tr.record(id, second.Add(time.Duration(i)*time.Second), batchParkWindow, batchParkThreshold)
+		assert.Equal(t, i == 2, fire, "second burst fires once at the threshold")
+		assert.Equal(t, i+1, count, "first-burst items must have aged out of the window")
+	}
+}
+
+func TestParkBurstTracker_should_pinWindowBoundary_When_RecordingAtExactOffsets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		offset    time.Duration // second park, relative to the first park that already fired
+		wantFire  bool
+		wantCount int
+	}{
+		{"just inside window: suppressed, both parks counted", batchParkWindow - time.Second, false, 2},
+		{"exactly +window: re-fires and the first park has aged out", batchParkWindow, true, 1},
+		{"after window", batchParkWindow + time.Second, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var tr parkBurstTracker
+			base := time.Now()
+			_, fire := tr.record("a", base, batchParkWindow, 1)
+			require.True(t, fire)
+			count, fire := tr.record("b", base.Add(tt.offset), batchParkWindow, 1)
+			assert.Equal(t, tt.wantFire, fire)
+			assert.Equal(t, tt.wantCount, count)
+		})
+	}
+}
+
+func TestRetryOrphanedTriageWithBackoffGate_should_escalateOnceForBatch_And_NotForSinglePark(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	parkable := func(title string) string {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title, AcceptanceCriteria: `[]`, Priority: 1, Status: string(BacklogStatusIdea)})
+		require.NoError(t, err)
+		_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
+		require.NoError(t, err)
+		// One attempt short of the cap, due now: the next gate call parks it.
+		applied, err := er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonOrphanedTriage, MaxRemediationAttempts-1, timePtr(time.Now().Add(-time.Minute)))
+		require.NoError(t, err)
+		require.True(t, applied)
+		return item.ID
+	}
+	newListener := func() (*BacklogLifecycleListener, *fakeNotifier) {
+		l := NewBacklogLifecycleListener(storage)
+		n := &fakeNotifier{}
+		l.SetNotifier(n)
+		l.SetTriageRespawner(newFakeTriageRespawner())
+		return l, n
+	}
+	countTitle := func(n *fakeNotifier, title string) int {
+		c := 0
+		for _, call := range n.calls {
+			if call.Title == title {
+				c++
+			}
+		}
+		return c
+	}
+
+	t.Run("single parked item gets only the per-item notification", func(t *testing.T) {
+		l, n := newListener()
+		l.retryOrphanedTriageWithBackoffGate(ctx, parkable("single"), "single")
+		assert.Equal(t, 1, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 0, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+
+	t.Run("three distinct parked items fire the aggregate exactly once", func(t *testing.T) {
+		l, n := newListener()
+		for _, name := range []string{"one", "two", "three"} {
+			l.retryOrphanedTriageWithBackoffGate(ctx, parkable(name), name)
+		}
+		assert.Equal(t, 3, countTitle(n, "Auto-triage paused"))
+		assert.Equal(t, 1, countTitle(n, "Multiple auto-triage retries exhausted"))
+	})
+}
+
+func TestTriageEndReasonWithDetail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, reason, detail, want string
+	}{
+		{"other with empty detail has no colon", TriageEndReasonOther, "", "other"},
+		{"other with detail appends it", TriageEndReasonOther, "dial failed", "other: dial failed"},
+		{"non-other ignores detail", "idle", "dial failed", "idle"},
+		{"empty reason falls back to unknown", "", "dial failed", triageEndReasonOrUnknown("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := triageEndReasonWithDetail(tt.reason, tt.detail)
+			assert.Equal(t, tt.want, got)
+			if tt.reason != TriageEndReasonOther {
+				assert.NotContains(t, got, tt.detail)
+			}
+		})
+	}
+}
+
+func TestReconcileTerminalItemSessions_should_RetryNextTick_When_ArchiveFailed(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "archive fails once", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "flaky-session", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{errForUUID: map[string]error{"flaky-session": errors.New("boom")}}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Empty(t, archiver.archivedUUIDs)
+
+	archiver.errForUUID = nil
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"flaky-session"}, archiver.archivedUUIDs, "a failed item must not be settled")
+}
+
+func TestReconcileTerminalItemSessions_should_ReprocessItem_When_ItemChangedInsideTTL(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "reopened and re-terminated", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "round-1", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	require.Equal(t, []string{"round-1"}, archiver.archivedUUIDs)
+
+	title := "retitled"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+	require.NoError(t, err)
+
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"round-1", "round-1"}, archiver.archivedUUIDs, "an updated item (new updated_at) bypasses the settled cache")
+}
+
+// Attaching an item session does not bump the item's updated_at, so the settled key
+// must also change with the session count or a late-spawned session would linger.
+func TestReconcileTerminalItemSessions_should_ReprocessItem_When_SessionAttachedLate(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "late session", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "early", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "late", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "late")
+}
+
+func TestReconcileTerminalItemSessions_should_RetryNextTick_When_KillFailed(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "kill fails once", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "stuck-pane", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{killErrForUUID: map[string]error{"stuck-pane": errors.New("tmux busy")}}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	archiver.killErrForUUID = nil
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"stuck-pane"}, archiver.killedUUIDs, "a failed kill must not settle the item")
+}
+
+func TestReconcileTerminalItemWorktrees_should_SkipSettledItem_UntilTTLElapses(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "done, worktree swept", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	listener.sweepClock = func() time.Time { return clock }
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+	listener.reconcileTerminalItemWorktrees(ctx)
+	assert.Equal(t, []string{item.ID}, cleaner.calls())
+
+	clock = clock.Add(terminalSweepSettleTTL)
+	listener.reconcileTerminalItemWorktrees(ctx)
+	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls())
 }

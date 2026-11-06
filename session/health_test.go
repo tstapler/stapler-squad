@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -295,12 +296,15 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 	}
 }
 
-// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod pins the
-// AC0/AC1/AC2 behavior: once restartGracePeriod has elapsed, a dead pane with a
-// non-zero exit code/signal transitions the session to Crashed with ExitReason
-// recorded instead of being silently respawned -- so the UI can surface a
-// banner and a resume action rather than the raw "Pane is dead" terminal text.
-func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *testing.T) {
+// TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod pins the
+// auto-refresh behavior: once restartGracePeriod has elapsed, a dead pane with
+// a non-zero exit code/signal is auto-respawned (kill+cold-restore) the same
+// way a grace-period crash is, relying on Start(false)'s own
+// checkRestartStorm/trackRestartRate breaker to bound retries rather than
+// requiring a manual "Resume" click for every crash. See
+// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails for the
+// case where the respawn attempt itself fails.
+func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *testing.T) {
 	t.Parallel()
 	checker := NewSessionHealthChecker(nil)
 	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
@@ -323,18 +327,60 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *tes
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
 	}
-	if mock.startCalls != 0 {
-		t.Errorf("expected no auto-respawn (Start not called) once Crashed, got %d Start() calls", mock.startCalls)
-	}
 	if mock.closeCalls == 0 {
-		t.Error("expected the stale dead-pane session to be killed")
+		t.Error("expected the stale dead-pane session to be killed before respawn")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected auto-respawn to call Start() rather than leaving the session Crashed")
+	}
+	snap := inst.Snapshot()
+	if snap.Status != Active {
+		t.Errorf("expected Status=Active after a successful auto-respawn, got %s", snap.Status)
+	}
+	if !result.RecoverySuccess {
+		t.Error("expected RecoverySuccess=true for a successful auto-respawn")
+	}
+}
+
+// TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails covers the
+// fallback: when the post-grace-period auto-respawn attempt itself fails (e.g.
+// the restart-storm breaker refused it, or the working directory is gone),
+// the session surfaces as Crashed with an ExitReason describing both the
+// original crash and why auto-recovery didn't happen -- so the UI can show a
+// banner and a manual "Resume" action instead of silently retrying forever.
+func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+	checker.startedAt = time.Now().Add(-2 * time.Hour) // well outside restartGracePeriod
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true,
+		paneExitCode:     137,
+		paneExitSignal:   "SIGKILL",
+		paneExitDead:     true,
+		startReturn:      errors.New("refusing to start: crash loop"),
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{Title: "crashed-test-respawn-fails", Status: Active}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
+
+	if !result.RecoveryAttempted {
+		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected an auto-respawn attempt (Start called) even though it fails")
 	}
 	snap := inst.Snapshot()
 	if snap.Status != Crashed {
-		t.Errorf("expected Status=Crashed, got %s", snap.Status)
+		t.Errorf("expected Status=Crashed once the respawn attempt itself fails, got %s", snap.Status)
 	}
-	if snap.ExitReason == "" {
-		t.Error("expected ExitReason to be populated")
+	if snap.ExitReason == "" || !strings.Contains(snap.ExitReason, "auto-recovery failed") {
+		t.Errorf("expected ExitReason to explain the failed auto-recovery attempt, got %q", snap.ExitReason)
 	}
 	if !result.RecoverySuccess {
 		t.Error("expected RecoverySuccess=true: a successful Crashed transition is not a recovery failure")
@@ -621,5 +667,80 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 
 	if len(results) != 2 {
 		t.Fatalf("expected both instances to be checked, got %d results: %+v", len(results), results)
+	}
+}
+
+// If this fails, the 15s health checker respawns archived sessions as real tmux
+// sessions and real `claude` processes (ADR-001,
+// superseded-rework-session-retirement). The table covers exactly the four
+// statuses IsSuspended() omits; the control row proves live sessions are still
+// recovered.
+func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	tests := []struct {
+		name     string
+		status   Status
+		archived bool
+		// wantRecovery is the expected RecoveryAttempted on the second
+		// checkSingleSession call (past the failure debounce).
+		wantRecovery bool
+	}{
+		{name: "active_archived", status: Active, archived: true},
+		{name: "creating_archived", status: Creating, archived: true},
+		{name: "restoring_archived", status: Restoring, archived: true},
+		{name: "failed_archived", status: Failed, archived: true},
+		{name: "active_not_archived_control", status: Active, archived: false, wantRecovery: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checker := NewSessionHealthChecker(nil)
+
+			mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() is false
+			inst := &Instance{Title: "archived-health-" + tt.name, Status: tt.status}
+			if tt.archived {
+				// Set before anything calls Snapshot(): it caches its first build.
+				inst.ArchivedAt = &archivedAt
+			}
+			inst.started.Store(true)
+			inst.processManager = NewTmuxBackend(mock)
+
+			// Two calls: the first is below the failure debounce threshold, the
+			// second reaches recoverMissingSession's Start(false).
+			var last HealthCheckResult
+			for i := 0; i < 2; i++ {
+				last = checker.checkSingleSession(inst, nil)
+			}
+
+			if last.RecoveryAttempted != tt.wantRecovery {
+				t.Errorf("RecoveryAttempted = %v, want %v (actions: %v)", last.RecoveryAttempted, tt.wantRecovery, last.Actions)
+			}
+
+			if !tt.archived {
+				if mock.startCalls == 0 {
+					t.Error("control: expected a live session's missing tmux session to still be recreated")
+				}
+				return
+			}
+
+			if mock.startCalls != 0 {
+				t.Errorf("expected Start() never to be called for an archived instance, got %d calls", mock.startCalls)
+			}
+			found := false
+			for _, a := range last.Actions {
+				if strings.Contains(a, "archived") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected an Actions entry naming the archived skip, got %v", last.Actions)
+			}
+			if got := inst.Snapshot().Status; got != tt.status {
+				t.Errorf("Status = %v, want %v (the guard must not rewrite status)", got, tt.status)
+			}
+		})
 	}
 }

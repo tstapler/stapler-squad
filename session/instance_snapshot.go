@@ -31,6 +31,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // GitHubIntegration groups all GitHub PR / URL integration fields within
@@ -41,6 +43,7 @@ type GitHubIntegration struct {
 	GitHubPRURL     string
 	GitHubOwner     string
 	GitHubRepo      string
+	GitHubHost      string
 	GitHubSourceRef string
 	ClonedRepoPath  string
 	MainRepoPath    string
@@ -68,6 +71,8 @@ type AutonomousModeState struct {
 	AutonomousTurn     int32
 	AutonomousMaxTurns int32
 	AutonomousOutcome  string
+	// AutonomousStopReason is why the last autonomous run ended ("" if none).
+	AutonomousStopReason domain.StopReason
 }
 
 // InstanceSnapshot is a point-in-time, read-safe copy of all mutable Instance
@@ -81,29 +86,39 @@ type AutonomousModeState struct {
 // through dedicated accessors or mailbox round-trips (Epic 3).
 type InstanceSnapshot struct {
 	// Identity / config
-	ID               string
-	UUID             string
-	Title            string
-	Path             string
-	WorkingDir       string
-	Branch           string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Status           Status
-	Program          string
-	Height           int
-	Width            int
-	AutoYes          bool
-	AutoApprove      bool
-	IsExpanded       bool
-	Prompt           string
-	InitialPrompt    string
-	Category         string
-	Note             string
-	SessionType      SessionType
-	TmuxPrefix       string
-	TmuxServerSocket string
-	Tags             []string // defensive deep copy — see buildSnapshot
+	ID                    string
+	UUID                  string
+	Title                 string
+	Path                  string
+	WorkingDir            string
+	Branch                string
+	CreationWarning       string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	Status                Status
+	Program               string
+	AltScreenActive       bool
+	AltScreenBootstrapped bool
+	Height                int
+	Width                 int
+	AutoYes               bool
+	AutoApprove           bool
+	IsExpanded            bool
+	Prompt                string
+	InitialPrompt         string
+	InitialPromptSentAt   time.Time
+	Category              string
+	Note                  string
+	SessionType           SessionType
+	TmuxPrefix            string
+	TmuxServerSocket      string
+	Backend               ProcessManagerBackend
+	Tags                  []string // defensive deep copy — see buildSnapshot
+
+	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
+	// fields — both defensive deep copies, see buildSnapshot.
+	RuleTagProvenance  map[string]string
+	SuppressedRuleTags map[string]bool
 
 	// Autonomous mode (grouped — access as snap.Autonomous.AutonomousMode)
 	Autonomous AutonomousModeState
@@ -121,6 +136,7 @@ type InstanceSnapshot struct {
 	// Misc config
 	OneShot                    bool
 	Hidden                     bool
+	Pinned                     bool
 	ProjectID                  string
 	HistoryFilePath            string
 	EverHadConversationHistory bool
@@ -141,6 +157,10 @@ type InstanceSnapshot struct {
 	// 1.1.4/4.1) — see ToInstanceData/FromInstanceData for the persisted round trip.
 	CreationProgressUpdatedAt time.Time
 
+	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
+	LastMeaningfulChangeAt time.Time
+	TurnEnded              TurnEnded
+
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
 
@@ -150,6 +170,7 @@ type InstanceSnapshot struct {
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *artifacts.SessionArtifactsBlob
+	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
@@ -164,11 +185,14 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Path:                      i.Path,
 		WorkingDir:                i.WorkingDir,
 		Branch:                    i.Branch,
+		CreationWarning:           i.CreationWarning,
 		CreatedAt:                 i.CreatedAt,
 		UpdatedAt:                 i.UpdatedAt,
 		Status:                    i.Status,
 		CreationProgressUpdatedAt: i.creationProgressUpdatedAt,
 		Program:                   i.Program,
+		AltScreenActive:           i.AltScreenActive,
+		AltScreenBootstrapped:     i.AltScreenBootstrapped,
 		Height:                    i.Height,
 		Width:                     i.Width,
 		AutoYes:                   i.AutoYes,
@@ -176,23 +200,27 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		IsExpanded:                i.IsExpanded,
 		Prompt:                    i.Prompt,
 		InitialPrompt:             i.InitialPrompt,
+		InitialPromptSentAt:       i.InitialPromptSentAt,
 		Category:                  i.Category,
 		Note:                      i.Note,
 		SessionType:               i.SessionType,
 		TmuxPrefix:                i.TmuxPrefix,
 		TmuxServerSocket:          i.TmuxServerSocket,
+		Backend:                   i.Backend,
 		Tags:                      append([]string(nil), i.Tags...),
 		Autonomous: AutonomousModeState{
-			AutonomousMode:     i.AutonomousMode,
-			AutonomousTurn:     i.AutonomousTurn,
-			AutonomousMaxTurns: i.AutonomousMaxTurns,
-			AutonomousOutcome:  i.AutonomousOutcome,
+			AutonomousMode:       i.AutonomousMode,
+			AutonomousTurn:       i.AutonomousTurn,
+			AutonomousMaxTurns:   i.AutonomousMaxTurns,
+			AutonomousOutcome:    i.AutonomousOutcome,
+			AutonomousStopReason: i.AutonomousStopReason,
 		},
 		GitHub: GitHubIntegration{
 			GitHubPRNumber:         i.GitHubPRNumber,
 			GitHubPRURL:            i.GitHubPRURL,
 			GitHubOwner:            i.GitHubOwner,
 			GitHubRepo:             i.GitHubRepo,
+			GitHubHost:             i.GitHubHost,
 			GitHubSourceRef:        i.GitHubSourceRef,
 			ClonedRepoPath:         i.ClonedRepoPath,
 			MainRepoPath:           i.MainRepoPath,
@@ -216,6 +244,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		RestartedFromSessionID:     i.RestartedFromSessionID,
 		OneShot:                    i.OneShot,
 		Hidden:                     i.Hidden,
+		Pinned:                     i.Pinned,
 		ProjectID:                  i.ProjectID,
 		HistoryFilePath:            i.HistoryFilePath,
 		EverHadConversationHistory: i.EverHadConversationHistory,
@@ -229,9 +258,12 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		WorkflowID:                 i.WorkflowID,
 		CLIFlags:                   i.CLIFlags,
 		ReviewState:                i.ReviewState,
+		LastMeaningfulChangeAt:     i.LastMeaningfulChangeAt,
+		TurnEnded:                  i.TurnEnded,
 		InstanceType:               i.InstanceType,
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,
+		ContextHealth:              i.ContextHealth,
 	}
 
 	// Deep copy RateLimitAutoResume *bool
@@ -267,6 +299,23 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 	if i.ExternalMetadata != nil {
 		meta := *i.ExternalMetadata
 		s.ExternalMetadata = &meta
+	}
+
+	// Deep copy RuleTagProvenance map[string]string (ADR-002) — never alias the
+	// live Instance map, mirroring Tags' copy above (instance-lock-free-reads.md).
+	if i.RuleTagProvenance != nil {
+		s.RuleTagProvenance = make(map[string]string, len(i.RuleTagProvenance))
+		for k, v := range i.RuleTagProvenance {
+			s.RuleTagProvenance[k] = v
+		}
+	}
+
+	// Deep copy SuppressedRuleTags map[string]bool (ADR-002).
+	if i.SuppressedRuleTags != nil {
+		s.SuppressedRuleTags = make(map[string]bool, len(i.SuppressedRuleTags))
+		for k, v := range i.SuppressedRuleTags {
+			s.SuppressedRuleTags[k] = v
+		}
 	}
 
 	return s

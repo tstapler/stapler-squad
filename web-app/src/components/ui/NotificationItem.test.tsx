@@ -13,22 +13,26 @@ import { NotificationItem } from "./NotificationItem";
 import type { GroupedNotification } from "@/lib/utils/notificationGrouping";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({
-    href,
-    children,
-    ...props
-  }: {
-    href: string;
-    children: React.ReactNode;
-    [key: string]: unknown;
-  }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({
+        href,
+        children,
+        ...props
+      }: {
+        href: string;
+        children: React.ReactNode;
+        [key: string]: unknown;
+      }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 
 function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
   return {

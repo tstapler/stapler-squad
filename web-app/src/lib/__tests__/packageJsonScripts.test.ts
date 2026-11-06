@@ -6,15 +6,14 @@ const packageJson = JSON.parse(
 );
 
 describe("package.json scripts", () => {
-  it("dev_should_containPortEnvVarFallback_When_readFromPackageJson", () => {
-    expect(packageJson.scripts.dev).toContain("${PORT:-3001}");
+  it("dev_and_build_should_runTheBunPipeline_When_readFromPackageJson", () => {
+    expect(packageJson.scripts["dev"]).toBe("bun build/dev.ts");
+    expect(packageJson.scripts["build"]).toBe("bun build/build.ts");
   });
 
-  it("start_should_containPortEnvVarFallback_When_readFromPackageJson", () => {
-    expect(packageJson.scripts.start).toContain("${PORT:-3001}");
-  });
-
-  it("dev_should_containHostnameLocalhost_When_readFromPackageJson", () => {
-    expect(packageJson.scripts.dev).toContain("--hostname localhost");
+  it("scripts_should_notReferenceNext_When_readFromPackageJson", () => {
+    for (const [name, command] of Object.entries<string>(packageJson.scripts)) {
+      expect({ name, command }).not.toEqual({ name, command: expect.stringMatching(/\bnext\b|WEB_BUILD/) });
+    }
   });
 });

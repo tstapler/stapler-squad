@@ -113,3 +113,7 @@ export const wrapper = style({
   position: "relative",
   display: "inline-block",
 });
+
+export const tooltipTrigger = style({
+  display: "inline-flex",
+});

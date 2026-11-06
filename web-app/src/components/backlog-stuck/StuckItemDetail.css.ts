@@ -22,7 +22,7 @@ export const row = style({
 });
 
 export const label = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontWeight: 600,
   minWidth: "90px",
   flexShrink: 0,
@@ -38,7 +38,10 @@ export const actionCopy = style({
 });
 
 export const prLink = style({
-  color: vars.color.primary,
+  // primary on cardBackground measures 4.32:1, fails WCAG AA (needs >=4.5:1);
+  // accentText is ~9.35:1 on the same background. See theme.css.ts's
+  // accentText comment for the identical prior fix.
+  color: vars.color.accentText,
   textDecoration: "none",
   ":hover": {
     textDecoration: "underline",
@@ -46,7 +49,7 @@ export const prLink = style({
 });
 
 export const unknownNote = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontStyle: "italic",
 });
 
@@ -78,9 +81,13 @@ export const overrideButton = style({
   fontSize: vars.fontSize.sm,
   fontWeight: 600,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
+  selectors: {
+    // This button uses aria-disabled instead of disabled so it stays
+    // focusable while busy.
+    '&[aria-disabled="true"]': {
+      opacity: 0.6,
+      cursor: "not-allowed",
+    },
   },
 });
 
@@ -93,13 +100,45 @@ export const overrideUnlimitedButton = style({
   color: vars.color.textPrimary,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
+  selectors: {
+    '&[aria-disabled="true"]': {
+      opacity: 0.6,
+      cursor: "not-allowed",
+    },
   },
 });
 
 export const overrideStatus = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontSize: vars.fontSize.xs,
+});
+
+export const autoMerge = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["2"],
+  minWidth: 0,
+  overflowWrap: "anywhere",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+});
+
+// Padded to a 44px tap target; inline-flex so it wraps instead of truncating at 360px.
+export const touchLink = style({
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "44px",
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const srOnly = style({
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
 });

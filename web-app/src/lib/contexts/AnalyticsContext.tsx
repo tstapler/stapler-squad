@@ -1,7 +1,9 @@
 "use client";
 
-import { createContext, useContext, useRef, useMemo, useEffect, ReactNode } from "react";
+import type { ReactNode } from "react";
+import { createContext, useContext, useRef, useMemo, useEffect } from "react";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
+import { setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 
 interface AnalyticsContextValue {
   provider: AnalyticsProvider;
@@ -32,7 +34,9 @@ export function AnalyticsContextProvider({ provider, children }: AnalyticsContex
     const p = provider;
     providerRef.current = p;
     void p.initialize?.();
+    setRpcTimingSink(p);
     return () => {
+      setRpcTimingSink(undefined);
       void p.onClose?.();
     };
   }, [provider]);

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "expected_version does not match the current version",
+    "current_version": 3
+  }
+}

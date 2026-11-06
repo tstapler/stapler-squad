@@ -72,16 +72,20 @@ func TestInstanceStartControlMode_should_NeverProduceTwoOwners_When_100Goroutine
 	// Each StartControlMode call is NOT paired with an immediate concurrent
 	// StopControlMode here (unlike an earlier version of this test): pairing
 	// them surfaced a genuine, pre-existing data race in
-	// session/tmux/control_mode.go's own refcounting (processControlModeLine's
-	// write vs StopControlMode's read at control_mode.go:487/210, with no
-	// streamhub code on either side of it) when many Start/Stop pairs
-	// interleave concurrently against one real tmux session — filed as
-	// BUG-095, out of scope for this project's ownership-lock fix. Calling
-	// Stop once via t.Cleanup after every Start has completed (below) still
-	// fully exercises the ownership-lock invariant this test targets
+	// session/tmux/control_mode.go — readControlModeOutput read
+	// t.controlModeDone/t.controlModeStdout directly from inside its own
+	// goroutine instead of capturing them at spawn time, racing a concurrent
+	// StopControlMode teardown — when many Start/Stop pairs interleave
+	// concurrently against one real tmux session. Filed as BUG-086 (was out
+	// of scope for this project's ownership-lock fix) and fixed separately;
+	// see session/tmux/control_mode_interleaved_start_stop_test.go for the
+	// dedicated repro/regression test and docs/bugs/fixed/BUG-086-*.md for
+	// the root cause writeup. This test still calls Stop once via t.Cleanup
+	// after every Start has completed (below), which is sufficient to
+	// exercise the ownership-lock invariant this test targets
 	// (StartControlMode and a concurrent simulated HubRegistry.GetOrCreate
-	// never both proceed as if they owned the session) without also
-	// exercising that unrelated refcounting race.
+	// never both proceed as if they owned the session) without conflating it
+	// with the (now-fixed) refcounting race.
 	for i := 0; i < n; i++ {
 		wg.Add(2)
 		// One goroutine calls the real Instance.StartControlMode() — the

@@ -1,0 +1,16 @@
+{
+  "id": "files-tabs",
+  "type": "frontend",
+  "name": "Open-file tab strip of the Files viewer: preview and pinned tabs, keyboard cycling, close",
+  "component": "OpenTabsBar",
+  "path": "web-app/src/components/sessions/files/OpenTabsBar.tsx",
+  "filePath": "web-app/src/components/sessions/files/OpenTabsBar.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/files-tabs.spec.ts",
+    "tests/e2e/files-viewer.spec.ts",
+    "tests/e2e/files-search.spec.ts"
+  ],
+  "lastModified": "2026-10-17T00:00:00Z"
+}

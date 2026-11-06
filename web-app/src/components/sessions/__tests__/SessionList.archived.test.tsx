@@ -104,3 +104,59 @@ describe("SessionList — show archived toggle", () => {
     expect(onFetchArchivedSessions).not.toHaveBeenCalled();
   });
 });
+
+// Same shape as "show archived toggle" above, in the same file (rather than a
+// separate one) to reuse this file's mock preamble instead of duplicating its
+// jest.mock(...) block — those calls are jest-hoisted per-file and can't be
+// extracted into a shared helper (see CLAUDE.md's jscpd-gate notes).
+describe("SessionList — show hidden toggle", () => {
+  it("SessionList_should_hideHiddenSessions_When_showHiddenIsOff", () => {
+    const sessions = [
+      makeSession("s1", "Active Session") as Session,
+      makeSession("s2", "diagnose:abc123:1", { hidden: true }) as Session,
+    ];
+    render(<SessionList sessions={sessions} />);
+
+    expect(screen.getByText("Active Session")).toBeInTheDocument();
+    expect(screen.queryByText("diagnose:abc123:1")).not.toBeInTheDocument();
+  });
+
+  it("SessionList_should_showHiddenSessions_When_toggleEnabled", () => {
+    const sessions = [
+      makeSession("s1", "Active Session") as Session,
+      makeSession("s2", "diagnose:abc123:1", { hidden: true }) as Session,
+    ];
+    render(<SessionList sessions={sessions} />);
+
+    fireEvent.click(screen.getByTestId("show-hidden-toggle"));
+
+    expect(screen.getByText("Active Session")).toBeInTheDocument();
+    expect(screen.getByText("diagnose:abc123:1")).toBeInTheDocument();
+  });
+
+  it("SessionList_should_callOnFetchHiddenSessions_When_toggleEnabled", () => {
+    const onFetchHiddenSessions = jest.fn();
+    render(
+      <SessionList
+        sessions={[makeSession("s1", "Active Session") as Session]}
+        onFetchHiddenSessions={onFetchHiddenSessions}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("show-hidden-toggle"));
+
+    expect(onFetchHiddenSessions).toHaveBeenCalledWith(true);
+  });
+
+  it("SessionList_should_notCallOnFetchHiddenSessions_When_notToggled", () => {
+    const onFetchHiddenSessions = jest.fn();
+    render(
+      <SessionList
+        sessions={[makeSession("s1", "Active Session") as Session]}
+        onFetchHiddenSessions={onFetchHiddenSessions}
+      />
+    );
+
+    expect(onFetchHiddenSessions).not.toHaveBeenCalled();
+  });
+});

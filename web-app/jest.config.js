@@ -1,5 +1,35 @@
 /** @type {import('jest').Config} */
 module.exports = {
+  // Active only under --coverage (jest ignores it otherwise). Directories that hold only new
+  // frontend-responsiveness modules are keyed by directory; mixed directories (legacy files at 0%
+  // from component-only coverage) are keyed by the new files so the gate measures new code only.
+  // requestPriority.ts (73% lines) is deliberately not keyed yet.
+  // Phase 6 command:
+  //   bunx jest --coverage --collectCoverageFrom='src/lib/{api,transport,perf,layout,backlog,telemetry,window,features}/**/*.{ts,tsx}' --no-cache
+  coverageThreshold: Object.fromEntries(
+    [
+      "perf/",
+      "layout/",
+      "backlog/",
+      "window/",
+      "features/",
+      "api/coalescingInterceptor.ts",
+      "api/idempotentMethods.ts",
+      "transport/unary-mux-frame.ts",
+      "transport/unary-ws-transport.ts",
+      "transport/wsUnaryPolicy.ts",
+      "telemetry/logBuffer.ts",
+      "telemetry/clientLogShipper.ts",
+      "telemetry/rpcTiming.ts",
+    ].map((path) => [`./src/lib/${path}`, { lines: 80 }]),
+  ),
+  // Default 5000ms is too tight for this project's full-suite runs: with
+  // ~350 suites sharing jest-worker processes, scheduler contention alone
+  // has intermittently pushed otherwise-fast async tests (e.g.
+  // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
+  // with no logic bug — each passes in well under 1s run in isolation.
+  // Must sit here, not inside `projects[]`: jest ignores it per-project (tests there still got 5000ms).
+  testTimeout: 20000,
   projects: [
     {
       displayName: "web-app",
@@ -16,17 +46,20 @@ module.exports = {
       // contain at least one test". Narrowing here fixes the root cause so a
       // future __tests__/ helper file can't silently break the same way.
       testMatch: ["**/?(*.)+(spec|test).ts?(x)"],
-      // Default 5000ms is too tight for this project's full-suite runs: with
-      // ~350 suites sharing jest-worker processes, scheduler contention alone
-      // has intermittently pushed otherwise-fast async tests (e.g.
-      // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
-      // with no logic bug — each passes in well under 1s run in isolation.
-      testTimeout: 20000,
       moduleNameMapper: {
+        // Window style modules get string class names (the proxy below trips React's
+        // className check); these must stay ahead of the generic .css mappers.
+        "styles/window/windowTabStrip\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowTabStripStylesMock.js",
+        "styles/window/windowOverview\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowOverviewStylesMock.js",
         // vanilla-extract .css.ts files — return callable proxy
         "\\.css\\.ts$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.module\\.css$": "identity-obj-proxy",
         "\\.css$": "<rootDir>/src/__mocks__/styleMock.js",
+        // GuidanceRequestPanel (AC3, embedded in BacklogItemDetail/TriageReviewPanel/
+        // SessionDetailView) uses RTK Query hooks needing a real Redux <Provider> most
+        // suites don't set up — map globally instead of per-suite jest.mock calls. A
+        // suite wanting realistic data can still override with its own jest.mock.
+        "^@/lib/api/guidanceApi$": "<rootDir>/src/__mocks__/guidanceApiMock.js",
         // Path alias
         "^@/(.*)$": "<rootDir>/src/$1",
       },
@@ -47,7 +80,7 @@ module.exports = {
       // react-markdown pulls in a deep tree of ESM-only unified/remark/rehype/
       // mdast/hast transitive deps (new one surfaces every level down). Rather
       // than hand-maintain an ever-growing allowlist of name prefixes against
-      // pnpm's ".pnpm/<pkg>@<version>/node_modules/<pkg>" store layout, just
+      // the isolated linker's "node_modules/.bun/<pkg>@<version>/node_modules/<pkg>" store layout, just
       // transform all of node_modules — ts-jest handles CJS and ESM alike.
       transformIgnorePatterns: [],
     },
@@ -72,6 +105,30 @@ module.exports = {
               module: "commonjs",
               moduleResolution: "node",
               esModuleInterop: true,
+            },
+          },
+        ],
+      },
+    },
+    {
+      // Node-side tests of the Bun build. Bun-only behaviour runs in a pinned `bun`
+      // subprocess via runInBun; `*.bun.ts` scripts are not tests and are never collected.
+      // scripts/__tests__/*.test.mjs use node:test and run through `bun run test:codemods`.
+      displayName: "build",
+      preset: "ts-jest",
+      testEnvironment: "node",
+      roots: ["<rootDir>/build"],
+      testMatch: ["<rootDir>/build/**/__tests__/**/*.test.ts"],
+      testPathIgnorePatterns: ["/node_modules/", "/fixtures/"],
+      transform: {
+        "^.+\\.tsx?$": [
+          "ts-jest",
+          {
+            tsconfig: {
+              module: "commonjs",
+              moduleResolution: "node",
+              esModuleInterop: true,
+              types: ["node", "jest"],
             },
           },
         ],

@@ -26,7 +26,7 @@ function makeWrapper(store: ReturnType<typeof makeStore>) {
 }
 
 function makeRepo(overrides: Partial<GitHubRepo> = {}): GitHubRepo {
-  return { owner: "octocat", repo: "hello-world", description: "", isLocal: false, localPath: "", ...overrides };
+  return { owner: "octocat", repo: "hello-world", description: "", isLocal: false, localPath: "", host: "", ...overrides };
 }
 
 function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
@@ -37,6 +37,7 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
     url: "https://github.com/octocat/hello-world/issues/1",
     labels: [],
     isPR: false,
+    host: "",
     ...overrides,
   };
 }

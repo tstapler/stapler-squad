@@ -1,0 +1,20 @@
+{
+  "id": "session:fanout-pick",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "PickFanoutWinner",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_fanout.go",
+  "tested": true,
+  "testIds": [
+    "TestPickFanoutWinner_MergesWinnerAndArchivesLosers",
+    "TestPickFanoutWinner_ConflictReturnsAbortedAndArchivesNothing",
+    "TestPickFanoutWinner_RejectsStillRunningWinner",
+    "TestPickFanoutWinner_RejectsDirtyBaseRepo",
+    "TestPickFanoutWinner_PausedWinnerWithRemovedWorktreeMergesItsBranch",
+    "TestPickFanoutWinner_ConcurrentPicksMergeOnlyOneWinner",
+    "TestPickFanoutWinner_UnknownGroupIsNotFound"
+  ],
+  "lastModified": "2026-10-18T20:58:59.272246784-07:00"
+}

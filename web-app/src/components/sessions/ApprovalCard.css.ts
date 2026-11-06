@@ -17,7 +17,7 @@ export const card = style({
   borderLeft: `3px solid ${vars.color.warning}`,
   borderRadius: vars.radii.lg,
   padding: vars.space["4"],
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderHover,
@@ -225,7 +225,7 @@ export const approveButton = style({
   fontSize: vars.fontSize.base,
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   background: vars.color.success,
   color: vars.color.primaryText,
   selectors: {
@@ -250,7 +250,7 @@ export const denyButton = style({
   fontSize: vars.fontSize.base,
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   background: vars.color.error,
   color: vars.color.primaryText,
   selectors: {
@@ -275,7 +275,7 @@ export const dismissButton = style({
   fontSize: vars.fontSize.base,
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   background: vars.color.surfaceSubtle,
   color: vars.color.textSecondary,
   selectors: {

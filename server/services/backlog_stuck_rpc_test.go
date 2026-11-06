@@ -7,6 +7,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,8 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -84,6 +88,36 @@ func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCa
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
 
+// reasonsWithoutProtoMapping lists domain.StuckReason values with no
+// STUCK_REASON_* proto enum value yet, so toProtoStuckReason falls through to
+// STUCK_REASON_UNSPECIFIED for them. domain.StuckReasonGateTimeout is a
+// pre-existing, separately-tracked gap — do not add an entry here for a
+// newly-introduced StuckReason; wire it into toProtoStuckReason instead.
+var reasonsWithoutProtoMapping = map[domain.StuckReason]bool{
+	domain.StuckReasonGateTimeout: true,
+}
+
+// TestToProtoStuckReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
+// guards against a StuckReason existing in the domain enum with no proto
+// mapping: every domain.AllStuckReasons entry must map to a non-UNSPECIFIED
+// proto value unless listed in reasonsWithoutProtoMapping.
+func TestToProtoStuckReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded(t *testing.T) {
+	t.Parallel()
+	for _, reason := range domain.AllStuckReasons {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			got := toProtoStuckReason(reason)
+			if reasonsWithoutProtoMapping[reason] {
+				assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got,
+					"StuckReason %q is listed in reasonsWithoutProtoMapping as expected-unmapped but now maps to %v — remove it from that map", reason, got)
+				return
+			}
+			assert.NotEqual(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got,
+				"StuckReason %q has no case in toProtoStuckReason (falls through to STUCK_REASON_UNSPECIFIED) — add a proto enum value and wire it in, or add it to reasonsWithoutProtoMapping with a documented reason", reason)
+		})
+	}
+}
+
 // seedOpenStuckRow creates a backlog item and inserts an open BacklogStuckState
 // row directly via the ent client (bypassing MarkStuck/its status precondition,
 // since these RPC-level tests only need a row to exist, not the reconciler's
@@ -146,8 +180,10 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 	assert.Equal(t, "PR #148 green & mergeable 3d", got.Context)
 	require.NotNil(t, got.FirstDetectedAt)
 	assert.WithinDuration(t, threeDaysAgo, got.FirstDetectedAt.AsTime(), 5*time.Second)
-	// allow_auto_merge is a Phase 4 concern — this handler must leave it unset.
+	// No lookup is wired in this service, so the auto-merge fields stay unset.
 	assert.Nil(t, got.AllowAutoMerge)
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED, got.AutoMergeLookupStatus)
+	assert.Nil(t, got.AutoMergeCheckedAt)
 }
 
 // TestListStuckBacklogItems_should_PopulatePlanArtifactsPath verifies
@@ -733,6 +769,9 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	domain.StuckReasonPushFailed:      true,
 	domain.StuckReasonSpawnFailed:     true,
 	domain.StuckReasonPlanNotApproved: true,
+	// StuckReasonRepeatedNoopDispatch: retrying is exactly the loop it detects;
+	// an operator must confirm/archive the duplicate or reset the item.
+	domain.StuckReasonRepeatedNoopDispatch: true,
 	// StuckReasonReworkBlockedStale: deliberately notify + durably mark +
 	// resolve-when-recovered only (plan.md Story 2.1.1) — no automated
 	// remediation action, per requirements.md's explicit out-of-scope item C
@@ -785,6 +824,33 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// transition today. A future epic wiring an auto-retry action should
 	// remove this entry and add a remediationActionByReason case instead.
 	domain.StuckReasonGateTimeout: true,
+	// StuckReasonBlockedByClaim: never auto-retried — retrying while the other
+	// host's claim stands would only re-mark the row. The operator action is the
+	// reason-gated OverrideClaimBlock RPC, not TriggerRemediationNow.
+	domain.StuckReasonBlockedByClaim: true,
+	// StuckReasonWorktreeInconsistent (session-worktree-reconciliation, Epic
+	// 1.2/1.3): no "retry now" action exists because the remediation *is* the
+	// worktree consistency sweep itself — it already re-evaluates every
+	// candidate on its own 15-minute ticker (session.StartWorktreeConsistencySweeper)
+	// and repairs or re-flags automatically; there is nothing a manual
+	// TriggerRemediationNow call could do differently. See
+	// session/worktree_consistency_sweep.go's resolveFinding/sweep.
+	domain.StuckReasonWorktreeInconsistent: true,
+	// StuckReasonMergedPRUnverified: ReconcilePRPending already re-verifies every
+	// tick, so a "retry now" would repeat the same check. The only resolution is an
+	// operator marking the item done (or fixing its recorded branch).
+	domain.StuckReasonMergedPRUnverified: true,
+	// StuckReasonVerdictUndelivered: same deliberate gap as StuckReasonSteerFailed
+	// above — force-writing a retry into a busy/dead PTY is unsafe by the same
+	// invariant IsReadyForSteer/SteerSessionGuarded enforce everywhere else, and
+	// the work session always has a second delivery path (its own
+	// wait_for_backlog_event/ScheduleWakeup polling). "Retry now" has nothing
+	// safe to do that a later bounce cycle's fresh verdict wouldn't already do
+	// on its own.
+	domain.StuckReasonVerdictUndelivered: true,
+	// StuckReasonTransitionDenied: the dequeue sweep itself is the retry (every
+	// tick re-attempts the claim and self-clears the row on success).
+	domain.StuckReasonTransitionDenied: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
@@ -809,4 +875,197 @@ func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewR
 		assert.True(t, wired != explicitlyUnwired,
 			"StuckReason %q must be either wired in remediationActionByReason or listed in reasonsWithoutAutomatedRemediation, not both or neither", reason)
 	}
+}
+
+func stuckAutoMergeSvc(t *testing.T, lookup RepoSettingsLookup, prURLs ...string) []*sessionv1.StuckBacklogItem {
+	t.Helper()
+	return stuckAutoMergeSvcReq(t, lookup, &sessionv1.ListStuckBacklogItemsRequest{}, prURLs...)
+}
+
+func stuckAutoMergeSvcReq(t *testing.T, lookup RepoSettingsLookup, req *sessionv1.ListStuckBacklogItemsRequest, prURLs ...string) []*sessionv1.StuckBacklogItem {
+	t.Helper()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetRepoSettingsLookup(lookup)
+	ctx := t.Context()
+	for i, u := range prURLs {
+		u := u
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+			Title: fmt.Sprintf("item %d", i), Status: string(session.BacklogStatusPRPending),
+		})
+		require.NoError(t, err)
+		_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &u}, nil)
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now().Add(-time.Hour), "ctx")
+	}
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(req))
+	require.NoError(t, err)
+	return resp.Msg.Items
+}
+
+func TestListStuckBacklogItems_should_PopulateAutoMerge_OncePerRepo(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	checked := time.Now().Add(-time.Minute)
+	var urls []string
+	for i := 1; i <= 12; i++ {
+		urls = append(urls, fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", i))
+	}
+	items := stuckAutoMergeSvc(t, func(_ context.Context, ref githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		calls.Add(1)
+		assert.Equal(t, "tstapler/stapler-squad", ref.String())
+		return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, CheckedAt: checked}
+	}, urls...)
+	require.Len(t, items, 12)
+	assert.Equal(t, int32(1), calls.Load())
+	for _, it := range items {
+		assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK, it.AutoMergeLookupStatus)
+		require.NotNil(t, it.AllowAutoMerge)
+		assert.False(t, *it.AllowAutoMerge)
+		require.NotNil(t, it.AutoMergeCheckedAt)
+		assert.WithinDuration(t, checked, it.AutoMergeCheckedAt.AsTime(), time.Second)
+	}
+}
+
+func TestListStuckBacklogItems_should_SkipLookup_When_NoGitHubRepo(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	items := stuckAutoMergeSvc(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		calls.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	}, "not a github url")
+	require.Len(t, items, 1)
+	assert.Equal(t, int32(0), calls.Load())
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED, items[0].AutoMergeLookupStatus)
+	assert.Nil(t, items[0].AllowAutoMerge)
+	assert.Nil(t, items[0].AutoMergeCheckedAt)
+}
+
+func TestListStuckBacklogItems_should_LeaveAllowAutoMergeNil_When_LookupNotOK(t *testing.T) {
+	t.Parallel()
+	for _, st := range []githubpkg.RepoSettingsStatus{
+		githubpkg.RepoSettingsRateLimited, githubpkg.RepoSettingsNoPermission,
+		githubpkg.RepoSettingsNotFound, githubpkg.RepoSettingsError,
+	} {
+		t.Run(st.String(), func(t *testing.T) {
+			t.Parallel()
+			attempt := time.Now().Add(-2 * time.Minute)
+			items := stuckAutoMergeSvc(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+				return githubpkg.RepoSettingsResult{Status: st, CheckedAt: attempt}
+			}, "https://github.com/tstapler/stapler-squad/pull/1")
+			require.Len(t, items, 1)
+			assert.Nil(t, items[0].AllowAutoMerge)
+			assert.Equal(t, toProtoAutoMergeStatus(st), items[0].AutoMergeLookupStatus)
+			require.NotNil(t, items[0].AutoMergeCheckedAt)
+			assert.WithinDuration(t, attempt, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
+		})
+	}
+}
+
+func TestListStuckBacklogItems_should_ForceRefreshOncePerRepo_When_RefreshAutoMergeSet(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh=%v", refresh), func(t *testing.T) {
+			var calls, forced int
+			items := stuckAutoMergeSvcReq(t, func(ctx context.Context, _ githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+				calls++
+				if githubpkg.IsRepoSettingsRefresh(ctx) {
+					forced++
+				}
+				return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, CheckedAt: time.Now()}
+			}, &sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: refresh},
+				"https://github.com/acme/web/pull/1", "https://github.com/acme/web/pull/2")
+			require.Len(t, items, 2)
+			assert.Equal(t, 1, calls, "one lookup per repo")
+			if refresh {
+				assert.Equal(t, 1, forced)
+			} else {
+				assert.Equal(t, 0, forced, "non-refresh requests must not bypass the cache")
+			}
+		})
+	}
+}
+
+func TestListStuckBacklogItems_should_KeepStaleValue_When_ForcedRefreshFails(t *testing.T) {
+	checked := time.Now().Add(-time.Minute)
+	items := stuckAutoMergeSvcReq(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, Stale: true, Reason: "timeout", CheckedAt: checked}
+	}, &sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: true}, "https://github.com/acme/web/pull/1")
+	require.Len(t, items, 1)
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK, items[0].AutoMergeLookupStatus)
+	assert.WithinDuration(t, checked, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
+}
+
+// TestListStuckBacklogItems_should_BatchItemSessionLookups is the query-count
+// budget for the stuck report: duplicate hints for N review items must cost a
+// constant number of statements, not two per item (the Tempo-observed N+1),
+// while still surfacing each item's own duplicate_ref.
+func TestListStuckBacklogItems_should_BatchItemSessionLookups(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	const items = 12
+	wantRef := map[string]string{}
+	for i := range items {
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+			Title: fmt.Sprintf("review item %d", i), Status: string(session.BacklogStatusReview),
+		})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "ctx")
+		if i%2 == 0 {
+			is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleReview})
+			require.NoError(t, err)
+			ref := fmt.Sprintf("dup%d", i)
+			require.NoError(t, storage.UpdateItemSessionVerificationNotes(ctx, is.ID, "duplicate_ref="+ref+" same change"))
+			wantRef[item.ID] = ref
+		}
+	}
+
+	countCtx, counter := dbobs.WithQueryCounter(ctx)
+	resp, err := svc.ListStuckBacklogItems(countCtx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Items, items)
+
+	for _, it := range resp.Msg.Items {
+		ref, dup := wantRef[it.ItemId]
+		assert.Equal(t, dup, it.DuplicatePending, it.ItemId)
+		assert.Equal(t, ref, it.DuplicateRef, it.ItemId)
+	}
+	assert.LessOrEqual(t, counter.Count(), int64(6), "statements for %d review items", items)
+}
+
+// TestListStuckBacklogItems_should_NotBlockOnGitHub_When_NotRefreshing proves a
+// plain poll uses the cache-only lookup and only RefreshAutoMerge pays for the
+// blocking one.
+func TestListStuckBacklogItems_should_NotBlockOnGitHub_When_NotRefreshing(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	var blocking, fast atomic.Int32
+	svc.SetRepoSettingsLookup(func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		blocking.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	})
+	svc.SetRepoSettingsNonBlockingLookup(func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		fast.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	})
+	ctx := t.Context()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "pr", Status: string(session.BacklogStatusPRPending)})
+	require.NoError(t, err)
+	url := "https://github.com/example/repo/pull/1"
+	n := 1
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "c")
+
+	_, err = svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, blocking.Load())
+	assert.EqualValues(t, 1, fast.Load())
+
+	_, err = svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: true}))
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, blocking.Load())
 }

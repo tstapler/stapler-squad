@@ -1,6 +1,6 @@
 // analytics-exempt
-import { redirect } from "next/navigation";
+import { Redirect } from "@/lib/nav";
 
 export default function DefaultsPage() {
-  redirect("/settings");
+  return <Redirect to="/settings" />;
 }

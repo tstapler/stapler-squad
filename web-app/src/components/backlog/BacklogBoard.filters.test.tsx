@@ -49,6 +49,7 @@ const NO_OP_FILTERS: BacklogFilterState = {
   search: "",
   statusFilter: [],
   priorityFilter: [],
+  sourceFilter: [],
   showArchived: false,
 };
 

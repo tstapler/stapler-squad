@@ -16,6 +16,7 @@ interface OmnibarResultListProps {
   onSessionOpenInNewPane?: (session: Session) => void;
   onRepoSelect: (path: string) => void;
   onCreateNew: () => void;
+  onCreateBacklog?: () => void;
   onCloneSession?: (session: Session) => void;
   highlightedIndex: number; // controlled from parent (Omnibar)
   id: string; // listbox id, parent input aria-controls this
@@ -23,13 +24,14 @@ interface OmnibarResultListProps {
 
 /**
  * Returns the total navigable item count for OmnibarResultList.
- * Sessions + repos + 1 for the always-present "+ New Session" item.
+ * Sessions + repos + 1 for "+ New Session" + 1 for "Create Backlog Item (AI)".
  */
 export function getResultListItemCount(
   sessionCount: number,
-  repoCount: number
+  repoCount: number,
+  hasBacklogOption = false
 ): number {
-  return sessionCount + repoCount + 1;
+  return sessionCount + repoCount + (hasBacklogOption ? 2 : 1);
 }
 
 /**
@@ -53,7 +55,11 @@ export function getHighlightedItemId(
     const entry = repoEntries[repoIndex];
     return `${id}-repo-${encodeURIComponent(entry.path)}`;
   }
-  return `${id}-create-new`;
+  const actionIndex = repoIndex - repoEntries.length;
+  if (actionIndex === 0) {
+    return `${id}-create-new`;
+  }
+  return `${id}-create-backlog`;
 }
 
 export function OmnibarResultList({
@@ -64,12 +70,15 @@ export function OmnibarResultList({
   onSessionOpenInNewPane,
   onRepoSelect,
   onCreateNew,
+  onCreateBacklog,
   onCloneSession,
   highlightedIndex,
   id,
 }: OmnibarResultListProps) {
   const createNewIndex = sessionResults.length + repoEntries.length;
+  const createBacklogIndex = createNewIndex + 1;
   const isCreateNewHighlighted = highlightedIndex === createNewIndex;
+  const isCreateBacklogHighlighted = highlightedIndex === createBacklogIndex;
   const listRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
@@ -141,6 +150,26 @@ export function OmnibarResultList({
           +
         </span>
         New Session
+      </li>
+      <li
+        role="option"
+        id={`${id}-create-backlog`}
+        aria-selected={isCreateBacklogHighlighted}
+        className={[
+          styles.createNewItem,
+          isCreateBacklogHighlighted ? styles.createNewHighlighted : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onCreateBacklog?.();
+        }}
+      >
+        <span className={styles.createNewIcon} aria-hidden="true">
+          📝
+        </span>
+        Create Backlog Item (AI)
       </li>
     </ul>
   );

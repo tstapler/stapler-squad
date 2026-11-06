@@ -10,6 +10,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TriggerFormModal } from "./TriggerFormModal";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
 
+// RepoPathInput (target directory field) needs these hooks stubbed outside the app's providers.
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({ useSessionRepoPaths: () => [] }));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => ({ hosts: [] }) }));
+jest.mock("@/lib/hooks/usePathCompletions", () => ({
+  usePathCompletions: () => ({ entries: [], isLoading: false }),
+}));
+
 function makeWorkflow(overrides: Partial<WorkflowProto> = {}): WorkflowProto {
   return {
     id: "wf-1",
@@ -36,6 +43,13 @@ function makeWorkflow(overrides: Partial<WorkflowProto> = {}): WorkflowProto {
 }
 
 describe("TriggerFormModal", () => {
+  it("TriggerFormModal_should_renderTargetDirectoryAsRichPathField", () => {
+    render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
+    const field = screen.getByTestId("trigger-target-directory-input");
+    expect(field).toHaveAttribute("role", "combobox");
+    expect(field).toHaveAccessibleName("Target directory");
+  });
+
   it("TriggerFormModal_should_showGithubPushFields_When_defaultTypeSelected", () => {
     render(<TriggerFormModal open={true} onSave={jest.fn()} onClose={jest.fn()} />);
 

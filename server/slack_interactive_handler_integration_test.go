@@ -4,19 +4,20 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
 )
 
@@ -38,7 +39,7 @@ func computeTestSlackInteractiveSignature(secret, timestamp, body string) string
 // gate (server.go, Story 2.1.3) reads the value this test intends.
 func setSlackInteractiveTestConfig(t *testing.T, approvalEnabled bool) {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	cfg := config.LoadConfig()
 	cfg.Slack.ApprovalEnabled = approvalEnabled
 	require.NoError(t, config.SaveConfig(cfg))
@@ -66,7 +67,7 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-1:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)
@@ -105,6 +106,12 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 	setSlackInteractiveTestConfig(t, false)
 
+	origDistFS := getWebDistFS
+	getWebDistFS = func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>spa</title>")}}, nil
+	}
+	t.Cleanup(func() { getWebDistFS = origDistFS })
+
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
 
@@ -115,7 +122,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 		ToolName:  "Bash",
 	}))
 
-	srv := NewServerWithDeps("localhost:0", deps)
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	payloadJSON := `{"actions":[{"action_id":"approve","value":"appr-int-2:allow"}]}`
 	body := "payload=" + url.QueryEscape(payloadJSON)

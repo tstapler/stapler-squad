@@ -230,6 +230,28 @@ print_binary_provenance() {
     esac
 }
 
+# post_grafana_deploy_annotation: marks a successful (re)deploy on the
+# machine-shared Grafana instance (~/dotfiles/stapler-scripts/observability,
+# localhost:48300 by default — see the observability-grafana-dashboards
+# skill) so it shows up as a vertical marker on the stapler-squad dashboards.
+# Best-effort only: that stack is frequently down (laptop with the compose
+# stack stopped, CI, a machine that's never run it) and a deploy must never
+# fail or hang on it — short timeout, backgrounded, all output discarded.
+post_grafana_deploy_annotation() {
+    pgda_bin="$1"
+    pgda_url="${GRAFANA_URL:-http://localhost:48300}"
+    pgda_auth="${GRAFANA_AUTH:-admin:admin}"
+    pgda_ver_output="$("$pgda_bin" version 2>/dev/null)"
+    pgda_branch="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*branch: *\([^ ]*\).*/\1/p')"
+    pgda_commit="$(printf '%s\n' "$pgda_ver_output" | sed -n 's/.*commit: *\([^ ]*\).*/\1/p')"
+    pgda_text="stapler-squad redeployed on $(hostname -s 2>/dev/null || hostname) (${pgda_branch:-unknown}@${pgda_commit:-unknown})"
+    pgda_text_escaped="$(printf '%s' "$pgda_text" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    pgda_payload="{\"text\":\"$pgda_text_escaped\",\"tags\":[\"deploy\",\"stapler-squad\"]}"
+    (curl -sf -m 2 -u "$pgda_auth" -X POST "$pgda_url/api/annotations" \
+        -H "Content-Type: application/json" \
+        -d "$pgda_payload" >/dev/null 2>&1 &)
+}
+
 # ── Linux / systemd user service ──────────────────────────────────────────────
 install_linux() {
     bin_path="$1"
@@ -979,7 +1001,11 @@ main() {
         macos) install_macos "$bin_path" ;;
     esac
 
-    health_check_and_rollback "$bin_path"
+    if health_check_and_rollback "$bin_path"; then
+        post_grafana_deploy_annotation "$bin_path"
+        return 0
+    fi
+    return 1
 }
 
 main "$@"

@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"os"
 	"slices"
 	"time"
 
@@ -333,31 +332,9 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	var restartErr error
 	if inst.IsHotRestoreRecoverable() {
 		inst.RecoverFromStopped()
-		// A prior failure may have been the session's worktree directory
-		// vanishing from disk (e.g. a pruned/deleted git worktree — see
-		// tmux.ErrWorkDirMissing). Start(false) below is the warm-restart
-		// path and, unlike first-time session setup, never re-creates the
-		// worktree on its own — so without this, "Retry now" would fail
-		// identically forever. GitWorktreeManager.Setup() is the same
-		// create-or-reuse-in-place logic first-time setup uses, so calling
-		// it again here is safe even if the directory turns out to still
-		// exist.
-		//
-		// A Setup() failure fails the retry immediately instead of still
-		// calling Start(false): that would just repeat the identical
-		// ErrWorkDirMissing failure this whole branch exists to recover
-		// from, making "Retry now" look like it silently did nothing.
-		var setupErr error
-		if inst.gitManager.HasWorktree() {
-			if workDir := inst.GetEffectiveRootDir(); workDir != "" {
-				if _, statErr := os.Stat(workDir); errors.Is(statErr, os.ErrNotExist) {
-					if setupErr = inst.gitManager.Setup(); setupErr == nil {
-						log.Info("SessionDriver: recreated missing worktree before retry", "session", inst.Title, "path", workDir)
-					}
-				}
-			}
-		}
-		if setupErr != nil {
+		// A prior failure may have been the session's worktree directory vanishing
+		// (see recreateWorktreeIfMissing); a failure there fails the retry now.
+		if setupErr := inst.recreateWorktreeIfMissing(); setupErr != nil {
 			restartErr = fmt.Errorf("failed to recreate missing worktree before retry: %w", setupErr)
 		} else {
 			// Clear the old (possibly dead) controller so StartController below creates a fresh one.
@@ -371,7 +348,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 			}
 		}
 	} else {
-		restartErr = inst.Restart(false)
+		restartErr = inst.Restart(false, "")
 	}
 
 	if restartErr != nil {
@@ -382,25 +359,19 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 		return restartErr
 	}
 
-	// Set driverRunning = true before spawning to close the race window
-	// between an exiting goroutine's own driverRunning bookkeeping and the new
-	// one starting (mirrors handleDriverFailure's existing D3 mitigation).
-	inst.driverRunning.Store(true)
-
-	driverStop := stop
-	if driverStop == nil {
-		if existing := inst.driverStopper.Load(); existing != nil {
-			driverStop = existing.stop
-		} else {
-			stopper := &sessionDriverStopper{stop: make(chan struct{})}
-			inst.driverStopper.Store(stopper)
-			driverStop = stopper.stop
-		}
+	// Register before spawning to close the race window between an exiting
+	// goroutine's driverRunning bookkeeping and the new one starting
+	// (mirrors handleDriverFailure's existing D3 mitigation).
+	driverStop, ok := inst.registerContinuation(stop)
+	if !ok {
+		// Destroy already ran. The restart above has already happened; it is cleaned up only when
+		// this ran on a driver goroutine that StopSessionDriver waited for (within driverStopTimeout).
+		log.Info("SessionDriver: instance destroyed, not spawning retry continuation", "session", inst.Title)
+		return nil
 	}
-
-	inst.driverWG.Add(1)
 	go func() {
 		defer inst.driverWG.Done()
+		defer inst.driverGoroutineExited()
 		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, policy, driverStop)
 	}()
 	return nil

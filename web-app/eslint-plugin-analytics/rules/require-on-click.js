@@ -29,6 +29,7 @@ module.exports = {
     /**
      * Walk all nodes in a subtree looking for a call expression where
      * callee.property.name === "track" (handles analytics.track(...), obj.track(...), etc.)
+     * or "emit" (useFilesAnalytics().emit, ADR-035)
      * or callee.name === "track".
      */
     function containsTrackCall(node) {
@@ -36,7 +37,7 @@ module.exports = {
       if (
         node.type === "CallExpression" &&
         ((node.callee.type === "MemberExpression" &&
-          node.callee.property.name === "track") ||
+          (node.callee.property.name === "track" || node.callee.property.name === "emit")) ||
           (node.callee.type === "Identifier" && node.callee.name === "track"))
       ) {
         return true;
@@ -112,10 +113,13 @@ module.exports = {
           ) {
             return true;
           }
-          // Comment form: {/* analytics-exempt */} → JSXEmptyExpression with leading comment
+          // Comment form: {/* analytics-exempt */} → a JSXEmptyExpression's range IS the comment's range (the
+          // comment is its only content), so getCommentsBefore(child.expression) never finds it — nothing is
+          // "before" a node that the comment itself occupies. getCommentsInside(child) looks inside the
+          // JSXExpressionContainer instead, which is where the comment actually lives.
           if (child.expression.type === "JSXEmptyExpression") {
-            const comments = context.getSourceCode().getCommentsBefore(child.expression);
-            if (comments.some((c) => c.value.trim() === " analytics-exempt" || c.value.trim() === "analytics-exempt")) {
+            const comments = context.getSourceCode().getCommentsInside(child);
+            if (comments.some((c) => c.value.trim() === "analytics-exempt")) {
               return true;
             }
           }

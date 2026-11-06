@@ -7,12 +7,17 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // mark and is used here instead (plan.md's snippet assumed `Github` exists;
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
-import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
-import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
+import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
+import { DependencyChip } from "./DependencyChip";
+import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
+import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
+import { safeExternalHref } from "./externalRef";
 import * as styles from "./BacklogItemCard.css";
 
 interface BacklogItemCardProps {
@@ -39,9 +44,53 @@ interface BacklogItemCardProps {
    * page level (not per-card) and passed down — see board/page.tsx.
    */
   stuckItem?: StuckBacklogItem;
+  /**
+   * Every OTHER currently-open StuckReason for this item beyond `stuckItem`
+   * itself, from BacklogBoard's `summarizeStuckItemGroup` call (a backlog
+   * item can have several simultaneous open StuckBacklogItem rows —
+   * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
+   */
+  otherStuckReasons?: StuckReason[];
+  /**
+   * Claim another host holds on this item's externalUrl, from the board's single
+   * ListForeignClaims call. Undefined renders no chip.
+   */
+  claim?: ClaimedElsewhere;
 }
 
-function AcSummary({ item }: { item: BacklogItem }) {
+// The bare externalId is only an issue number, so repo-qualify it from the URL
+// (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
+export function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
+  const source = getSourceBadgeConfig(pluginId);
+  const { fullRef, shortRef } = buildExternalRefLabels(pluginId, externalUrl, externalId);
+  const href = safeExternalHref(externalUrl);
+  if (!href) {
+    return (
+      <span className={styles.provenanceBadge} title={fullRef} data-action-button="true">
+        <CircleDot aria-hidden="true" size={12} />
+        {shortRef}
+      </span>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={styles.provenanceBadge}
+      aria-label={`Imported from ${source.label} issue ${fullRef}`}
+      title={fullRef}
+      data-action-button="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* analytics-exempt */}
+      <CircleDot aria-hidden="true" size={12} />
+      {shortRef}
+    </a>
+  );
+}
+
+export function AcSummary({ item }: { item: BacklogItem }) {
   if (item.acCriteria.length === 0) return null;
   const done = item.acCriteria.filter((c) => c.status === "done").length;
   return (
@@ -62,7 +111,7 @@ const VERDICT_BADGE_CONFIG: Partial<Record<NonNullable<BacklogItem["gateVerdict"
 // FAIL/PARTIAL verdict that triggered rework is otherwise invisible until the
 // item is opened (PENDING is left unbadged: it just means a review is running,
 // not a signal worth a card badge).
-function VerdictBadge({ item }: { item: BacklogItem }) {
+export function VerdictBadge({ item }: { item: BacklogItem }) {
   if (!item.gateVerdict) return null;
   const config = VERDICT_BADGE_CONFIG[item.gateVerdict];
   if (!config) return null;
@@ -93,6 +142,8 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   pendingAction = null,
   forceJustChanged = false,
   stuckItem,
+  otherStuckReasons,
+  claim,
 }: BacklogItemCardProps) {
   const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
@@ -175,6 +226,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 
       {isTriageRunning && (
@@ -192,19 +244,9 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           <VerdictBadge item={item} />
         </span>
         {item.externalUrl && item.externalId && (
-          <a
-            href={item.externalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.provenanceBadge}
-            aria-label={`Imported from GitHub issue #${item.externalId}`}
-            data-action-button="true"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <CircleDot aria-hidden="true" size={12} />
-            #{item.externalId}
-          </a>
+          <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} pluginId={item.pluginId} />
         )}
+        {claim && <ClaimChip claim={claim} />}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
           disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
@@ -220,6 +262,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             }
           }}
         >
+          {/* analytics-exempt */}
           {isActionPending ? (
             <>
               <span className={styles.buttonSpinner} aria-hidden="true" />
@@ -229,7 +272,10 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             actionSpec.label
           )}
         </button>
-        {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
+        {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
+        {item.blockedBy && item.blockedBy.length > 0 && (
+          <DependencyChip deps={item.blockedBy} onItemClick={onClick} />
+        )}
       </div>
       {disabledReason && (
         <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">

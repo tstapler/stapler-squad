@@ -211,8 +211,8 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 //   - sessionTitle: used only for structured debug logging.
 //
 // Caller must be running inside the actor's serialized command closure (via i.send()/
-// sendSyncErr()), not holding Instance.mu - see UpdateTerminalTimestamps in
-// instance_approval.go, the sole caller.
+// sendSyncErr()) AND hold Instance.mu, so the caller can touchLocked in the same hold -
+// see UpdateTerminalTimestamps in instance_approval.go, the sole caller.
 // Returns true when any field was updated (caller should rebuild the snapshot).
 func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) bool {
 	now := time.Now()

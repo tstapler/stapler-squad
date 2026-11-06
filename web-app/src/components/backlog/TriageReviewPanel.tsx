@@ -7,6 +7,7 @@ import { getErrorMessage } from "@/lib/utils/connectError";
 import { TriageDiffSection } from "./TriageDiffSection";
 import { TriageErrorBanner } from "./TriageErrorBanner";
 import { TriageRelatedWorkSection } from "./TriageRelatedWorkSection";
+import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import * as styles from "./TriageReviewPanel.css";
 
 const DISMISSED_KEY = (id: string) => `triage-panel-dismissed-${id}`;
@@ -64,6 +65,12 @@ function isReadOnlyProps(props: TriageReviewPanelProps): props is TriageReviewPa
  * Shows when triageStatus === "completed" AND item.status === "idea" AND not dismissed.
  *
  * Per UX spec Section 3.1 and Section 7.2.
+ *
+ * Invariant (`hasSuggestions` gate): TriageDiffSection — and with it the
+ * question-answer UI — renders only when at least one suggestion has
+ * `rationale !== "question"`. A fixture holding only question suggestions
+ * renders no diff section at all, so tests of the answer flow must include
+ * at least one non-question suggestion.
  */
 export function TriageReviewPanel(props: TriageReviewPanelProps) {
   const { item, triageResult } = props;
@@ -161,6 +168,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           }}
           data-testid="triage-undo-button"
         >
+{/* analytics-exempt */}
           Undo
         </button>
       </div>,
@@ -200,6 +208,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               data-testid="triage-dismiss-button"
               disabled={isApplying}
             >
+{/* analytics-exempt */}
               Skip ×
             </button>
           )}
@@ -222,6 +231,13 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
           <p className={styles.sectionLabel}>Summary</p>
           <p className={styles.summaryText}>{triageResult.summary}</p>
         </div>
+
+        {/* Clarifying questions triage asked via ask_user (AC2/AC3) — same
+            shared component as BacklogItemDetail/SessionDetailView. Renders
+            nothing of its own when there's nothing pending/answered, so no
+            divider is added here — its own card styling separates it when
+            it does render. */}
+        <GuidanceRequestPanel scope="backlog-item" scopeKey={item.id} title="Triage questions" />
 
         {!readOnly && (
           <>
@@ -286,6 +302,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isApplying}
                 data-testid="triage-apply-button"
               >
+{/* analytics-exempt */}
                 {isApplying ? "Applying…" : "Apply suggestions"}
               </button>
             ) : (
@@ -297,6 +314,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isApplying}
                 data-testid="triage-mark-ready-button"
               >
+{/* analytics-exempt */}
                 {isApplying ? "Applying…" : "Mark ready"}
               </button>
             )}
@@ -307,6 +325,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
               disabled={isApplying}
               data-testid="triage-skip-button"
             >
+{/* analytics-exempt */}
               Skip — review later
             </button>
             {onRefine && !showRefineForm && (
@@ -317,6 +336,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 disabled={isApplying}
                 data-testid="triage-refine-toggle-button"
               >
+{/* analytics-exempt */}
                 Not quite — give feedback
               </button>
             )}
@@ -358,6 +378,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 aria-busy={isRefining}
                 data-testid="triage-refine-submit-button"
               >
+{/* analytics-exempt */}
                 {isRefining ? "Refining…" : "Refine triage"}
               </button>
               <button
@@ -370,6 +391,7 @@ export function TriageReviewPanel(props: TriageReviewPanelProps) {
                 disabled={isRefining}
                 data-testid="triage-refine-cancel-button"
               >
+{/* analytics-exempt */}
                 Cancel
               </button>
             </div>

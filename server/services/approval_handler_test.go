@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,7 +18,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -66,7 +66,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	_ = NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(1))
 
 	tmpDir := t.TempDir()
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (first write): %v", err)
 	}
 	firstAddr := fmt.Sprintf("http://localhost:%d", 20000+calls) // whatever nextAddr() returned during that call
@@ -81,7 +81,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// URL moves forward, mirroring a server that rebinds to a different port between
 	// hook-injection events -- the exact scenario the lazy baseURLFn mechanism exists to
 	// support (never a string baked in at construction time).
-	if err := InjectHookConfig(tmpDir, "session-a"); err != nil {
+	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
 		t.Fatalf("InjectHookConfig (second write): %v", err)
 	}
 
@@ -235,6 +235,145 @@ func TestHandlePermissionRequest_EscalationReason_ExplicitRule(t *testing.T) {
 	}
 	if captured.EscalationCategory != "explicit-rule" {
 		t.Errorf("EscalationCategory = %q, want %q", captured.EscalationCategory, "explicit-rule")
+	}
+}
+
+// TestNormalizePiPayload_CopiesPathToFilePath covers the dominant pi-harness bug: pi's
+// read/edit/write/grep/find/ls tools key the target path as "path", but classifier.go's
+// matchesRule reads payload.ToolInput["file_path"] verbatim for every FilePattern rule.
+func TestNormalizePiPayload_CopiesPathToFilePath(t *testing.T) {
+	t.Parallel()
+	payload := classifier.PermissionRequestPayload{
+		ToolName:  "write",
+		ToolInput: map[string]interface{}{"content": "x", "path": "/tmp/.env"},
+	}
+	normalizePiPayload(&payload)
+	if got := payload.ToolInput["file_path"]; got != "/tmp/.env" {
+		t.Errorf("ToolInput[file_path] = %v, want /tmp/.env", got)
+	}
+}
+
+// TestNormalizePiPayload_PrefersExistingFilePath ensures normalizePiPayload never
+// clobbers an already-populated file_path (e.g. a future pi version that adopts
+// Claude's convention directly) with a stale "path" value.
+func TestNormalizePiPayload_PrefersExistingFilePath(t *testing.T) {
+	t.Parallel()
+	payload := classifier.PermissionRequestPayload{
+		ToolName:  "write",
+		ToolInput: map[string]interface{}{"file_path": "/tmp/explicit.txt", "path": "/tmp/other.txt"},
+	}
+	normalizePiPayload(&payload)
+	if got := payload.ToolInput["file_path"]; got != "/tmp/explicit.txt" {
+		t.Errorf("ToolInput[file_path] = %v, want /tmp/explicit.txt", got)
+	}
+}
+
+// TestNormalizePiPayload_AliasesToolNames covers the two pi tool names with no
+// case-insensitive-EqualFold overlap onto a Claude tool name: "find" (pi's glob-pattern
+// finder) and "powershell" (pi's Windows shell tool).
+func TestNormalizePiPayload_AliasesToolNames(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{"find": "Glob", "powershell": "Bash", "FIND": "Glob"}
+	for input, want := range cases {
+		payload := classifier.PermissionRequestPayload{ToolName: input}
+		normalizePiPayload(&payload)
+		if payload.ToolName != want {
+			t.Errorf("normalizePiPayload(%q).ToolName = %q, want %q", input, payload.ToolName, want)
+		}
+	}
+}
+
+// TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies is an end-to-end regression test
+// through the real classifier (not a mock): a pi "write" tool call keying its target as
+// "path" (pi's real convention, confirmed against the installed
+// @earendil-works/pi-coding-agent package) must still trip seed-deny-env-write, which
+// matches on ToolInput["file_path"]. Before normalizePiPayload existed, this fell through
+// to Escalate and blocked for the full approval timeout instead of resolving instantly.
+func TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(5 * time.Second)
+	h.SetClassifier(classifier.NewRuleBasedClassifier())
+
+	payload := map[string]interface{}{
+		"tool_name":  "write",
+		"tool_input": map[string]interface{}{"content": "SECRET=x", "path": "/tmp/project/.env"},
+		"cwd":        "/tmp/project",
+		"source":     "pi",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CS-Session-ID", "test-session")
+
+	rr := httptest.NewRecorder()
+	h.HandlePermissionRequest(rr, req)
+
+	var resp hookDecisionResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v (body=%s)", err, rr.Body.String())
+	}
+	if resp.HookSpecificOutput.Decision.Behavior != "deny" {
+		t.Errorf("Decision.Behavior = %q, want %q (pi's path->file_path gap left this escalating instead of auto-denying)", resp.HookSpecificOutput.Decision.Behavior, "deny")
+	}
+}
+
+// TestApprovalDetail_PrefersCommandOverFilePath covers the fix for the dominant
+// auto-approval-log bug: AppendAutoApproved's detail param used to be derived only from
+// ToolInput["file_path"], which Bash never sets, so every auto-decided Bash command
+// (including pi's, and every sub-command of a compound &&/;/pipe chain) was logged and
+// persisted as just the tool name with zero information about what actually ran.
+func TestApprovalDetail_PrefersCommandOverFilePath(t *testing.T) {
+	t.Parallel()
+	got := approvalDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
+	if want := "ls -la && pwd"; got != want {
+		t.Errorf("approvalDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestApprovalDetail_FallsBackToFilePath(t *testing.T) {
+	t.Parallel()
+	got := approvalDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
+	if want := "/tmp/foo.txt"; got != want {
+		t.Errorf("approvalDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestApprovalDetail_EmptyWhenNeitherPresent(t *testing.T) {
+	t.Parallel()
+	if got := approvalDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
+		t.Errorf("approvalDetail() = %q, want empty string", got)
+	}
+}
+
+// fakeAutoApprovalLogger captures AppendAutoApproved calls for assertion without going
+// through the real notifications.NotificationHistoryStore.
+type fakeAutoApprovalLogger struct {
+	detail string
+}
+
+func (f *fakeAutoApprovalLogger) AppendAutoApproved(_, _, _, detail, _, _, _, _ string) error {
+	f.detail = detail
+	return nil
+}
+
+// TestHandlePermissionRequest_AutoAllowedCompoundBash_LogsFullCommand is an end-to-end
+// regression test through the real classifier: a compound Bash command auto-allowed by
+// seed-allow-bash-ls-pwd must have its full original command text (both sub-commands)
+// reach the auto-approval log, not just "Bash".
+func TestHandlePermissionRequest_AutoAllowedCompoundBash_LogsFullCommand(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(5 * time.Second)
+	h.SetClassifier(classifier.NewRuleBasedClassifier())
+	logger := &fakeAutoApprovalLogger{}
+	h.SetAutoApprovalLogger(logger)
+
+	rr := postPermissionRequestWithCommand(t, h, "test-session", "Bash", "ls -la && pwd")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if want := "ls -la && pwd"; logger.detail != want {
+		t.Errorf("AppendAutoApproved detail = %q, want %q (full compound command, not just tool name)", logger.detail, want)
 	}
 }
 
@@ -534,7 +673,7 @@ func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstanc
 // NotifyApprovalPending was invoked (it dispatches its own POST internally,
 // per Story 1.2.3's ownership model).
 func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 
 	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -563,7 +702,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 
 	// Give any accidental second dispatch a moment to land, then assert the
 	// count settled at exactly one call.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) //nolint:notimesleeptest negative assertion on a fire-and-forget dispatch with no completion signal
 	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
 }
 
@@ -619,7 +758,7 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i), "")
 		}(i)
 	}
 	wg.Wait()
@@ -634,4 +773,25 @@ func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(
 
 	var parsed map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
+}
+
+func TestBroadcastApprovalNotification_ShouldStampRiskLevel_WhenApprovalIsClassified(t *testing.T) {
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+
+	h.broadcastApprovalNotification("sess-r", &PendingApproval{
+		ID: "appr-r", SessionID: "sess-r", ToolName: "Bash", RiskLevel: "critical",
+		ToolInput: map[string]interface{}{},
+	})
+
+	select {
+	case ev := <-ch:
+		require.Equal(t, "critical", ev.NotificationMetadata["risk_level"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("no notification published")
+	}
 }

@@ -3,12 +3,12 @@
 // +feature: backlog:board-page
 
 import { useState, useCallback, useRef, useEffect, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { BacklogBoard } from "@/components/backlog/BacklogBoard";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { useBacklogFilters } from "@/lib/hooks/useBacklogFilters";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useBacklogService, type ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import * as styles from "./board.css";
@@ -21,7 +21,19 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
 };
 
 function BacklogBoardPageInner() {
-  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage } = useBacklogService();
+  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, listForeignClaims } = useBacklogService();
+  // One local-only call for the whole board (never per card); claims that have
+  // not gossiped here yet simply show no chip.
+  const [foreignClaims, setForeignClaims] = useState<ClaimedElsewhere[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listForeignClaims().then((claims) => {
+      if (!cancelled) setForeignClaims(claims);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [listForeignClaims]);
   const { showActionToast } = useNotifications();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -30,11 +42,12 @@ function BacklogBoardPageInner() {
   // Shared filter state with the list view (AC 3, 4) — same localStorage
   // keys via useBacklogFilters. Sort/group-by remain list-only (AC 6).
   const filterState = useBacklogFilters();
-  const { search, statusFilter, priorityFilter, showArchived } = filterState.state;
+  const { search, statusFilter, priorityFilter, sourceFilter, showArchived } = filterState.state;
   const {
     search: setSearch,
     statusFilter: setStatusFilter,
     priorityFilter: setPriorityFilter,
+    sourceFilter: setSourceFilter,
     showArchived: setShowArchived,
   } = filterState.setters;
   const resetView = filterState.resetToDefaults;
@@ -128,6 +141,8 @@ function BacklogBoardPageInner() {
         onStatusFilterChange={setStatusFilter}
         priorityFilter={priorityFilter}
         onPriorityFilterChange={setPriorityFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
         showArchived={showArchived}
         onShowArchivedChange={setShowArchived}
         onResetView={resetView}
@@ -140,11 +155,17 @@ function BacklogBoardPageInner() {
           onItemClick={handleItemClick}
           pending={pending}
           stuckItems={stuckItems}
-          filters={{ search, statusFilter, priorityFilter, showArchived }}
+          foreignClaims={foreignClaims}
+          filters={{ search, statusFilter, priorityFilter, sourceFilter, showArchived }}
         />
         {selectedItemId && (
           <aside className={styles.detailPane} aria-label="Item detail">
-            <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
+            <BacklogItemDetail
+              key={selectedItemId}
+              itemId={selectedItemId}
+              onClose={handleDetailClose}
+              onItemClick={handleItemClick}
+            />
           </aside>
         )}
       </div>

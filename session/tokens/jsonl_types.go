@@ -11,6 +11,18 @@ type jsonlEntry struct {
 	SessionID string          `json:"sessionId"`
 	Timestamp string          `json:"timestamp"`
 	Message   json.RawMessage `json:"message"`
+
+	// Subtype and CompactMetadata are set on system "compact_boundary" entries.
+	Subtype         string           `json:"subtype"`
+	CompactMetadata *compactMetadata `json:"compactMetadata"`
+}
+
+// compactMetadata is the payload Claude Code writes when a conversation is
+// compacted. PostTokens is absent in older transcripts.
+type compactMetadata struct {
+	Trigger    string `json:"trigger"`
+	PreTokens  int64  `json:"preTokens"`
+	PostTokens int64  `json:"postTokens"`
 }
 
 // jsonlMessage is the "message" field of an assistant entry.
@@ -25,10 +37,11 @@ type jsonlMessage struct {
 
 // jsonlUsage contains the token counts for a message.
 type jsonlUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
+	Speed                    string `json:"speed"` // "standard" or a faster billing mode
 }
 
 // jsonlContent is one element in the content array of an assistant message.

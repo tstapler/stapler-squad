@@ -1,6 +1,7 @@
 "use client";
 
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import * as styles from "../BacklogItemDetail.css";
 
 export interface PlanningSectionProps {
@@ -14,7 +15,9 @@ export interface PlanningSectionProps {
  * matches the pre-extraction behavior exactly.
  */
 export function PlanningSection({ item }: PlanningSectionProps) {
-  if (!item.triageResult || item.status === "idea") return null;
+  // TriageResultPanel renders the same data when its flag is on.
+  const replacedByTriagePanel = useFeatureFlag("backlog-triage-results-panel");
+  if (replacedByTriagePanel || !item.triageResult || item.status === "idea") return null;
 
   return (
     <div className={styles.section}>

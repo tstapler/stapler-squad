@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package session.v1;
+
+// SessionBundleService provides per-session diagnostic bundle export (RUM —
+// Real User Monitoring). Supports two delivery modes:
+//   - ExportSessionBundle: server-streaming, chunks the ZIP to the browser
+//     (Approach A from the implementation plan; auth middleware applies
+//     automatically via ConnectOptions; consistent with WatchSessions /
+//     StreamTerminal streaming pattern).
+//   - SaveSessionBundle: unary, writes the ZIP to a server-side path and
+//     returns the file path + SHA-256 content hash for backlog hand-off.
+service SessionBundleService {
+  // ExportSessionBundle assembles a RUMSessionBundle ZIP for the given session
+  // and streams it back as a sequence of fixed-size (64 KB) BundleChunk
+  // messages. The final chunk has final=true. The caller reassembles the
+  // chunks into a Blob for a browser-initiated download.
+  rpc ExportSessionBundle(ExportSessionBundleRequest) returns (stream BundleChunk) {}
+
+  // SaveSessionBundle assembles a RUMSessionBundle ZIP and writes it to
+  // output_dir on the server, returning the resolved file path, size, and
+  // SHA-256 content hash. The hash is used for backlog hand-off (see
+  // plan.md Pattern Decisions note B4 — absolute paths are machine-local).
+  rpc SaveSessionBundle(SaveSessionBundleRequest) returns (SaveSessionBundleResponse) {}
+}
+
+// ExportSessionBundleRequest selects the session and configures the
+// scrollback tail depth for the browser-download streaming path.
+message ExportSessionBundleRequest {
+  // session_uuid is the UUID of the session to bundle.
+  string session_uuid = 1;
+  // max_scrollback_lines caps the tail of scrollback included in the bundle.
+  // 0 means use the server default (500 lines). Values above 500 are clamped.
+  int32 max_scrollback_lines = 2;
+  // client_spans_json is the browser's buffered spans for this session
+  // (JSON array), bundled as client_traces.json. Capped server-side.
+  bytes client_spans_json = 3;
+}
+
+// BundleChunk is a single fixed-size segment of the assembled ZIP stream.
+// The stream ends after the chunk with final=true.
+message BundleChunk {
+  // data contains the raw ZIP bytes for this chunk (up to 64 KB).
+  bytes data = 1;
+  // chunk_index is the zero-based position of this chunk in the stream.
+  int32 chunk_index = 2;
+  // final is true on the last chunk of the stream.
+  bool final = 3;
+}
+
+// SaveSessionBundleRequest selects the session and the server-side directory
+// to write the bundle ZIP into.
+message SaveSessionBundleRequest {
+  // session_uuid is the UUID of the session to bundle.
+  string session_uuid = 1;
+  // output_dir is the absolute server-side directory path to write the bundle
+  // into. Empty means use the server default (~/.stapler-squad/diagnostics/).
+  string output_dir = 2;
+  // client_spans_json: see ExportSessionBundleRequest.client_spans_json.
+  bytes client_spans_json = 3;
+}
+
+// SaveSessionBundleResponse describes the saved bundle file.
+message SaveSessionBundleResponse {
+  // file_path is the absolute server-side path of the saved ZIP file.
+  string file_path = 1;
+  // file_size_bytes is the size of the saved ZIP file in bytes.
+  int64 file_size_bytes = 2;
+  // content_hash is the hex-encoded SHA-256 digest of the ZIP content.
+  // Used as a machine-independent identifier for backlog hand-off.
+  string content_hash = 3;
+}

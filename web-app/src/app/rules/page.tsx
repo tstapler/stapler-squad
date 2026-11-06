@@ -3,7 +3,7 @@
 // +feature: approval-rules rules-management
 
 import { Suspense, useEffect } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { ApprovalRulesPanel } from "@/components/sessions/ApprovalRulesPanel";
 import { ApprovalAnalyticsPanel } from "@/components/sessions/ApprovalAnalyticsPanel";
 import { HookStatusPanel } from "@/components/sessions/HookStatusPanel";

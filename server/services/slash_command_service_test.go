@@ -20,7 +20,7 @@ import (
 // that directory (a broken check would still find it, since
 // filepath.Join cleans the same way).
 func TestListSlashCommands_RejectsTraversingTargetDirectory(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate ~/.claude/commands (user-source) from the real home dir
+	withFakeHome(t) // isolate ~/.claude/commands (user-source) from the real home dir
 
 	base := t.TempDir()
 	// escapeDir is what filepath.Clean(maliciousTargetDir) resolves to below.
@@ -51,7 +51,7 @@ func TestListSlashCommands_RejectsTraversingTargetDirectory(t *testing.T) {
 // control case: a clean absolute target_directory must still surface its
 // project commands.
 func TestListSlashCommands_LegitimateTargetDirectory_ListsProjectCommands(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	withFakeHome(t)
 
 	targetDir := t.TempDir()
 	commandsDir := filepath.Join(targetDir, ".claude", "commands")

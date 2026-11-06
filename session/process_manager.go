@@ -3,11 +3,24 @@ package session
 import (
 	"context"
 	"os"
+
+	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // ProcessManager abstracts terminal process lifecycle and I/O.
 // Implementations: TmuxBackend (wraps TmuxProcessManager), NativeProcessManager (Phase 2).
 type ProcessManager interface {
+	// WireLaunch tells the backend what program to run, before Start or
+	// RestoreWithWorkDir. It is a required method so a new backend cannot compile
+	// without deciding how it consumes the launch command; callers never
+	// type-switch on the concrete backend to do this.
+	WireLaunch(spec LaunchSpec)
+
+	// AppendLaunchEnv adds environment (KEY=VALUE) for the program the next Start
+	// launches. A backend that cannot pass env must say so by doing nothing, explicitly.
+	AppendLaunchEnv(env ...string)
+
 	// Lifecycle
 	Start(dir string) error
 	RestoreWithWorkDir(workDir string) error
@@ -73,6 +86,18 @@ type ProcessManager interface {
 	ResetExitOnce()
 }
 
+// LaunchSpec is everything a backend needs to launch an instance's program.
+type LaunchSpec struct {
+	// Program is the full launch command (including any --resume flag) as shell
+	// text, for backends that run it through a shell.
+	Program string
+	// Command is the same launch command as data, for backends that exec directly.
+	Command launchcmd.LaunchCommand
+	// NewTmuxSession builds the instance-configured tmux session (runner,
+	// prefix, socket, env) around Program; only the tmux backend calls it.
+	NewTmuxSession func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession
+}
+
 // ProcessManagerBackend identifies the backend implementation.
 type ProcessManagerBackend string
 
@@ -102,11 +127,15 @@ type ProcessManagerOptions struct {
 	Prefix       string
 	ServerSocket string
 	Program      string
-	Args         []string
+	// Command, when set, is used instead of Program by backends that exec directly.
+	Command launchcmd.LaunchCommand
+	Args    []string
 	// Backend, when non-empty, overrides both the process-wide default
 	// (RegisterBackendProvider) and NewProcessManager's defaultBackend argument for
 	// this one call — an explicit per-session choice always wins. Zero value ("")
 	// means "no per-session override," preserving today's behavior for every caller
 	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
 	Backend ProcessManagerBackend
+	// TymuxSessionID is the persisted daemon session id for a restored tymux Instance.
+	TymuxSessionID string
 }

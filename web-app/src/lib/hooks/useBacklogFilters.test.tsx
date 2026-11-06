@@ -38,6 +38,7 @@ const NO_OP_FILTERS: BacklogFilterState = {
   search: "",
   statusFilter: [],
   priorityFilter: [],
+  sourceFilter: [],
   showArchived: false,
 };
 
@@ -126,5 +127,31 @@ describe("useBacklogFilters persistence (shared state across independent consume
 
     expect(second.result.current.state.statusFilter).toEqual(["ready", "review"]);
     expect(second.result.current.state.search).toBe("widget");
+  });
+});
+
+describe("filterBacklogItems sourceFilter", () => {
+  const items = [
+    { ...makeItem({ id: "a" }), pluginId: "linear" },
+    { ...makeItem({ id: "b" }), pluginId: "github_issues" },
+    { ...makeItem({ id: "c" }) },
+  ] as BacklogItem[];
+
+  it("keeps only items from the selected source", () => {
+    const out = filterBacklogItems(items, { ...NO_OP_FILTERS, sourceFilter: ["linear"] });
+    expect(out.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("matches an imported item lacking pluginId under the GitHub chip", () => {
+    const legacy = [
+      makeItem({ id: "legacy", externalUrl: "https://github.com/acme/w/issues/1", externalId: "1" }),
+      makeItem({ id: "manual" }),
+    ] as BacklogItem[];
+    const out = filterBacklogItems(legacy, { ...NO_OP_FILTERS, sourceFilter: ["github_issues"] });
+    expect(out.map((i) => i.id)).toEqual(["legacy"]);
+  });
+
+  it("shows everything when no source is selected", () => {
+    expect(filterBacklogItems(items, NO_OP_FILTERS)).toHaveLength(3);
   });
 });

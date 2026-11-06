@@ -283,6 +283,31 @@ class ChatBacklogItemDetector implements Detector {
 }
 
 /**
+ * Fan-out detector — matches "fanout N: <prompt>" (N in 2-5, the server's cap) so the omnibar
+ * can prefill the variants count and first prompt. Priority 16 sits just after ChatBacklogItem (15).
+ */
+class FanOutDetector implements Detector {
+  name = "FanOut";
+  priority = 16;
+
+  private readonly RE = /^fanout\s+([2-5])\s*:\s*(.+)$/is;
+
+  detect(input: string): DetectionResult | null {
+    const m = this.RE.exec(input.trim());
+    if (!m) return null;
+    const prompt = m[2].trim();
+    if (!prompt) return null;
+    return {
+      type: InputType.FanOut,
+      confidence: 1.0,
+      parsedValue: prompt,
+      suggestedName: prompt.slice(0, 40),
+      metadata: { fanoutCount: Number(m[1]) },
+    };
+  }
+}
+
+/**
  * New Session detector — matches the "new/" prefix shortcut.
  * Priority 35 places it before GitHubShorthand (40) so "new/foo" is always
  * treated as a new-session command, not a GitHub owner/repo shorthand.
@@ -401,6 +426,7 @@ export function createDefaultRegistry(): DetectorRegistry {
   registry.register(new GitHubPRDetector());
   registry.register(new GitHubEnterpriseURLDetector());
   registry.register(new ChatBacklogItemDetector());
+  registry.register(new FanOutDetector());
   registry.register(new GitHubBranchDetector());
   registry.register(new GitHubRepoDetector());
   registry.register(new NewSessionDetector());

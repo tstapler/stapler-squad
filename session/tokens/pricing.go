@@ -3,124 +3,21 @@ package tokens
 import (
 	"encoding/json"
 	"os"
-	"regexp"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/pricing"
 )
 
-// dateSuffixPattern matches date suffixes like -20250514 at the end of model IDs.
-var dateSuffixPattern = regexp.MustCompile(`-\d{8}$`)
+// providers is the vendor set that prices models and normalizes their IDs.
+var providers = pricing.DefaultProviders()
 
-// variantSuffixPattern matches minor variant numbers like -6 or -7 after the family number.
-// For example: claude-sonnet-4-6 → remove the trailing -6 (variant) to get claude-sonnet-4.
-// This applies when the last segment is a single digit following a major version digit.
-var variantSuffixPattern = regexp.MustCompile(`^(claude-(?:opus|sonnet|haiku)-\d+)-\d+$`)
-
-// legacyModelPattern matches old-style claude-3-opus-20240229 format.
-var legacyModelPattern = regexp.MustCompile(`^claude-(\d+)-(\w+)(?:-\d{8})?$`)
-
-// DefaultPricingTable returns a PricingTable with hardcoded defaults as of 2026-07-27.
+// DefaultPricingTable returns a PricingTable with every provider's default prices.
 // Prices are in USD per million tokens.
 func DefaultPricingTable() *PricingTable {
-	return &PricingTable{
-		LoadedAt: time.Now(),
-		Prices: map[string]ModelPricing{
-			// Introductory rate through 2026-08-31; steady-state rate ($3/$15 input/output,
-			// $3.75 cache write, $0.30 cache read) differs — re-verify via WebFetch after
-			// that date. Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-sonnet-5": {
-				ModelFamily:        "claude-sonnet-5",
-				InputPricePerMTok:  2.00,
-				OutputPricePerMTok: 10.00,
-				CacheWritePerMTok:  2.50,
-				CacheReadPerMTok:   0.20,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-opus-5": {
-				ModelFamily:        "claude-opus-5",
-				InputPricePerMTok:  5.00,
-				OutputPricePerMTok: 25.00,
-				CacheWritePerMTok:  6.25,
-				CacheReadPerMTok:   0.50,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-fable-5": {
-				ModelFamily:        "claude-fable-5",
-				InputPricePerMTok:  10.00,
-				OutputPricePerMTok: 50.00,
-				CacheWritePerMTok:  12.50,
-				CacheReadPerMTok:   1.00,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Limited availability (see https://anthropic.com/glasswing) but actively priced.
-			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-mythos-5": {
-				ModelFamily:        "claude-mythos-5",
-				InputPricePerMTok:  10.00,
-				OutputPricePerMTok: 50.00,
-				CacheWritePerMTok:  12.50,
-				CacheReadPerMTok:   1.00,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Family alias for the actively-served 4.5-4.8 minor releases (variantSuffixPattern
-			// strips "-5".."-8" down to this bucket). Verified 2026-07-27 against
-			// https://platform.claude.com/docs/en/about-claude/pricing — EffectiveDate is kept
-			// current since Anthropic can still revise pricing for actively-served models.
-			"claude-opus-4": {
-				ModelFamily:        "claude-opus-4",
-				InputPricePerMTok:  5.00,
-				OutputPricePerMTok: 25.00,
-				CacheWritePerMTok:  6.25,
-				CacheReadPerMTok:   0.50,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-sonnet-4": {
-				ModelFamily:        "claude-sonnet-4",
-				InputPricePerMTok:  3.00,
-				OutputPricePerMTok: 15.00,
-				CacheWritePerMTok:  3.75,
-				CacheReadPerMTok:   0.30,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
-			"claude-haiku-4": {
-				ModelFamily:        "claude-haiku-4",
-				InputPricePerMTok:  1.00,
-				OutputPricePerMTok: 5.00,
-				CacheWritePerMTok:  1.25,
-				CacheReadPerMTok:   0.10,
-				EffectiveDate:      "2026-07-27",
-			},
-			// Claude 3 generation: fully retired, no longer listed on Anthropic's pricing page,
-			// and historical pricing for deprecated models does not change. EffectiveDate is
-			// deliberately left blank (IsStale skips blank dates) so this frozen entry never
-			// trips the staleness warning meant for actively-monitored models.
-			"claude-opus-3": {
-				ModelFamily:        "claude-opus-3",
-				InputPricePerMTok:  15.00,
-				OutputPricePerMTok: 75.00,
-				CacheWritePerMTok:  18.75,
-				CacheReadPerMTok:   1.50,
-			},
-			"claude-sonnet-3": {
-				ModelFamily:        "claude-sonnet-3",
-				InputPricePerMTok:  3.00,
-				OutputPricePerMTok: 15.00,
-				CacheWritePerMTok:  3.75,
-				CacheReadPerMTok:   0.30,
-			},
-			"claude-haiku-3": {
-				ModelFamily:        "claude-haiku-3",
-				InputPricePerMTok:  0.25,
-				OutputPricePerMTok: 1.25,
-				CacheWritePerMTok:  0.30,
-				CacheReadPerMTok:   0.03,
-			},
-		},
-	}
+	return &PricingTable{LoadedAt: time.Now(), Prices: pricing.DefaultPrices(providers)}
 }
 
 // LoadPricingOverride loads pricing from a JSON file and merges it over the
@@ -151,100 +48,91 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 	return table, nil
 }
 
-// NormalizeModelFamily strips date suffixes and normalizes a raw model ID to
-// a pricing-table key.
+// NormalizeModelFamily strips date suffixes and normalizes a raw model ID to a
+// pricing-table key; see pricing.NormalizeModelFamily.
 //
-// Examples:
-//
-//	"claude-sonnet-4-6-20250514" → "claude-sonnet-4"
-//	"claude-sonnet-4-6"          → "claude-sonnet-4"
-//	"claude-opus-4-7"            → "claude-opus-4"
-//	"claude-3-opus-20240229"     → "claude-opus-3"
-//	"claude-haiku-4"             → "claude-haiku-4"
-//	"unknown-model-xyz"          → "unknown-model-xyz"
+// Results are memoized: the regex pipeline dominated GetInsightsSummary (it runs
+// per turn, over a handful of distinct model IDs). The cache stops growing at
+// normalizeCacheMax entries so arbitrary transcript content cannot bloat it.
 func NormalizeModelFamily(modelID string) string {
-	if modelID == "" {
-		return modelID
+	if v, ok := normalizeCache.Load(modelID); ok {
+		return v.(string)
 	}
-
-	// Strip date suffix first (-20250514).
-	normalized := dateSuffixPattern.ReplaceAllString(modelID, "")
-
-	// Handle legacy format: claude-3-opus → claude-opus-3
-	if m := legacyModelPattern.FindStringSubmatch(normalized); len(m) == 3 {
-		version := m[1]
-		family := m[2]
-		return "claude-" + family + "-" + version
+	family := pricing.NormalizeModelFamily(modelID, providers)
+	if normalizeCacheSize.Load() < normalizeCacheMax {
+		if _, loaded := normalizeCache.LoadOrStore(modelID, family); !loaded {
+			normalizeCacheSize.Add(1)
+		}
 	}
-
-	// Handle variant suffix: claude-sonnet-4-6 → claude-sonnet-4
-	if m := variantSuffixPattern.FindStringSubmatch(normalized); len(m) == 2 {
-		return m[1]
-	}
-
-	return normalized
+	return family
 }
 
-// hasUsage reports whether any token counter is non-zero. Shared by
-// EstimateCost, ModelFamilyCost, and their callers to decide whether an
-// unpriced model family had real usage worth flagging (vs. a zero-usage
-// family like Claude Code's internal "<synthetic>" turns).
-func hasUsage(input, output, cacheCreation, cacheRead int64) bool {
-	return input != 0 || output != 0 || cacheCreation != 0 || cacheRead != 0
+const normalizeCacheMax = 4096
+
+var (
+	normalizeCache     sync.Map // modelID -> family
+	normalizeCacheSize atomic.Int64
+)
+
+// CategoryCosts is a session's estimated cost split by token category. Input +
+// Output + CacheCreation + CacheRead equals the EstimateCost total for a
+// fully-priced session; an unpriced model family contributes 0 to every field.
+type CategoryCosts = pricing.CategoryCosts
+
+func turnUsage(t TurnStats) pricing.Usage {
+	return pricing.Usage{Input: t.Input, Output: t.Output, CacheCreation: t.CacheCreation, CacheRead: t.CacheRead, Speed: t.Speed}
 }
 
-// EstimateCost computes USD cost for a ParseResult using the PricingTable.
-// Returns 0.0 for the cost of any model family not found in the table, and
-// reports those skipped families in unpriced (sorted) so the caller can
-// distinguish "genuinely zero usage" from "usage present but unpriced" —
-// see ADR-001-unpriced-signal-return-shape.md. A family with zero usage
-// across every counter (e.g. Claude Code's internal "<synthetic>" turns,
-// which the parser already filters out of TurnTimeline in production — see
-// parser.go's syntheticModelSentinel) is never flagged unpriced, since there
-// is nothing to price and nothing to warn about.
+// EstimateCost computes USD cost for a ParseResult using the PricingTable —
+// the sum of EstimateCostByCategory's four category costs. See that function's
+// doc comment for the unpriced/zero-usage semantics both share.
 func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []string) {
+	costs, unpriced := pt.EstimateCostByCategory(r)
+	return costs.Total(), unpriced
+}
+
+// EstimateCostByCategory computes USD cost for a ParseResult using the
+// PricingTable, split by token category (see CategoryCosts) instead of summed
+// into one total. Returns 0.0 for the cost of any model family not found in
+// the table, and reports those skipped families in unpriced (sorted) so the
+// caller can distinguish "genuinely zero usage" from "usage present but
+// unpriced" — see ADR-001-unpriced-signal-return-shape.md. A family with zero
+// usage across every counter (e.g. Claude Code's internal "<synthetic>"
+// turns, which the parser already filters out of TurnTimeline in
+// production — see parser.go's syntheticModelSentinel) is never flagged
+// unpriced, since there is nothing to price and nothing to warn about.
+func (pt *PricingTable) EstimateCostByCategory(r *ParseResult) (costs CategoryCosts, unpriced []string) {
 	if r == nil || pt == nil {
-		return 0.0, nil
-	}
-
-	// Build per-model token counts from turn timeline.
-	modelInputs := make(map[string]int64)
-	modelOutputs := make(map[string]int64)
-	modelCacheCreation := make(map[string]int64)
-	modelCacheRead := make(map[string]int64)
-
-	for _, turn := range r.TurnTimeline {
-		family := NormalizeModelFamily(turn.Model)
-		modelInputs[family] += turn.Input
-		modelOutputs[family] += turn.Output
-		modelCacheCreation[family] += turn.CacheCreation
-		modelCacheRead[family] += turn.CacheRead
-	}
-
-	// If no turn timeline, fall back to primary model with totals.
-	if len(r.TurnTimeline) == 0 && r.PrimaryModel != "" {
-		family := NormalizeModelFamily(r.PrimaryModel)
-		modelInputs[family] = r.TotalInput
-		modelOutputs[family] = r.TotalOutput
-		modelCacheCreation[family] = r.CacheCreation
-		modelCacheRead[family] = r.CacheRead
+		return CategoryCosts{}, nil
 	}
 
 	unpricedSet := make(map[string]bool)
-
-	var total float64
-	for family, inputTok := range modelInputs {
-		pricing, ok := pt.Prices[family]
+	add := func(model string, u pricing.Usage, perRequest bool) {
+		family := NormalizeModelFamily(model)
+		price, ok := pt.Prices[family]
 		if !ok {
-			if hasUsage(inputTok, modelOutputs[family], modelCacheCreation[family], modelCacheRead[family]) {
+			if u.HasTokens() {
 				unpricedSet[family] = true
 			}
-			continue
+			return
 		}
-		total += float64(inputTok) / 1_000_000.0 * pricing.InputPricePerMTok
-		total += float64(modelOutputs[family]) / 1_000_000.0 * pricing.OutputPricePerMTok
-		total += float64(modelCacheCreation[family]) / 1_000_000.0 * pricing.CacheWritePerMTok
-		total += float64(modelCacheRead[family]) / 1_000_000.0 * pricing.CacheReadPerMTok
+		c := price.FlatCost(u)
+		if perRequest {
+			c = price.Cost(u)
+		}
+		costs.Input += c.Input
+		costs.Output += c.Output
+		costs.CacheCreation += c.CacheCreation
+		costs.CacheRead += c.CacheRead
+	}
+
+	// Each turn is one request, so long-context tiers apply per turn.
+	for _, turn := range r.TurnTimeline {
+		add(turn.Model, turnUsage(turn), true)
+	}
+	// Without a timeline only session totals exist; tiers can't be applied to them.
+	if len(r.TurnTimeline) == 0 && r.PrimaryModel != "" {
+		add(r.PrimaryModel, pricing.Usage{Input: r.TotalInput, Output: r.TotalOutput, CacheCreation: r.CacheCreation, CacheRead: r.CacheRead}, false)
 	}
 
 	unpriced = make([]string, 0, len(unpricedSet))
@@ -253,7 +141,7 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 	}
 	sort.Strings(unpriced)
 
-	return total, unpriced
+	return costs, unpriced
 }
 
 // IsStale returns true when any entry in the table has an EffectiveDate older
@@ -290,31 +178,23 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 
 	for _, turn := range r.TurnTimeline {
 		family := NormalizeModelFamily(turn.Model)
-		pricing, ok := pt.Prices[family]
+		price, ok := pt.Prices[family]
 		if !ok {
-			if hasUsage(turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead) {
+			if turnUsage(turn).HasTokens() {
 				unpriced[family] = true
 			}
 			continue
 		}
-		cost := float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-			float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-			float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-			float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
-		result[family] += cost
+		result[family] += price.Cost(turnUsage(turn)).Total()
 	}
 
 	// Fall back to primary model if no timeline data.
 	if len(result) == 0 && r.PrimaryModel != "" {
 		family := NormalizeModelFamily(r.PrimaryModel)
-		pricing, ok := pt.Prices[family]
-		if ok {
-			cost := float64(r.TotalInput)/1_000_000.0*pricing.InputPricePerMTok +
-				float64(r.TotalOutput)/1_000_000.0*pricing.OutputPricePerMTok +
-				float64(r.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-				float64(r.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
-			result[family] = cost
-		} else if hasUsage(r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead) {
+		totals := pricing.Usage{Input: r.TotalInput, Output: r.TotalOutput, CacheCreation: r.CacheCreation, CacheRead: r.CacheRead}
+		if price, ok := pt.Prices[family]; ok {
+			result[family] = price.FlatCost(totals).Total()
+		} else if totals.HasTokens() {
 			unpriced[family] = true
 		}
 	}
@@ -332,15 +212,11 @@ func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced b
 		return 0, false
 	}
 	family := NormalizeModelFamily(turn.Model)
-	pricing, ok := pt.Prices[family]
+	price, ok := pt.Prices[family]
 	if !ok {
 		return 0, false
 	}
-	cost = float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
-		float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
-		float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
-		float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
-	return cost, true
+	return price.Cost(turnUsage(turn)).Total(), true
 }
 
 // AttributeToolCosts attributes each turn's whole cost once to every distinct
@@ -410,12 +286,12 @@ func ComputeCacheROI(r *ParseResult, pt *PricingTable) (roi float64, ok bool) {
 	if r == nil || pt == nil {
 		return 0, false
 	}
-	pricing, found := pt.LookupByModel(r.PrimaryModel)
+	price, found := pt.LookupByModel(r.PrimaryModel)
 	if !found {
 		return 0, false
 	}
-	roi = float64(r.CacheRead)*(pricing.InputPricePerMTok-pricing.CacheReadPerMTok)/1_000_000.0 -
-		float64(r.CacheCreation)*pricing.CacheWritePerMTok/1_000_000.0
+	roi = float64(r.CacheRead)*(price.InputPricePerMTok-price.CacheReadPerMTok)/1_000_000.0 -
+		float64(r.CacheCreation)*price.CacheWritePerMTok/1_000_000.0
 	return roi, true
 }
 

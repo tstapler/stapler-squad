@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 import { zIndex } from "@/styles/theme-contract.css";
 
@@ -19,51 +19,10 @@ export const vcsRow = style({
   flexWrap: "wrap",
 });
 
-export const statsRow = style({
-  display: "flex",
-  gap: vars.space["4"],
-  marginBottom: vars.space["3"],
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textSecondary,
-  flexWrap: "wrap",
-});
-
 export const statItem = style({
   display: "flex",
   alignItems: "center",
   gap: vars.space["1"],
-});
-
-export const added = style({
-  color: vars.color.success,
-  fontWeight: 600,
-  fontFamily: vars.font.mono,
-});
-
-export const removed = style({
-  color: vars.color.error,
-  fontWeight: 600,
-  fontFamily: vars.font.mono,
-});
-
-export const commitList = style({
-  listStyle: "none",
-  padding: 0,
-  margin: `0 0 ${vars.space["3"]} 0`,
-});
-
-export const commitItem = style({
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  padding: `${vars.space["1"]} 0`,
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
-  ":last-child": {
-    borderBottom: "none",
-  },
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
 });
 
 export const actionRow = style({
@@ -124,6 +83,11 @@ export const summaryError = style({
   color: vars.color.errorText,
 });
 
+const spin = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
 export const spinner = style({
   display: "inline-block",
   width: "1em",
@@ -131,19 +95,7 @@ export const spinner = style({
   border: `2px solid ${vars.color.borderColor}`,
   borderTopColor: vars.color.primary,
   borderRadius: "50%",
-  animation: "spin 0.6s linear infinite",
-  "@keyframes": {
-    spin: {
-      from: { transform: "rotate(0deg)" },
-      to: { transform: "rotate(360deg)" },
-    },
-  },
-} as Parameters<typeof import("@vanilla-extract/css").style>[0]);
-
-export const noChanges = style({
-  color: vars.color.textMuted,
-  fontSize: vars.fontSize.sm,
-  fontStyle: "italic",
+  animation: `${spin} 0.6s linear infinite`,
 });
 
 export const sessionBtnWrapper = style({

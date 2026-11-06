@@ -53,6 +53,16 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 			want: remediationSkippedParked,
 		},
 		{
+			name: "cold retries spent, deadline in the past -> permanently parked",
+			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
+			want: remediationSkippedParked,
+		},
+		{
+			name: "one cold retry left, deadline in the past -> granted cold retry",
+			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries - 1, NextRemediationAt: &past, LastCheckedAt: now},
+			want: remediationGrantedColdRetry,
+		},
+		{
 			// BUG-083: a parked row is not a permanent stop. next_remediation_at,
 			// repurposed while parked to hold the cold-retry deadline, gates a
 			// slow automatic heartbeat instead.
@@ -268,16 +278,16 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 	require.NoError(t, recErr)
 	require.True(t, applied)
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < int(MaxRemediationColdRetries); i++ {
 		due, justParked, gateErr := storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
 		require.NoError(t, gateErr, "cold retry %d", i)
 		assert.True(t, due, "cold retry %d: a parked row past its cold-retry deadline must become due automatically, with no manual reset", i)
-		assert.False(t, justParked, "cold retry %d: this is not a fresh park event, must not re-fire the exhausted notification", i)
+		assert.Equal(t, i == int(MaxRemediationColdRetries)-1, justParked, "cold retry %d: only the final cold retry signals permanent parking", i)
 
 		rows, findErr := storage.FindOpenStuckStates(ctx)
 		require.NoError(t, findErr)
 		require.Len(t, rows, 1)
-		assert.Equal(t, MaxRemediationAttempts, rows[0].RemediationAttempts, "cold retry %d: attempt count must stay pinned at the cap, not increment further", i)
+		assert.Equal(t, MaxRemediationAttempts+int32(i)+1, rows[0].RemediationAttempts, "cold retry %d: attempt count must advance past the cap", i)
 		require.NotNil(t, rows[0].NextRemediationAt)
 		assert.WithinDuration(t, time.Now().Add(remediationColdRetryInterval), *rows[0].NextRemediationAt, 5*time.Second, "cold retry %d: deadline must advance another full interval", i)
 
@@ -290,6 +300,11 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 		// Advance to the next cold-retry cycle for the next loop iteration.
 		backdateNextRemediationAt(t, repo, itemID, domain.StuckReasonOrphanedTriage, time.Now().Add(-time.Second))
 	}
+
+	// Budget spent: even with the deadline elapsed, the row must stay parked.
+	due, _, gateErr := storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
+	require.NoError(t, gateErr)
+	assert.False(t, due, "after MaxRemediationColdRetries cold retries the row must stay parked until an operator resets it")
 }
 
 // TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivenessOverrideWithZeroCodeChange
@@ -384,7 +399,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	require.NoError(t, err)
 	rowAfter, ok := findOpenStuckStateFor(rowsAfter, itemID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok)
-	assert.Equal(t, MaxRemediationAttempts, rowAfter.RemediationAttempts, "cold retry must stay pinned at the cap, not increment further")
+	assert.Equal(t, MaxRemediationAttempts+1, rowAfter.RemediationAttempts, "cold retry must count against MaxRemediationColdRetries")
 	require.NotNil(t, rowAfter.NextRemediationAt)
 	assert.WithinDuration(t, time.Now().Add(remediationColdRetryInterval), *rowAfter.NextRemediationAt, 5*time.Second, "cold-retry deadline must advance another full interval")
 }

@@ -7,6 +7,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails verifies the
@@ -142,7 +145,7 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 
 	// A second call bumps the timestamp again.
 	firstTimestamp := got
-	time.Sleep(time.Millisecond)
+	waitForClockDelta(t, time.Millisecond)
 	inst.SetCreationProgress("Starting tmux session...")
 	assert.True(t, inst.CreationProgressUpdatedAt().After(firstTimestamp), "second call must advance the timestamp")
 }
@@ -188,4 +191,126 @@ func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet pins
+// that IsArchived() goes through the published snapshot rather than the raw
+// i.ArchivedAt field (.claude/rules/instance-lock-free-reads.md). Every
+// auto-lifecycle guard added for ADR-001 (health checker, poller, session
+// driver, stale-resume recovery) reads this one predicate from a non-actor
+// goroutine, so a raw-field read here would race the actor setters.
+func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		status     Status
+		archivedAt *time.Time
+		want       bool
+	}{
+		{name: "stopped_not_archived", status: Stopped, archivedAt: nil, want: false},
+		{name: "stopped_archived", status: Stopped, archivedAt: &now, want: true},
+		{name: "permanently_failed_archived", status: PermanentlyFailed, archivedAt: &now, want: true},
+		{name: "active_archived", status: Active, archivedAt: &now, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// ArchivedAt must be set before anything calls Snapshot(): the first
+			// call caches its lazily-built value (see Snapshot's doc comment).
+			inst := &Instance{Title: "archived-predicate-" + tt.name, Status: tt.status, ArchivedAt: tt.archivedAt}
+			assert.Equal(t, tt.want, inst.IsArchived())
+		})
+	}
+}
+
+// TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter guards the
+// other half of the predicate: an archive written through the actor setter
+// republishes the snapshot, so IsArchived() flips. A raw `inst.ArchivedAt =`
+// write (the defect fixed in server/services/workflow_service.go) leaves this
+// false for the rest of the process lifetime.
+func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "archived-via-actor-setter", Status: Stopped}
+	require.False(t, inst.IsArchived(), "precondition: not archived")
+
+	require.True(t, inst.SetArchivedAtIfNil(time.Now()), "first archive should apply (CAS)")
+	assert.True(t, inst.IsArchived(), "IsArchived() must see an actor-routed archive")
+
+	assert.False(t, inst.SetArchivedAtIfNil(time.Now()), "second archive is a no-op (CAS)")
+}
+
+// TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet
+// covers the mgr == nil early return -- no other scroll_gate_test.go instance
+// hits it, since newScrollGateTestInstance always calls SetStatusManager.
+func TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManagerSet(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{}
+
+	status, controllerActive := inst.GetDetectedStatusInfo()
+
+	assert.Equal(t, detection.StatusUnknown, status)
+	assert.False(t, controllerActive)
+}
+
+func TestTransitionTo_Touch_Should_AdvanceLastMeaningfulChangeBeforeSnapshot_When_StatusChanges(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-transition", Status: Creating}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	inst.mu.Lock()
+	err := inst.transitionTo(context.Background(), Failed)
+	inst.mu.Unlock()
+
+	require.NoError(t, err)
+	got := inst.Snapshot().LastMeaningfulChangeAt
+	assert.True(t, got.After(before), "published snapshot must carry the advanced value")
+	assert.Equal(t, inst.UpdatedAt, got)
+}
+
+func TestUpdateTimestamps_Should_NotAdvanceLastMeaningfulChange_When_RenameOrPin(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-rename", Status: Running}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	require.NoError(t, inst.SetPinned(true))
+	inst.SetTitleDirect("touch-renamed")
+
+	assert.Equal(t, before, inst.Snapshot().LastMeaningfulChangeAt)
+}
+
+// Snapshot pointer identity stands in for a counting build hook: each rebuild stores a new pointer.
+func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOtherwise_When_CountingHook(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{Title: "touch-frames", Path: "/tmp/test", Program: "claude"})
+	require.NoError(t, err)
+	inst.SetTmuxSession(tmux.NewTmuxSession("touch-frames", "claude"))
+
+	s0 := inst.Snapshot()
+	inst.UpdateTerminalTimestamps("   \n", false)
+	assert.Same(t, s0, inst.Snapshot(), "blank frame must not rebuild")
+	assert.Equal(t, s0.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt)
+
+	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
+	s1 := inst.Snapshot()
+	assert.NotSame(t, s0, s1, "meaningful frame rebuilds")
+	assert.True(t, s1.LastMeaningfulChangeAt.Equal(s1.LastMeaningfulOutput))
+	assert.True(t, s1.LastMeaningfulChangeAt.After(s0.LastMeaningfulChangeAt))
+
+	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
+	assert.Equal(t, s1.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt, "same signature does not touch")
+}
+
+func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-turn", Status: Running}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	inst.RecordTurnEnd("done", TurnEndSourceHook)
+
+	snap := inst.Snapshot()
+	assert.True(t, snap.LastMeaningfulChangeAt.After(before))
+	assert.Equal(t, snap.TurnEnded.At, snap.LastMeaningfulChangeAt)
 }

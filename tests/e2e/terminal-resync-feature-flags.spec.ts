@@ -13,8 +13,9 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const RESYNC_FLAG = 'terminal:resync-stagger';
 const RESYNC_FLAG_LABEL = 'Terminal resync: stagger bursts';
 
@@ -85,7 +86,8 @@ test.describe('terminal-resync-feature-flags', () => {
 
     // Badge flips to "On" and no error is shown.
     await expect(row.getByTestId('feature-flag-status')).toHaveText('On', { timeout: 10000 });
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    // The notification Announcer keeps one empty role=alert region mounted; only a non-empty alert is an error.
+    await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
 
     // Reload — the toggled state must persist (server-backed, not local-only state).
     await gotoFeaturesPage(page);

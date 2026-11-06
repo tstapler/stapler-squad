@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package session.v1;
+
+// LLMBackendService edits which backend (claude, consolette, agy, gemini,
+// opencode) serves headless LLM calls. Changes apply live, without restart.
+service LLMBackendService {
+  // GetLLMBackendSettings returns the current selection and backend status.
+  rpc GetLLMBackendSettings(GetLLMBackendSettingsRequest) returns (GetLLMBackendSettingsResponse) {}
+
+  // UpdateLLMBackendSettings replaces the selection and persists it.
+  rpc UpdateLLMBackendSettings(UpdateLLMBackendSettingsRequest) returns (UpdateLLMBackendSettingsResponse) {}
+}
+
+// ModelMap translates Claude model aliases (haiku/sonnet/opus) for one backend.
+message LLMBackendModelMap {
+  string backend = 1;
+  // aliases maps alias -> backend model ID; empty value = backend's own default.
+  map<string, string> aliases = 2;
+}
+
+// LLMBackendSettings is the editable selection.
+message LLMBackendSettings {
+  // default_backend is used for features without an override; empty = claude.
+  string default_backend = 1;
+  // per_feature maps feature key -> backend name.
+  map<string, string> per_feature = 2;
+  // consolette_base_url overrides http://127.0.0.1:47000.
+  string consolette_base_url = 3;
+  repeated LLMBackendModelMap model_maps = 4;
+  // anthropic_base_url overrides the HTTP Anthropic client base URL (rules generation only).
+  string anthropic_base_url = 5;
+}
+
+// LLMBackendStatus describes one backend's current state.
+message LLMBackendStatus {
+  string name = 1;
+  bool available = 2;
+  bool supports_resume = 3;
+  bool supports_system_prompt = 4;
+  bool supports_tool_restriction = 5;
+  bool supports_workdir = 6;
+}
+
+message GetLLMBackendSettingsRequest {}
+
+message GetLLMBackendSettingsResponse {
+  LLMBackendSettings settings = 1;
+  repeated LLMBackendStatus backends = 2;
+  // feature_keys lists the headless features that accept an override.
+  repeated string feature_keys = 3;
+}
+
+message UpdateLLMBackendSettingsRequest {
+  LLMBackendSettings settings = 1;
+}
+
+message UpdateLLMBackendSettingsResponse {
+  LLMBackendSettings settings = 1;
+}

@@ -153,36 +153,3 @@ export const TIME_RANGE_PRESETS: TimeRangePreset[] = [
     }),
   },
 ];
-
-/**
- * Get a time range preset by its value
- */
-export function getTimeRangePreset(value: string): TimeRangePreset | undefined {
-  return TIME_RANGE_PRESETS.find(preset => preset.value === value);
-}
-
-/**
- * Format a time range for display
- */
-export function formatTimeRangeLabel(start: Date, end: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - start.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  // Check if end is "now" (within last minute)
-  const isEndNow = now.getTime() - end.getTime() < 60000;
-
-  if (isEndNow) {
-    if (diffMins <= 5) return 'Last 5 minutes';
-    if (diffMins <= 15) return 'Last 15 minutes';
-    if (diffHours <= 1) return 'Last hour';
-    if (diffHours <= 4) return 'Last 4 hours';
-    if (diffHours <= 24) return 'Last 24 hours';
-    if (diffDays <= 7) return 'Last 7 days';
-  }
-
-  // Custom range format
-  return `${formatTimestampShort(start)} - ${formatTimestampShort(end)}`;
-}

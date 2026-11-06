@@ -1,0 +1,501 @@
+{
+  "title": "stapler-squad: Database (SQLite pools, queries by call site)",
+  "description": "Pool saturation vs execution time per SQLite pool (ent writer, ent-read, analytics), and the same by repository call site. See docs/reference/database-observability.md.",
+  "uid": "ssq-database",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "green",
+        "name": "Deploys",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [
+            "deploy",
+            "stapler-squad"
+          ],
+          "type": "tags"
+        },
+        "type": "tags"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Slow/queued DB spans in Tempo",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D~%20%5C%22db%5C%5C%5C%5C..%2A%5C%22%20%26%26%20span.db.pool_wait_ms%20%3E%20100%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+      "tooltip": "db.* client spans that waited >100 ms for a pool connection"
+    },
+    {
+      "title": "Slowest DB spans in Tempo",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D~%20%5C%22db%5C%5C%5C%5C..%2A%5C%22%20%26%26%20duration%20%3E%20100ms%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+      "tooltip": "db.* client spans slower than 100 ms"
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Golden signals (pool saturation first: waiting is not executing)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 301
+    },
+    {
+      "id": 302,
+      "title": "Pool connections in use",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "db_pool_in_use",
+          "refId": "A",
+          "legendFormat": "in use {{db_name}}"
+        },
+        {
+          "expr": "db_pool_open",
+          "refId": "B",
+          "legendFormat": "open {{db_name}}"
+        }
+      ],
+      "description": "ent has ONE writer connection (max_open=1); ent-read has 4. in use == max_open for long stretches means callers queue."
+    },
+    {
+      "id": 303,
+      "title": "Pool wait (ms of waiting per second)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 200
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (db_name)(rate(db_pool_wait_duration_ms[5m]))",
+          "refId": "A",
+          "legendFormat": "{{db_name}}"
+        }
+      ],
+      "description": "Cumulative time callers spent queued for a connection. >1000 ms/s means more than one caller is waiting on average."
+    },
+    {
+      "id": 304,
+      "title": "Pool wait events (/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (db_name)(rate(db_pool_wait_count[5m]))",
+          "refId": "A",
+          "legendFormat": "{{db_name}}"
+        }
+      ]
+    },
+    {
+      "id": 305,
+      "title": "Query duration p50 / p95 / p99 by pool",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, db_name)(rate(db_query_duration_milliseconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "p50 {{db_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, db_name)(rate(db_query_duration_milliseconds_bucket[5m])))",
+          "refId": "B",
+          "legendFormat": "p95 {{db_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, db_name)(rate(db_query_duration_milliseconds_bucket[5m])))",
+          "refId": "C",
+          "legendFormat": "p99 {{db_name}}"
+        }
+      ]
+    },
+    {
+      "id": 306,
+      "title": "Pool wait per waiting query p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, db_name)(rate(db_query_pool_wait_milliseconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "p50 {{db_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, db_name)(rate(db_query_pool_wait_milliseconds_bucket[5m])))",
+          "refId": "B",
+          "legendFormat": "p95 {{db_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, db_name)(rate(db_query_pool_wait_milliseconds_bucket[5m])))",
+          "refId": "C",
+          "legendFormat": "p99 {{db_name}}"
+        }
+      ],
+      "description": "Over-attributed under concurrency (pool-wide delta). Use to compare with execution time on the left: wait >> exec means contention, not slow SQL."
+    },
+    {
+      "type": "row",
+      "title": "By query call site (db_caller = repository method that issued the query)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 307
+    },
+    {
+      "id": 308,
+      "title": "Top 10 by total time (ms of execution per second)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (db_caller)(rate(db_query_duration_milliseconds_sum[5m])))",
+          "refId": "A",
+          "legendFormat": "{{db_caller}}"
+        }
+      ]
+    },
+    {
+      "id": 309,
+      "title": "Top 10 by p95 duration",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, db_caller)(rate(db_query_duration_milliseconds_bucket[5m]))))",
+          "refId": "A",
+          "legendFormat": "{{db_caller}}"
+        }
+      ]
+    },
+    {
+      "id": 310,
+      "title": "Top 10 by call rate",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (db_caller)(rate(db_query_duration_milliseconds_count[5m])))",
+          "refId": "A",
+          "legendFormat": "{{db_caller}}"
+        }
+      ],
+      "description": "A caller at hundreds per second with sub-ms queries is a sweep or N+1 loop (the 2026-10-30 incident: terminal-item sweeps = 88% of read queries)."
+    },
+    {
+      "id": 311,
+      "title": "Top 10 by p95 pool wait",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, db_caller)(rate(db_query_pool_wait_milliseconds_bucket[5m]))))",
+          "refId": "A",
+          "legendFormat": "{{db_caller}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Context",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 312
+    },
+    {
+      "id": 313,
+      "title": "Slow queries (/s, over STAPLER_SQUAD_SLOW_QUERY_MS)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (db_name)(rate(db_slow_queries_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{db_name}}"
+        }
+      ]
+    },
+    {
+      "id": 314,
+      "title": "SQLITE_BUSY / LOCKED errors (/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (db_name)(rate(db_busy_errors_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{db_name}}"
+        }
+      ]
+    },
+    {
+      "id": 315,
+      "title": "Free pages / page count (db_maint)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "db_maint_free_pages",
+          "refId": "A",
+          "legendFormat": "free {{db_name}}"
+        },
+        {
+          "expr": "db_maint_page_count",
+          "refId": "B",
+          "legendFormat": "total {{db_name}}"
+        }
+      ]
+    }
+  ]
+}

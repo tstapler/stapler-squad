@@ -3,14 +3,14 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useAppSelector } from "@/lib/store";
-import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import { selectAllSessions, selectSessionsHasLoadedOnce } from "@/lib/store/sessionsSlice";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
+import { useClearResultLine } from "@/lib/hooks/useClearResultLine";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import {
   notificationTypeFilter,
-  isActionableNotification,
   isReconciledNotification,
   computeScopedMarkReadIds,
   capBadgeCount,
@@ -68,7 +68,8 @@ export function NotificationsPage() {
     markAsRead,
     removeFromHistory,
     acknowledgeNotification,
-    clearHistory,
+    clearHistoryByIds,
+    showActionToast,
     getUnreadCount,
     historyLoading,
     historyHasMore,
@@ -79,6 +80,7 @@ export function NotificationsPage() {
   } = useNotifications();
 
   const auditLog = useAuditLog();
+  const { keptLine, applyClearResult, clearKeptLine } = useClearResultLine();
 
   // Epic 3.3 (session-completion-summary), Story 3.3.2: a notification's
   // sessionId may reference a session that's since been deleted from the
@@ -87,6 +89,16 @@ export function NotificationsPage() {
   // `/?session=<id>` link.
   const liveSessions = useAppSelector(selectAllSessions);
   const liveSessionIds = useMemo(() => new Set(liveSessions.map((s) => s.id)), [liveSessions]);
+  // Some notifications (e.g. SendNotification's poller-miss fallback in
+  // notification_service.go) were recorded with the session's title rather than its
+  // stable id — page.tsx's findSessionById already tolerates this by falling back to a
+  // title match, so this liveness check has to match it or it wrongly reports a live
+  // session as gone. See the reproduced case in NotificationsPage.test.tsx.
+  const liveSessionTitles = useMemo(
+    () => new Set(liveSessions.map((s) => s.title.toLowerCase())),
+    [liveSessions]
+  );
+  const hasLoadedSessionsOnce = useAppSelector(selectSessionsHasLoadedOnce);
 
   const { resolvedApprovals, pendingApprovals, blockedApprovals, failedApprovals, resolveApproval } = useApprovalResolution({
     notificationHistory,
@@ -141,11 +153,11 @@ export function NotificationsPage() {
   // decision" tier and everything else ("recent activity" — never
   // "informational", which is Task 3.2.1a's Review Queue tier name).
   const needsDecision = useMemo(
-    () => filteredNotifications.filter((n) => !n.isRead && isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision === true),
     [filteredNotifications]
   );
   const recentActivity = useMemo(
-    () => filteredNotifications.filter((n) => n.isRead || !isActionableNotification(n.notificationType)),
+    () => filteredNotifications.filter((n) => n.isPendingDecision !== true),
     [filteredNotifications]
   );
 
@@ -154,7 +166,7 @@ export function NotificationsPage() {
   // NeedsDecisionSection can tell "nothing needs a decision" apart from "a
   // filter is hiding something that does" (Product Triad Review round-4 fix).
   const totalActionableCount = useMemo(
-    () => notificationHistory.filter((n) => !n.isRead && isActionableNotification(n.notificationType)).length,
+    () => notificationHistory.filter((n) => n.isPendingDecision === true).length,
     [notificationHistory]
   );
 
@@ -187,16 +199,23 @@ export function NotificationsPage() {
   );
 
   const handleMarkActivityRead = useCallback(() => {
+    clearKeptLine();
     markAsRead(scopedMarkReadIds);
-  }, [markAsRead, scopedMarkReadIds]);
+  }, [markAsRead, scopedMarkReadIds, clearKeptLine]);
 
   const handleClearHistory = useCallback(() => {
-    // Task 3.1.5d: irreversible, so gate behind a confirm — the actual
-    // exclusion of unread actionable records lives server-side (Task 3.1.5c).
-    if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
-      clearHistory();
+    // Irreversible, so gate behind a confirm. The ids are every read row the server field
+    // says is not a pending decision; the server guards the same predicate again and lists
+    // anything it kept, which the shared helper turns into the "N kept" line (Task 4.4f).
+    if (!window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
+      return;
     }
-  }, [clearHistory]);
+    clearKeptLine();
+    const ids = notificationHistory.filter((n) => n.isRead && !n.isPendingDecision).map((n) => n.id);
+    clearHistoryByIds(ids)
+      .then(applyClearResult)
+      .catch(() => showActionToast("Could not clear notifications", "error", "notifications-clear"));
+  }, [notificationHistory, clearHistoryByIds, applyClearResult, clearKeptLine, showActionToast]);
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
     markAsRead(ids);
@@ -212,10 +231,18 @@ export function NotificationsPage() {
 
   const getSessionHref = useCallback(
     (sessionId: string) =>
-      liveSessionIds.has(sessionId)
+      // Before the sessions store has ever loaded, an absent id means "haven't
+      // heard yet," not "confirmed gone" — default to the live route so a fast
+      // click right after page load doesn't race the first WatchSessions
+      // snapshot and land on the summary route for a session that's actually live.
+      // Also accept a title match (see liveSessionTitles above) since some
+      // recorded notifications carry the title in place of the stable id.
+      !hasLoadedSessionsOnce ||
+      liveSessionIds.has(sessionId) ||
+      liveSessionTitles.has(sessionId.toLowerCase())
         ? `/?session=${encodeURIComponent(sessionId)}`
         : `/sessions/summary?sessionId=${encodeURIComponent(sessionId)}`,
-    [liveSessionIds]
+    [liveSessionIds, liveSessionTitles, hasLoadedSessionsOnce]
   );
 
   // Task 3.1.2h (AC38): background fetch-failure staleness indicator — only
@@ -299,6 +326,10 @@ export function NotificationsPage() {
         </div>
       </div>
 
+      {keptLine && (
+        <p data-testid="notifications-kept-line">{keptLine}</p>
+      )}
+
       <div className={filterBar}>
         <div className={searchRow}>
           <input
@@ -359,7 +390,7 @@ export function NotificationsPage() {
         )}
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
-            <div className={emptyIcon}>⏳</div>
+            <div className={emptyIcon} aria-hidden="true">⏳</div>
             <p className={emptyText}>Loading notifications...</p>
           </div>
         ) : totalActionableCount > 0 && needsDecision.length === 0 ? (
@@ -385,7 +416,7 @@ export function NotificationsPage() {
           // Reachable only when totalActionableCount === 0 — the branch above
           // already caught every case where it's nonzero.
           <div className={empty}>
-            <div className={emptyIcon}>{hasActiveFilter ? "🔍" : "🔔"}</div>
+            <div className={emptyIcon} aria-hidden="true">{hasActiveFilter ? "🔍" : "🔔"}</div>
             <p className={emptyText}>
               {hasActiveFilter ? "No matching notifications" : "No notifications yet"}
             </p>

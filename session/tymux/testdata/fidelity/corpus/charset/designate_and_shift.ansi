@@ -1,0 +1,10 @@
+charset/designate_and_shift -- xterm ctlseqs SCS/SO/SI; libvterm 14state_encod
+G0->gfx: (0lqk(B back-to-ascii: lqk
+G1->gfx + SO/SI: )0lqk lqk-after-SI
+G1 designated but not shifted: )0lqk
+SO-without-G1-designation: lqk
+UK charset (G0 (A): (A#(B  US: #
+G2/G3 designate (*0 +0): *0+0lqk-unshifted
+LS2 ESC n / LS3 ESC o with G2=gfx: *0nlqk(Bo lqk(B
+SS2 ESC N one char: *0Nlqk
+(0(%5lq(B  DEC supplemental/other designators ignored: (Blqk

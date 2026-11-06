@@ -31,6 +31,8 @@ export const searchInput = style({
   color: "inherit",
   borderBottom: `1px solid ${vars.color.borderColor}`,
   boxSizing: "border-box",
+  // 16px stops iOS Safari zooming the page on focus.
+  "@media": { "(pointer: coarse)": { fontSize: 16 } },
   selectors: {
     "&::placeholder": {
       color: vars.color.textMuted,

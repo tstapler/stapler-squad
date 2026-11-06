@@ -15,11 +15,13 @@ import (
 func waitForBatch(t *testing.T, timeout time.Duration, cond func() bool) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
 	for time.Now().Before(deadline) {
 		if cond() {
 			return true
 		}
-		time.Sleep(time.Millisecond)
+		<-ticker.C
 	}
 	return cond()
 }

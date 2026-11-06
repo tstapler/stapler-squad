@@ -23,9 +23,8 @@ import "context"
 //     ever reaching Active. Stopped stays terminal — no Stopped→Failed edge is
 //     defined. Failed→Creating is the retry path (Epic 1.2); epoch gating for
 //     that transition happens one layer up (ADR-002), not in this table.
-//   - After hooks for Active→Hibernated and Hibernated→Active launch goroutines so
-//     that heavy I/O (checkpoint write, process kill, process start) does not block
-//     the caller while the state-machine mutex is held.
+//   - Active↔Hibernated carry no After hook; transitionToLocked dispatches
+//     their heavy I/O inline instead (see its doc comment).
 
 // transitionKey identifies a (from, to) state machine edge.
 type transitionKey struct{ from, to Status }
@@ -52,18 +51,15 @@ var transitionDefs = []TransitionDef{
 	{From: Failed, To: Creating},
 	{From: Active, To: Paused},
 	{From: Active, To: Stopped},
-	{From: Active, To: Hibernated, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.hibernateProcess(ctx)
-	}},
+	// No After hook: a prior goroutine here ran untracked by hibernateWG and
+	// raced with transitionTo's "caller holds i.mu" contract. See the file's
+	// "Design notes" above.
+	{From: Active, To: Hibernated},
 	{From: Active, To: Crashed},
 	{From: Paused, To: Active},
 	{From: Paused, To: Stopped},
 	{From: Stopped, To: Active},
-	{From: Hibernated, To: Active, After: func(ctx context.Context, i *Instance) {
-		// After is called with mu held — launch heavy work in a goroutine.
-		go i.resumeFromHibernation(ctx)
-	}},
+	{From: Hibernated, To: Active},
 	{From: Hibernated, To: Stopped},
 	{From: Crashed, To: Active},
 	{From: Crashed, To: Stopped},

@@ -407,3 +407,86 @@ func TestEventsSince(t *testing.T) {
 		_ = got
 	})
 }
+
+// T-BF-01: a rejected event is dropped before Seq assignment, so the accepted
+// event is Seq 1 and replay never contains the rejected one.
+func TestPublish_ShouldDropBeforeSeqAndExcludeFromReplay_WhenFilterRejects(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	bus.SetPublishFilter(func(e *Event) bool { return e.NotificationType != 4 })
+
+	rejected := NewNotificationEvent("s", "s", "n1", 4, 2, "t", "m", nil)
+	accepted := NewNotificationEvent("s", "s", "n2", 7, 2, "t", "m", nil)
+	bus.Publish(rejected)
+	bus.Publish(accepted)
+
+	if rejected.Seq != 0 {
+		t.Errorf("rejected event got Seq %d, want 0 (unpublished)", rejected.Seq)
+	}
+	if accepted.Seq != 1 {
+		t.Errorf("accepted event Seq = %d, want 1", accepted.Seq)
+	}
+	select {
+	case got := <-ch:
+		if got.NotificationID != "n2" {
+			t.Errorf("subscriber received %q", got.NotificationID)
+		}
+	default:
+		t.Fatal("subscriber received nothing")
+	}
+	select {
+	case extra := <-ch:
+		t.Fatalf("subscriber received a second event: %q", extra.NotificationID)
+	default:
+	}
+	replay := bus.EventsSince(1) // Seq > 1: nothing
+	if len(replay) != 0 {
+		t.Errorf("replay after seq 1 = %d events", len(replay))
+	}
+	if all := bus.EventsSince(0); all != nil {
+		t.Errorf("EventsSince(0) = %v, want nil by contract", all)
+	}
+	bus.mu.RLock()
+	defer bus.mu.RUnlock()
+	bus.bufMu.Lock()
+	defer bus.bufMu.Unlock()
+	if len(bus.buf) != 1 || bus.buf[0].event.NotificationID != "n2" {
+		t.Errorf("replay buffer holds %d entries; rejected event must not be buffered", len(bus.buf))
+	}
+}
+
+// T-BF-02: concurrent publishers while the filter is swapped 100 times (-race).
+func TestSetPublishFilter_ShouldNotRace_When8PublishersAnd100Swaps(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					bus.Publish(NewNotificationEvent("s", "s", "n", 4, 2, "t", "m", nil))
+				}
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		if i%3 == 0 {
+			bus.SetPublishFilter(nil)
+		} else {
+			bus.SetPublishFilter(func(e *Event) bool { return i%2 == 0 })
+		}
+	}
+	close(stop)
+	wg.Wait()
+}

@@ -1,0 +1,19 @@
+{
+  "id": "notification-inline-actions",
+  "type": "frontend",
+  "name": "Inline notification actions: Approve, Deny, answers and backlog decisions from the notification row, driven by server descriptors",
+  "component": "ActionRow",
+  "path": "web-app/src/components/ui/notification-actions/ActionRow.tsx",
+  "filePath": "web-app/src/components/ui/notification-actions/ActionRow.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/ui/notification-actions/ActionRow.test.tsx",
+    "web-app/src/components/ui/notification-actions/ActionRow.approval.test.tsx",
+    "web-app/src/components/ui/notification-actions/ActionRow.a11y.test.tsx",
+    "web-app/src/components/ui/NotificationItem.actions.test.tsx",
+    "web-app/src/components/ui/NotificationPanel.actions.test.tsx",
+    "web-app/src/lib/copy/copyGuard.test.ts"
+  ],
+  "lastModified": "2026-10-19T00:00:00Z"
+}

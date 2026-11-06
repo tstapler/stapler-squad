@@ -3,6 +3,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
+import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import {
+  useRepoPathSuggestions,
+  normalizePath,
+  type RepoPathWorktreeInfo,
+} from "@/lib/hooks/useRepoPathSuggestions";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
 import { isGitHubRef, parseGitHubRef, getRepoFullName } from "@/lib/github/urlParser";
 import * as styles from "./RepoPathInput.css";
@@ -25,6 +31,10 @@ interface RepoPathInputProps {
   detectGitHubUrl?: boolean;
   /** Called (in addition to onChange) when an entry is picked from the dropdown, not on every keystroke. */
   onSelect?: (entry: CompletionEntry) => void;
+  /** Accessible name when there is no associated <label>. */
+  "aria-label"?: string;
+  /** Fired on Enter when no dropdown entry is highlighted (Enter then belongs to the surrounding form/row). */
+  onEnter?: () => void;
   "data-testid"?: string;
 }
 
@@ -33,6 +43,77 @@ const MAX_HISTORY = 5;
 function tildeAbbreviate(p: string): string {
   const m = p.match(/^(\/(?:Users|home)\/[^/]+)(\/.*)?$/);
   return m ? `~${m[2] ?? ""}` : p;
+}
+
+function makeHistoryEntry(p: string, worktreeOf?: string): CompletionEntry {
+  return {
+    name: tildeAbbreviate(p),
+    path: p,
+    isDirectory: true,
+    isHistory: true,
+    ...(worktreeOf ? { isWorktree: true, rootLabel: tildeAbbreviate(worktreeOf) } : {}),
+  };
+}
+
+/**
+ * Groups history candidates by resolved repo root. The root is synthesized
+ * into the list even when no session is currently rooted there (AC2).
+ */
+interface RepoGroup {
+  rootPath: string | null;
+  discoveredRoot: string | null;
+  members: string[];
+}
+
+function groupByResolvedRoot(
+  paths: string[],
+  resolutions: Map<string, RepoPathWorktreeInfo>
+): { groupOrder: string[]; groups: Map<string, RepoGroup> } {
+  const groupOrder: string[] = [];
+  const groups = new Map<string, RepoGroup>();
+
+  for (const p of paths) {
+    const info = resolutions.get(normalizePath(p));
+    const groupKey = info ? info.rootPath : normalizePath(p);
+
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { rootPath: null, discoveredRoot: info?.rootPath ?? null, members: [] };
+      groups.set(groupKey, group);
+      groupOrder.push(groupKey);
+    }
+
+    if (!info || info.isMain) {
+      group.rootPath = p;
+    } else {
+      group.members.push(p);
+    }
+  }
+
+  return { groupOrder, groups };
+}
+
+function buildGroupedHistoryEntries(
+  paths: string[],
+  resolutions: Map<string, RepoPathWorktreeInfo>
+): CompletionEntry[] {
+  const { groupOrder, groups } = groupByResolvedRoot(paths, resolutions);
+
+  const entries: CompletionEntry[] = [];
+  for (const groupKey of groupOrder) {
+    const group = groups.get(groupKey);
+    if (!group) continue;
+    if (group.rootPath) {
+      entries.push(makeHistoryEntry(group.rootPath));
+    } else if (group.discoveredRoot) {
+      entries.push(makeHistoryEntry(group.discoveredRoot));
+    }
+    for (const member of group.members) {
+      const info = resolutions.get(normalizePath(member));
+      entries.push(makeHistoryEntry(member, info?.rootPath));
+    }
+  }
+  return entries;
 }
 
 export function RepoPathInput({
@@ -46,6 +127,8 @@ export function RepoPathInput({
   hint,
   detectGitHubUrl = false,
   onSelect,
+  "aria-label": ariaLabel,
+  onEnter,
   "data-testid": testId,
 }: RepoPathInputProps) {
   const generatedId = useId();
@@ -61,25 +144,29 @@ export function RepoPathInput({
     enabled: value.length > 0,
     directoriesOnly: true,
   });
+  const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
 
   const detectedRepo = useMemo(() => {
-    if (!detectGitHubUrl || !value.trim() || !isGitHubRef(value)) return null;
-    return parseGitHubRef(value);
-  }, [detectGitHubUrl, value]);
+    if (!detectGitHubUrl || !value.trim() || !isGitHubRef(value, enterpriseHosts)) return null;
+    return parseGitHubRef(value, enterpriseHosts);
+  }, [detectGitHubUrl, value, enterpriseHosts]);
+
+  const historyCandidates = useMemo(
+    () =>
+      historyPaths
+        .filter((p) => value === "" || p.toLowerCase().includes(value.toLowerCase()))
+        .slice(0, MAX_HISTORY),
+    [historyPaths, value]
+  );
+
+  // `resolutions` is mutated in place as worktree families resolve in the
+  // background, so `version` (not `resolutions` itself) is the signal that
+  // grouping needs to be recomputed — see useRepoPathSuggestions' doc comment.
+  const { resolutions, version } = useRepoPathSuggestions(historyCandidates);
 
   const { allEntries, historyCount } = useMemo(() => {
-    const filtered = historyPaths.filter(
-      (p) => value === "" || p.toLowerCase().includes(value.toLowerCase())
-    );
-    const history = filtered.slice(0, MAX_HISTORY);
-    const historySet = new Set(history);
-
-    const historyEntries: CompletionEntry[] = history.map((p) => ({
-      name: tildeAbbreviate(p),
-      path: p,
-      isDirectory: true,
-      isHistory: true,
-    }));
+    const historyEntries = buildGroupedHistoryEntries(historyCandidates, resolutions);
+    const historySet = new Set(historyEntries.map((e) => e.path));
 
     const fsCompletionEntries: CompletionEntry[] = fsEntries
       .filter((e) => !historySet.has(e.path))
@@ -94,7 +181,8 @@ export function RepoPathInput({
       allEntries: [...historyEntries, ...fsCompletionEntries],
       historyCount: historyEntries.length,
     };
-  }, [historyPaths, fsEntries, value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyCandidates, resolutions, version, fsEntries]);
 
   const showDropdown = open && (allEntries.length > 0 || isLoading);
 
@@ -110,6 +198,24 @@ export function RepoPathInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Focus opens the list, so Tab must close it or it stays over the next control.
+      if (e.key === "Tab") {
+        setOpen(false);
+        setSelectedIndex(-1);
+        return;
+      }
+      if (
+        e.key === "Enter" &&
+        onEnter &&
+        !e.nativeEvent.isComposing &&
+        e.keyCode !== 229 && // Safari fires the IME-confirm Enter after compositionend with keyCode 229
+        !(open && selectedIndex >= 0 && selectedIndex < allEntries.length)
+      ) {
+        e.preventDefault();
+        setOpen(false);
+        onEnter();
+        return;
+      }
       if (!open) {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           setOpen(true);
@@ -146,13 +252,15 @@ export function RepoPathInput({
             // listener lives on this node) but worth remembering before adding a second.
             e.stopPropagation();
             e.nativeEvent.stopImmediatePropagation();
+            // Also cancel the default so a native <dialog> doesn't close on this Escape.
+            e.preventDefault();
           }
           setOpen(false);
           setSelectedIndex(-1);
           break;
       }
     },
-    [open, allEntries, selectedIndex, handleSelect, showDropdown]
+    [open, allEntries, selectedIndex, handleSelect, showDropdown, onEnter]
   );
 
   useEffect(() => {
@@ -196,6 +304,7 @@ export function RepoPathInput({
             : undefined
         }
         aria-describedby={error ? `${id}-error` : undefined}
+        aria-label={ariaLabel}
         disabled={disabled}
         data-testid={testId}
         autoComplete="off"
@@ -216,8 +325,8 @@ export function RepoPathInput({
       {detectedRepo ? (
         <span className={styles.githubHint} data-testid="repo-path-github-hint">
           Will clone {getRepoFullName(detectedRepo)} to{" "}
-          {`~/.stapler-squad/repos/github.com/${detectedRepo.owner}/${detectedRepo.repo}`} when
-          you save.
+          {`~/.stapler-squad/repos/${detectedRepo.host || "github.com"}/${detectedRepo.owner}/${detectedRepo.repo}`}{" "}
+          when you save.
         </span>
       ) : (
         hint && <span className={styles.hint}>{hint}</span>

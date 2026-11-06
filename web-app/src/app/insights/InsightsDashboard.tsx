@@ -2,8 +2,8 @@
 "use client";
 
 import { useState, useMemo, useCallback, Suspense } from "react";
-import dynamic from "next/dynamic";
-import { useSearchParams, useRouter } from "next/navigation";
+import { lazyComponent } from "@/lib/lazy";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
 import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import { useBudgetThreshold } from "@/lib/hooks/useBudgetThreshold";
@@ -13,6 +13,7 @@ import { FindingsPanel } from "./FindingsPanel";
 import { TopNTable } from "./TopNTables";
 import { ActivityBreakdownTable } from "./ActivityBreakdownTable";
 import { SessionsTable } from "./SessionsTable";
+import { UnattributedByTitleTable } from "./UnattributedByTitleTable";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { ProjectedCostCard } from "./ProjectedCostCard";
 import { TimeRangeFilter, resolveTimeRangeDates } from "./TimeRangeFilter";
@@ -42,17 +43,21 @@ import {
 } from "./InsightsDashboard.css";
 
 // Lazy-load recharts and its D3 dependencies (~1.2MB) only when the insights page is visited.
-const DailySpendChart = dynamic(
-  () => import("./DailySpendChart").then((m) => m.DailySpendChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const DailySpendChart = lazyComponent(
+  () => import("./DailySpendChart").then((m) => ({ default: m.DailySpendChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
-const ModelBreakdownChart = dynamic(
-  () => import("./ModelBreakdownChart").then((m) => m.ModelBreakdownChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const ModelBreakdownChart = lazyComponent(
+  () => import("./ModelBreakdownChart").then((m) => ({ default: m.ModelBreakdownChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
-const ModelOverTimeChart = dynamic(
-  () => import("./ModelOverTimeChart").then((m) => m.ModelOverTimeChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const ModelOverTimeChart = lazyComponent(
+  () => import("./ModelOverTimeChart").then((m) => ({ default: m.ModelOverTimeChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+);
+const StageCostChart = lazyComponent(
+  () => import("./StageCostChart").then((m) => ({ default: m.StageCostChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
 function friendlyError(err: string): string {
@@ -107,6 +112,16 @@ function InsightsDashboardInner() {
     threshold > 0 &&
     projection !== null &&
     projection.projectedMonthly > threshold;
+
+  // Bar-click cross-filter (Task 5.2.2b) — lifted here so both StageCostChart
+  // and SessionsTable share it. Clicking the already-active role's bar again
+  // clears the filter (ux.md's "clicking the same bar again... returns to
+  // unfiltered view").
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined);
+  const handleRoleClick = useCallback((role: string) => {
+    setRoleFilter((prev) => (prev === role ? undefined : role));
+  }, []);
+  const clearRoleFilter = useCallback(() => setRoleFilter(undefined), []);
 
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
   // Stable identity — SessionDetailDrawer's keydown-handling effect has this
@@ -208,7 +223,22 @@ function InsightsDashboardInner() {
             <div className={grid2}>
               <DailySpendChart daily={summary.daily} />
               <ModelBreakdownChart models={summary.models} />
+              <StageCostChart
+                roles={summary.roleBreakdown}
+                activeRole={roleFilter}
+                onRoleClick={handleRoleClick}
+              />
             </div>
+            <UnattributedByTitleTable
+              title="Unattributed Cost by Session"
+              testId="unattributed-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "")?.items ?? []}
+            />
+            <UnattributedByTitleTable
+              title="External (Non-Stapler-Squad) Cost by Session"
+              testId="external-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "external")?.items ?? []}
+            />
           </section>
 
           <section className={section}>
@@ -265,6 +295,8 @@ function InsightsDashboardInner() {
               sessions={summary.sessions}
               onSessionClick={(s) => setSelectedSession(s)}
               backlogIndex={backlogIndex}
+              roleFilter={roleFilter}
+              onClearRoleFilter={clearRoleFilter}
             />
           </section>
         </>

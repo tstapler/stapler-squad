@@ -1,0 +1,128 @@
+---
+// A single feature-grid tile. A `demoClip` plays in place of the screenshot
+// (which becomes its poster); with neither, the tile is text-only. `alt` is
+// required whenever `screenshot` is set.
+export interface Props {
+	heading: string;
+	description: string;
+	category: string;
+	screenshot?: string;
+	alt?: string;
+	demoClip?: { name: string; ext: string };
+}
+
+const { heading, description, screenshot, alt, demoClip } = Astro.props;
+
+// scripts/build-features.mjs emits `screenshot` as a root-relative path
+// (e.g. "/features/01-dashboard.png") with no knowledge of the Pages base
+// path, so it must be prefixed here at render time -- found via a live
+// preview run under base: '/stapler-squad', where the un-prefixed <img src>
+// 404'd (confirmed in the browser console, not guessed). Strip BASE_URL's
+// trailing slash before concatenating: the real build's BASE_URL has none
+// ("/stapler-squad"), but AstroContainer's unit-test default is "/", which
+// would otherwise double up with screenshot's own leading slash.
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
+// Recorded during the deploy into public/clips/ (see scripts/build-features.mjs).
+const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` : undefined;
+---
+
+<article class="feature-card" data-testid="feature-card">
+	{
+		demoClip ? (
+			<>
+			<video
+				src={clipSrc}
+				data-poster={screenshotSrc}
+				aria-label={alt ? `${heading} demo: ${alt}` : `${heading} demo`}
+				controls
+				muted
+				loop
+				playsinline
+				preload="none"
+				data-testid="feature-card-video"
+			/>
+			{/* data-poster is set by script, so without JS the video would be an empty box. */}
+			{screenshotSrc && (
+				<noscript>
+					<img src={screenshotSrc} alt={alt ?? `${heading} screenshot`} width="320" height="200" />
+				</noscript>
+			)}
+			</>
+		) : (
+			screenshot && (
+				<img
+					src={screenshotSrc}
+					alt={alt}
+					loading="lazy"
+					width="320"
+					height="200"
+					data-testid="feature-card-image"
+				/>
+			)
+		)
+	}
+	<h4>{heading}</h4>
+	<p>{description}</p>
+</article>
+
+<style>
+	.feature-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 1rem;
+		border: 1px solid var(--sl-color-gray-5, #3b3b43);
+		border-radius: 0.75rem;
+	}
+
+	.feature-card img,
+	.feature-card video {
+		width: 100%;
+		height: auto;
+		aspect-ratio: 16 / 10; /* reserved up front: no layout shift when the clip loads */
+		object-fit: cover;
+		border-radius: 0.5rem;
+	}
+
+	/* Matches the recorded clip (1280x760 with its browser frame) so `cover` crops nothing,
+	   including the left-aligned burned-in captions. */
+	.feature-card video {
+		aspect-ratio: 1280 / 760;
+	}
+
+	.feature-card h4 {
+		margin: 0;
+		font-size: var(--sl-text-lg, 1.125rem);
+	}
+
+	.feature-card p {
+		margin: 0;
+		color: var(--sl-color-gray-2, #c0c2c7);
+		font-size: var(--sl-text-sm, 0.875rem);
+	}
+</style>
+
+<script>
+	// A <video poster> is fetched eagerly (it has no loading="lazy"), and a grid of them starved the
+	// landing page's LCP on the Lighthouse mobile run, so each poster is set only near the viewport.
+	const videos = document.querySelectorAll<HTMLVideoElement>('video[data-poster]');
+	const setPoster = (v: HTMLVideoElement) => {
+		v.poster = v.dataset.poster ?? '';
+	};
+	if ('IntersectionObserver' in window) {
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) {
+					if (!e.isIntersecting) continue;
+					setPoster(e.target as HTMLVideoElement);
+					io.unobserve(e.target);
+				}
+			},
+			{ rootMargin: '300px' },
+		);
+		videos.forEach((v) => io.observe(v));
+	} else {
+		videos.forEach(setPoster);
+	}
+</script>

@@ -81,6 +81,17 @@ func (w *WorktreeStorer) Close() error {
 	return nil
 }
 
+// CommonDirKey returns the canonical common .git directory of this worktree's
+// repository, delegating to the shared store; identical for a main checkout
+// and every linked worktree of it.
+func (w *WorktreeStorer) CommonDirKey() string { return w.shared.CommonDirKey() }
+
+// Extension returns the shared store's extension slot value; see
+// SharedObjectStore.Extension.
+func (w *WorktreeStorer) Extension(newFn func() Extension) Extension {
+	return w.shared.Extension(newFn)
+}
+
 var _ storer.EncodedObjectStorer = (*WorktreeStorer)(nil)
 
 // NewEncodedObject implements storer.EncodedObjectStorer. Constructing a

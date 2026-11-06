@@ -19,32 +19,6 @@ import (
 // treat this as an expected, low-severity no-op (log and continue), not a hard failure.
 var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
-// ConversationID represents a validated Claude/Antigravity conversation UUID.
-type ConversationID string
-
-// ParseConversationID parses and validates a raw string as a ConversationID.
-func ParseConversationID(s string) (ConversationID, error) {
-	if !isValidUUID(s) {
-		return "", fmt.Errorf("invalid conversation ID format: %q", s)
-	}
-	return ConversationID(s), nil
-}
-
-// WorkspacePath represents a cleaned, resolved workspace root path.
-type WorkspacePath string
-
-// NewWorkspacePath resolves symlinks and cleans a path to guarantee a single canonical representation.
-func NewWorkspacePath(s string) (WorkspacePath, error) {
-	if s == "" {
-		return "", fmt.Errorf("workspace path cannot be empty")
-	}
-	resolved, err := filepath.EvalSymlinks(s)
-	if err != nil {
-		resolved = s
-	}
-	return WorkspacePath(filepath.Clean(resolved)), nil
-}
-
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
 	srcAdapter := resolveHistoryAdapter(oldProgram)
@@ -146,6 +120,25 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		}
 
 		// Update Claude session data on the Instance
+		i.claudeSessionMu.Lock()
+		if i.claudeSession == nil {
+			i.claudeSession = &ClaudeSessionData{}
+		}
+		i.claudeSession.ConversationUUID = uuidStr
+		i.claudeSession.ProjectName = i.Title
+		i.claudeSession.LastAttached = time.Now()
+		if i.claudeSession.Metadata == nil {
+			i.claudeSession.Metadata = make(map[string]string)
+		}
+		i.claudeSession.Metadata["working_dir"] = workspace
+		cb := i.claudeSessionIDSavedCallback
+		i.claudeSessionMu.Unlock()
+
+		if cb != nil {
+			cb()
+		}
+	} else if dstAdapter.Name() == "opencode" {
+		uuidStr = i.GetClaudeConversationUUID()
 		i.claudeSessionMu.Lock()
 		if i.claudeSession == nil {
 			i.claudeSession = &ClaudeSessionData{}

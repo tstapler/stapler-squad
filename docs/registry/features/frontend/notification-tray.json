@@ -1,0 +1,27 @@
+{
+  "id": "notification-tray",
+  "type": "frontend",
+  "name": "Non-modal notification tray with edge handle, phone entry chip, grouped rows, guarded bulk actions, Quiet mode and Pin",
+  "component": "NotificationPanel",
+  "path": "web-app/src/components/ui/NotificationPanel.tsx",
+  "filePath": "web-app/src/components/ui/NotificationPanel.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/ui/NotificationPanel.test.tsx",
+    "web-app/src/components/ui/__tests__/TrayHandle.test.tsx",
+    "web-app/src/components/ui/__tests__/trayVariant.test.ts",
+    "web-app/src/components/ui/__tests__/trayState.test.ts",
+    "web-app/src/lib/hooks/__tests__/useUndoWindow.test.ts",
+    "web-app/src/lib/hooks/__tests__/useTrayFocus.test.ts",
+    "web-app/src/lib/hooks/__tests__/useStableRowOrder.test.ts",
+    "web-app/src/lib/utils/__tests__/notificationGrouping.tray.test.ts",
+    "web-app/src/lib/contexts/__tests__/NotificationContext.test.tsx",
+    "web-app/src/app/notifications/__tests__/NotificationsPage.test.tsx",
+    "tests/e2e/notification-tray-terminal-invariants.spec.ts",
+    "tests/e2e/notification-tray-variants.spec.ts",
+    "tests/e2e/notification-tray-bulk.spec.ts",
+    "tests/e2e/notification-a11y-matrix.spec.ts"
+  ],
+  "lastModified": "2026-10-09T00:00:00Z"
+}

@@ -185,6 +185,12 @@ var anthropicContextWindows = map[string]int{
 }
 
 func (c *AnthropicLimitsClient) ModelContextWindow(model string) int {
+	return AnthropicContextWindow(model)
+}
+
+// AnthropicContextWindow returns the context window in tokens for an Anthropic
+// model name, defaulting to 200k for unrecognized models.
+func AnthropicContextWindow(model string) int {
 	// Normalize model name for lookup.
 	for k, v := range anthropicContextWindows {
 		if strings.Contains(model, k) {

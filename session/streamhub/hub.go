@@ -15,6 +15,10 @@ import (
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
 // outbound queue stays full past slowSubscriberGrace (Task 1.2.1e), as
 // opposed to a Transport.Send error (Task 1.2.1g).
+var errPaintBacklog = errors.New("streamhub: more than maxPaintBacklog frames or maxPaintBacklogBytes bytes arrived during the first paint")
+
+var errFirstPaintTimeout = errors.New("streamhub: subscriber never ran FirstPaint")
+
 var errSlowSubscriberEvicted = errors.New("streamhub: subscriber outbound queue full past grace period")
 
 const (
@@ -31,6 +35,10 @@ const (
 	// would disconnect healthy-but-bursty consumers, not just stuck ones).
 	defaultSlowSubscriberGrace = 250 * time.Millisecond
 
+	// defaultFirstPaintMaxAwait bounds how long a ManualFirstPaint subscriber, which has no writer
+	// and whose frames are dropped as superseded, may wait for its FirstPaint.
+	defaultFirstPaintMaxAwait = 30 * time.Second
+
 	// DefaultHubTeardownGrace is how long a StreamHub with zero subscribers
 	// waits before tearing down control mode, so a brief reconnect doesn't
 	// kill it (Story 1.2.2).
@@ -45,6 +53,10 @@ const (
 	// context.WithTimeout so an early upstream disconnect still cancels
 	// promptly instead of waiting out this ceiling.
 	captureTimeout = 5 * time.Second
+
+	// captureRetryTimeout bounds the single post-resize capture retry; the resize
+	// apply lock is held across it, so it is shorter than the first attempt.
+	captureRetryTimeout = 2 * time.Second
 )
 
 // HubOption configures a StreamHub at construction time. Tests use these to
@@ -92,6 +104,18 @@ func WithBatchMaxWindow(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.batchMaxWindow = d }
 }
 
+// WithOutputObserver installs a single pre-fan-out observer. It is invoked
+// once per coalesced output unit, regardless of subscriber count.
+func WithOutputObserver(fn func([]byte)) HubOption {
+	return func(h *StreamHub) { h.outputObserver = fn }
+}
+
+// WithCaptureTap installs a capture tap that records raw output, drops,
+// resizes and snapshots. A nil tap is a no-op.
+func WithCaptureTap(t *CaptureTap) HubOption {
+	return func(h *StreamHub) { h.tap = t }
+}
+
 // StreamHub is the single-owner runtime object for one tmux session's output
 // stream: it fans output out to every attached subscriber over a
 // Transport-agnostic interface, and is the sole caller of that session's
@@ -104,10 +128,14 @@ type StreamHub struct {
 
 	subscriberBufferSize  int
 	slowSubscriberGrace   time.Duration
+	firstPaintMaxAwait    time.Duration
 	teardownGrace         time.Duration
+	clock                 Clock
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
+	outputObserver        func([]byte)
+	tap                   *CaptureTap
 
 	mu sync.Mutex
 	// state only transitions to HubTornDown once ForceTeardown's close/
@@ -118,6 +146,9 @@ type StreamHub struct {
 	// twice.
 	state            HubLifecycleState
 	teardownInFlight bool
+	// counted tracks whether this hub is currently included in streamhub_active_hubs;
+	// registry-reused hubs re-enter the count when a subscriber re-attaches after teardown.
+	counted bool
 	// reactivatedDuringTeardown is set by AttachSubscriber when it observes
 	// teardownInFlight, so ForceTeardown's final write can tell "genuinely
 	// idle throughout" apart from "attached and detached again mid-
@@ -127,7 +158,7 @@ type StreamHub struct {
 	// removeSubscriber re-armed in response to the second detach.
 	reactivatedDuringTeardown bool
 	subscribers               map[SubscriberID]*subscriber
-	teardownTimer             *time.Timer
+	teardownTimer             Timer
 
 	// batchWindow is the hub's single opportunistic-with-ceiling
 	// accumulation buffer and timer (Epic 2.1) — OnRawOutput feeds it
@@ -135,28 +166,34 @@ type StreamHub struct {
 	// coalesce/flush pass per burst instead of each paying their own.
 	batchWindow *BatchWindow
 
-	// resizeMu guards negotiatedSize/resizing — kept separate from mu (the
-	// subscriber-registry lock) so a slow SessionController call (a real
-	// tmux ioctl/capture-pane) never blocks AttachSubscriber/
-	// DetachSubscriber/Broadcast on unrelated subscribers.
+	// resizeMu guards negotiatedSize/resizing/resizeGeneration — kept
+	// separate from mu (the subscriber-registry lock) so a slow
+	// SessionController call (a real tmux ioctl/capture-pane) never blocks
+	// AttachSubscriber/DetachSubscriber/Broadcast on unrelated subscribers.
 	resizeMu       sync.Mutex
 	negotiatedSize TerminalSize
 	resizing       bool
+	// resizeGeneration increments once per completed applyNegotiatedSize
+	// call (success or failure), alongside resizing flipping back to
+	// false. ForwardScroll (session package, via ResizeActivity) samples
+	// this and resizing before/after its own independent pane-capture
+	// window to detect a resize racing that capture (Fix 5) -- neither
+	// StreamHub.RequestResize nor applyNegotiatedSize acquires
+	// scrollForwardMu, so a resize can run fully concurrently with an
+	// in-flight ForwardScroll; this counter is how that race is made
+	// observable rather than silently corrupting ForwardScroll's
+	// before/after content diff.
+	resizeGeneration uint64
 
 	// resizeApplyMu serializes RequestResize's full negotiate-then-apply
-	// sequence end to end, across every subscriber attached to this hub.
-	// It is a distinct lock from resizeMu (which only guards brief
-	// reads/writes of negotiatedSize/resizing for OnRawOutput/
-	// NegotiatedSize) because resizeApplyMu is held for the entire
-	// duration of applyNegotiatedSize's SetWindowSize ->
-	// quiescence-wait -> CapturePaneContent pipeline, which can run for
-	// hundreds of milliseconds. Without it, two subscribers voting for a
-	// resize near-simultaneously could each independently observe
-	// changed == true (under resizeMu, released before applyNegotiatedSize
-	// runs) and both call applyNegotiatedSize concurrently — violating its
-	// doc comment's "exactly once per call" contract and this package's
-	// single-owner concurrency guarantee, which is the entire point of the
-	// stream-hub redesign.
+	// sequence end to end. Distinct from resizeMu (which only guards brief
+	// negotiatedSize/resizing reads/writes) because it's held across
+	// applyNegotiatedSize's whole SetWindowSize -> quiescence-wait ->
+	// CapturePaneContent pipeline (can run for hundreds of ms) -- without
+	// it, two subscribers voting for a resize near-simultaneously could
+	// each observe changed == true under the brief resizeMu and both call
+	// applyNegotiatedSize concurrently, violating its "exactly once per
+	// call" contract.
 	resizeApplyMu sync.Mutex
 
 	// slowSubscriberDropsTotal counts slow-subscriber evictions (never
@@ -190,19 +227,48 @@ type StreamHub struct {
 	// any hot path this hub's other locks were split out to protect.
 	// See TryStartPump's doc comment for why this exists.
 	pumpActive bool
+
+	// scrollForwardMu is the ScrollForwardAttachBarrier: held for the full
+	// duration of an in-flight Instance.ForwardScroll call via
+	// BeginScrollForward, and by AttachSubscriber across its entire attach
+	// sequence (registration through sendCatchUpSnapshot's live capture) --
+	// not just a point-in-time check, which would leave a window for a
+	// forward to start after the check passed but before the catch-up
+	// snapshot finished, letting a newly-attached subscriber's snapshot be
+	// the mid-scroll pane content. Kept separate from mu so it's held only
+	// across this rare, multi-hundred-ms path, never the hot broadcast
+	// path. Always acquired before mu when both are needed
+	// (AttachSubscriber -> registerSubscriberLocked), never the reverse.
+	scrollForwardMu sync.Mutex
+}
+
+// BeginScrollForward claims the ScrollForwardAttachBarrier for the duration
+// of one Instance.ForwardScroll call, returning a release func the caller
+// must defer. See scrollForwardMu's doc comment.
+func (h *StreamHub) BeginScrollForward() (release func()) {
+	h.scrollForwardMu.Lock()
+	return h.scrollForwardMu.Unlock
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
 // HubStarting state with zero subscribers. controller is used by
 // ForceTeardown and the resize/quiescence/capture pipeline; it may be nil in
 // tests that never exercise either.
+// WithFirstPaintMaxAwait overrides how long a ManualFirstPaint subscriber may wait for its
+// FirstPaint before being evicted.
+func WithFirstPaintMaxAwait(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.firstPaintMaxAwait = d }
+}
+
 func NewStreamHub(sessionName string, controller SessionController, opts ...HubOption) *StreamHub {
 	h := &StreamHub{
 		sessionName:           sessionName,
 		controller:            controller,
 		subscriberBufferSize:  defaultSubscriberBufferSize,
 		slowSubscriberGrace:   defaultSlowSubscriberGrace,
+		firstPaintMaxAwait:    defaultFirstPaintMaxAwait,
 		teardownGrace:         DefaultHubTeardownGrace,
+		clock:                 realClock{},
 		quiescenceTimeout:     defaultQuiescenceTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
 		batchMaxWindow:        MaxBatchWindow,
@@ -212,9 +278,11 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 	for _, opt := range opts {
 		opt(h)
 	}
-	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow))
+	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow), withBatchClock(h.clock))
 
 	incActiveHubs()
+	recordHubCreated()
+	h.counted = true
 	log.Info("streamhub hub created", "session", sessionName, "resolved_path", "hub_owned")
 	return h
 }
@@ -238,6 +306,9 @@ func (h *StreamHub) onBatchFlush(unit BroadcastUnit) {
 		"bytes", len(unit.Data),
 		"reason", unit.Reason.String())
 	recordBatchFlushFramesCoalesced(unit.FramesCoalesced)
+	if h.outputObserver != nil {
+		h.outputObserver(unit.Data)
+	}
 	h.Broadcast(unit.Data)
 }
 
@@ -293,27 +364,22 @@ func (h *StreamHub) MarkPumpExited() {
 // streamhub itself has no opinion on whether that's a legitimate reattach —
 // that policy belongs to HubRegistry (Epic 3).
 func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberCapability) SubscriberID {
+	// scrollForwardMu is held for the entire attach sequence, through
+	// sendCatchUpSnapshot -- not just an initial lock-then-unlock barrier
+	// check -- so a BeginScrollForward call that starts after this attach
+	// has already passed the check can't begin until this attach's
+	// catch-up snapshot has actually been captured and sent. A
+	// point-in-time check alone left a window where an in-flight
+	// ForwardScroll could still start after the check but before
+	// sendCatchUpSnapshot's live pane capture, letting the newly-attached
+	// subscriber's catch-up snapshot be the mid-scroll pane (Fix 4,
+	// architecture-review BLOCKER). See scrollForwardMu's doc comment.
+	h.scrollForwardMu.Lock()
+	defer h.scrollForwardMu.Unlock()
+
 	id := NewSubscriberID()
 	sub := newSubscriber(id, transport, capability, h.subscriberBufferSize)
-
-	h.mu.Lock()
-	h.subscribers[id] = sub
-	h.cancelPendingTeardownLocked()
-	if h.teardownInFlight {
-		// ForceTeardown is mid-StopControlMode-call for this exact attach —
-		// tell its final state write to skip claiming HubTornDown even if
-		// this subscriber detaches again before that call returns (see
-		// ForceTeardown's doc comment).
-		h.reactivatedDuringTeardown = true
-	}
-	switch h.state {
-	case HubStarting, HubActive, HubDraining, HubTornDown:
-		h.state = HubActive
-	default:
-		panic("unhandled HubLifecycleState")
-	}
-	count := len(h.subscribers)
-	h.mu.Unlock()
+	count := h.registerSubscriberLocked(id, sub)
 
 	// Story 1.2.1's AC: a newly-attached subscriber receives a CatchUpSnapshot
 	// within this same call, not just the browser WebSocket path via its own
@@ -323,16 +389,53 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	// This runs before startWriter so it is guaranteed to be the very first
 	// Send call this transport ever receives, with no writer goroutine yet
 	// running to race it.
-	h.sendCatchUpSnapshot(sub)
-
-	sub.startWriter(h.handleSubscriberSendError)
+	//
+	// A ManualFirstPaint subscriber does neither: FirstPaint sends its paint and starts its
+	// writer, so frames broadcast meanwhile queue behind it instead of racing it.
+	if !capability.ManualFirstPaint {
+		h.sendCatchUpSnapshot(sub)
+		sub.startWriter(h.handleSubscriberSendError)
+	} else {
+		sub.armFirstPaintTimeout(h.clock, h.firstPaintMaxAwait, func() { h.removeSubscriber(id, errFirstPaintTimeout) })
+	}
 
 	log.Info("streamhub subscriber attached",
 		"session", h.sessionName, "subscriber_id", string(id), "subscriber_count", count,
 		"transport_type", fmt.Sprintf("%T", transport),
 		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
 	recordSubscribersPerHub(count)
+	recordSubscriberAttached()
 	return id
+}
+
+// registerSubscriberLocked adds sub to the subscriber registry under mu,
+// transitioning the hub's lifecycle state and canceling any pending
+// teardown -- the mu-guarded portion of AttachSubscriber, split out so
+// AttachSubscriber itself stays under this repo's function-length gate.
+func (h *StreamHub) registerSubscriberLocked(id SubscriberID, sub *subscriber) (count int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.subscribers[id] = sub
+	h.cancelPendingTeardownLocked()
+	if h.teardownInFlight {
+		// ForceTeardown is mid-StopControlMode-call for this exact attach —
+		// tell its final state write to skip claiming HubTornDown even if
+		// this subscriber detaches again before that call returns (see
+		// ForceTeardown's doc comment).
+		h.reactivatedDuringTeardown = true
+	}
+	if !h.counted {
+		h.counted = true
+		incActiveHubs()
+	}
+	switch h.state {
+	case HubStarting, HubActive, HubDraining, HubTornDown:
+		h.state = HubActive
+	default:
+		panic("unhandled HubLifecycleState")
+	}
+	return len(h.subscribers)
 }
 
 // sendCatchUpSnapshot delivers the hub's current pane content directly to a
@@ -356,22 +459,75 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 	}
 }
 
-// currentSnapshot returns the hub's best-known current pane content: the
-// cached result of the most recent successful post-quiescence
-// CapturePaneContent call (applyNegotiatedSize) if one exists, or a fresh
-// SessionController capture otherwise — never both, so an attach never pays
-// for a redundant capture-pane call when a recent one is already known-good
-// (this project's own root-cause concern about redundant captures,
-// research/pitfalls.md). A successful on-demand capture is itself cached, so
-// only the first subscriber of a hub that has never resized ever triggers a
-// real capture-pane call; every later attach before the next resize reuses
-// it.
+// ErrUnknownSubscriber is returned by FirstPaint for a subscriber that already detached.
+var ErrUnknownSubscriber = errors.New("streamhub: unknown subscriber")
+
+// FirstPaint runs paint for a ManualFirstPaint subscriber, then starts its writer. paint captures
+// and writes the subscriber's first snapshot directly (outside the hub's queue).
 //
-// ok is false when no snapshot is available at all: h.controller is nil
-// (tests that never exercise the controller surface), CapturePaneContent
-// errors, or it succeeds with empty content (nothing has ever been rendered
-// to this pane yet).
+// Ordering: resizeApplyMu is held throughout, so no resize can capture-and-broadcast between
+// paint's capture and its write. Frames broadcast before paint begins are dropped (the capture
+// includes them, and replaying them would apply them twice, and nothing drains a queue then).
+// Frames that arrive during paint are held, up to maxPaintBacklog, and the writer sends them
+// right after the paint, so none is lost (those the capture already contains are duplicated).
+// A paint that captured nothing loses the frames dropped before it; the caller decides whether
+// that is worth failing the connection (the websocket handler paints blank). paint blocks resizes for its duration
+// (one capture RPC plus one socket write), and is not given the hub's other locks.
+func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
+	h.mu.Lock()
+	sub, ok := h.subscribers[id]
+	h.mu.Unlock()
+	if !ok {
+		return ErrUnknownSubscriber
+	}
+
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+
+	if !sub.beginFirstPaint() {
+		return ErrUnknownSubscriber
+	}
+	err := paint()
+	overflowed := sub.endFirstPaint()
+	sub.startWriter(h.handleSubscriberSendError)
+	if err == nil && overflowed {
+		return errPaintBacklog
+	}
+	return err
+}
+
+// allAwaitingFirstPaint reports whether the hub has subscribers and every one is still waiting
+// for its FirstPaint, so a resize broadcast would only be discarded.
+func (h *StreamHub) allAwaitingFirstPaint() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.subscribers) == 0 {
+		return false
+	}
+	for _, sub := range h.subscribers {
+		if !sub.awaitingFirstPaint.Load() {
+			return false
+		}
+	}
+	return true
+}
+
+// currentSnapshot returns the hub's best-known current pane content: the
+// cached result of the most recent post-quiescence CapturePaneContent call
+// if one exists, or a fresh on-demand capture otherwise (itself cached
+// afterward) -- an attach never pays for a redundant capture-pane call when
+// a recent one is already known-good.
+//
+// ok is false when no snapshot is available: h.controller is nil, the
+// capture errors, or it succeeds with empty content.
 func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
+	// A full-state redraw is neither served from nor stored in the text cache: a cached one would
+	// hand a later attacher the modes/title/cursor of whenever it was taken, and a later failed
+	// capture would then fall back to a stale redraw dressed as the text snapshot.
+	if redraw, ok := h.captureRedraw(); ok {
+		return redraw, true
+	}
+
 	h.snapshotMu.Lock()
 	cached := h.lastSnapshot
 	h.snapshotMu.Unlock()
@@ -395,11 +551,38 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	}
 
 	prepared := ansiSnapshotPrefix + prepareSnapshotContent(captured)
-	capturedBytes := []byte(withCursorSync(prepared, h.controller))
+	capturedBytes := []byte(withCursorSync(h.clock, prepared, h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = capturedBytes
 	h.snapshotMu.Unlock()
 	return capturedBytes, true
+}
+
+// captureRedraw returns the controller's full-state redraw (modes, title, alt screen, cursor
+// restored) as the complete snapshot bytes. ok is false when the controller has none — nil
+// controller, no FullStateSnapshotter, a text-only backend, or a failed capture, which is logged
+// and left to the caller's text-capture path.
+func (h *StreamHub) captureRedraw() ([]byte, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	return h.captureRedrawContext(ctx)
+}
+
+func (h *StreamHub) captureRedrawContext(ctx context.Context) ([]byte, bool) {
+	f, isCapable := h.controller.(FullStateSnapshotter)
+	if !isCapable {
+		return nil, false
+	}
+	snap, ok, err := f.CapturePaneRedraw(ctx)
+	if err != nil {
+		log.Info("streamhub: full-state redraw unavailable, falling back to text capture",
+			"session", h.sessionName, "error", err)
+		return nil, false
+	}
+	if !ok {
+		return nil, false
+	}
+	return []byte(snap.Data), true
 }
 
 // DetachSubscriber removes the subscriber and stops its writer goroutine
@@ -438,6 +621,7 @@ func (h *StreamHub) removeSubscriber(id SubscriberID, reason error) {
 	h.mu.Unlock()
 
 	sub.close()
+	recordSubscriberRemoved(reason != nil)
 
 	if reason != nil {
 		log.Warn("streamhub subscriber evicted",
@@ -470,18 +654,25 @@ func (h *StreamHub) Broadcast(data []byte) {
 }
 
 func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
-	if sub.trySend(data) {
+	delivered, stalled := sub.trySend(data)
+	if delivered && !stalled {
 		return
 	}
+	if !delivered {
+		h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
+	}
 
-	if !sub.markSlow() {
+	if !sub.markSlow(h.clock.Now()) {
 		// Already stalled and a timer is pending for it; this frame is
 		// simply dropped, same as any frame that finds the queue full.
 		return
 	}
 
-	time.AfterFunc(grace, func() {
-		if sub.isStillFull() {
+	progress := sub.replaySent.Load()
+	h.clock.AfterFunc(grace, func() {
+		// A replaying writer that sent anything since the stall was seen is slow, not stalled;
+		// the next stalled frame re-arms the check.
+		if sub.isStillFull() && sub.replaySent.Load() == progress {
 			h.slowSubscriberDropsTotal.Add(1)
 			recordSlowSubscriberDrop()
 			h.removeSubscriber(sub.id, errSlowSubscriberEvicted)
@@ -515,7 +706,7 @@ func (h *StreamHub) cancelPendingTeardownLocked() {
 func (h *StreamHub) scheduleTeardownLocked() {
 	h.state = HubDraining
 	h.cancelPendingTeardownLocked()
-	h.teardownTimer = time.AfterFunc(h.teardownGrace, h.onTeardownGraceExpired)
+	h.teardownTimer = h.clock.AfterFunc(h.teardownGrace, h.onTeardownGraceExpired)
 }
 
 // onTeardownGraceExpired fires on the timer goroutine once teardownGrace has
@@ -530,7 +721,7 @@ func (h *StreamHub) onTeardownGraceExpired() {
 	if !stillDraining {
 		return
 	}
-	_ = h.ForceTeardown()
+	_ = h.forceTeardown(TeardownLastSubscriber)
 }
 
 // ForceTeardown tears the hub down unconditionally: every remaining
@@ -544,7 +735,9 @@ func (h *StreamHub) onTeardownGraceExpired() {
 // flag-flip-to-legacy case. Safe to call concurrently or more than once:
 // teardownInFlight, not h.state, rejects a second caller, since h.state
 // can't serve as that guard until the transition completes.
-func (h *StreamHub) ForceTeardown() error {
+func (h *StreamHub) ForceTeardown() error { return h.forceTeardown(TeardownForced) }
+
+func (h *StreamHub) forceTeardown(reason TeardownReason) error {
 	h.mu.Lock()
 	if h.state == HubTornDown || h.teardownInFlight {
 		h.mu.Unlock()
@@ -565,12 +758,18 @@ func (h *StreamHub) ForceTeardown() error {
 	// subscriber is attached" invariant (types.go) visibly false for the
 	// entire StopControlMode call below would be its own bug.
 	h.state = HubDraining
+	wasCounted := h.counted
+	h.counted = false
 	h.mu.Unlock()
 
-	decActiveHubs()
+	if wasCounted {
+		decActiveHubs()
+	}
+	recordHubTeardown(reason)
 
 	for _, sub := range subs {
 		sub.close()
+		recordSubscriberRemoved(false)
 	}
 
 	var stopErr error
@@ -630,8 +829,10 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 	resizing := h.resizing
 	h.resizeMu.Unlock()
 	if resizing {
+		h.tap.Record(TapDrop, DropCauseResizeSettling, data)
 		return
 	}
+	h.tap.Record(TapOutput, "", data)
 	h.batchWindow.Add(data)
 }
 
@@ -669,15 +870,18 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// manufactured timeouts — an early upstream disconnect (ctx canceled)
 	// stops this pipeline immediately instead of waiting out a fixed
 	// ceiling neither call could otherwise be told about.
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
 	defer cancel()
 
 	h.resizeMu.Lock()
 	h.resizing = true
 	h.resizeMu.Unlock()
+	h.tap.RecordResize(size)
 	defer func() {
 		h.resizeMu.Lock()
 		h.resizing = false
+		h.resizeGeneration++
 		h.resizeMu.Unlock()
 	}()
 
@@ -707,10 +911,28 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	}
 
 	subID, updates := h.controller.SubscribeControlModeUpdates()
-	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
+	waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
+	if h.allAwaitingFirstPaint() {
+		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
+		return
+	}
+
+	if redraw, ok := h.captureRedrawContext(ctx); ok {
+		h.publishSnapshot(redraw)
+		return
+	}
+
 	content, err := h.controller.CapturePaneContentRawContext(ctx)
+	if errors.Is(err, context.DeadlineExceeded) && callerCtx.Err() == nil {
+		// Our own budget ran out while the caller is still connected. Dropping the
+		// capture would leave subscribers on the pre-resize screen (output was
+		// suppressed during the resize and nothing re-arms a capture), so retry once.
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureRetryTimeout)
+		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
+		retryCancel()
+	}
 	if err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName)
@@ -731,16 +953,21 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
-
+	prepared := []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()
+	h.publishSnapshot(prepared)
+}
 
+// publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not
+// touch the text-snapshot cache.
+func (h *StreamHub) publishSnapshot(prepared []byte) {
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself
 	// the authoritative resync point every subscriber is waiting on.
+	h.tap.Record(TapSnapshot, "", prepared)
 	h.batchWindow.Bypass(prepared)
 }
 
@@ -764,5 +991,5 @@ func (h *StreamHub) handleControllerError(err error) {
 	// subscriber immediately, not wait behind a pending batch that a
 	// now-dead controller will never help flush cleanly anyway.
 	h.batchWindow.Bypass(streamEndedSentinel)
-	_ = h.ForceTeardown()
+	_ = h.forceTeardown(TeardownControllerError)
 }

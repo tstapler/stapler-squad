@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -32,46 +30,6 @@ func clampResizeDim(v int) uint32 {
 	return uint32(v)
 }
 
-// reconnectMetrics backs tymux_attach_stream_reconnects_total (Task
-// 2.5.2c, Observability Plan) — a process-wide hand-rolled counter
-// matching session/tmux/fork_metrics.go's existing atomic.Int64
-// convention (no metrics-library dependency), keyed by cause
-// ("error" for a transport drop that triggered ReconnectLoop,
-// "output_gap" for an in-stream resync that never reopened Attach) since
-// a single aggregate count would conflate two different situations the
-// Observability Plan wants distinguishable.
-var reconnectMetrics = struct {
-	mu     sync.Mutex
-	counts map[string]*atomic.Int64
-}{counts: make(map[string]*atomic.Int64)}
-
-// recordReconnect increments tymux_attach_stream_reconnects_total{cause}.
-func recordReconnect(cause string) {
-	reconnectMetrics.mu.Lock()
-	c, ok := reconnectMetrics.counts[cause]
-	if !ok {
-		c = new(atomic.Int64)
-		reconnectMetrics.counts[cause] = c
-	}
-	reconnectMetrics.mu.Unlock()
-	c.Add(1)
-}
-
-// ReconnectMetricsSnapshot returns a point-in-time copy of
-// tymux_attach_stream_reconnects_total, keyed by cause — exported so a
-// future Observability Plan wiring (e.g. an HTTP /metrics handler) can
-// read it without reaching into package-private state, mirroring
-// session/tmux's own ForkPressureSnapshot() convention.
-func ReconnectMetricsSnapshot() map[string]int64 {
-	reconnectMetrics.mu.Lock()
-	defer reconnectMetrics.mu.Unlock()
-	out := make(map[string]int64, len(reconnectMetrics.counts))
-	for k, v := range reconnectMetrics.counts {
-		out[k] = v.Load()
-	}
-	return out
-}
-
 // openStandingStream opens the one Attach stream that backs a
 // tymuxGRPCSession for its whole lifetime (Story 2.3.1) — called once from
 // cacheFromSession, the common tail of Start/RestoreWithWorkDir, never
@@ -86,9 +44,17 @@ func ReconnectMetricsSnapshot() map[string]int64 {
 // attempts, where blocking is safe because it always runs off the
 // reader goroutine, never off a caller of Start/RestoreWithWorkDir.
 func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
+	return s.openStandingStreamForView(context.Background(), paneID)
+}
+
+func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, paneID string) error {
 	s.teardownStandingStream()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCancel := context.AfterFunc(parent, cancel)
+	defer stopCancel()
+	timer := time.AfterFunc(lifecycleRPCTimeout, cancel)
+	defer timer.Stop()
 	stream := s.transport.Attach(ctx)
 	if stream == nil {
 		cancel()
@@ -103,7 +69,7 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 
 	done := make(chan struct{})
 	s.mu.Lock()
-	s.stream = stream
+	s.setStreamLocked(stream)
 	s.cancelAttach = cancel
 	s.streamDone = done
 	s.mu.Unlock()
@@ -117,7 +83,10 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 	// wrapping, not a replacement, context — proven by
 	// TestStartGeneration_DerivedContext_PropagatesParentCancellation in
 	// session/lifecycle/observability_test.go).
+	s.markStreamEvent()
+	registerLiveStream(s, done)
 	go func() {
+		defer unregisterLiveStream(s, done)
 		genCtx, span := lifecycle.StartGeneration(ctx, "tymux_stream")
 		reason := s.readAttachLoop(genCtx, paneID, stream, done)
 		lifecycle.EndGeneration(span, "tymux_stream", reason)
@@ -191,6 +160,7 @@ func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, st
 			}
 			continue
 		}
+		s.markStreamEvent()
 		s.handleAttachEvent(event)
 	}
 }
@@ -231,22 +201,53 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 	case *v1.AttachEvent_Snapshot:
 		s.mu.Lock()
 		s.liveness = p.Snapshot.GetLiveness()
+		s.restartIsPending = false
 		s.mu.Unlock()
 	case *v1.AttachEvent_Output:
 		s.fanout.Broadcast(p.Output)
 	case *v1.AttachEvent_Exited:
 		s.mu.Lock()
 		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
 		s.mu.Unlock()
+		if s.exitFollowedByRestart() {
+			// tymuxd relaunches the same pane after this Exited; the stream end that
+			// follows reaches ReconnectLoop (exited stays false) and redials it.
+			s.mu.Lock()
+			s.restartIsPending = true
+			s.mu.Unlock()
+			log.Info("tymux: pane exited but tymuxd will restart it, keeping the session", "session_id", s.GetSessionIdentifier(), "reason", exitReason(p.Exited))
+			return
+		}
 		s.deliverExit(exitReason(p.Exited))
+	case *v1.AttachEvent_GapExceeded:
+		// The daemon follows GapExceeded with a priming Snapshot (the
+		// reconnect resync path redraws from it); nothing to do but count.
+		recordAttachEvent(attachEventGapExceeded)
 	case *v1.AttachEvent_OutputGap:
 		recordReconnect("output_gap")
+		recordAttachEvent(attachEventOutputGap)
 		count := s.outputGapCount.Add(1)
 		log.Warn("tymux: output_gap received, resyncing via CapturePane", "session_id", s.GetSessionIdentifier(), "count", count)
 		ctx, cancel := s.interruptibleContext()
 		_ = s.resyncViaCapturePane(ctx)
 		cancel()
 	}
+}
+
+// exitFollowedByRestart reports whether tymuxd's restart policy is about to relaunch the pane
+// that just sent Exited. False when closing, when the daemon cannot say, or when it is not
+// between restarts, so those paths keep Exited final.
+func (s *tymuxGRPCSession) exitFollowedByRestart() bool {
+	if s.closing.Load() {
+		return false
+	}
+	s.mu.RLock()
+	paneID := s.paneID
+	s.mu.RUnlock()
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	return !s.closing.Load() && s.restartPending(ctx, paneID)
 }
 
 // exitReason renders an ExitStatus (ADR-001: an absent code is a
@@ -288,23 +289,6 @@ func (s *tymuxGRPCSession) deliverExit(reason string) {
 	} else {
 		log.Debug("tymux: exit observed, no callback fired yet", "session_id", s.GetSessionIdentifier(), "reason", reason, "callback_registered", cb != nil)
 	}
-}
-
-// sendOnStream writes req to the standing stream's input side. Every
-// input method (SendKeys/TapEnter/SendPromptWithEnter/
-// SendInputViaControlMode, Story 2.3.3) and SetWindowSize/SetDetachedSize
-// (Epic 2.4) funnel through here rather than opening a new RPC.
-func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
-	s.mu.RLock()
-	stream := s.stream
-	s.mu.RUnlock()
-	if stream == nil {
-		return errSessionNotStarted
-	}
-	if err := stream.Send(req); err != nil {
-		return classifyRPCError("Attach.Send", err)
-	}
-	return nil
 }
 
 // sendResize sends a Resize AttachRequest on the standing stream — the one
@@ -452,8 +436,9 @@ func reconnectBackoffDelay(attempt int, base, max time.Duration) time.Duration {
 
 // waitBackoff sleeps for reconnectBackoffDelay(attempt, ...), returning
 // false early (without completing the sleep) if abortReconnect fires
-// first — Close()/DetachSafely() calling beginClosing() mid-backoff.
-func (s *tymuxGRPCSession) waitBackoff(attempt int) bool {
+// first — Close()/DetachSafely() calling beginClosing() mid-backoff — or
+// genCtx is cancelled because a reopen superseded this reconnect generation.
+func (s *tymuxGRPCSession) waitBackoff(genCtx context.Context, attempt int) bool {
 	s.mu.RLock()
 	base, max := s.reconnectBaseDelay, s.reconnectMaxDelay
 	abort := s.abortReconnect
@@ -462,6 +447,8 @@ func (s *tymuxGRPCSession) waitBackoff(attempt int) bool {
 	case <-time.After(reconnectBackoffDelay(attempt, base, max)):
 		return true
 	case <-abort:
+		return false
+	case <-genCtx.Done():
 		return false
 	}
 }
@@ -484,28 +471,11 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 	return nil
 }
 
-// ReconnectLoop re-opens Attach{pane_id} with jittered exponential backoff
-// after readAttachLoop observes a non-deliberate stream end. Runs on
-// readAttachLoop's own reader goroutine; blocking here is fine since
-// nothing else waits on it except via s.streamDone.
-//
-// Each attempt dials Attach{pane_id}; a pane reported Dead (errPaneDead)
-// triggers one ReviveSession + redial before giving up on that attempt. A
-// successful dial resyncs once and returns the new stream — s.streamDone
-// stays untouched, so a transient drop that recovers is invisible to
-// Attach()'s callers.
-//
-// On giving up (attempts exhausted, or a deliberate Close()/
-// DetachSafely() interrupts a backoff wait) it returns ok=false along with
-// the lifecycle.Reason (ReasonDeliberateClose vs ReasonReconnectExhausted)
-// it already determined internally from the same s.closing.Load() check —
-// callers must reuse that returned Reason rather than re-deriving it via a
-// second, later s.closing.Load() call, which races against
-// Close()/DetachSafely() setting it from another goroutine (see
-// project_plans/session-lifecycle-state-machine/decisions/). genCtx (the
-// generation context from openStandingStream's lifecycle.StartGeneration)
-// is used to record that Reason via lifecycle.RecordEnd; true exhaustion
-// also delivers a distinguishable failure via deliverExit.
+// ReconnectLoop keeps transport outages recoverable with capped backoff until
+// Close or DetachSafely interrupts it, so a permanently dead daemon keeps the
+// session reconnecting. Confirmed pane loss is terminal; an unconfirmed
+// NotFound retains the bounded reconciliation budget. The returned reason is
+// authoritative so callers do not race a later closing-state read.
 func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
 	recordReconnect(cause)
 	sessionID := s.GetSessionIdentifier()
@@ -513,32 +483,52 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 
 	s.mu.Lock()
 	maxAttempts := s.reconnectMaxAttempts
+	if s.paneID != "" {
+		// The argument is the pane the reader started on; a follow since then
+		// repointed s.paneID, and redialling the old one would waste an attempt.
+		paneID = s.paneID
+	}
 	s.reconnecting = true
 	s.reconnectAttempt = 0
 	s.reconnectCause = cause
 	s.reconnectSince = time.Now()
 	s.mu.Unlock()
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if s.closing.Load() {
+	lastDialNotFound := false
+	for attempt := 1; ; attempt++ {
+		if s.closing.Load() || genCtx.Err() != nil {
 			break
 		}
+		lastDialNotFound = false
 		s.mu.Lock()
 		s.reconnectAttempt = attempt
 		s.mu.Unlock()
 		log.Info("tymux: standing Attach stream reconnect attempt", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt, "max_attempts", maxAttempts)
 
-		if attempt > 1 && !s.waitBackoff(attempt) {
+		if attempt > 1 && !s.waitBackoff(genCtx, attempt) {
 			break // interrupted by a deliberate Close()/DetachSafely()
 		}
-		if s.closing.Load() {
+		if s.closing.Load() || genCtx.Err() != nil {
 			break
 		}
 
 		stream, first, cancel, err := s.dialAttachInterruptible(paneID)
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
+			s.mu.RLock()
+			viewOnly := s.viewOnly
+			s.mu.RUnlock()
+			if viewOnly {
+				break // Viewing never revives a pane, even after a daemon restart.
+			}
+			switch s.deadPaneDisposition(paneID) {
+			case deadPaneRestarting:
+				continue // tymuxd is restarting it; reviving would bypass its backoff
+			case deadPaneTerminal:
+				return s.giveUpPaneNotRunning(genCtx, sessionID, paneID)
+			}
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
+			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()
 			s.backendRestarted = true
 			s.backendRestartedAt = time.Now()
@@ -551,6 +541,27 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 				continue
 			}
 			stream, first, cancel, err = s.dialAttachInterruptible(paneID)
+		}
+		if err != nil && s.closing.Load() {
+			break // a deliberate Close() surfaces as a dial error; keep ReasonDeliberateClose
+		}
+		if err != nil && connect.CodeOf(err) == connect.CodeNotFound {
+			if s.daemonConfirmsPaneGone(sessionID, paneID) {
+				if s.closing.Load() {
+					break // Close() landed during the confirmation round trip
+				}
+				return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+			}
+			lastDialNotFound = true
+			if attempt >= maxAttempts {
+				break
+			}
+			// Unconfirmed, or the session respawned its pane: daemonConfirmsPaneGone
+			// repointed s.paneID, so redial that one.
+			s.mu.RLock()
+			paneID = s.paneID
+			s.mu.RUnlock()
+			continue
 		}
 		if err != nil {
 			continue
@@ -567,12 +578,20 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		}
 
 		s.mu.Lock()
-		s.stream = stream
+		if genCtx.Err() != nil {
+			// A reopen superseded this generation while we dialled; installing would give the
+			// fanout two readers.
+			s.mu.Unlock()
+			cancel()
+			break
+		}
+		s.setStreamLocked(stream)
 		s.cancelAttach = cancel
 		s.reconnecting = false
 		s.reconnectAttempt = 0
 		s.reconnectCause = ""
 		s.mu.Unlock()
+		s.markStreamEvent() // the reattach's priming Snapshot just arrived
 
 		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
 		return stream, first, true, lifecycle.ReasonUnknown
@@ -588,8 +607,67 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		return nil, nil, false, lifecycle.ReasonDeliberateClose
 	}
 
+	if genCtx.Err() != nil {
+		// A reopen (RestoreWithWorkDir) cancelled this generation; its replacement owns the exit.
+		lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonDeliberateSupersede)
+		log.Info("tymux: standing Attach stream reconnect abandoned (superseded)", "session_id", sessionID, "pane_id", paneID, "cause", cause)
+		return nil, nil, false, lifecycle.ReasonDeliberateSupersede
+	}
+
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
-	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	if lastDialNotFound {
+		s.deliverExit(fmt.Sprintf("reconnect failed: pane not found and not confirmed gone after %d attempts", maxAttempts))
+	} else {
+		s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	}
+	return nil, nil, false, lifecycle.ReasonReconnectExhausted
+}
+
+// giveUpPaneGone ends ReconnectLoop at the first NotFound redial: the daemon has no such pane,
+// so further attempts only delay the SPA's not_found.
+func (s *tymuxGRPCSession) giveUpPaneGone(genCtx context.Context, sessionID, paneID string, err error) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
+	s.mu.Lock()
+	s.reconnecting = false
+	s.mu.Unlock()
+	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
+	log.Warn("tymux: standing Attach redial found no such pane, giving up", "session_id", sessionID, "pane_id", paneID, "err", err)
+	s.deliverExit("reconnect failed: pane no longer exists in tymuxd")
+	return nil, nil, false, lifecycle.ReasonReconnectExhausted
+}
+
+type deadPaneState int
+
+const (
+	deadPaneUnknown deadPaneState = iota // revive, as after a daemon restart
+	deadPaneRestarting
+	deadPaneTerminal
+)
+
+// deadPaneDisposition classifies a pane whose redial hit errPaneDead using tymuxd's lifecycle state.
+func (s *tymuxGRPCSession) deadPaneDisposition(paneID string) deadPaneState {
+	ctx, cancel := s.interruptibleContext()
+	defer cancel()
+	state, ok := s.paneLifecycleState(ctx, paneID)
+	switch {
+	case !ok:
+		return deadPaneUnknown
+	case isRestartPending(state):
+		return deadPaneRestarting
+	case isTerminalPaneState(state):
+		return deadPaneTerminal
+	}
+	return deadPaneUnknown
+}
+
+// giveUpPaneNotRunning ends ReconnectLoop for a FAILED/STOPPED pane, which only an operator can
+// bring back, so squad shows the session Stopped instead of retrying a revive that cannot succeed.
+func (s *tymuxGRPCSession) giveUpPaneNotRunning(genCtx context.Context, sessionID, paneID string) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
+	s.mu.Lock()
+	s.reconnecting = false
+	s.mu.Unlock()
+	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
+	log.Warn("tymux: pane is FAILED or STOPPED, giving up reconnect", "session_id", sessionID, "pane_id", paneID)
+	s.deliverExit("reconnect failed: pane is failed or stopped in tymuxd")
 	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }

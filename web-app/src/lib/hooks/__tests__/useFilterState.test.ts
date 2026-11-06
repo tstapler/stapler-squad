@@ -1,12 +1,12 @@
 import { renderHook, act } from "@testing-library/react";
 import { useFilterState } from "../useFilterState";
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: jest.fn(),
   useRouter: jest.fn(),
 }));
 
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams, useRouter } from "@/lib/nav";
 
 describe("useFilterState", () => {
   let mockReplace: jest.Mock;
@@ -38,7 +38,7 @@ describe("useFilterState", () => {
       result.current.setFilter("status", "running");
     });
 
-    expect(mockReplace).toHaveBeenCalledWith("?status=running", { scroll: false });
+    expect(mockReplace).toHaveBeenCalledWith("?status=running", { resetScroll: false });
   });
 
   it("setFilter(key, value) preserves existing params", () => {

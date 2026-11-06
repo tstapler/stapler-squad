@@ -2,23 +2,24 @@
 
 // analytics-exempt
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { Link, useSearchParams } from "@/lib/nav";
 import * as Tabs from "@radix-ui/react-tabs";
 import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
 import { AliasesManager } from "@/components/settings/AliasesManager";
+import { ProgramsManager } from "@/components/settings/ProgramsManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
 import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import { InputModeSetting } from "@/components/settings/InputModeSetting";
+import { TerminalSettings } from "@/components/settings/TerminalSettings";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useOnboardingContext } from "@/lib/contexts/OnboardingContext";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { routes } from "@/lib/routes";
-import Link from "next/link";
 import * as styles from "./settings.css";
 
 function SettingsPageInner() {
@@ -79,6 +80,9 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <AliasesManager />
             </section>
+            <section className={styles.section}>
+              <ProgramsManager />
+            </section>
             {flags["backlog"] && (
               <section className={styles.section}>
                 <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
@@ -92,6 +96,20 @@ function SettingsPageInner() {
               </Link>
             </section>
             <section className={styles.section}>
+              <Link
+                href={routes.settingsBacklogStages}
+                className={styles.helpLink}
+                data-testid="settings-backlog-stages-link"
+              >
+                Backlog Stages →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsBacklogQuota} className={styles.helpLink} data-testid="settings-backlog-quota-link">
+                Backlog Quota (pause backlog automation near the session limit) →
+              </Link>
+            </section>
+            <section className={styles.section}>
               <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
                 Remotes (SSH hosts) →
               </Link>
@@ -101,20 +119,41 @@ function SettingsPageInner() {
                 Jules (Google cloud agent) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsTaggingClassifier} className={styles.helpLink} data-testid="settings-tagging-classifier-link">
+                Tag Classification (AI tagging model) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsLlmBackends} className={styles.helpLink} data-testid="settings-llm-backends-link">
+                LLM Backends (claude / consolette / agy / gemini / opencode) →
+              </Link>
+            </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsBackgroundModels} className={styles.helpLink} data-testid="settings-background-models-link">
+                Background Models (cheaper models and effort for unattended work) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>
                 <div className={styles.helpSectionTitle}>Help</div>
                 <div className={styles.helpRow}>
+                  {// analytics-exempt
                   <button
                     className={styles.helpButton}
                     onClick={triggerOnboarding}
                   >
                     Show onboarding tour again
-                  </button>
+                  </button>}
                   <Link href={routes.help} className={styles.helpLink}>
                     View documentation
                   </Link>
+                  {flags["changelog"] && (
+                    <Link href={routes.changelog} className={styles.helpLink} data-testid="settings-changelog-link">
+                      What&apos;s new (changelog)
+                    </Link>
+                  )}
                 </div>
               </div>
             </section>
@@ -136,6 +175,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <InputModeSetting />
+            </section>
+            <section className={styles.section}>
+              <TerminalSettings />
             </section>
             <section className={styles.section}>
               <PushNotificationSettings />

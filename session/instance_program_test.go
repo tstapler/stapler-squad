@@ -188,45 +188,46 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "antigravity"))
 	assert.True(t, isClaudeAntigravityCrossSwitch("antigravity", "claude"))
 	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "agy"))
+	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "opencode"))
+	assert.True(t, isClaudeAntigravityCrossSwitch("opencode", "agy"))
 	assert.False(t, isClaudeAntigravityCrossSwitch("claude", "aider"))
-	assert.False(t, isClaudeAntigravityCrossSwitch("aider", "opencode"))
+	assert.False(t, isClaudeAntigravityCrossSwitch("opencode", "opencode"))
 
 	assert.True(t, isClaudeAntigravityFamily("claude"))
 	assert.True(t, isClaudeAntigravityFamily("antigravity"))
 	assert.True(t, isClaudeAntigravityFamily("agy"))
+	assert.True(t, isClaudeAntigravityFamily("opencode"))
 	assert.False(t, isClaudeAntigravityFamily("aider"))
 }
 
-// TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies the fix for the reported
-// claude<->gemini asymmetry: gemini (the standalone Gemini CLI) is excluded from both the
-// family gate here AND from AgyAdapter.CanHandle (session/agy_adapter.go), since Antigravity's
-// adapter only reads/writes its own ~/.gemini/antigravity-cli/... storage, not the real
-// Gemini CLI's format. If either side of this check is ever widened to include gemini without
-// the other, this test catches the drift.
+// TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies that gemini (the standalone Gemini CLI)
+// is handled by GeminiAdapter (and thus included in the family gate and cross-switch resolution),
+// while remaining excluded from AgyAdapter.CanHandle (session/agy_adapter.go).
 func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
 	t.Parallel()
-	assert.False(t, isClaudeAntigravityFamily("gemini"))
-	assert.False(t, isClaudeAntigravityCrossSwitch("claude", "gemini"))
-	assert.False(t, isClaudeAntigravityCrossSwitch("gemini", "claude"))
+	assert.True(t, isClaudeAntigravityFamily("gemini"))
+	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "gemini"))
+	assert.True(t, isClaudeAntigravityCrossSwitch("gemini", "claude"))
 	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
+	assert.True(t, NewGeminiAdapter().CanHandle("gemini"))
 }
 
-// TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState verifies AC0: a
-// claude->gemini switch never silently falls into an unhandled state. Since gemini isn't
-// history-portable via AgyAdapter, it takes the leaving-the-family ClearConversationState()
+// TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState verifies AC0: a
+// claude->aider switch never silently falls into an unhandled state. Since aider isn't
+// history-portable via any adapter, it takes the leaving-the-family ClearConversationState()
 // branch — same as any other non-family program — rather than being dropped on the floor.
-func TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState(t *testing.T) {
+func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
 
-	changed, resolved, err := inst.SwitchProgram(context.Background(), "gemini", nil)
+	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", nil)
 
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assert.Equal(t, "gemini", resolved)
-	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to gemini must clear the stale claude UUID, not silently keep it")
+	assert.Equal(t, "aider", resolved)
+	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to non-family program must clear the stale claude UUID, not silently keep it")
 }
 
 // TestPortHistoryFailureIsExpected directly covers the Warn-vs-Error log-level selection used

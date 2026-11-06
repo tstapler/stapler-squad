@@ -132,10 +132,7 @@ func TestCallbackDispatcher_Dispatch_DropsBeyondCapacity(t *testing.T) {
 		return received.Load() == int32(cap)
 	}, 2*time.Second, 10*time.Millisecond, "expected exactly cap in-flight requests")
 
-	// Give the dropped goroutines (there are none — they never spawned) or any
-	// hypothetical late arrivals a window to show up before asserting the count
-	// never grows past cap.
-	time.Sleep(200 * time.Millisecond)
+	assert.Len(t, d.inFlight, cap, "only cap slots may ever be reserved; over-capacity dispatches never spawn")
 	assert.Equal(t, int32(cap), received.Load(), "over-capacity dispatches must be dropped, not queued for later delivery")
 
 	close(block) // release the held requests so the goroutines can exit cleanly
@@ -375,11 +372,14 @@ func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRound
 func TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff(t *testing.T) {
 	t.Parallel()
 	var received atomic.Int32
+	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received.Add(1)
+		<-block
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	defer close(block)
 
 	cfg := &config.Config{
 		FeatureFlags: map[string]bool{"webhook_triggers": false},
@@ -393,7 +393,7 @@ func TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff(t *testing.T) {
 	}
 
 	d.Dispatch("session_complete", map[string]any{"event": "session_complete"})
-	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, d.inFlight, "a spawned delivery would hold its slot while the server blocks")
 	assert.Equal(t, int32(0), received.Load(), "Dispatch must no-op when the feature flag is off")
 }
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { routes } from "@/lib/routes";
 import {
@@ -87,6 +87,7 @@ function AddDeviceModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
           <input
             type="text"
             placeholder="Device name (optional)"
+            aria-label="Device name (optional)"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && generate()}

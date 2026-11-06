@@ -32,7 +32,8 @@ func lockForWorktree(worktreePath string) *sync.Mutex {
 var ScaffoldingExcludePatterns = []string{
 	".backlog-context.md",
 	".claude/commands/backlog/",
-	"web-app/.next/",
+	"web-app/.out-tmp-*",
+	"web-app/.build/",
 }
 
 // UntrackScaffolding removes any git index entry matching patterns (git-rm-cached
@@ -84,9 +85,13 @@ func UntrackScaffolding(worktreePath string, patterns []string) ([]string, error
 
 // scaffoldingPatternMatches reports whether entryName (a git index path, always
 // forward-slash-separated regardless of OS) matches exclude pattern p. Patterns
-// ending in "/" match any entry under that directory tree; other patterns match
-// the full path exactly.
+// ending in "/" match any entry under that directory tree; a trailing "*" matches
+// any path with that prefix (the Bun temp output dirs carry a random suffix);
+// other patterns match the full path exactly.
 func scaffoldingPatternMatches(entryName, p string) bool {
+	if prefix, ok := strings.CutSuffix(p, "*"); ok {
+		return strings.HasPrefix(entryName, prefix)
+	}
 	if strings.HasSuffix(p, "/") {
 		return strings.HasPrefix(entryName, p)
 	}

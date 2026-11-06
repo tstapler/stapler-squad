@@ -101,15 +101,14 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
   });
 }
 
-// next/navigation is not available in the jsdom test environment.
-// Tests that import components using useRouter or usePathname from next/navigation
-// will fail without this stub. Individual tests can override via jest.mock().
-jest.mock("next/navigation", () => ({
+// Navigation test surface: tests mock the facade ("@/lib/nav"); individual tests can override via jest.mock().
+jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: jest.fn(() => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), forward: jest.fn() })),
   usePathname: jest.fn(() => "/"),
   useSearchParams: jest.fn(() => new URLSearchParams()),
   useParams: jest.fn(() => ({})),
-}), { virtual: true });
+}));
 
 // @xterm/addon-serialize calls HTMLCanvasElement.prototype.getContext at module load time,
 // which jsdom does not implement. Stub it globally to prevent the canvas error and keep
@@ -164,3 +163,45 @@ jest.mock("@/lib/hooks/useHandoffSummary", () => ({
     refetch: jest.fn(),
   }),
 }));
+
+// useInsightsSummary (BacklogItemDetail's Story 5.2.3 ItemStageCostTable
+// fetch, plus every Insights dashboard component) opens a real WatchInsights
+// transport on mount unless mocked, breaking any test that renders
+// BacklogItemDetail without knowing about this dependency. Stub it globally
+// with a stable, non-fetching default (same rationale as
+// useSlashCommands/useAvailablePrograms/useBacklogStages above). Tests that
+// DO need to control the summary (StageCostChart/ItemStageCostTable wiring,
+// InsightsDashboard) override this locally with their own
+// jest.mock("@/lib/hooks/useInsightsService", ...).
+jest.mock("@/lib/hooks/useInsightsService", () => ({
+  ...jest.requireActual("@/lib/hooks/useInsightsService"),
+  useInsightsSummary: () => ({
+    summary: null,
+    loading: false,
+    isLiveUpdating: false,
+    error: null,
+    refetch: jest.fn(),
+  }),
+}));
+
+// useBacklogStages (BacklogBoard/StageTracker, Epic 2.9
+// backlog-custom-workflow-stages) calls ListStages via the real ConnectRPC
+// transport on mount. Stub it globally with the built-in-only default so
+// tests that render these components without caring about live custom-stage
+// config don't trigger a fetch jsdom can't satisfy (same rationale as
+// useSlashCommands/useAvailablePrograms above). Tests that DO need to
+// exercise stage-fetching override this locally with their own
+// jest.mock("@/lib/hooks/useBacklogStages", ...), same override pattern as
+// useHandoffSummary below.
+jest.mock("@/lib/hooks/useBacklogStages", () => ({
+  ...jest.requireActual("@/lib/hooks/useBacklogStages"),
+  useBacklogStages: () => ({
+    stages: jest.requireActual("@/lib/hooks/useBacklogStages").BUILTIN_BACKLOG_STAGES,
+    isLoading: false,
+    error: null,
+  }),
+}));
+
+// Interaction-safety windows (settled layout, commit delay) would swallow or defer clicks made
+// right after render. Suites that exercise them restore the real values with setTimingForTests().
+require("./src/lib/hooks/interactionTiming").setTimingForTests({ settleMs: 0, commitDelayMs: 0 });

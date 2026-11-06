@@ -12,6 +12,8 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/log"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // swapKeyringSeams overrides the package-level keyringGet/Set/Delete test
@@ -84,15 +86,12 @@ func installWarnHandler(t *testing.T, message string) *warnHandler {
 // background probe goroutine's log write without a dedicated done channel.
 func waitForCount(t *testing.T, timeout time.Duration, get func() int, want int) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if got := get(); got >= want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for count to reach %d (last was %d)", want, get())
-		}
-		time.Sleep(2 * time.Millisecond)
+	if err := wait.WaitForCondition(func() bool { return get() >= want }, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 2 * time.Millisecond,
+		Description:  "count to reach want",
+	}); err != nil {
+		t.Fatalf("timed out waiting for count to reach %d (last was %d): %v", want, get(), err)
 	}
 }
 
@@ -283,17 +282,23 @@ func TestKeyringTokenSource_APIKey_should_ServeFromCacheWithoutReResolving_When_
 
 func TestKeyringTokenSource_APIKey_should_ReturnErrJulesKeychainPausedAndLogOnce_When_CircuitOpen(t *testing.T) {
 	handler := installWarnHandler(t, "jules keychain paused")
+	probeRelease := make(chan struct{})
+	probeStarted := make(chan struct{}, 2)
 
 	swapKeyringSeams(t,
-		func(string, string) (string, error) { return "", errors.New("still down") },
+		func(string, string) (string, error) {
+			<-probeRelease
+			return "", errors.New("still down")
+		},
 		nil, nil,
 	)
 
 	now := time.Now()
-	s := NewKeyringTokenSource(withClock(func() time.Time { return now }))
-	s.stateMu.Lock()
-	s.circuitOpenUntil = now.Add(time.Hour)
-	s.stateMu.Unlock()
+	s := NewKeyringTokenSource(
+		withClock(func() time.Time { return now }),
+		withProbeStartHook(func() { probeStarted <- struct{}{} }),
+	)
+	s.openCircuit()
 
 	for i := 0; i < 5; i++ {
 		_, err := s.APIKey(context.Background())
@@ -305,11 +310,34 @@ func TestKeyringTokenSource_APIKey_should_ReturnErrJulesKeychainPausedAndLogOnce
 		}
 	}
 
-	// The single background probe (launched by the first of the 5 calls)
-	// fails against the stub above and logs once -- wait for it to land.
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background keychain probe did not start")
+	}
+	close(probeRelease)
+
+	// The one background probe fails and extends the cooldown. Calls during
+	// that new cooldown must not immediately launch another probe.
 	waitForCount(t, time.Second, handler.Count, 1)
+	if err := wait.WaitForCondition(func() bool {
+		s.stateMu.Lock()
+		defer s.stateMu.Unlock()
+		return !s.probeInFlight
+	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: time.Millisecond, Description: "probe no longer in flight"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.APIKey(context.Background())
+	if !errors.Is(err, ErrJulesKeychainPaused) {
+		t.Fatalf("call after failed probe error = %v, want ErrJulesKeychainPaused", err)
+	}
+	select {
+	case <-probeStarted:
+		t.Fatal("failed probe was retried before its extended cooldown elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
 	if got := handler.Count(); got != 1 {
-		t.Fatalf("\"jules keychain paused\" Warn records = %d across 5 calls, want exactly 1", got)
+		t.Fatalf("\"jules keychain paused\" Warn records = %d, want exactly 1", got)
 	}
 }
 
@@ -435,7 +463,7 @@ func TestKeyringTokenSource_APIKey_should_CoalesceSynchronousResolves_When_ManyG
 	}
 	// Give the other 49 goroutines a chance to reach the shared singleflight
 	// call before it completes.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest no observable signal that the other goroutines reached the singleflight call
 	close(block)
 
 	doneWG.Wait()

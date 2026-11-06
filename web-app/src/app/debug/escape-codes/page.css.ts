@@ -44,7 +44,7 @@ export const button = style({
   color: vars.color.textPrimary,
   cursor: "pointer",
   fontSize: "0.875rem",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -185,18 +185,6 @@ export const badge = style({
   fontWeight: 500,
   textTransform: "capitalize",
 });
-
-export const badgeCSI = style({ background: "#3b82f6", color: "white" });
-export const badgeOSC = style({ background: "#8b5cf6", color: "white" });
-export const badgeDCS = style({ background: "#ec4899", color: "white" });
-export const badgeDECPriv = style({ background: "#f59e0b", color: "black" });
-export const badgeSGR = style({ background: "#10b981", color: "white" });
-export const badgeCursor = style({ background: "#06b6d4", color: "white" });
-export const badgeErase = style({ background: "#ef4444", color: "white" });
-export const badgeScroll = style({ background: "#84cc16", color: "black" });
-export const badgeSimple = style({ background: "#64748b", color: "white" });
-export const badgeCharset = style({ background: "#a855f7", color: "white" });
-export const badgeUnknown = style({ background: "#374151", color: "white" });
 
 export const countCell = style({
   fontWeight: 600,

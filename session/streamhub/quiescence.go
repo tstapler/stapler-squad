@@ -1,6 +1,7 @@
 package streamhub
 
 import (
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -25,28 +26,49 @@ const (
 // the raw update channel directly (rather than a per-connection one) and
 // logs its own hub-scoped QuiescenceTimedOut WARN (Task 1.3.2f) instead of
 // leaving that to each caller.
-func waitForQuiescence(updates <-chan []byte, timeout, quietFor time.Duration, sessionName string) {
-	deadline := time.After(timeout)
-	quiet := time.NewTimer(quietFor)
-	defer quiet.Stop()
-	start := time.Now()
+func waitForQuiescence(clock Clock, updates <-chan []byte, timeout, quietFor time.Duration, sessionName string) {
+	deadline := make(chan struct{})
+	deadlineTimer := clock.AfterFunc(timeout, func() { close(deadline) })
+	defer deadlineTimer.Stop()
+
+	// mu orders re-arming against an already-fired quiet callback: a stale
+	// callback sees a newer generation and stays silent, and arm drains any
+	// signal it left behind, so the new timer's signal can never be dropped.
+	var mu sync.Mutex
+	quiet := make(chan struct{}, 1)
+	gen := 0
+	arm := func() Timer {
+		mu.Lock()
+		defer mu.Unlock()
+		gen++
+		g := gen
+		select {
+		case <-quiet:
+		default:
+		}
+		return clock.AfterFunc(quietFor, func() {
+			mu.Lock()
+			defer mu.Unlock()
+			if g == gen {
+				quiet <- struct{}{}
+			}
+		})
+	}
+	quietTimer := arm()
+	defer func() { quietTimer.Stop() }()
+	start := clock.Now()
 	for {
 		select {
 		case _, ok := <-updates:
 			if !ok {
 				return
 			}
-			if !quiet.Stop() {
-				select {
-				case <-quiet.C:
-				default:
-				}
-			}
-			quiet.Reset(quietFor)
-		case <-quiet.C:
+			quietTimer.Stop()
+			quietTimer = arm()
+		case <-quiet:
 			return
 		case <-deadline:
-			if elapsed := time.Since(start); elapsed >= timeout-5*time.Millisecond {
+			if elapsed := clock.Now().Sub(start); elapsed >= timeout-5*time.Millisecond {
 				log.Warn("streamhub quiescence timed out; session may be stalled",
 					"tmux_session", sessionName, "elapsed", elapsed.Round(time.Millisecond))
 			}

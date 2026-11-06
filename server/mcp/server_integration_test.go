@@ -46,7 +46,9 @@ func expectedToolCount(t *testing.T) int {
 func TestMCPHandshakeSubprocess(t *testing.T) {
 	want := expectedToolCount(t)
 	binaryPath := t.TempDir() + "/stapler-squad-test"
-	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	// -s -w drops symbol/DWARF tables: linking the ~175MB default binary dominates this
+	// test (~20s of its ~23s); the handshake needs neither, and stripping cuts the build to ~6s.
+	build := exec.Command("go", "build", "-ldflags=-s -w", "-o", binaryPath, ".")
 	build.Dir = "../.."
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %v\n%s", err, out)

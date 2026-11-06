@@ -29,14 +29,16 @@ import type { Session } from "@/gen/session/v1/types_pb";
 // want the real SessionDetailView (with its correct ARIA markup) to render. Resolve the
 // SessionDetailView loader synchronously via require so assertions can stay synchronous;
 // stub everything else (i.e. TerminalOutput) as before.
-jest.mock("next/dynamic", () => (loader: () => Promise<{ default: React.ComponentType }>) => {
-  if (loader.toString().includes("SessionDetailView")) {
-    return require("../SessionDetailView").SessionDetailView;
-  }
-  return function DynamicStub() {
-    return <div data-testid="terminal-output" />;
-  };
-});
+jest.mock("@/lib/lazy", () => ({
+  lazyComponent: (loader: () => Promise<{ default: React.ComponentType }>) => {
+    if (loader.toString().includes("SessionDetailView")) {
+      return require("../SessionDetailView").SessionDetailView;
+    }
+    return function DynamicStub() {
+      return <div data-testid="terminal-output" />;
+    };
+  },
+}));
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
 // HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
@@ -55,11 +57,7 @@ jest.mock("../BrowserTab", () => ({
   BrowserTab: ({ sessionId }: { sessionId: string }) => (
     <div data-testid={`browser-tab-stub-${sessionId}`} />
   ),
-  VNCStatus: { UNSPECIFIED: 0, STARTING: 1, READY: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
-}));
-jest.mock("../NoVNCViewer", () => ({
-  __esModule: true,
-  default: () => <div data-testid="novnc-viewer-stub" />,
+  CDPStatus: { UNSPECIFIED: 0, WAITING: 1, STREAMING: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
 }));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
@@ -96,8 +94,8 @@ jest.mock("@/lib/constants/programs", () => ({
   isKnownProgram: () => true,
   PROGRAMS: [],
 }));
-jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []) }));
-jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn() }));
+jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []), useAppDispatch: () => jest.fn() }));
+jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn(), selectSessionsError: jest.fn(), setError: jest.fn() }));
 
 // useShells otherwise fires a real ConnectRPC listShells call on mount, and
 // useAvailablePrograms fires a real fetch("/api/server-info") — both land outside this

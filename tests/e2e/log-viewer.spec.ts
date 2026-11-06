@@ -7,8 +7,9 @@ const _features = [
   // FEATURE_CATALOG['logs-expand'], // TODO: add to catalog
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('log-viewer', () => {
   test.beforeEach(async ({ page }) => {
@@ -75,7 +76,7 @@ test.describe('log-viewer', () => {
 
     // Verify the match counter appears (aria-live region) when query is non-empty
     // The counter shows "N / total" format and has aria-live="polite"
-    const matchCounter = page.locator('[aria-live="polite"]');
+    const matchCounter = page.getByText(/^\d+ \/ \d+$/);
     // Counter is present whenever searchQuery is non-empty (even if 0 / 0)
     await expect(matchCounter).toBeVisible();
   });

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,31 @@ var validCategories = map[string]bool{
 	"performance": true,
 	"navigation":  true,
 	"rpc":         true,
+}
+
+const (
+	filesEventPrefix = "files."
+	maxFilesLabels   = 8
+)
+
+// filesLabelValueShape and filesLabelKeyShape bound what a files.* event may carry,
+// so a path, query or draft text cannot be recorded even by a buggy client.
+var (
+	filesLabelValueShape = regexp.MustCompile(`^[a-z0-9_+-]{1,24}$`)
+	filesLabelKeyShape   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,23}$`)
+)
+
+// filesLabelsValid reports whether a files.* event's labels fit the privacy shape.
+func filesLabelsValid(labels map[string]string) bool {
+	if len(labels) > maxFilesLabels {
+		return false
+	}
+	for k, v := range labels {
+		if !filesLabelKeyShape.MatchString(k) || !filesLabelValueShape.MatchString(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // analyticsEventRequest matches the frontend AnalyticsEvent JSON shape.
@@ -75,6 +101,8 @@ type analyticsSummaryResponse struct {
 type AnalyticsHandler struct {
 	provider analytics.AnalyticsProvider
 	limiter  *rateLimiter
+	events   *minuteBudget
+	cmEvents *minuteBudget
 	client   *ent.Client // may be nil when only LogAnalyticsProvider is available
 }
 
@@ -88,7 +116,19 @@ func NewAnalyticsHandler(provider analytics.AnalyticsProvider) *AnalyticsHandler
 		limiter: &rateLimiter{
 			resetAt: time.Now().Add(time.Minute),
 		},
+		events:   &minuteBudget{limit: analyticsEventsPerMinute},
+		cmEvents: &minuteBudget{limit: metricEventsPerMinute},
 	}
+}
+
+func countMetricEvents(events []analyticsEventRequest) int {
+	n := 0
+	for _, ev := range events {
+		if strings.HasPrefix(ev.EventName, "cm.") {
+			n++
+		}
+	}
+	return n
 }
 
 // NewAnalyticsHandlerWithClient creates a new AnalyticsHandler that can also serve
@@ -124,6 +164,7 @@ func (h *AnalyticsHandler) allow() bool {
 // HandlePost handles POST /api/analytics.
 func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 	if !h.allow() {
+		noteRateLimited(scopeGlobalRequests)
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -159,13 +200,31 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Charged only after validation, so a malformed batch consumes no event budget.
+	if !h.events.take(len(req.Events)) {
+		noteRateLimited(scopeGlobalEvents)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+	if !h.cmEvents.take(countMetricEvents(req.Events)) {
+		noteRateLimited(scopeMetricBudget)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+
 	ctx := r.Context()
+	dropped := 0
+	toRecord := make([]analytics.Event, 0, len(req.Events))
 	for _, ev := range req.Events {
+		if strings.HasPrefix(ev.EventName, filesEventPrefix) && !filesLabelsValid(ev.Labels) {
+			dropped++
+			continue
+		}
 		// Sanitize event name: strip newlines to prevent log injection.
 		safeName := strings.ReplaceAll(ev.EventName, "\n", `\n`)
 		safeName = strings.ReplaceAll(safeName, "\r", `\r`)
 
-		aerr := h.provider.Record(ctx, analytics.Event{
+		toRecord = append(toRecord, analytics.Event{
 			ID:            ev.ID,
 			EventName:     safeName,
 			EventCategory: ev.EventCategory,
@@ -175,11 +234,16 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			Component:     ev.Component,
 			Labels:        ev.Labels,
 		})
-		if aerr != nil {
-			log.Error("analytics record error (continuing)", "err", aerr)
-		}
+	}
+	// One transaction for the whole request when the provider supports it: a commit
+	// per event serialized up to 100 inserts on the single analytics connection.
+	if aerr := analytics.RecordAll(ctx, h.provider, toRecord); aerr != nil {
+		log.Error("analytics record error (continuing)", "err", aerr, "events", len(toRecord))
 	}
 
+	if dropped > 0 {
+		log.Warn("analytics dropped files events with out-of-shape labels", "dropped", dropped, "batch", len(req.Events))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

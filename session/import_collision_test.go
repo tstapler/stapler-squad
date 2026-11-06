@@ -30,6 +30,10 @@ func (f *fakeInstanceStore) ListInstanceData() ([]InstanceData, error) {
 	return f.instances, nil
 }
 
+func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*InstanceData, error) {
+	panic("fakeInstanceStore: FindInstanceDataByID not implemented")
+}
+
 func (f *fakeInstanceStore) SaveInstances([]*Instance) error {
 	panic("fakeInstanceStore: SaveInstances not implemented")
 }

@@ -80,4 +80,25 @@ describe("VcsWidgetFileList", () => {
     expect(screen.queryByText(/Untracked Files/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Conflicts/)).not.toBeInTheDocument();
   });
+
+  it("VcsWidgetFileList_should_CallOnViewFileDiffNotOnNavigateToFile_When_FileRowClicked_And_BothProvided", async () => {
+    const onNavigateToFile = jest.fn();
+    const onViewFileDiff = jest.fn();
+    render(
+      <VcsWidgetFileList
+        fileChanges={[makeFile()]}
+        onNavigateToFile={onNavigateToFile}
+        onViewFileDiff={onViewFileDiff}
+      />,
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: /src\/foo\.ts/ }));
+    expect(onViewFileDiff).toHaveBeenCalledWith("src/foo.ts");
+    expect(onNavigateToFile).not.toHaveBeenCalled();
+  });
+
+  it("VcsWidgetFileList_should_RenderButton_When_OnlyOnViewFileDiffProvided", () => {
+    render(<VcsWidgetFileList fileChanges={[makeFile()]} onViewFileDiff={jest.fn()} />);
+    expect(screen.getByRole("button", { name: /src\/foo\.ts/ })).toBeInTheDocument();
+  });
 });

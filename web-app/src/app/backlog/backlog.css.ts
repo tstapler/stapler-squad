@@ -188,6 +188,36 @@ export const tableRow = style({
   },
 });
 
+export const checkboxCell = style({
+  width: 32,
+  paddingRight: 0,
+});
+
+// Hidden until the row is hovered/focused, checked, or select mode is on.
+export const rowCheckbox = style({
+  opacity: 0,
+  cursor: "pointer",
+  selectors: {
+    [`${tableRow}:hover &`]: { opacity: 1 },
+    [`${tableRow}:focus-within &`]: { opacity: 1 },
+    "&:checked": { opacity: 1 },
+  },
+  "@media": { "(hover: none)": { opacity: 1 } },
+});
+
+export const rowCheckboxVisible = style({
+  selectors: { "&&": { opacity: 1 } },
+});
+
+export const srOnly = style({
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+});
+
 export const tableRowActive = style({
   background: vars.color.accentBg,
 });
@@ -262,6 +292,17 @@ export const titleCell = style({
   fontWeight: vars.fontWeight.medium,
 });
 
+export const rowWidgets = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: vars.space["1"],
+  marginTop: vars.space["1"],
+  whiteSpace: "normal",
+  fontWeight: vars.fontWeight.normal,
+  selectors: { "&:empty": { display: "none" } },
+});
+
 export const acProgressCell = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.xs,
@@ -290,42 +331,6 @@ export const groupHeaderCell = style({
   background: vars.color.surfaceMuted,
   borderBottom: `1px solid ${vars.color.borderColor}`,
   borderTop: `1px solid ${vars.color.borderColor}`,
-});
-
-export const emptyState = style({
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: vars.space["12"],
-  gap: vars.space["3"],
-  color: vars.color.textMuted,
-  textAlign: "center",
-});
-
-export const emptyTitle = style({
-  fontSize: vars.fontSize.lg,
-  fontWeight: vars.fontWeight.medium,
-  color: vars.color.textSecondary,
-});
-
-export const emptySubtitle = style({
-  fontSize: vars.fontSize.sm,
-});
-
-export const emptyActionButton = style({
-  padding: `${vars.space["2"]} ${vars.space["4"]}`,
-  background: vars.color.primary,
-  color: vars.color.primaryText,
-  border: "none",
-  borderRadius: vars.radii.md,
-  fontSize: vars.fontSize.sm,
-  fontWeight: vars.fontWeight.medium,
-  cursor: "pointer",
-  marginTop: vars.space["2"],
-  ":hover": {
-    background: vars.color.primaryHover,
-  },
 });
 
 // Modal overlay for item form

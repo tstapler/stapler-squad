@@ -49,6 +49,12 @@ describe("createNotificationSyncChannel", () => {
     });
   });
 
+  it("posts the action-resolved id set as one BroadcastChannel message", () => {
+    const message: NotificationSyncMessage = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1", "q2"], summary: "Redis" };
+    createNotificationSyncChannel().broadcast(message);
+    expect(mockChannel.postMessage).toHaveBeenCalledWith(message);
+  });
+
   // UT-TS-09b — subscribe calls the handler when a MessageEvent is received
   describe("subscribe", () => {
     it("calls the handler when a message event fires", () => {
@@ -116,5 +122,62 @@ describe("createNotificationSyncChannel", () => {
 
       expect(MockBC).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("createNotificationSyncChannel without BroadcastChannel", () => {
+  let original: typeof globalThis.BroadcastChannel;
+
+  beforeEach(() => {
+    original = global.BroadcastChannel;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (global as any).BroadcastChannel = undefined;
+  });
+
+  afterEach(() => {
+    global.BroadcastChannel = original;
+    window.localStorage.clear();
+  });
+
+  it("moved_kind_should_drop_toast_but_not_touch_history_and_storage_fallback_should_deliver_when_no_BroadcastChannel", () => {
+    const handler = jest.fn();
+    const message: NotificationSyncMessage = { type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids: ["a", "b"] };
+    createNotificationSyncChannel().subscribe(handler);
+
+    // A storage event is what another tab's setItem produces here; jsdom does not
+    // deliver it to the writing window, so fire it by hand.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "stapler-squad:notification-sync",
+        newValue: JSON.stringify({ nonce: 1, message }),
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(message);
+  });
+
+  it("delivers an action-resolved id set through the storage fallback when BroadcastChannel is unavailable", () => {
+    const handler = jest.fn();
+    const message: NotificationSyncMessage = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1"], summary: "Redis" };
+    createNotificationSyncChannel().subscribe(handler);
+    window.dispatchEvent(new StorageEvent("storage", { key: "stapler-squad:notification-sync", newValue: JSON.stringify({ nonce: 2, message }) }));
+    expect(handler).toHaveBeenCalledWith(message);
+  });
+
+  it("broadcast writes the message through localStorage and ignores unrelated storage keys", () => {
+    const setItem = jest.spyOn(Storage.prototype, "setItem");
+    const handler = jest.fn();
+    const channel = createNotificationSyncChannel();
+    channel.subscribe(handler);
+
+    channel.broadcast({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["x"] });
+    expect(setItem).toHaveBeenCalledWith(
+      "stapler-squad:notification-sync",
+      expect.stringContaining("NOTIFICATIONS_BULK_DISMISSED"),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: "other", newValue: "{}" }));
+    expect(handler).not.toHaveBeenCalled();
+    setItem.mockRestore();
   });
 });

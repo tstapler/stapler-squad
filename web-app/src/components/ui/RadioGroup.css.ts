@@ -28,7 +28,7 @@ export const radioBtn = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.1s ease",
+  transition: "background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease, opacity 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,

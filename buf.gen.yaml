@@ -11,8 +11,10 @@ plugins:
     opt:
       - paths=source_relative
 
-  # Go ConnectRPC generation
-  - remote: buf.build/connectrpc/go
+  # Go ConnectRPC generation. Pinned to the connect-go version in go.mod: the
+  # unpinned plugin began emitting connectrpc.com/connect/v2 imports when
+  # connect-go v2.0.0 shipped, breaking every CI job that regenerates protos.
+  - remote: buf.build/connectrpc/go:v1.20.0
     out: gen/proto/go
     opt:
       - paths=source_relative

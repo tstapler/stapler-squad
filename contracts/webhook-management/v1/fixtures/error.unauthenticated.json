@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "authentication required"
+  }
+}

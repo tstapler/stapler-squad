@@ -1,0 +1,12 @@
+{
+  "id": "backlog-diagnose-nudge",
+  "type": "frontend",
+  "component": "StuckItemDetail",
+  "path": "web-app/src/components/backlog-stuck/StuckItemDetail.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "StuckItemDetail_should_offerDiagnoseControl_When_HandlerProvided"
+  ],
+  "lastModified": "2026-09-27T00:00:00Z"
+}

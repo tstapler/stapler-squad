@@ -87,3 +87,165 @@ Not needed — low risk, single-user internal tool, no production rollout proces
 - What is the exact mechanism for reading hidden/headless session output today (RPC name, whether it already supports non-interactive sessions)? → Phase 2 research.
 - What is the precise list of currently-duplicated fields across the panel's 12+ sections? → Phase 2 research / Phase 3 UX design.
 - Should the redesigned detail view remain a panel/drawer, or would a different presentation (e.g. tabs, a dedicated page) serve progressive disclosure better? → Phase 3 UX design.
+
+---
+
+## Phase 2 Follow-up: Action Reachability + PR Visibility (2026-10-12)
+
+**Source**: Operator feedback after Phase 1 implementation shipped. Three concrete friction points
+reported in use:
+
+### New Problem Statement
+
+Despite the progressive-disclosure redesign, three interaction problems remain after Phase 1:
+
+1. **Actions buried below the fold**: `ActionsSection` (Spawn Session, Approve, etc.) requires
+   scrolling past GateBlockingSection, GuidanceRequestPanel, TriageLoadingIndicator,
+   TriageReviewPanel, ChatRefinementPanel, PlanningSection, AcCriteriaList, and PlanVerdictBox
+   before it is reachable. For a `review`-status item, the primary action ("Approve") is
+   the most important thing in the view — it should not require a scroll.
+
+2. **PR link not visible without expansion**: When `item.prUrl` is set and `item.status`
+   is `done` or `archived`, `PullRequestSection` does not render (it is status-gated to
+   `pr_pending` only) and `VersionControlSection` defaults to collapsed (not in the
+   `["in_progress", "review", "pr_pending"]` auto-expand set). The user sees no PR link
+   without first expanding a section. For `review` status the VCS auto-expands but the
+   PR link is still below the fold.
+
+3. **VersionControl/PullRequest section coordination confusion**: When an item has a PR
+   (`item.prUrl` set) but is not `pr_pending`, the user must hunt through sections for
+   the PR link. The D4 fix (`showPrLink={false}` in VCS when `pr_pending`) is correct
+   but the inverse state — prUrl set, status `done`/`review`/`archived`, no
+   `PullRequestSection` rendered — leaves the PR link only in a collapsed VCS section.
+
+4. **Visual flow**: The scroll area ordering deprioritizes decision-making content
+   (ActionsSection, PlanVerdictBox) in favor of reference content (description, planning,
+   criteria) that rarely changes per review cycle.
+
+### New Success Metrics
+
+- From the sticky header, the user can trigger the primary lifecycle action (triage,
+  session start, review approval, mark-done) without scrolling — 0 scrolls to reach the
+  primary action button.
+- When `item.prUrl` is set, a clickable PR link is visible in the sticky header (or
+  immediately adjacent to LifecycleSummary) without expanding any section, regardless of
+  `item.status`.
+- Section ordering puts ActionsSection + PlanVerdictBox as the first content in the
+  scroll area, before any reference/secondary content.
+
+### New Scope
+
+**In Scope (Phase 2 additions)**:
+- Add a compact primary-action chip to the sticky header region (inline with LifecycleSummary
+  or just below it) that renders the single most-important action for the current lifecycle
+  state — not the full ActionsSection, just the primary button.
+- Add a compact PR link badge to LifecycleSummary (or sticky header) whenever `item.prUrl`
+  is set, regardless of `item.status`. Badge: `PR #<n> →` linking to `item.prUrl`.
+- Reorder the scroll area: move ActionsSection + PlanVerdictBox to the top of the scroll
+  area (immediately after the sticky header, before GateBlockingSection, TriageReviewPanel,
+  etc.), consistent with the principle that decision-making content outranks reference content.
+- Expand VersionControlSection by default whenever `item.prUrl` is set (any status), not
+  only for `["in_progress", "review", "pr_pending"]` — a PR exists means VCS context is
+  relevant.
+
+**Out of Scope**:
+- Removing or restructuring the existing ActionsSection in the scroll area — the primary-action
+  chip in the header is an *additive* affordance, not a replacement (some statuses have
+  multiple relevant actions; the header chip shows the single most-common one, ActionsSection
+  shows all of them).
+- Changing the D4 `showPrLink` logic in VersionControlSection — the duplication-elimination
+  is correct. The PR badge in the header is the primary fix.
+
+### New Constraints
+
+All existing constraints in requirements.md apply. Additional:
+- The primary-action chip in the sticky header must not duplicate the full ActionsSection
+  UI — it is a compact affordance with a label only (no manual-review form, no Jules
+  dispatch dialog trigger, no send-back box) that delegates to the scroll-area ActionsSection
+  for anything beyond the single primary action.
+- The PR badge must use `GitHubBadge` (already used in PullRequestSection) or equivalent,
+  not invent a new PR chip visual language.
+
+---
+
+## Phase 3 Follow-up: Exploratory UX Audit Post Phase 1 + Phase 2 (2026-10-17)
+
+**Source**: Post-implementation exploratory testing request. Phase 1 (progressive disclosure,
+LifecycleSummary) and Phase 2 (ActionsSection reorder, PR badge in header, VCS auto-expand)
+are fully implemented. A fresh exploratory audit is requested to find remaining confusion
+points and produce tested alternative presentations.
+
+### New Problem Statement
+
+After Phase 1 + Phase 2 implementation, `BacklogItemDetail.tsx` has improved progressive
+disclosure and action reachability. However, structural issues remain:
+
+1. **AcCriteriaList is always-expanded and outside the CollapsibleGroup** — For items
+   with 5+ acceptance criteria, this inserts a long always-visible list between PlanningSection
+   and the CollapsibleGroup headers. Users must scroll through all criteria to reach section
+   headers like Sessions or Description.
+
+2. **Fifteen sections in the CollapsibleGroup** — Even collapsed, displaying 15 section
+   accordions in a vertical list requires users to visually scan a long header stack.
+   No grouping cues distinguish "decision-making" sections (Reviewing, PullRequest) from
+   "reference" sections (Description, PlanArtifacts) from "audit trail" sections (Sessions,
+   WorkflowHistory, ProgressHistory, ActivityLog).
+
+3. **Four overlapping history sections** — Sessions, WorkflowHistory, ProgressHistory, and
+   ActivityLog each present historical/audit data in different formats. Users don't have a
+   clear mental model for which answers "what happened last time?" or "why did this fail?"
+
+4. **DescriptionSection defaults collapsed** — Item description is the most fundamental
+   content for understanding an unfamiliar item, yet it defaults to collapsed.
+
+5. **LifecycleSummary badge accumulation** — For a non-default item (category + custom
+   pipeline + skip-planning + rework-cap-override + prUrl set), the header shows 6+ badges.
+
+### New Success Metrics
+
+- A user opening an unfamiliar item's detail panel can identify its lifecycle state AND
+  understand what the item is about without expanding more than 1 section.
+- The CollapsibleGroup's section list is navigable: users can locate any section in under
+  3 seconds of scanning (< 8 visible section headers, or grouped/labeled navigation).
+- "What happened last time?" is answerable from a single section or a clearly-labeled
+  group without knowing which of Sessions/WorkflowHistory/ProgressHistory/ActivityLog
+  to open.
+- AcCriteriaList scroll length does not prevent reaching CollapsibleGroup section headers
+  without scrolling (criteria list is either collapsible or moved into the group).
+
+### New Scope
+
+**In Scope (Phase 3)**:
+- Exploratory audit: enumerate all currently-visible sections per status and identify
+  specific confusion points from first-principles use of the live component.
+- Design and document 3 alternative layouts (A: flatten+filter, B: status-aware, C: tabs).
+- Pick a recommended layout based on complexity-vs-clarity tradeoff.
+- Implement the recommended alternative (or the highest-value subset of it).
+- Make AcCriteriaList collapsible (or move it into the CollapsibleGroup).
+- Group or consolidate the 4 audit/history sections into a single entry point.
+- Flip DescriptionSection to default-expanded.
+- Write E2E tests covering the changed section ordering and default-expanded states.
+
+**Out of Scope**:
+- Changing the LifecycleSummary badge accumulation (separate styling concern).
+- Adding new backend data to any section (display-layer changes only).
+- ManualOverrideSection visibility/placement — low-frequency power-user tool; leave as-is
+  unless the exploratory audit surfaces it as a real friction point.
+
+### New Constraints
+
+All existing Phase 1/Phase 2 constraints apply. Additional:
+- Any new section grouping must remain compatible with `useSectionExpandState` persistence
+  (expand state per item per section key stored in localStorage).
+- Do not introduce nested CollapsibleGroups — the current single Radix Accordion root
+  (ADR-027) provides roving-tabindex keyboard nav; nesting would break that contract.
+  Use a single flattened group with optional visual separators/headers between groups.
+
+### Open Questions (Phase 3)
+
+- Should Sessions, WorkflowHistory, ProgressHistory, and ActivityLog be merged into
+  one collapsible section with internal tab navigation, or remain separate sections
+  with a labeled visual grouping line between them? → Phase 3 research.
+- Should AcCriteriaList move into the CollapsibleGroup (collapsible) or remain
+  always-visible with a "collapse long lists" affordance (e.g. show N, expand to all)?
+  → Phase 3 research / dogfooding.

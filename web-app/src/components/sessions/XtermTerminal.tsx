@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
-import { Terminal } from "@xterm/xterm";
+import { useTerminalGestures, type GestureOptions } from "@/lib/hooks/useTerminalGestures";
+import { readScrollMode } from "@/lib/terminal/mouseTracking";
+import type { ScrollMode, ScrollOverride, TuiScrollPolicy } from "@/lib/terminal/scrollRouting";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
@@ -19,13 +21,31 @@ import type { WebglAddon } from "@xterm/addon-webgl";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
+import { TerminalLinkMenu } from "./TerminalLinkMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
+import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
+import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import {
+  postFitRepaint,
+  trackWebglTerminal,
+  forgetWebglTerminal,
+  canFit,
+  FIT_RETRY_MAX_ATTEMPTS,
+  FIT_RETRY_TIMEOUT_MS,
+  type RendererKind,
+  type RefitOptions,
+  type RefitReason,
+  type RequestFitOptions,
+} from "@/lib/terminal/postFitRepaint";
+import { claimWebglSlot, releaseWebglSlot, touchWebglSlot, type WebglSlot } from "@/lib/terminal/webglBudget";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 
@@ -131,7 +151,63 @@ export function isSustainedMismatch(
   return Math.abs(actualPxPerCol - expectedPxPerCol) > tolerance;
 }
 
+// A whole onData chunk made of one or more SGR (\x1b[<b;x;yM/m) or X10 (\x1b[M + 3 bytes) mouse report.
+const MOUSE_REPORT_RE = /^(?:\x1b\[(?:<\d+;\d+;\d+[Mm]|M[\s\S]{3}))+$/;
+export const isMouseReport = (data: string): boolean => MOUSE_REPORT_RE.test(data);
+
+/** Settings that reach `useTerminalGestures` from TerminalOutput; changes apply on the next frame, no remount. */
+export interface ScrollGestureProps {
+  scrollOverride?: ScrollOverride;
+  /** False removes the touch listeners and sets `data-gesture-scroll="off"`. Default true. */
+  gestureScrollEnabled?: boolean;
+  tuiScrollPolicy?: TuiScrollPolicy;
+  /** Bumped on reconnect or full-snapshot write; cancels an in-flight gesture. */
+  connectionEpoch?: number;
+  /** The hook reads these through its options ref, so a new identity never re-registers listeners. */
+  onScrollStart?: GestureOptions["onScrollStart"];
+  onScrollGesture?: GestureOptions["onScrollGesture"];
+  onPageKeysSent?: GestureOptions["onPageKeysSent"];
+  onGestureActiveChange?: GestureOptions["onGestureActiveChange"];
+  /** Live getter (ref-backed upstream): true while a chunked paste is in flight. */
+  isInputBusy?: GestureOptions["isInputBusy"];
+  /**
+   * Sink for bytes the gesture hook generates (page keys, wheel reports). Distinct from `onData`
+   * so the host can tell them apart from user keystrokes. Falls back to `onData` when absent.
+   */
+  onProgrammaticData?: (data: string) => void;
+  /** User's Mouse toggle: 'none' blocks tap click forwarding and xterm's native mouse reports. */
+  mouseModeOverride?: GestureOptions["mouseModeOverride"];
+}
+
+/** Tracks DECSET/DECRST ?1006 (SGR mouse encoding), which xterm's public `modes` doesn't expose. */
+export function trackSgrMouseEncoding(terminal: Terminal, flag: { current: boolean }): IDisposable[] {
+  const track = (enabled: boolean) => (params: (number | number[])[]) => {
+    if (params.includes(1006)) flag.current = enabled;
+    return false; // let xterm's own handler run
+  };
+  const reset = () => {
+    flag.current = false;
+    return false;
+  };
+  const parser = terminal.parser;
+  if (!parser) return []; // partial terminal mocks in tests
+  return [
+    parser.registerCsiHandler({ prefix: "?", final: "h" }, track(true)),
+    parser.registerCsiHandler({ prefix: "?", final: "l" }, track(false)),
+    parser.registerEscHandler({ final: "c" }, reset), // RIS
+    parser.registerCsiHandler({ intermediates: "!", final: "p" }, reset), // DECSTR
+  ];
+}
+
+const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
+
 export interface XtermTerminalProps {
+  scrollGesture?: ScrollGestureProps;
+  /**
+   * Called only when the buffer type or mouse-tracking mode changes. The first value
+   * is assumed to be `{ normal, none }`, so a terminal that starts there reports nothing.
+   */
+  onScrollModeChange?: (mode: ScrollMode) => void;
   /**
    * Callback when user types in terminal
    */
@@ -162,6 +238,21 @@ export interface XtermTerminalProps {
    * If true, theme/fontSize/scrollback props are ignored unless explicitly provided
    */
   useConfig?: boolean;
+
+  /**
+   * Story 1.4.0 (Task 1.4.0c) — threaded straight through to
+   * useTerminalGestures's identically-named option. See that hook's doc
+   * comment; TerminalOutput.tsx supplies both.
+   */
+  isAltScreenActive?: () => boolean;
+  /** Story 1.4.0 (Task 1.4.0c) — see useTerminalGestures's identically-named option. */
+  onAltScreenScrollUp?: (lines: number) => void;
+  /**
+   * Story 4.1.3e: false while the owning window is hidden (keep-alive). A hidden terminal skips every
+   * fit()/sampler pass, yields its WebGL slot first, and refits once when this turns true. The stream
+   * keeps writing to xterm either way.
+   */
+  windowActive?: boolean;
 }
 
 export interface XtermTerminalHandle {
@@ -181,6 +272,13 @@ export interface XtermTerminalHandle {
    * silently dropped, leaving those rows unpainted until a later resize forces a full repaint.
    */
   resize: (cols: number, rows: number) => void;
+  /**
+   * Starts the resize sampler directly (no 150 ms RO debounce) and always
+   * repaints, even when rows/cols are unchanged. Safe to call when the
+   * container is zero-size: retries are bounded and then deferred to the
+   * next non-zero ResizeObserver delivery.
+   */
+  refit: (opts?: RefitOptions) => void;
   search: (term: string) => boolean;
   searchNext: (term: string) => boolean;
   searchPrevious: (term: string) => boolean;
@@ -205,7 +303,25 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   fontSize: fontSizeProp,
   scrollback: scrollbackProp,
   useConfig = false,
+  scrollGesture,
+  onScrollModeChange,
+  isAltScreenActive,
+  onAltScreenScrollUp,
+  windowActive = true,
 }, ref) => {
+  const windowActiveRef = useRef(windowActive);
+  windowActiveRef.current = windowActive;
+  // Set when a fit was skipped while hidden; consumed by the activation refit below.
+  const fitDeferredRef = useRef(false);
+  // Re-render on Settings > Appearance changes so the font/cursor effects below pick them up.
+  const [, setConfigVersion] = useState(0);
+  useEffect(() => {
+    if (!useConfig) return;
+    const onChange = () => setConfigVersion((v) => v + 1);
+    window.addEventListener("terminal-config-changed", onChange);
+    return () => window.removeEventListener("terminal-config-changed", onChange);
+  }, [useConfig]);
+
   // Load configuration
   const config = useConfig ? loadTerminalConfig() : null;
 
@@ -226,6 +342,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Active renderer, for postFitRepaint's WebGL-only atlas clear. Starts as 'dom'
+  // (xterm's default) until an addon load succeeds.
+  const rendererRef = useRef<RendererKind>("dom");
+  // Bridges the effect-local sampler to useImperativeHandle's refit().
+  const requestFitRef = useRef<(opts: RequestFitOptions) => void>(() => {});
 
   // Refs for floating Copy button and toast — avoid React re-renders on 60fps selection changes
   const copyButtonRef = useRef<HTMLButtonElement>(null);
@@ -233,21 +354,36 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Draggable selection handles for mobile — DOM-mutated at 60fps alongside the copy button
   const startHandleRef = useRef<HTMLDivElement>(null);
   const endHandleRef = useRef<HTMLDivElement>(null);
+  // Magnifier bubble shown above the finger during a handle drag (display aid only)
+  const magnifierRef = useRef<HTMLDivElement>(null);
   // Custom left-side scrollbar track and thumb
   const scrollTrackRef = useRef<HTMLDivElement>(null);
   const scrollThumbRef = useRef<HTMLDivElement>(null);
 
   // Context menu uses useState (shown at most once per right-click — not a hot path)
   const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number } | null>(null);
+  // Link tap menu (touch devices only) — same rationale as contextMenuState
+  const [linkMenuState, setLinkMenuState] = useState<{ x: number; y: number; uri: string } | null>(null);
 
   // Store callbacks in refs to avoid recreating terminal on callback changes
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
 
+  const onScrollModeChangeRef = useRef(onScrollModeChange);
+  const sgrMouseEncodingRef = useRef(false);
+  const mouseModeOverrideRef = useRef(scrollGesture?.mouseModeOverride);
+  mouseModeOverrideRef.current = scrollGesture?.mouseModeOverride;
+  const onProgrammaticDataRef = useRef(scrollGesture?.onProgrammaticData);
+  const onProgrammaticData = scrollGesture?.onProgrammaticData;
+
   useEffect(() => {
     onDataRef.current = onData;
     onResizeRef.current = onResize;
-  }, [onData, onResize]);
+    onScrollModeChangeRef.current = onScrollModeChange;
+    onProgrammaticDataRef.current = onProgrammaticData;
+  }, [onData, onResize, onScrollModeChange, onProgrammaticData]);
+
+  const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled ?? true;
 
   // Unified mobile gesture state machine (R4.3).
   // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
@@ -258,7 +394,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   useTerminalGestures({
     containerRef,
     terminalRef,
-    onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
+    onSendData: useCallback((data: string) => (onProgrammaticDataRef.current ?? onDataRef.current)?.(data), []),
+    isAltScreenActive,
+    onAltScreenScrollUp,
+    override: scrollGesture?.scrollOverride,
+    gestureScrollEnabled,
+    tuiScrollPolicy: scrollGesture?.tuiScrollPolicy,
+    connectionEpoch: scrollGesture?.connectionEpoch,
+    onScrollStart: scrollGesture?.onScrollStart,
+    onScrollGesture: scrollGesture?.onScrollGesture,
+    onPageKeysSent: scrollGesture?.onPageKeysSent,
+    onGestureActiveChange: scrollGesture?.onGestureActiveChange,
+    isInputBusy: scrollGesture?.isInputBusy,
+    mouseModeOverride: scrollGesture?.mouseModeOverride,
+    isSgrMouseEncoding: () => sgrMouseEncodingRef.current,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
@@ -383,6 +532,35 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     setContextMenuState(null);
   }, []);
 
+  // Link tap menu action handlers (touch devices only)
+  const handleLinkMenuCopy = useCallback((uri: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(uri)
+        .then(() => showToast('copied'))
+        .catch(() => showToast(execCommandCopy(uri) ? 'copied' : 'failed'));
+    } else {
+      showToast(execCommandCopy(uri) ? 'copied' : 'failed');
+    }
+  }, [showToast, execCommandCopy]);
+
+  const handleLinkMenuOpen = useCallback((uri: string) => {
+    // Mirrors @xterm/addon-web-links' own default handler (window.open + null opener)
+    // so touch and mouse land on identical navigation behavior, just gated differently.
+    const newWindow = window.open();
+    if (newWindow) {
+      try {
+        newWindow.opener = null;
+      } catch {
+        // Some browsers throw when reassigning opener — navigation still proceeds.
+      }
+      newWindow.location.href = uri;
+    }
+  }, []);
+
+  const handleLinkMenuDismiss = useCallback(() => {
+    setLinkMenuState(null);
+  }, []);
+
   // Sync the custom left-side scrollbar with the terminal's current viewport.
   // Called from onScroll, onResize, and after the initial fit — all via direct
   // DOM mutation so there's no React re-render overhead on every scroll event.
@@ -432,6 +610,39 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       rightClickSelectsWord: true, // Right-click selects the word under cursor
     });
 
+    // Repaint seam: every confirmed fit and every refit() request repaints through
+    // here. Loop guard: a repeat repaint at unchanged dims inside one frame
+    // (REPAINT_COALESCE_MS) is dropped, so a burst of refit() calls costs one refresh.
+    const REPAINT_COALESCE_MS = 16;
+    let lastRepaintAt = -Infinity;
+    let lastRepaintDims: ResizeDimensions | null = null;
+    const repaint = (reason: RefitReason) => {
+      const dims = { cols: terminal.cols, rows: terminal.rows };
+      const now = performance.now();
+      if (lastRepaintDims && dimensionsEqual(lastRepaintDims, dims) && now - lastRepaintAt < REPAINT_COALESCE_MS) {
+        return;
+      }
+      lastRepaintAt = now;
+      lastRepaintDims = dims;
+      postFitRepaint(terminal, rendererRef.current, reason);
+    };
+
+    // Per-fit diagnostics for the mobile debug log (Task 0.1.1c2); zero cost when the flag is off.
+    const logFit = (event: string, extra: Record<string, unknown> = {}) => {
+      const el = containerRef.current;
+      const vv = window.visualViewport;
+      mobileDebug.log(event, {
+        vvHeight: vv?.height,
+        vvOffsetTop: vv?.offsetTop,
+        clientWidth: el?.clientWidth,
+        clientHeight: el?.clientHeight,
+        cols: terminal.cols,
+        rows: terminal.rows,
+        renderer: rendererRef.current,
+        ...extra,
+      });
+    };
+
     // WebGL mismatch tracker + one-directional Canvas fallback (AC5). See
     // project_plans/terminal-resize-fit-loop/decisions/ADR-001-add-xterm-addon-canvas-dependency.md
     let webglMismatchCount = 0;
@@ -441,35 +652,50 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     // unmount if the component tears down before the RAF fires.
     let postFallbackRafId: number | null = null;
 
+    const webglSlot: WebglSlot = {
+      isVisible: () => windowActiveRef.current && document.visibilityState === "visible" && (containerRef.current?.clientWidth ?? 0) > 0,
+      release: () => {
+        if (cancelled || rendererRef.current !== "webgl") return;
+        console.log("[XtermTerminal] WebGL budget exceeded, moving this pane to the canvas renderer");
+        swapWebglForCanvas();
+      },
+    };
+
     const triggerCanvasFallback = () => {
       if (webglFallbackTriggered || cancelled) return; // one-directional latch, never re-arms (pitfalls §4)
       webglFallbackTriggered = true;
       console.warn('[XtermTerminal] WebGL cell-measurement mismatch exceeded threshold, falling back to canvas renderer');
+      swapWebglForCanvas();
+    };
 
-      // @xterm/addon-webgl resolved to 0.18.0 (confirmed in package-lock.json /
-      // node_modules). This postdates the historical WebglAddon.dispose()
-      // no-op bug (xterm.js #2254, fixed via #2548, a 2019-era fix long since
-      // released). The GPU-memory-leak-on-dispose fix (#3889, fixed via
-      // #3890) is also merged upstream, but a lightweight web search could not
-      // definitively pin the exact release/version boundary where #3890
-      // landed relative to 0.18.0 — noting that explicitly rather than
-      // asserting an unverified claim (Task 3.0.2).
+    // Shared by the fallback latch and by WebGL-budget eviction (webglBudget.ts).
+    const swapWebglForCanvas = () => {
+      webglFallbackTriggered = true; // eviction must also arm the latch, or a later mismatch loads a second CanvasAddon
+      releaseWebglSlot(webglSlot);
+
+      forgetWebglTerminal(terminal);
       webglAddonRef.current?.dispose();
       webglAddonRef.current = null;
 
       try {
         terminal.loadAddon(new CanvasAddon());
+        rendererRef.current = "canvas";
         // Wait one RAF frame after the addon swap before fitting, per the
         // historical xterm.js #1416 crash precedent (measuring against a
         // not-yet-initialized renderer).
         postFallbackRafId = requestAnimationFrame(() => {
           postFallbackRafId = null;
+          if (!windowActiveRef.current) {
+            fitDeferredRef.current = true;
+            return;
+          }
           const proposed = fitAddonRef.current?.proposeDimensions();
           if (fitAddonRef.current && isFiniteResizeDimensions(proposed)) {
             fitAddonRef.current.fit();
           } else {
             console.warn('[XtermTerminal] Skipped post-fallback fit: proposed dimensions not finite');
           }
+          repaint("context-loss");
         });
       } catch (err) {
         // adversarial-review.md Blocker: CanvasAddon construction must be
@@ -478,6 +704,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // DOM renderer is left active automatically — no explicit fallback
         // code path is needed (confirmed by build-vs-buy.md research).
         console.error("[XtermTerminal] Canvas renderer also failed to load; falling back to xterm's built-in DOM renderer", err);
+        rendererRef.current = "dom";
       }
     };
 
@@ -516,9 +743,23 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       (containerRef.current as any).__staplerSquadForceCanvasFallback = () => triggerCanvasFallback();
     }
 
+    // true once on mount — pointer:coarse means a touch-primary device. Hoisted here
+    // (rather than only at its other use-site below) so the WebLinksAddon handler can
+    // read it too.
+    const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
     // Create and load addons
     const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+    // Default web-links behavior opens the link immediately on any click/tap, which on
+    // touch devices (Android Chrome) means a bare tap navigates away before there's any
+    // chance to copy the URL — the only way to get at a link with no public host name.
+    // Gate that default behind a menu on touch devices; leave mouse click-to-open as-is.
+    const webLinksAddon = new WebLinksAddon(isTouchPrimary
+      ? (event: MouseEvent, uri: string) => {
+          event.preventDefault();
+          setLinkMenuState({ x: event.clientX, y: event.clientY, uri });
+        }
+      : undefined);
     const searchAddon = new SearchAddon();
     const serializeAddon = new SerializeAddon();
 
@@ -526,6 +767,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
+    // xterm.js defaults to Unicode 6 widths, which disagree with tymuxd's emulator (and modern
+    // terminals) on emoji and other wide glyphs, so a snapshot redraw lands cells in the wrong columns.
+    terminal.loadAddon(new Unicode11Addon());
+    terminal.unicode.activeVersion = "11";
 
     // xterm.js issue #2033 — guard WebGL before loading on Android/mobile.
     // Loaded dynamically (rather than the always-on static import this
@@ -548,16 +793,24 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (cancelled) return;
           webglAddonRef.current = new WebglAddon();
           terminal.loadAddon(webglAddonRef.current);
+          rendererRef.current = "webgl";
+          mobileDebug.log("renderer", { renderer: "webgl" });
           webglAddonRef.current.onContextLoss(() => {
             console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
+            mobileDebug.log("context-loss", { renderer: rendererRef.current });
             triggerCanvasFallback();
           });
+          // After onContextLoss is attached: claiming may evict a peer synchronously.
+          trackWebglTerminal(terminal);
+          claimWebglSlot(webglSlot);
           console.log("[XtermTerminal] WebGL renderer enabled");
         } catch (e) {
           console.warn("[XtermTerminal] WebGL failed to load:", e);
         }
       } else {
         console.log("[XtermTerminal] WebGL2 unavailable (Android?), using canvas renderer");
+        rendererRef.current = "canvas";
+        mobileDebug.log("renderer", { renderer: "canvas" });
       }
     })();
 
@@ -648,6 +901,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             console.log(`[XtermTerminal] Container size before fit: ${rect.width}px × ${rect.height}px`);
           }
 
+          if (!windowActiveRef.current) {
+            fitDeferredRef.current = true;
+            return;
+          }
+
           // Log what FitAddon will see
           const proposedDims = fitAddon.proposeDimensions();
           console.log(`[XtermTerminal] Proposed dimensions:`, proposedDims);
@@ -686,15 +944,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       // Setup event handlers using refs to avoid recreating terminal
+      sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
+      const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
       const dataDisposable = terminal.onData((data) => {
+        if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
 
       // Show floating Copy button on selection change via direct DOM mutation (no setState).
       // onSelectionChange fires at up to 60fps during mouse drag — setState here would cause
       // a re-render storm. Direct ref mutation costs ~0.01ms vs ~3ms for React reconcile.
-      // true once on mount — pointer:coarse means a touch-primary device
-      const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+      // (isTouchPrimary computed above, near the WebLinksAddon setup)
 
       const selectionDisposable = terminal.onSelectionChange(() => {
         const btn = copyButtonRef.current;
@@ -747,11 +1007,27 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // scrolled up into history and new output arrives, onScroll doesn't fire (the
       // viewport position didn't change) but the buffer grew, so thumb proportions
       // go stale. Updating here keeps the thumb correctly sized while streaming.
-      const writeParsedDisposable = terminal.onWriteParsed?.(() => updateScrollbar(terminal));
+      // The same write hook re-reads the scroll mode: mouse-tracking changes only arrive via writes.
+      let lastScrollMode = INITIAL_SCROLL_MODE;
+      const reportScrollMode = () => {
+        const next = readScrollMode(terminal);
+        if (next.bufferType === lastScrollMode.bufferType && next.mouseTrackingMode === lastScrollMode.mouseTrackingMode) return;
+        lastScrollMode = next;
+        onScrollModeChangeRef.current?.(next);
+      };
+      const writeParsedDisposable = terminal.onWriteParsed?.(() => {
+        updateScrollbar(terminal);
+        reportScrollMode();
+      });
+      const bufferChangeDisposable = terminal.buffer?.onBufferChange?.(reportScrollMode);
 
       // CRITICAL: Store refs BEFORE triggering callbacks
       // This ensures terminalRef is available when parent component calls getTerminal()
       terminalRef.current = terminal;
+      // Lets the desktop toast deck keep clear of the cursor line.
+      const unregisterCursorSource = registerTerminalCursorSource(() =>
+        cursorCellRect(terminal, terminal.element?.querySelector(".xterm-screen") ?? null),
+      );
       fitAddonRef.current = fitAddon;
       searchAddonRef.current = searchAddon;
       serializeAddonRef.current = serializeAddon;
@@ -775,17 +1051,38 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (!el) return;
           // { startCol, startRow, endCol, endRow } in xterm viewport coords
           let anchor: { sc: number; sr: number; ec: number; er: number } | null = null;
+          // Cached once per drag (not re-measured on every touchmove — see touchDrag.ts).
+          let geometry: CellGeometry | null = null;
+          let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
+          let cancelSelectThrottle: (() => void) | null = null;
 
-          const onTouchMove = (e: TouchEvent) => {
-            if (!anchor || !terminal.element) return;
-            const touch = e.touches[0];
-            if (!touch) return;
-            e.preventDefault();
-            const rect = terminal.element.getBoundingClientRect();
-            const { cellH, cellW } = getCellDimensions(terminal);
-            const col = Math.max(0, Math.min(terminal.cols - 1, Math.floor((touch.clientX - rect.left) / cellW)));
-            const row = Math.max(0, Math.min(terminal.rows - 1, Math.floor((touch.clientY - rect.top) / cellH)));
+          const hideMagnifier = () => {
+            const mag = magnifierRef.current;
+            if (mag) mag.style.display = 'none';
+          };
 
+          // Display only: reads the buffer, never touches selection state.
+          const updateMagnifier = (col: number, row: number, clientX: number, clientY: number) => {
+            const mag = magnifierRef.current;
+            if (!mag) return;
+            const { text, cursorOffset } = getTerminalRowText(terminal, row, col);
+            const cursorEl = document.createElement('span');
+            cursorEl.className = styles.selectionMagnifierCursor;
+            cursorEl.textContent = text.charAt(cursorOffset);
+            mag.replaceChildren(
+              document.createTextNode(text.slice(0, cursorOffset)),
+              cursorEl,
+              document.createTextNode(text.slice(cursorOffset + 1)),
+            );
+            const { left, top } = computeMagnifierPosition(clientX, clientY, window.innerWidth);
+            mag.style.left = `${left}px`;
+            mag.style.top = `${top}px`;
+            mag.style.display = 'block';
+          };
+
+          const applyHandleDrag = (clientX: number, clientY: number) => {
+            if (!anchor || !geometry) return;
+            const { col, row } = pointToCell(clientX, clientY, geometry);
             if (handle === 'end') {
               // Keep start fixed, extend/shrink the end
               const len = Math.max(1, (row - anchor.sr) * terminal.cols + (col - anchor.sc));
@@ -795,10 +1092,22 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
               const len = Math.max(1, (anchor.er - row) * terminal.cols + (anchor.ec - col));
               terminal.select(col, row, len);
             }
+            updateMagnifier(col, row, clientX, clientY);
+          };
+
+          const onTouchMove = (e: TouchEvent) => {
+            if (!anchor) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            e.preventDefault();
+            selectThrottled?.(touch.clientX, touch.clientY);
           };
 
           const onTouchEnd = () => {
             anchor = null;
+            geometry = null;
+            cancelSelectThrottle?.();
+            hideMagnifier();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
@@ -808,8 +1117,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             e.preventDefault();
             e.stopPropagation();
             const pos = terminal.getSelectionPosition();
-            if (!pos) return;
+            if (!pos || !terminal.element) return;
             anchor = { sc: pos.start.x, sr: pos.start.y, ec: pos.end.x, er: pos.end.y };
+            const { cellH, cellW } = getCellDimensions(terminal);
+            geometry = {
+              rect: terminal.element.getBoundingClientRect(),
+              cellW,
+              cellH,
+              maxCol: terminal.cols - 1,
+              maxRow: terminal.rows - 1,
+            };
+            [selectThrottled, cancelSelectThrottle] = rafThrottlePoint(applyHandleDrag);
             document.addEventListener('touchmove', onTouchMove, { passive: false });
             document.addEventListener('touchend', onTouchEnd, { passive: true });
             document.addEventListener('touchcancel', onTouchEnd, { passive: true });
@@ -818,6 +1136,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           el.addEventListener('touchstart', onTouchStart, { passive: false });
           handleCleanupFns.push(() => {
             el.removeEventListener('touchstart', onTouchStart);
+            cancelSelectThrottle?.();
+            hideMagnifier();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
@@ -961,6 +1281,30 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       let sampleTimeout: NodeJS.Timeout | null = null;
       let sampleCount = 0;
       let pendingProposedDims: ResizeDimensions | null = null;
+      // Set by requestFitRef (refit()); consumed by whichever sampler branch ends the run.
+      let repaintRequested = false;
+      let repaintReason: RefitReason = "viewport-settle";
+      let anchorBottom = false;
+      // refit() found a zero-size container for the whole retry budget; the next
+      // non-zero ResizeObserver delivery re-issues it.
+      let pendingRefit = false;
+      let wasZero = false;
+
+      // onFitted callbacks of requests coalesced into the current run; flushed once when it ends.
+      let pendingFitCallbacks: NonNullable<RefitOptions["onFitted"]>[] = [];
+      const flushFitted = (stale = false) => {
+        if (pendingFitCallbacks.length === 0) return;
+        const callbacks = pendingFitCallbacks;
+        pendingFitCallbacks = [];
+        const dims = { cols: terminal.cols, rows: terminal.rows, ...(stale && { stale }) };
+        callbacks.forEach((cb) => cb(dims));
+      };
+
+      const consumeRepaintRequest = (): boolean => {
+        const requested = repaintRequested;
+        repaintRequested = false;
+        return requested;
+      };
 
       const stopSampler = () => {
         samplerActive = false;
@@ -973,7 +1317,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const sampleTick = () => {
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          consumeRepaintRequest();
+          anchorBottom = false;
+          stopSampler();
+          flushFitted(true);
+          return;
+        }
         if (!fitAddonRef.current || !terminalRef.current) {
+          consumeRepaintRequest();
+          pendingFitCallbacks = []; // disposed: nothing left to report
           stopSampler();
           return;
         }
@@ -984,10 +1338,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           rows: terminalRef.current.rows,
         };
         const result = shouldScheduleFit(proposed, applied, pendingProposedDims);
+        logFit("sampler-tick", { count: sampleCount, proposed, applied });
 
         if (result.schedule) {
           fitAddonRef.current.fit();
           console.log(`[XtermTerminal] Sampler confirmed resize, fit applied: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
+          logFit("sampler-fit", { forced: repaintRequested });
+          if (anchorBottom) terminalRef.current.scrollToBottom?.();
+          anchorBottom = false;
 
           // Sync lastContainerSize to the post-fit DOM dimensions so the next
           // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
@@ -1004,13 +1362,22 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             recordMismatchSample(mismatchInputs);
           }
 
+          // Always repaint after a confirmed fit; reason is the pending refit's, else the RO default.
+          const reason = repaintReason;
+          consumeRepaintRequest();
+          repaint(reason);
           stopSampler();
+          flushFitted();
           return;
         }
 
         if (result.nextPending === null) {
           // At rest (proposed equals applied) or proposeDimensions() returned undefined.
+          // Only a refit() request repaints here; RO-driven at-rest stays as ADR-002 had it.
+          if (consumeRepaintRequest()) repaint(repaintReason);
+          anchorBottom = false;
           stopSampler();
+          flushFitted();
           return;
         }
 
@@ -1019,10 +1386,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
         if (sampleCount >= MAX_SAMPLES) {
           console.warn('[XtermTerminal] Resize did not converge after 20 samples; giving up');
+          logFit("sampler-giveup", { samples: sampleCount });
+          if (consumeRepaintRequest()) repaint(repaintReason);
+          anchorBottom = false;
           // Full reset (not a partial abandon): give-up must not leave the
           // sampler permanently inert, since startSamplerIfNeeded() is a
           // no-op whenever samplerActive is already true. See ADR-002.
           stopSampler();
+          flushFitted();
           return;
         }
 
@@ -1034,17 +1405,145 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         samplerActive = true;
         sampleCount = 0;
         pendingProposedDims = null;
+        logFit("sampler-start");
         sampleTick();
+      };
+
+      // Bounded zero-size retry for refit(): 20 rAF attempts or 1000 ms, whichever first.
+      let retryRaf: number | null = null;
+      let retryTimeout: NodeJS.Timeout | null = null;
+      let retryAttempts = 0;
+      let retryOpts: RequestFitOptions | null = null;
+
+      const clearRetry = () => {
+        if (retryRaf !== null) cancelAnimationFrame(retryRaf);
+        if (retryTimeout) clearTimeout(retryTimeout);
+        retryRaf = null;
+        retryTimeout = null;
+        retryOpts = null;
+      };
+
+      const startRequest = (opts: RequestFitOptions) => {
+        if (opts.forceRepaint) {
+          repaintRequested = true;
+          repaintReason = opts.reason;
+          const buf = terminal.buffer?.active;
+          if (buf && typeof buf.baseY === "number" && buf.viewportY >= buf.baseY) anchorBottom = true;
+        }
+        startSamplerIfNeeded();
+      };
+
+      // Q3 signal: a visible container that extends below the visual viewport does not track it.
+      const checkViewportTracking = (el: HTMLElement) => {
+        const containerHeight = el.offsetHeight; // reads layout, forcing a reflow before the sampler measures
+        const vv = window.visualViewport;
+        if (!vv) return;
+        const rect = el.getBoundingClientRect();
+        mobileDebug.log("refit-viewport", {
+          vvHeight: vv.height,
+          vvOffsetTop: vv.offsetTop,
+          containerHeight,
+          containerTop: rect.top,
+        });
+        if (rect.bottom > vv.offsetTop + vv.height + 1) {
+          console.warn(
+            `[XtermTerminal] refit: container (bottom ${rect.bottom}px) does not track visualViewport (bottom ${vv.offsetTop + vv.height}px)`
+          );
+        }
+      };
+
+      const exhaustRetry = () => {
+        const opts = retryOpts;
+        clearRetry();
+        console.warn("[XtermTerminal] refit: container stayed zero-size, deferring to next ResizeObserver delivery");
+        logFit("fit-skipped", { reason: "zero-size-exhausted" });
+        pendingRefit = true;
+        if (opts) repaint(opts.reason); // never leave a canvas with valid dims stale
+        flushFitted(true); // nothing was fitted: terminal.cols/rows are still the pre-hide dims
+      };
+
+      const retryAttempt = () => {
+        retryRaf = null;
+        if (canFit(containerRef.current)) {
+          const opts = retryOpts;
+          clearRetry();
+          if (opts) requestFitRef.current(opts);
+          return;
+        }
+        retryAttempts++;
+        if (retryAttempts >= FIT_RETRY_MAX_ATTEMPTS) {
+          exhaustRetry();
+          return;
+        }
+        retryRaf = requestAnimationFrame(retryAttempt);
+      };
+
+      requestFitRef.current = (requested) => {
+        // Registered once here; the zero-size retry re-enters with the callback stripped.
+        const { onFitted, ...opts } = requested;
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          onFitted?.({ cols: terminal.cols, rows: terminal.rows, stale: true });
+          return;
+        }
+        const el = containerRef.current;
+        if (!el) {
+          onFitted?.({ cols: terminal.cols, rows: terminal.rows, stale: true }); // nothing will fit; release the caller's pending state
+          return;
+        }
+        if (onFitted) pendingFitCallbacks.push(onFitted);
+        if (!canFit(el)) {
+          logFit("fit-skipped", { reason: "zero-size" });
+          if (retryOpts) {
+            retryOpts = opts; // already retrying; keep the latest reason
+            return;
+          }
+          retryOpts = opts;
+          retryAttempts = 0;
+          retryTimeout = setTimeout(exhaustRetry, FIT_RETRY_TIMEOUT_MS);
+          retryRaf = requestAnimationFrame(retryAttempt);
+          return;
+        }
+        clearRetry();
+        pendingRefit = false;
+        checkViewportTracking(el);
+        startRequest(opts);
       };
 
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
         if (!fitAddonRef.current || !terminalRef.current) return;
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          return;
+        }
 
         const entry = entries[0];
         if (!entry) return;
 
         // Get current container size
         const { width, height } = entry.contentRect;
+
+        // A restore after zero-size (or an exhausted refit) must repaint even when the size
+        // matches lastContainerSize, which would otherwise dedupe it away.
+        if (width === 0 || height === 0) {
+          wasZero = true;
+          // Hidden: drop the pending debounce and any running sampler; the restore path above re-fits.
+          if (resizeTimeout) {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = null;
+          }
+          if (samplerActive) {
+            consumeRepaintRequest();
+            anchorBottom = false;
+            stopSampler();
+            flushFitted(true);
+          }
+        } else if (wasZero || pendingRefit) {
+          const reason: RefitReason = "visibility";
+          wasZero = false;
+          pendingRefit = false;
+          requestFitRef.current({ forceRepaint: true, reason });
+        }
 
         // Only fit if size actually changed (avoid sub-pixel changes)
         const widthChanged = Math.abs(width - lastContainerSize.width) > 1;
@@ -1080,18 +1579,37 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           }, debounceDelay);
         } else if ((widthChanged || heightChanged) && (width === 0 || height === 0)) {
           console.log(`[XtermTerminal] Skipping fit: container collapsed to zero-size (${width}px × ${height}px)`);
+          logFit("fit-skipped", { reason: "ro-zero-size", width, height });
         }
       });
 
-      resizeObserver.observe(containerRef.current!);
+      const observedEl = containerRef.current;
+      if (observedEl) resizeObserver.observe(observedEl);
+
+      // A backgrounded tab can lose WebGL glyph-atlas contents without a context-loss event,
+      // leaving garbled glyphs over intact buffer text; repaint (clears the atlas) on return.
+      const onDocumentVisible = () => {
+        if (document.visibilityState === "visible") {
+          requestFitRef.current({ forceRepaint: true, reason: "visibility" });
+        }
+      };
+      document.addEventListener("visibilitychange", onDocumentVisible);
+
+      // A focused pane is the one in use: evict it last.
+      const onFocusIn = () => touchWebglSlot(webglSlot);
+      const focusContainer = containerRef.current; // React may null the ref before cleanup runs
+      focusContainer?.addEventListener("focusin", onFocusIn);
 
       // Cleanup
       return () => {
+        document.removeEventListener("visibilitychange", onDocumentVisible);
         cancelled = true;
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);
         }
         stopSampler();
+        clearRetry();
+        requestFitRef.current = () => {};
         if (postFallbackRafId !== null) {
           cancelAnimationFrame(postFallbackRafId);
           postFallbackRafId = null;
@@ -1099,11 +1617,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
+        sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
         scrollDisposable?.dispose();
         writeParsedDisposable?.dispose();
+        bufferChangeDisposable?.dispose();
         handleCleanupFns.forEach(fn => fn());
+        forgetWebglTerminal(terminal);
+        releaseWebglSlot(webglSlot);
+        focusContainer?.removeEventListener("focusin", onFocusIn);
+        unregisterCursorSource();
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
@@ -1111,6 +1635,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         serializeAddonRef.current = null;
         webglAddonRef.current = null;
         if (containerRef.current) {
+          // eslint-disable-next-line react-hooks/exhaustive-deps -- debug hook was set on the live element; must clear whatever the ref holds now, not a stale capture
           delete (containerRef.current as any).__staplerSquadForceCanvasFallback;
         }
       };
@@ -1161,7 +1686,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (terminalRef.current && terminalRef.current.options.fontSize !== fontSize) {
       terminalRef.current.options.fontSize = fontSize;
       // Defer fit to avoid synchronous resize events
-      setTimeout(() => fitAddonRef.current?.fit(), 0);
+      setTimeout(() => requestFitRef.current({ forceRepaint: true, reason: "font-change" }), 0);
     }
   }, [fontSize]);
 
@@ -1170,7 +1695,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (terminalRef.current && terminalRef.current.options.fontFamily !== fontFamily) {
       terminalRef.current.options.fontFamily = fontFamily;
       // Defer fit to avoid synchronous resize events
-      setTimeout(() => fitAddonRef.current?.fit(), 0);
+      setTimeout(() => requestFitRef.current({ forceRepaint: true, reason: "font-change" }), 0);
     }
   }, [fontFamily]);
 
@@ -1181,6 +1706,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current.options.cursorBlink = cursorBlink;
     }
   }, [cursorStyle, cursorBlink]);
+
+  // Hidden -> active: one refit for whatever was skipped while hidden.
+  useEffect(() => {
+    if (!windowActive || !fitDeferredRef.current) return;
+    fitDeferredRef.current = false;
+    requestFitRef.current({ forceRepaint: true, reason: "visibility" });
+  }, [windowActive]);
 
   // Expose terminal methods via ref
   // CRITICAL: Use getter for terminal property to return current ref value
@@ -1204,10 +1736,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.focus();
     },
     fit: () => {
-      fitAddonRef.current?.fit();
+      requestFitRef.current({ forceRepaint: true, reason: "manual-resize" });
     },
     resize: (cols: number, rows: number) => {
       terminalRef.current?.resize(cols, rows);
+    },
+    refit: (opts?: RefitOptions) => {
+      requestFitRef.current({ forceRepaint: true, reason: opts?.reason ?? "manual-resize", onFitted: opts?.onFitted });
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;
@@ -1225,7 +1760,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   return (
     <div className={styles.container} data-context="terminal">
-      <div ref={containerRef} className={styles.terminal} />
+      <div ref={containerRef} className={styles.terminal} data-gesture-scroll={gestureScrollEnabled ? "on" : "off"} />
       {/* Custom left-side scrollbar — stays out of the right-side window-scrollbar zone.
           Only visible when scrollback content exists (controlled via updateScrollbar). */}
       <div ref={scrollTrackRef} className={styles.scrollTrack} style={{ display: 'none' }}>
@@ -1277,6 +1812,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             aria-hidden="true"
             style={{ display: 'none' }}
           />
+          <div
+            ref={magnifierRef}
+            className={styles.selectionMagnifier}
+            aria-hidden="true"
+            role="presentation"
+            style={{ display: 'none' }}
+          />
         </>,
         document.body
       )}
@@ -1289,6 +1831,16 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           onSelectAll={handleMenuSelectAll}
           onPaste={handleMenuPaste}
           onDismiss={handleContextMenuDismiss}
+        />
+      )}
+      {linkMenuState && (
+        <TerminalLinkMenu
+          x={linkMenuState.x}
+          y={linkMenuState.y}
+          uri={linkMenuState.uri}
+          onOpen={handleLinkMenuOpen}
+          onCopy={handleLinkMenuCopy}
+          onDismiss={handleLinkMenuDismiss}
         />
       )}
     </div>

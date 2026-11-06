@@ -1,0 +1,25 @@
+
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/f1d0ad89-c4ea-4c03-9a3f-9613d218335f/scratchpad/cap/proj
+
+
+❯ Use the AskUserQuestion tool exactly once with one question: 'Which color
+  should the spike use?', header 'Color', multiSelect false, three options Red,
+  Green, Blue with short descriptions. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color should the spike use?
+
+❯ 1. Red
+     Warm, high-contrast color for alerts or emphasis.
+  2. Green
+     Neutral-positive color often used for success states.
+  3. Blue
+     Cool, calm color common in primary UI accents.
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

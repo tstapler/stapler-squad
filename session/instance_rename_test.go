@@ -118,7 +118,7 @@ func TestInstanceRestart(t *testing.T) {
 			inst.started.Store(tt.started)
 
 			// Attempt restart
-			err := inst.Restart(tt.preserveOutput)
+			err := inst.Restart(tt.preserveOutput, "")
 
 			// Check error expectation
 			if tt.wantErr {

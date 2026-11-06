@@ -1,0 +1,21 @@
+{
+  "id": "claim-conflict-banner",
+  "type": "frontend",
+  "name": "Banner on a backlog item naming the host that already claimed its external URL, with Copy link, Override and Resolve (disputed) actions",
+  "component": "ClaimConflictBanner",
+  "path": "web-app/src/components/backlog/ClaimConflictBanner.tsx",
+  "filePath": "web-app/src/components/backlog/ClaimConflictBanner.tsx",
+  "markerLine": 2,
+  "alsoIn": [
+    {
+      "component": "ItemClaimBanner",
+      "path": "web-app/src/components/backlog/ItemClaimBanner.tsx",
+      "note": "Container that runs the CheckCrossHostClaim RPC and mounts the banner in BacklogItemDetail's header."
+    }
+  ],
+  "tested": true,
+  "testIds": [
+    "ClaimConflictBanner",
+    "ItemClaimBanner"
+  ]
+}

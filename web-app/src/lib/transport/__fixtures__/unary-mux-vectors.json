@@ -1,0 +1,218 @@
+{
+  "description": "Shared ADR-001 wire vectors (big-endian). Go: server/services/ws_unary_frame_test.go; TS: web-app/src/lib/transport/unary-mux-frame.test.ts. Frame = type u8 | id u32 | body. maxFrameBytes=262144.",
+  "maxFrameBytes": 262144,
+  "types": {
+    "REQUEST": 1,
+    "RESPONSE": 2,
+    "ERROR": 3,
+    "CANCEL": 4,
+    "PING": 5,
+    "PONG": 6,
+    "CHUNK": 7
+  },
+  "frames": [
+    {
+      "name": "request_basic",
+      "type": "REQUEST",
+      "fields": {
+        "id": 1,
+        "method": "/session.v1.SessionService/GetVCSStatus",
+        "meta": {
+          "headers": {
+            "Connect-Protocol-Version": "1"
+          },
+          "timeoutMs": 30000
+        },
+        "bodyHex": "0a027331"
+      },
+      "hex": "010000000100272f73657373696f6e2e76312e53657373696f6e536572766963652f476574564353537461747573003e7b2268656164657273223a7b22436f6e6e6563742d50726f746f636f6c2d56657273696f6e223a2231227d2c2274696d656f75744d73223a33303030307d0a027331"
+    },
+    {
+      "name": "request_empty_body",
+      "type": "REQUEST",
+      "fields": {
+        "id": 3,
+        "method": "/session.v1.SessionService/GetVCSStatus",
+        "meta": {
+          "headers": {},
+          "timeoutMs": 0
+        },
+        "bodyHex": ""
+      },
+      "hex": "010000000300272f73657373696f6e2e76312e53657373696f6e536572766963652f476574564353537461747573001c7b2268656164657273223a7b7d2c2274696d656f75744d73223a307d"
+    },
+    {
+      "name": "request_max_id",
+      "type": "REQUEST",
+      "fields": {
+        "id": 4294967295,
+        "method": "/session.v1.SessionService/GetVCSStatus",
+        "meta": {
+          "headers": {},
+          "timeoutMs": 8000
+        },
+        "bodyHex": "0a027331"
+      },
+      "hex": "01ffffffff00272f73657373696f6e2e76312e53657373696f6e536572766963652f476574564353537461747573001f7b2268656164657273223a7b7d2c2274696d656f75744d73223a383030307d0a027331"
+    },
+    {
+      "name": "response_single_fin",
+      "type": "RESPONSE",
+      "fields": {
+        "id": 1,
+        "totalLen": 4,
+        "fin": 1,
+        "meta": {
+          "headers": {
+            "Content-Type": "application/proto"
+          },
+          "trailers": {}
+        },
+        "bodyHex": "0a027331"
+      },
+      "hex": "02000000010000000401003e7b2268656164657273223a7b22436f6e74656e742d54797065223a226170706c69636174696f6e2f70726f746f227d2c22747261696c657273223a7b7d7d0a027331"
+    },
+    {
+      "name": "response_head_fin0",
+      "type": "RESPONSE",
+      "fields": {
+        "id": 5,
+        "totalLen": 10,
+        "fin": 0,
+        "meta": {
+          "headers": {},
+          "trailers": {}
+        },
+        "bodyHex": "00010203"
+      },
+      "hex": "02000000050000000a00001c7b2268656164657273223a7b7d2c22747261696c657273223a7b7d7d00010203"
+    },
+    {
+      "name": "response_empty_payload",
+      "type": "RESPONSE",
+      "fields": {
+        "id": 7,
+        "totalLen": 0,
+        "fin": 1,
+        "meta": {
+          "headers": {},
+          "trailers": {}
+        },
+        "bodyHex": ""
+      },
+      "hex": "02000000070000000001001c7b2268656164657273223a7b7d2c22747261696c657273223a7b7d7d"
+    },
+    {
+      "name": "chunk_middle_fin0",
+      "type": "CHUNK",
+      "fields": {
+        "id": 5,
+        "fin": 0,
+        "bodyHex": "04050607"
+      },
+      "hex": "07000000050004050607"
+    },
+    {
+      "name": "chunk_last_fin1",
+      "type": "CHUNK",
+      "fields": {
+        "id": 5,
+        "fin": 1,
+        "bodyHex": "0809"
+      },
+      "hex": "0700000005010809"
+    },
+    {
+      "name": "error_not_allowed",
+      "type": "ERROR",
+      "fields": {
+        "id": 9,
+        "json": {
+          "code": "permission_denied",
+          "message": "method not allowed",
+          "details": {
+            "marker": "ws_method_not_allowed"
+          }
+        }
+      },
+      "hex": "03000000097b22636f6465223a227065726d697373696f6e5f64656e696564222c226d657373616765223a226d6574686f64206e6f7420616c6c6f776564222c2264657461696c73223a7b226d61726b6572223a2277735f6d6574686f645f6e6f745f616c6c6f776564227d7d"
+    },
+    {
+      "name": "error_invalid_argument",
+      "type": "ERROR",
+      "fields": {
+        "id": 11,
+        "json": {
+          "code": "invalid_argument",
+          "message": "header not allowed: Origin"
+        }
+      },
+      "hex": "030000000b7b22636f6465223a22696e76616c69645f617267756d656e74222c226d657373616765223a22686561646572206e6f7420616c6c6f7765643a204f726967696e227d"
+    },
+    {
+      "name": "cancel",
+      "type": "CANCEL",
+      "fields": {
+        "id": 13
+      },
+      "hex": "040000000d"
+    },
+    {
+      "name": "ping",
+      "type": "PING",
+      "fields": {
+        "id": 0
+      },
+      "hex": "0500000000"
+    },
+    {
+      "name": "pong",
+      "type": "PONG",
+      "fields": {
+        "id": 0
+      },
+      "hex": "0600000000"
+    }
+  ],
+  "reassembly": [
+    {
+      "name": "chunked_response_reassembly",
+      "description": "RESPONSE fin=0 + CHUNK fin=0 + CHUNK fin=1 for id 5 concatenate to payloadHex; sum equals totalLen",
+      "id": 5,
+      "frames": [
+        "response_head_fin0",
+        "chunk_middle_fin0",
+        "chunk_last_fin1"
+      ],
+      "payloadHex": "00010203040506070809",
+      "totalLen": 10
+    }
+  ],
+  "invalid": [
+    {
+      "name": "too_short_header",
+      "hex": "0100",
+      "expect": "malformed"
+    },
+    {
+      "name": "unknown_type",
+      "hex": "0900000001",
+      "expect": "malformed"
+    },
+    {
+      "name": "request_method_len_overruns",
+      "hex": "010000000100ff",
+      "expect": "malformed"
+    },
+    {
+      "name": "chunk_without_fin_byte",
+      "hex": "0700000005",
+      "expect": "malformed"
+    },
+    {
+      "name": "response_total_len_mismatch_on_fin",
+      "hex": "02000000010000000901001c7b2268656164657273223a7b7d2c22747261696c657273223a7b7d7d0a027331",
+      "expect": "malformed"
+    }
+  ]
+}

@@ -41,10 +41,19 @@ func normalizeTmuxVersion(raw string) string {
 }
 
 // checkControlModeVersionMatchOnce compares this process's resolved tmux
-// client version (`Binary() -V`) against the ALREADY-RUNNING server's own
+// client version (`ResolveClientForSocket(t.serverSocket) -V`, via
+// t.buildTmuxCommandContext) against the ALREADY-RUNNING server's own
 // reported version (`display-message -p '#{version}'`, targeted at this
 // session -- it must already exist on t.serverSocket for the query to
 // succeed). Memoized per socket via versionCheckedSockets.
+//
+// ResolveClientForSocket (binary_resolution.go) already matches the client
+// to an already-running server's own binary via OS-level process inspection,
+// so in the normal case both sides of this comparison are the exact same
+// binary and this reports no mismatch -- correctly, since resolution already
+// fixed it before either command ran. This check remains as a backstop for
+// when that resolution can't run (e.g. `lsof` unavailable) or a race lets a
+// mismatch through anyway.
 //
 // A mismatch here reproduces a confirmed, previously-invisible production
 // incident (see docs/bugs/open/BUG-101-...): a newer tmux -C attach-session
@@ -54,11 +63,15 @@ func normalizeTmuxVersion(raw string) string {
 // deadline for as long as that server process lives (confirmed live: 100%
 // of control_mode commands timed out for over 24h of metric history, root
 // cause was a tmux 3.6a client against a --tmux-keep-server-preserved tmux
-// 3.4 server from an earlier embed_tmux deploy). Ordinary (non-control-mode)
-// commands are unaffected -- a plain one-shot `display-message` succeeds
-// across the same version gap -- which is why this check works at all, and
-// why the existing subprocess fallbacks keep the terminal usable once
-// control mode is disabled here.
+// 3.4 server from an earlier embed_tmux deploy). That incident was a narrow
+// gap where ordinary (non-control-mode) commands stayed unaffected -- a
+// plain one-shot `display-message` still succeeded across it. A wider gap
+// is NOT guaranteed to behave the same way: a pinned tmux 3.4 client against
+// a 20-day-old shared default-socket tmux 3.7b server failed ordinary
+// list-sessions/start-server calls outright ("server exited unexpectedly",
+// titus-soaktest-followup incident, 2026-09-16) -- which is why
+// ResolveClientForSocket exists instead of relying on this check's
+// "commands still work, just slower" fallback alone.
 func (t *TmuxSession) checkControlModeVersionMatchOnce(ctx context.Context) {
 	socketKey := string(t.serverSocket)
 	if _, already := versionCheckedSockets.LoadOrStore(socketKey, struct{}{}); already {
@@ -97,7 +110,7 @@ func (t *TmuxSession) checkControlModeVersionMatchOnce(ctx context.Context) {
 		"session", t.sanitizedName,
 		"client_version", clientVer,
 		"server_version", serverVer,
-		"remediation", "restart the tmux server on a matching tmux version (this kills its sessions), or set TMUX_BIN to the binary path the running server was actually started with")
+		"remediation", "ResolveClientForSocket should have auto-matched this already -- if it didn't (e.g. lsof unavailable), restart the tmux server on a matching tmux version (this kills its sessions), or set TMUX_BIN to the binary path the running server was actually started with")
 }
 
 // controlModeDisabledForSocket reports whether checkControlModeVersionMatchOnce
@@ -134,7 +147,7 @@ func RestartTmuxServer(serverSocket string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, err := runGated(ctx, serverSocket, func() ([]byte, error) {
-		return (LocalRunner{}).Run(ctx, "", Binary(), args...)
+		return (LocalRunner{}).Run(ctx, "", ResolveClientForSocket(serverSocket), args...)
 	})
 	if err != nil {
 		// Combine err+out the same way ListAllSessions does: LocalRunner.Run's
@@ -148,5 +161,6 @@ func RestartTmuxServer(serverSocket string) error {
 	}
 	versionCheckedSockets.Delete(serverSocket)
 	controlModeDisabledSockets.Delete(serverSocket)
+	ClearResolvedClientForSocket(serverSocket)
 	return nil
 }

@@ -32,8 +32,9 @@
  *   match that behavior — see this task's final report for the gap this surfaces.
  */
 import { test, expect, Page, Locator } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 interface FixtureNotification {
   id: string;
@@ -48,6 +49,17 @@ interface FixtureNotification {
   occurrenceCount?: number;
 }
 
+// Mirrors the server's IsActionableType: the fixture stands in for GetNotificationHistory,
+// which computes isPendingDecision from type, read state and the auto_remediating stamp.
+const ACTIONABLE_FIXTURE_TYPES = new Set([
+  "NOTIFICATION_TYPE_APPROVAL_NEEDED",
+  "NOTIFICATION_TYPE_CONFIRMATION_NEEDED",
+  "NOTIFICATION_TYPE_INPUT_REQUIRED",
+  "NOTIFICATION_TYPE_ERROR",
+  "NOTIFICATION_TYPE_FAILURE",
+  "NOTIFICATION_TYPE_WARNING",
+]);
+
 function buildHistoryResponse(notifications: FixtureNotification[]) {
   return {
     notifications: notifications.map((n) => ({
@@ -61,6 +73,10 @@ function buildHistoryResponse(notifications: FixtureNotification[]) {
       metadata: n.metadata,
       createdAt: new Date().toISOString(),
       isRead: n.isRead,
+      isPendingDecision:
+        !n.isRead &&
+        ACTIONABLE_FIXTURE_TYPES.has(n.notificationType) &&
+        n.metadata?.auto_remediating !== "true",
       occurrenceCount: n.occurrenceCount,
     })),
     totalCount: notifications.length,

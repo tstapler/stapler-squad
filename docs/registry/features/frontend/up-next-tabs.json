@@ -1,0 +1,19 @@
+{
+  "id": "up-next-tabs",
+  "type": "frontend",
+  "description": "Up Next page tab shell (PRs, Stuck, Worktrees, Queue) with URL-first tab state, localStorage persistence, attention badges and manual keyboard activation",
+  "component": "UpNextTabs",
+  "path": "web-app/src/components/unfinished/UpNextTabs.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/up-next-tabs.spec.ts",
+    "upNext_should_SelectPRsTabAndShowPanelInViewport_When_FirstVisit",
+    "upNext_should_SelectStuckTab_When_ItemDeepLinkOpened",
+    "upNext_should_RestoreTab_When_ReloadedOrReopenedWithoutTabParam",
+    "upNext_should_ActivateTabOnlyOnEnter_When_ArrowKeyMovesFocus",
+    "upNext_should_ReportNoColorContrastViolationOnTabList_When_StuckBadgeSeeded",
+    "upNext_should_HaveNoHorizontalOverflowAt320px_When_PRsPanelNotConnected"
+  ],
+  "lastModified": "2026-10-07T00:00:00Z"
+}

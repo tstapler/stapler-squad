@@ -135,14 +135,32 @@ v2.x tag at implementation time per stack.md) — Story 1.3.1.
   and the forward-sync subscriber both already no-op cleanly on that path,
   confirmed by reading `handleForwardSyncClose`'s existing `!ok` branch).
   No data migration to reverse (ADR-001 means no schema change to roll back).
-- **Staged rollout**: Ship all phases behind normal PR review; no
-  progressive-rollout mechanism needed since the feature is opt-in per user
-  (they must add credentials and an `ItemSource` row before anything syncs).
-  Recommend landing Phase 1 (fetch/mapping) and Phase 3 (one-off import)
-  before Phase 2 (forward-sync writes to external trackers) in separate PRs
-  if the implementer wants an extra manual-verification checkpoint before
-  granting write access to Linear/JIRA — not required by any AC, a
-  sequencing suggestion only.
+- **Staged rollout (plan of record, promoted from suggestion per triad
+  product-lens review, hardened after 2 further review rounds)**:
+  1. **Pick one tracker first**, not both simultaneously. Evidence for demand
+     here is a single migrated GitHub issue (N=1, no stated tracker
+     preference) — building both Linear and JIRA integrations at once
+     doubles unvalidated engineering cost (two GraphQL/REST clients, two
+     keychain packages, JIRA's extra ADF-parsing surface) before any
+     adoption signal exists. Confirm which tracker the requester's own team
+     actually uses (check the original issue thread / ask) before starting
+     Phase 1; default to Linear if unknown (smaller API surface, no ADF
+     parsing).
+  2. Land that one tracker's Phase 1 (fetch/mapping) + Phase 3 (one-off MCP
+     import) first, as its own PR(s) — this alone delivers requirements.md
+     Goals #1–2 for that tracker and is the lowest-risk way to test the
+     requirements.md "Risky assumption."
+  3. **Hard gate**: do not open the Phase 2 PR (forward-sync writes to the
+     external tracker — the only phase touching the live, already-shipped
+     GitHub forward-sync path per pre-mortem P1 #2) or the Phase 4 PR
+     (frontend badges/filter/settings UI) until a real `ItemSource` row for
+     that tracker exists in a non-test `~/.stapler-squad/` config, per
+     requirements.md's success-metrics section. This is a hard sequencing
+     gate on PR creation, not merely a review-priority signal.
+  4. Only after the first tracker clears that gate, repeat steps 1–3 for the
+     second tracker. No progressive-rollout *mechanism* (flag/canary) is
+     needed either way since the feature is opt-in per user (credentials +
+     an `ItemSource` row required before anything syncs).
 
 ## Unresolved Questions
 - [ ] Should `import_linear_issue`/`import_jira_issue` also gain an
@@ -316,7 +334,8 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 
 ##### Task 1.3.1c: `Fetch` — JQL search + cursor advancement (~5 min)
 - `client.Issue.SearchV2JQL(ctx, jql, opts)` with `jql = fmt.Sprintf("project = %s AND updated >= %q ORDER BY updated ASC", cfg.ProjectKey, cursor)` (empty cursor ⇒ no `AND updated >=` clause).
-- Convert `[]cloud.Issue` → `[]ExternalItem` (`convertJiraIssues`), cursor = `max(cursor, latest Fields.Updated)`.
+- **Pre-mortem P1 #1**: `SearchV2JQL` is the new Jira Cloud search API and paginates via `NextPageToken`, not `startAt`/`total` (the legacy `/rest/api/3/search` is fully removed, 410 Gone). `Fetch` must loop, passing `opts.NextPageToken` forward, until the response's `IsLast`/empty-`NextPageToken` signals the end, accumulating all pages into one `[]cloud.Issue` before computing the cursor — bound the loop (mirror GitHub's `maxPreviewFetchPages`) so a runaway project can't hang a sync tick. Computing `cursor = max(cursor, latest Fields.Updated)` from only the first page would silently and permanently drop every issue past page 1.
+- Convert `[]cloud.Issue` → `[]ExternalItem` (`convertJiraIssues`), cursor = `max(cursor, latest Fields.Updated)` computed over the *fully paginated* result set.
 - Files: `session/backlog_plugin_jira.go`
 
 ##### Task 1.3.1d: Rate-limit + auth-failure detection (~5 min)
@@ -332,7 +351,8 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 **Files**: `session/backlog_plugin_jira.go`, `jira/adf.go` (new)
 
 ##### Task 1.3.2a: ADF→plaintext walker (~5 min)
-- `jira.ADFToPlainText(doc json.RawMessage) string` — walks `content[].content[].text` nodes for `paragraph`/`heading`/`text`/`bulletList`/`orderedList` node types, joins with newlines; unknown node types skipped gracefully (no panic on unrecognized ADF extensions). Resolve Unresolved Questions item 3 first (check `go-jira/v2/cloud` for existing ADF types before hand-rolling the walker's input type).
+- `jira.ADFToPlainText(doc json.RawMessage) string` — walks `content[].content[].text` nodes for `paragraph`/`heading`/`text`/`bulletList`/`orderedList` node types, joins with newlines.
+- **Pre-mortem P1 #3**: real JIRA tickets routinely carry `codeBlock` (stack traces, repro snippets), `table`, `taskList` (checklists), `panel` (callouts), `mention`, and `inlineCard`/`blockCard` (linked issues) — content an agent acting on the imported item needs. Explicitly enumerate these node types too (reasonable plaintext approximation, e.g. fenced text for `codeBlock`, `- [ ] `/`- [x] ` for `taskList` items, `<url or resolved title>` for `inlineCard`/`blockCard`). Only node types still outside this explicit set fall back to a visible `[unsupported content omitted: <type>]` marker — never silent removal. Resolve Unresolved Questions item 3 first (check `go-jira/v2/cloud` for existing ADF types before hand-rolling the walker's input type).
 - Files: `jira/adf.go`
 
 ##### Task 1.3.2b: `MapToBacklogItem` incl. priority + issue-key/URL split (~5 min)
@@ -409,6 +429,7 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 
 #### Story 2.2.1: Refactor subscriber to dispatch on two capability interfaces
 **As a** backlog item transitioning to done, **I want** forward-sync to fire regardless of which tracker the item came from, **so that** GitHub, Linear, and JIRA all get the same completion-time write-back behavior.
+**Pre-mortem P1 #2**: this refactor touches the already-shipped, live-used GitHub issue-auto-close path. Forward-sync failures are only logged (`server/services/backlog_github_forward_sync.go:144-149`), never surfaced as a UI alert, so a dispatch-ordering or interface-satisfaction regression here would ship silently. Land Epic 2.2 as its own reviewable PR, ahead of Epic 2.1's Linear/JIRA-specific additions, and require the pre-refactor GitHub forward-sync test suite to pass *unmodified* against the post-refactor dispatch code as an explicit regression gate — not "renamed and extended" as a single step.
 **Acceptance Criteria**:
 - A `LinearPlugin`-backed item triggers `UpdateIssueState` + `PostIssueComment` + watermark write, same as GitHub's `CloseIssue` path does today.
   - *Given* a `BacklogItemData` with `SourceID` pointing at an `ItemSource{PluginID: "linear", ForwardSyncEnabled: true, ForwardSyncCloseLabel: "Done"}`, *When* the item transitions to `BacklogStatusDone` and the `EventBus` publishes `BacklogChangeStatusTransition`, *Then* `StartBacklogForwardSyncSubscriber`'s handler calls `LinearPlugin.UpdateIssueState`, then `PostIssueComment`, then persists `GitHubSyncedIssueUpdatedAt` from the mutation's returned timestamp.
@@ -422,6 +443,7 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 
 ##### Task 2.2.1b: Type-switch dispatch in the handler (~5 min)
 - Rename `StartBacklogGitHubForwardSyncSubscriber` → `StartBacklogForwardSyncSubscriber`, `handleForwardSyncClose` → `handleForwardSync`. Replace the single `closer, ok := plugin.(externalIssueCloser)` check with a type-switch trying `externalIssueCloser` then `externalIssueStateUpdater`, each calling its own close/update method, then falling through to shared `PostIssueComment` + watermark-write logic (ADR-002's code sketch).
+- **Regression gate (pre-mortem P1 #2)**: before adding any Linear/JIRA-specific test case, run the existing `server/services/backlog_github_forward_sync_test.go` suite unmodified against this renamed/refactored dispatch code and confirm it passes byte-for-byte the same as pre-refactor. Land this task's diff as its own PR/commit, reviewed and merged ahead of Epic 2.1's tracker-specific tests landing on top.
 - Files: `server/services/backlog_forward_sync.go`
 
 ##### Task 2.2.1c: Update `server/server.go` wiring (~2 min)
@@ -737,3 +759,15 @@ Phase 5: Testing & Registry (spans all phases, sequenced last per story)
 ##### Task 5.3.1b: Add `data-testid="backlog-item-card"` if missing + registry entries (~3 min)
 - Confirm `BacklogItemCard.tsx` already exposes a stable test ID (grep first); add per-feature registry files (`docs/registry/features/frontend/backlog-item-source-badge.json`, `backlog-filter-by-source.json`) with `testIds` referencing the new spec's `describe`/`test` names.
 - Files: `web-app/src/components/backlog/BacklogItemCard.tsx` (if needed), `docs/registry/features/frontend/backlog-item-source-badge.json` (new), `docs/registry/features/frontend/backlog-filter-by-source.json` (new)
+
+---
+
+## Implementation Notes (first PR: Phase 1 + Phase 3, both trackers)
+
+- **No `go-jira/v2`**: its `SearchV2JQL` targets `rest/api/2` and `IssueFields.Description` is a `string`, so it cannot carry ADF. `JiraPlugin` hand-rolls `rest/api/3/search/jql` over `net/http` (nextPageToken loop, bounded). Supersedes Pattern Decision "JIRA HTTP client" and Task 1.3.1a.
+- **Credentials**: keychain, then env (`LINEAR_API_KEY`; `JIRA_EMAIL`/`JIRA_API_TOKEN`/`JIRA_BASE_URL`, env creds only sent to the `JIRA_BASE_URL` host). `PluginConfig.Raw` token fields are ignored (AC6).
+- **Single-tracker-first gate (AC10) waived by the owner**: Phase 2 (forward-sync, AC5, Linear and JIRA) and Phase 4 (frontend badge/filter/settings schemas, AC7) ship in this PR although no non-test Linear or JIRA `ItemSource` row exists yet.
+- **Deviations from ADR-002/Task 2.2.1**: `StartBacklogGitHubForwardSyncSubscriber`, `handleForwardSyncClose` and the file name keep their GitHub names (and `backlog_github_forward_sync:` log prefix) to keep the GitHub regression diff minimal; the dispatch is generalized behind `externalIssueStateUpdater`. `ForwardSyncCloseLabel` doubles as the target state/transition name.
+- **Credentials**: no UI/RPC writes the Linear/JIRA keychain entries yet (`SetKeychainToken*` are only used by tests); the env vars are the working path, and error text/Settings help say so.
+- **Known follow-ups**: `withSourcePlugin` does one item read per watch event when `SourcePluginID` is empty (populate it at publish time); Linear first sync over 10k issues errors rather than resuming (Linear only orders `updatedAt` descending); one global Linear key; the MCP import path duplicates `importGitHubIssue`'s claim/create/triage tail.
+- **AC9**: waived by the owner. The registry scanner (`make registry-generate-backend`) is proto-driven and prunes hand-written MCP entries (verified: both `import-*-issue.json` files I added were deleted); this PR adds no RPC, only fields.

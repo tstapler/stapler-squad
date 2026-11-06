@@ -15,8 +15,8 @@ import (
 // checks, ad hoc one-shot calls) — one lookup+update path instead of each caller
 // reimplementing it, so cost persistence can't quietly diverge per call site.
 func CostSinkForSessionUUID(storage *Storage, sessionUUID string) headless.CostSink {
-	return func(usd float64) {
-		if usd <= 0 || storage == nil {
+	return func(usd float64, priced bool) {
+		if !priced || usd <= 0 || storage == nil {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

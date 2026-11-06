@@ -37,6 +37,32 @@ func (i *Instance) GetPath() string {
 }
 ```
 
+## Lock safety is only half of it: pick the right path concept
+
+`Snapshot()` makes a read race-free. It does not tell you whether the value is the
+one you want. `Instance` has four path concepts, and `Instance.Workspace()`
+(`session/types.go`) is the only place that names them:
+
+| Question | Field |
+|---|---|
+| comparing two sessions' locations | `Workspace().ActiveDir` |
+| reading or writing files | `Workspace().ExistingDir` |
+| "same repository?" | `Workspace().RepoRoot`, or `WorkspaceKey()` |
+| this session's worktree, if any | `Workspace().WorktreeDir` |
+
+`ActiveDir` and `ExistingDir` differ exactly when a worktree directory is gone from
+disk — a normal state, since `pause_session` deletes the worktree and keeps the
+branch. `ExistingDir` then falls back to the repo root, so **two sessions in separate
+cleaned-up worktrees share an `ExistingDir`**. Comparing it is what made
+`WorkspacePeersPanel` report false collisions between properly isolated sessions
+(PR #801, whose own commit message misattributes the cause — the field it blamed,
+`session.path`, already carried the resolved value). Use `ActiveDir` to compare.
+
+`GetEffectiveRootDir()` and `GetWorkingDirectory()` both return `ActiveDir`; prefer
+`ActiveDir()`, which names it. Note `GetWorkingDirectory()` has never read the
+`Instance.WorkingDir` field, which is the user's *relative* subdirectory — a separate
+concept that happens to share the name.
+
 If the field isn't in `InstanceSnapshot` (`session/instance_snapshot.go`) yet, add it there first (it's the single authoritative field list per that file's header comment) rather than reaching for an ad hoc `i.mu.RLock()`. A raw `i.mu.RLock()`-guarded read is only appropriate for state genuinely excluded from the snapshot (manager/dependency objects — see the exclusion list in `instance_snapshot.go`'s doc comment).
 
 ## Why

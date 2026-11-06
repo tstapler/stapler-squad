@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -52,9 +53,9 @@ var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
 
 // remediationColdRetryInterval is the heartbeat period for a "parked" row
 // (remediation_attempts >= MaxRemediationAttempts): once parked, the row is
-// retried again every remediationColdRetryInterval, indefinitely, without
-// ever needing an operator to call ResetStuckRemediation/
-// BulkResetStuckRemediation — see evaluateRemediation's
+// retried again every remediationColdRetryInterval, a bounded number of times, without
+// needing an operator call to ResetStuckRemediation/
+// BulkResetStuckRemediation, up to MaxRemediationColdRetries times — see evaluateRemediation's
 // remediationGrantedColdRetry case and RemediationDue's handling of it.
 //
 // Root cause this closes (BUG-083, docs/bugs/fixed/BUG-083-...): a park was
@@ -83,6 +84,15 @@ var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
 // deliberately unconfigurable constant rather than a new knob, matching
 // remediationBackoffSchedule's own un-configurable style.
 const remediationColdRetryInterval = 7 * 24 * time.Hour
+
+// MaxRemediationColdRetries bounds the cold-retry heartbeat: a parked row gets
+// this many extra automatic attempts (attempts counts past the cap), then stays
+// parked until an operator resets it, so one broken item cannot respawn forever.
+const MaxRemediationColdRetries = 2
+
+// remediationAttemptCeiling is the attempt count at which a row is permanently
+// parked (fast schedule plus bounded cold retries).
+func remediationAttemptCeiling() int32 { return MaxRemediationAttempts + MaxRemediationColdRetries }
 
 // serverStartTime approximates this process's boot time, for the
 // restart-grace check in evaluateRemediation. Evaluated at package init,
@@ -128,11 +138,11 @@ const (
 	// remediationGrantedColdRetry: remediation_attempts is already at the
 	// cap (parked), AND next_remediation_at (repurposed, while parked, as the
 	// cold-retry deadline — see RemediationDue) is due. The caller should
-	// invoke its remediation action; the resulting write pins
-	// remediation_attempts at the cap (does not increment further) and pushes
+	// invoke its remediation action; the resulting write increments
+	// remediation_attempts past the cap and pushes
 	// next_remediation_at another remediationColdRetryInterval into the
-	// future, so this repeats indefinitely — a slow heartbeat, not a one-shot
-	// reprieve — until the row resolves or an operator explicitly resets it.
+	// future, repeating until the row resolves, an operator resets it, or
+	// MaxRemediationColdRetries is spent.
 	remediationGrantedColdRetry
 )
 
@@ -157,6 +167,9 @@ func evaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remedi
 		// this field always being set on the parking attempt (see
 		// RemediationDue) — treat that as "not yet due" rather than panicking
 		// or treating a missing deadline as "always due."
+		if row.RemediationAttempts >= remediationAttemptCeiling() {
+			return remediationSkippedParked
+		}
 		if row.NextRemediationAt != nil && !now.Before(*row.NextRemediationAt) {
 			return remediationGrantedColdRetry
 		}
@@ -281,23 +294,15 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 		}
 		return true, false, nil
 	case remediationGrantedColdRetry:
-		// Already parked (remediation_attempts == MaxRemediationAttempts) and
-		// the cold-retry heartbeat is due (BUG-083). Grant exactly one more
-		// attempt WITHOUT incrementing remediation_attempts past the cap —
-		// staying pinned at the cap is what keeps this row eligible for the
-		// next cold retry too (a normal increment would just re-park it
-		// identically, so there is nothing to gain by moving the counter),
-		// and push next_remediation_at another remediationColdRetryInterval
-		// out so the heartbeat repeats indefinitely rather than firing once.
-		// justParked is deliberately false here: this is not a fresh park
-		// event, so the caller must not re-send the one-time "auto-
-		// remediation exhausted" notification for a row that already got it
-		// the first time it parked.
+		// Parked and the cold-retry deadline is due (BUG-083). Count it past the
+		// cap so MaxRemediationColdRetries bounds the heartbeat, and push the
+		// deadline out another interval. justParked fires only on the final cold
+		// retry so the operator is told the item is now permanently parked.
 		coldAt := now.Add(remediationColdRetryInterval)
-		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts, &coldAt); recErr != nil {
+		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts+1, &coldAt); recErr != nil {
 			return true, false, fmt.Errorf("remediation due %s/%s: record cold retry: %w", itemID, reason, recErr)
 		}
-		return true, false, nil
+		return true, row.RemediationAttempts+1 >= remediationAttemptCeiling(), nil
 	default: // remediationGranted
 		nextAttempt := row.RemediationAttempts + 1
 		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, nextAttempt, nextRemediationAtForAttempt(nextAttempt, now)); recErr != nil {
@@ -398,4 +403,177 @@ func (s *Storage) RecordManualRemediationAttempt(ctx context.Context, itemID str
 		return false, fmt.Errorf("record manual remediation attempt %s/%s: %w", itemID, reason, recErr)
 	}
 	return nextAttempt >= MaxRemediationAttempts, nil
+}
+
+// --- Open transition denials (Story 1.5.8) ---------------------------------
+
+// ErrTransitionDeniedHold is the skip sentinel for an automatic action parked
+// behind an open transition_denied row. Periodic spawn points skip quietly;
+// the operator's "Retry now" maps it to FailedPrecondition.
+var ErrTransitionDeniedHold = errors.New("an automatic transition is denied and waits on the workflow engine")
+
+// liftableDenial reports whether a workflow-engine configuration change can
+// lift a denial of this reason. A default_guard denial is the caller's own
+// input, which the caller retries as before, so it never parks anything.
+func liftableDenial(reason string) bool {
+	switch reason {
+	case DeniedConfigGraph, DeniedOperatorGate, DeniedTargetStageRemoved:
+		return true
+	}
+	return false
+}
+
+// transitionDenialAnchored reports whether a transition_denied row still
+// describes its item: the item is in the status the denial recorded as "from".
+// selfHealStuck resolves the row once the item has moved on, whichever path
+// moved it.
+func transitionDenialAnchored(row OpenStuckStateData) bool {
+	d, ok := domain.ParseTransitionDeniedContext(row.Context)
+	return ok && d.From == string(row.ItemStatus)
+}
+
+// OpenTransitionDenial returns the open, un-snoozed transition_denied denial
+// whose recorded "from" equals status.
+func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, status BacklogStatus) (domain.TransitionDenial, bool, error) {
+	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, domain.StuckReasonTransitionDenied)
+	if err != nil || !ok {
+		return domain.TransitionDenial{}, false, err
+	}
+	d, parsed := domain.ParseTransitionDeniedContext(row.Context)
+	if !parsed || d.From != string(status) || !liftableDenial(d.Reason) {
+		return domain.TransitionDenial{}, false, nil
+	}
+	return d, true, nil
+}
+
+// HasOpenTransitionDenied is the shared predicate behind every spawn-point and
+// detector-local guard (ADR-007 D12): true iff an open transition_denied row
+// exists whose recorded "from" equals status, the item's current status.
+func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, status BacklogStatus) (bool, error) {
+	_, ok, err := s.OpenTransitionDenial(ctx, itemID, status)
+	return ok, err
+}
+
+// TransitionDenialHolds is the guard form of HasOpenTransitionDenied: true while
+// item's current status has an open denial that the engine still refuses. A
+// denial the engine would now allow (gate satisfied, edge re-enabled, class no
+// longer enforced) is resolved here, so the held action proceeds on this call.
+// A read error fails open, as before the denial existed.
+func (s *Storage) TransitionDenialHolds(ctx context.Context, item *BacklogItemData) bool {
+	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, BacklogStatus(item.Status))
+	if err != nil {
+		log.Debug("[TransitionDenialHolds] denial lookup failed; not holding", "item", item.ID, "error", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	if _, stillDenied := s.transitionStillDenied(ctx, item.ID, d); stillDenied {
+		return true
+	}
+	s.resolveLiftedDenial(ctx, item.ID)
+	return false
+}
+
+func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
+	if _, err := s.ResolveStuck(ctx, itemID, domain.StuckReasonTransitionDenied); err != nil {
+		log.Warn("[TransitionDenialHolds] ResolveStuck failed", "item", itemID, "error", err)
+	}
+}
+
+// transitionStillDenied re-decides the recorded request without writing, with
+// Default guards off: the recorded reasons are the graph and Configured gates,
+// and the caller's own guard input is not reproducible here. The verdict's
+// reason is returned so a changed reason can be reported. It reports not
+// denied when the denial can no longer bind: no gate wired, an unregistered
+// caller, or the caller's class not enforced. It decides quietly: the denial
+// was counted when it was recorded, so a probe adds nothing to the soak signal.
+func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (gateVerdict, bool) {
+	g := s.gate.Load()
+	spec, known := LookupTransitionCaller(TransitionCaller(d.Caller))
+	if g == nil || !known || g.engine.ModeFor(spec.Class) != ModeEnforce {
+		return gateVerdict{}, false
+	}
+	item, err := s.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return gateVerdict{}, true // unknown: keep holding, retry next tick
+	}
+	v := decideTransition(g.engine.ForClassQuiet(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	return v, v.Err != nil
+}
+
+// redriveByWrite lists the callers whose whole effect is the status write and
+// that nothing retries once denied (the triage session behind them has ended).
+// Every other caller either retries on each sweep tick or re-runs through its
+// spawn point, so lifting its denial only resolves the row.
+var redriveByWrite = map[TransitionCaller]bool{
+	CallerAutonomousComplete: true,
+	CallerMaybeTriggerTriage: true,
+	CallerTriageComplete:     true,
+}
+
+// RedriveTransitionDenials is the sweep over recorded denials (Task 1.5.8e): a
+// denial that is lifted is resolved, and for a redriveByWrite caller the
+// transition is first re-attempted through the gate; a denial whose reason
+// changed (the target stage was deleted) is re-reported. It returns how many
+// rows it resolved. One open-rows read per tick; the rest is per denial.
+func (s *Storage) RedriveTransitionDenials(ctx context.Context) int {
+	rows, err := s.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.Warn("[RedriveTransitionDenials] FindOpenStuckStates failed", "error", err)
+		return 0
+	}
+	resolved := 0
+	for _, row := range rows {
+		if row.Reason != domain.StuckReasonTransitionDenied {
+			continue
+		}
+		d, parsed := domain.ParseTransitionDeniedContext(row.Context)
+		if !parsed || d.From != string(row.ItemStatus) {
+			continue // selfHealStuck clears a row whose item moved on
+		}
+		if s.redriveOne(ctx, row.ItemID, d) {
+			resolved++
+		}
+	}
+	return resolved
+}
+
+func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.TransitionDenial) bool {
+	verdict, denied := s.transitionStillDenied(ctx, itemID, d)
+	if denied {
+		s.reportChangedDenial(ctx, itemID, d, verdict)
+		return false
+	}
+	caller := TransitionCaller(d.Caller)
+	if redriveByWrite[caller] {
+		_, err := s.GatedTransition(ctx, TransitionRequest{
+			Caller:       caller,
+			ItemID:       itemID,
+			To:           BacklogStatus(d.To),
+			Precondition: &BacklogItemPrecondition{ExpectedStatus: d.From},
+			TriggeredBy:  TriggeredBySystem,
+		})
+		if err != nil && !errors.Is(err, ErrPreconditionFailed) {
+			log.Debug("[RedriveTransitionDenials] re-attempt not applied", "item", itemID, "caller", d.Caller, "error", err)
+			return false
+		}
+	}
+	s.resolveLiftedDenial(ctx, itemID)
+	return true
+}
+
+// reportChangedDenial re-reports a denial whose reason differs from the
+// recorded one; the reporter is idempotent per exact denial, so an unchanged
+// denial stays quiet.
+func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d domain.TransitionDenial, v gateVerdict) {
+	g := s.gate.Load()
+	if g == nil || v.Reason == d.Reason {
+		return
+	}
+	item, err := s.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return
+	}
+	g.reporter.Report(ctx, item, TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
 }

@@ -2,6 +2,7 @@ package tokens
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/pricing"
 	"os"
 	"testing"
 	"time"
@@ -30,6 +31,75 @@ func TestNormalizeModelFamily_WhenDateSuffixedID_ExpectStripped(t *testing.T) {
 			assert.Equal(t, c.expected, got)
 		})
 	}
+}
+
+// TestNormalizeModelFamily_WhenGeminiSnapshotSuffix_ExpectStripped is Task
+// 3.2.1b's acceptance case: a dated or numbered Gemini snapshot suffix must
+// normalize to the same family as the bare model ID, mirroring the existing
+// claude-* variant/date handling, without merging a distinctly-priced sibling
+// (flash-lite) into gemini-2.5-flash.
+func TestNormalizeModelFamily_WhenGeminiSnapshotSuffix_ExpectStripped(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"gemini-2.5-pro", "gemini-2.5-pro"},
+		{"gemini-2.5-flash", "gemini-2.5-flash"},
+		{"gemini-2.5-pro-20250619", "gemini-2.5-pro"},
+		{"gemini-2.5-flash-002", "gemini-2.5-flash"},
+		{"gemini-2.5-flash-lite", "gemini-2.5-flash-lite"},
+		{"gemini-2.5-flash-lite-002", "gemini-2.5-flash-lite-002"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			got := NormalizeModelFamily(c.input)
+			assert.Equal(t, c.expected, got)
+		})
+	}
+}
+
+// TestDefaultPricingTable_WhenGeminiModel_ExpectPopulatedPricingWithSourceDate
+// is Story 3.2.1's literal AC: LookupByModel("gemini-2.5-pro") must return a
+// populated ModelPricing with a source-dated EffectiveDate, the same
+// dated/sourced convention every other DefaultPricingTable() entry follows.
+func TestDefaultPricingTable_WhenGeminiModel_ExpectPopulatedPricingWithSourceDate(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	for _, family := range []string{"gemini-2.5-pro", "gemini-2.5-flash"} {
+		t.Run(family, func(t *testing.T) {
+			entry, ok := pt.LookupByModel(family)
+			require.True(t, ok, "expected %q entry in DefaultPricingTable()", family)
+			assert.Greater(t, entry.InputPricePerMTok, 0.0)
+			assert.Greater(t, entry.OutputPricePerMTok, 0.0)
+			assert.Equal(t, family, entry.ModelFamily)
+
+			_, err := time.Parse("2006-01-02", entry.EffectiveDate)
+			assert.NoError(t, err, "EffectiveDate must parse as YYYY-MM-DD")
+		})
+	}
+}
+
+// TestEstimateCost_WhenGeminiProModel_ExpectExactPrice exercises the same
+// EstimateCost path GeminiCaller's cost computation ultimately validates
+// against, at $1.25/1M input + $10.00/1M output for gemini-2.5-pro.
+func TestEstimateCost_WhenGeminiProModel_ExpectExactPrice(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	result := &ParseResult{
+		PrimaryModel: "gemini-2.5-pro",
+		TurnTimeline: []TurnStats{
+			{Model: "gemini-2.5-pro", Input: 100_000, Output: 100_000}, // under the 200k-prompt tier
+		},
+	}
+
+	cost, unpriced := pt.EstimateCost(result)
+	// gemini-2.5-pro: $1.25/MTok input + $10.00/MTok output = $1.125 for 100k each.
+	assert.InDelta(t, 1.125, cost, 0.0001)
+	assert.Empty(t, unpriced)
 }
 
 func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
@@ -165,6 +235,62 @@ func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUn
 
 	assert.True(t, unpriced["gpt-99-turbo"])
 	assert.False(t, unpriced["claude-sonnet-4"])
+}
+
+// TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently
+// covers the per-category split EstimateCost's existing tests never assert on
+// directly (they only ever check the summed Total()).
+func TestEstimateCostByCategory_WhenVariedUsage_ExpectEachCategoryPricedIndependently(t *testing.T) {
+	t.Parallel()
+	pt := DefaultPricingTable()
+
+	t.Run("priced family with distinct per-category token counts", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "claude-sonnet-4",
+					Input:         1_000_000,
+					Output:        1_000_000,
+					CacheCreation: 1_000_000,
+					CacheRead:     1_000_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		// claude-sonnet-4 rates: $3/MTok input, $15/MTok output, $3.75/MTok
+		// cache-write, $0.30/MTok cache-read (DefaultPricingTable()).
+		assert.InDelta(t, 3.0, costs.Input, 0.0001)
+		assert.InDelta(t, 15.0, costs.Output, 0.0001)
+		assert.InDelta(t, 3.75, costs.CacheCreation, 0.0001)
+		assert.InDelta(t, 0.30, costs.CacheRead, 0.0001)
+		assert.Empty(t, unpriced)
+	})
+
+	t.Run("unpriced family reports zero on every category and is flagged", func(t *testing.T) {
+		t.Parallel()
+		result := &ParseResult{
+			TurnTimeline: []TurnStats{
+				{
+					Model:         "gpt-99-turbo",
+					Input:         500_000,
+					Output:        500_000,
+					CacheCreation: 500_000,
+					CacheRead:     500_000,
+				},
+			},
+		}
+
+		costs, unpriced := pt.EstimateCostByCategory(result)
+
+		assert.Zero(t, costs.Input)
+		assert.Zero(t, costs.Output)
+		assert.Zero(t, costs.CacheCreation)
+		assert.Zero(t, costs.CacheRead)
+		assert.Equal(t, []string{"gpt-99-turbo"}, unpriced)
+	})
 }
 
 // knownActiveClaudeFamilies is maintained independently of DefaultPricingTable()'s keys —
@@ -460,4 +586,52 @@ func TestComputeCacheROI_WhenCacheReadWithoutWrite_ExpectPositiveROI(t *testing.
 	require.True(t, ok)
 	// claude-sonnet-4: (input $3.00 - cacheRead $0.30) * 1M/1e6 = $2.70 saved.
 	assert.InDelta(t, 2.70, roi, 0.0001)
+}
+
+func TestDefaultPricingTable_PricesNonAnthropicAndHaiku5(t *testing.T) {
+	pt := DefaultPricingTable()
+	r := &ParseResult{
+		PrimaryModel: "gpt-6.1-sol",
+		TurnTimeline: []TurnStats{
+			{Model: "gpt-6.1-sol", Input: 100_000, Output: 100_000, CacheRead: 100_000},
+			{Model: "gpt-5.6-terra", Input: 100_000, Output: 100_000},
+			{Model: "claude-haiku-5-5", Input: 20_000, Output: 20_000, CacheCreation: 20_000, CacheRead: 20_000},
+		},
+	}
+	costs, unpriced := pt.ModelFamilyCost(r)
+	assert.Empty(t, unpriced)
+	assert.InDelta(t, 1.21, costs["gpt-6.1-sol"], 1e-9)
+	assert.InDelta(t, 1.40, costs["gpt-5.6-terra"], 1e-9)
+	assert.InDelta(t, 0.0147, costs["claude-haiku-5"], 1e-9)
+}
+
+func TestEstimateCost_AppliesLongContextTierPerTurnNotPerSession(t *testing.T) {
+	pt := DefaultPricingTable()
+	// Two 200k-prompt turns: each is under gpt-6.1-sol's 272k tier, though the sum is over it.
+	r := &ParseResult{TurnTimeline: []TurnStats{
+		{Model: "gpt-6.1-sol", Input: 200_000},
+		{Model: "gpt-6.1-sol", Input: 200_000},
+	}}
+	cost, _ := pt.EstimateCost(r)
+	assert.InDelta(t, 0.8, cost, 1e-9)
+
+	over := &ParseResult{TurnTimeline: []TurnStats{{Model: "gpt-6.1-sol", Input: 300_000}}}
+	cost, _ = pt.EstimateCost(over)
+	assert.InDelta(t, 1.2, cost, 1e-9) // 300k * $4/MTok
+}
+
+func TestEstimateCost_FastSpeedMultipliesTurnCost(t *testing.T) {
+	pt := DefaultPricingTable()
+	r := &ParseResult{TurnTimeline: []TurnStats{{Model: "gpt-6.1-sol", Output: 100_000, Speed: pricing.SpeedFast}}}
+	cost, _ := pt.EstimateCost(r)
+	assert.InDelta(t, 2.0, cost, 1e-9) // 100k * $10/MTok * 2x
+}
+
+func TestNormalizeModelFamily_WhenCalledRepeatedly_ExpectSameResultFromMemo(t *testing.T) {
+	t.Parallel()
+	const id = "claude-sonnet-4-6-20250514"
+	first := NormalizeModelFamily(id)
+	assert.Equal(t, "claude-sonnet-4", first)
+	assert.Equal(t, first, NormalizeModelFamily(id))
+	assert.Equal(t, "", NormalizeModelFamily(""))
 }

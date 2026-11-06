@@ -2,7 +2,7 @@
  * Generates per-feature Markdown documentation from the typed feature catalog.
  *
  * Usage:
- *   cd tools/docs-gen && npm install && npx ts-node --project tsconfig.json generate.ts
+ *   cd tools/docs-gen && bun install && bunx ts-node --project tsconfig.json generate.ts
  *
  * Or via Makefile:
  *   make docs-features

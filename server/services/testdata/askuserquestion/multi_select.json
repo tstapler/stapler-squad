@@ -1,0 +1,28 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "permission_mode": "auto",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which letters?",
+        "header": "Letters",
+        "options": [
+          {
+            "label": "A",
+            "description": "Option A"
+          },
+          {
+            "label": "B",
+            "description": "Option B"
+          },
+          {
+            "label": "C",
+            "description": "Option C"
+          }
+        ],
+        "multiSelect": true
+      }
+    ]
+  }
+}

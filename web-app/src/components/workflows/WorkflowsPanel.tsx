@@ -3,8 +3,7 @@
 
 import { useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link, useRouter } from "@/lib/nav";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";

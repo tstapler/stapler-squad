@@ -76,7 +76,24 @@ func extractEmbeddedTymuxd() (string, error) {
 			return dst, nil
 		}
 	}
-	if err := os.WriteFile(dst, tymuxdEmbedded, 0755); err != nil {
+	// Write-then-rename: overwriting in place fails with ETXTBSY while a daemon runs
+	// from dst, which is exactly when a newer build needs to replace it.
+	tmp, err := os.CreateTemp(dir, "tymuxd-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("extracting embedded tymuxd: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(tymuxdEmbedded); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("extracting embedded tymuxd: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("extracting embedded tymuxd: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0755); err != nil { //nolint:gosec // must be executable
+		return "", fmt.Errorf("extracting embedded tymuxd: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), dst); err != nil {
 		return "", fmt.Errorf("extracting embedded tymuxd: %w", err)
 	}
 	return dst, nil

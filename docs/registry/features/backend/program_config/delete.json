@@ -1,0 +1,12 @@
+{
+  "id": "program_config:delete",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DeleteProgramConfig",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/defaults_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-18T10:01:47.180745014-07:00"
+}

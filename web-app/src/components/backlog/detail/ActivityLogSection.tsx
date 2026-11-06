@@ -6,6 +6,7 @@ import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { formatDate } from "@/lib/backlog/formatDate";
+import { DiagnoseResultCard } from "../DiagnoseResultCard";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./ProgressHistorySection.css";
 
@@ -52,7 +53,7 @@ export function ActivityLogSection({ item, defaultExpanded }: ActivityLogSection
                     </>
                   )}
                 </div>
-                {n.message && <span>{n.message}</span>}
+                {n.message && <DiagnoseResultCard message={n.message} />}
               </div>
             );
           })}

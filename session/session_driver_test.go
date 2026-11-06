@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"go.uber.org/goleak"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // stuckDialogProcessManager implements ProcessManager. CapturePaneContent always
@@ -30,6 +32,7 @@ import (
 type stuckDialogProcessManager struct {
 	sendKeysCount atomic.Int32
 	callCount     atomic.Int32
+	contentCalls  atomic.Int32 // every content() call: one per driver poll tick
 	dialogText    string
 
 	// growPerCall, when true, prepends growing unrelated content to each
@@ -40,12 +43,19 @@ type stuckDialogProcessManager struct {
 
 	// failCount, when > 0, makes the first failCount SendKeys calls return an error.
 	failCount int
+
+	// pollEntered, when non-nil, is closed on the first pane capture so a test
+	// can wait until a driver poll is genuinely in flight.
+	pollEntered     chan struct{}
+	pollEnteredOnce sync.Once
 }
 
 const trustDialogText = `Quick safety check: Is this a project you created or one you trust?
 ❯ 1. Yes, I trust this folder
   2. No, exit`
 
+func (m *stuckDialogProcessManager) WireLaunch(LaunchSpec)               {}
+func (m *stuckDialogProcessManager) AppendLaunchEnv(...string)           {}
 func (m *stuckDialogProcessManager) Start(dir string) error              { return nil }
 func (m *stuckDialogProcessManager) RestoreWithWorkDir(dir string) error { return nil }
 func (m *stuckDialogProcessManager) Close() error                        { return nil }
@@ -83,6 +93,10 @@ func (m *stuckDialogProcessManager) SendInputViaControlMode(ctx context.Context,
 const growBaseReps = 500
 
 func (m *stuckDialogProcessManager) content() string {
+	m.contentCalls.Add(1)
+	if m.pollEntered != nil {
+		m.pollEnteredOnce.Do(func() { close(m.pollEntered) })
+	}
 	if !m.growPerCall {
 		return m.dialogText
 	}
@@ -327,9 +341,9 @@ func TestIsOneShot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: "test", Tags: tc.tags}
-			got := isOneShot(inst)
+			got := IsOneShot(inst)
 			if got != tc.want {
-				t.Errorf("isOneShot(%v) = %v, want %v", tc.tags, got, tc.want)
+				t.Errorf("IsOneShot(%v) = %v, want %v", tc.tags, got, tc.want)
 			}
 		})
 	}
@@ -468,7 +482,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 	}
 
 	before := time.Now()
-	got := attemptBacklogNudge(inst, 6*time.Minute)
+	got := attemptBacklogNudge(context.Background(), inst, 6*time.Minute)
 
 	if got.IsZero() {
 		t.Fatal("attemptBacklogNudge returned zero time on failed send — this reproduces BUG-041: " +
@@ -497,7 +511,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	if !nudgeSentAt.IsZero() || idle <= driverBacklogNudgeDelay {
 		t.Fatal("test setup invalid: nudge guard should be open before the first attempt")
 	}
-	nudgeSentAt = attemptBacklogNudge(inst, idle)
+	nudgeSentAt = attemptBacklogNudge(context.Background(), inst, idle)
 
 	// Second tick (simulating the very next driver poll, "idle" recomputed relative to the
 	// just-set nudgeSentAt so it is effectively ~0): guard must now be closed even though
@@ -508,57 +522,28 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	}
 }
 
-// ─── U-GO-01: TestSanitizeInitialPromptForTmux_stripsNullBytes ───────────────
+// ─── U-GO-01: TestCleanDriverPromptText_stripsNullBytes ───────────────
 
-func TestSanitizeInitialPromptForTmux_stripsNullBytes(t *testing.T) {
+func TestCleanDriverPromptText_stripsNullBytes(t *testing.T) {
 	t.Parallel()
 	input := "hello\x00world\x00"
-	got := sanitizeInitialPromptForTmux(input)
+	got := cleanDriverPromptText(input)
 	if strings.Contains(got, "\x00") {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains null bytes", input, got)
+		t.Errorf("cleanDriverPromptText(%q) = %q, still contains null bytes", input, got)
 	}
 	if got != "helloworld" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "helloworld")
+		t.Errorf("cleanDriverPromptText(%q) = %q, want %q", input, got, "helloworld")
 	}
 }
 
-// ─── U-GO-02: TestSanitizeInitialPromptForTmux_collapsesNewlines ─────────────
+// ─── U-GO-04: TestCleanDriverPromptText_whitespaceOnlyFallsThrough ────
 
-func TestSanitizeInitialPromptForTmux_collapsesNewlines(t *testing.T) {
-	t.Parallel()
-	input := "line1\nline2\rline3"
-	got := sanitizeInitialPromptForTmux(input)
-	if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains newlines", input, got)
-	}
-	// Newlines should be replaced with spaces
-	if got != "line1 line2 line3" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "line1 line2 line3")
-	}
-}
-
-// ─── U-GO-03: TestSanitizeInitialPromptForTmux_truncatesAt4096 ───────────────
-
-func TestSanitizeInitialPromptForTmux_truncatesAt4096(t *testing.T) {
-	t.Parallel()
-	input := strings.Repeat("a", 5000)
-	got := sanitizeInitialPromptForTmux(input)
-	if len(got) > 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
-	}
-	if len(got) != 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want exactly 4096", len(got))
-	}
-}
-
-// ─── U-GO-04: TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough ────
-
-func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
+func TestCleanDriverPromptText_whitespaceOnlyFallsThrough(t *testing.T) {
 	t.Parallel()
 	input := "   \t  "
-	got := sanitizeInitialPromptForTmux(input)
+	got := cleanDriverPromptText(input)
 	if got != "" {
-		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
+		t.Errorf("cleanDriverPromptText(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
 	}
 }
 
@@ -569,7 +554,7 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 // NOTE (M-14): These tests re-implement the prompt-selection logic from runSessionDriver.
 // If that logic changes, update these tests to match. The selection logic is a simple
 // 4-line block in runSessionDriver that checks inst.InitialPrompt and calls
-// sanitizeInitialPromptForTmux — extracting it to a standalone helper was judged
+// cleanDriverPromptText — extracting it to a standalone helper was judged
 // too invasive given the minimal complexity.
 
 // resolveInitialPromptForTest re-implements the prompt-selection logic from
@@ -578,7 +563,7 @@ func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
 func resolveInitialPromptForTest(inst *Instance) string {
 	initialPrompt := driverInitialPrompt
 	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		sanitized := cleanDriverPromptText(inst.InitialPrompt)
 		if sanitized != "" {
 			initialPrompt = sanitized
 		}
@@ -628,25 +613,101 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	}
 }
 
-// ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
+// fakeInitialPromptRepo records UpdateInitialPromptSentAt calls for assertions,
+// without needing a real EntRepository/DB.
+type fakeInitialPromptRepo struct {
+	title string
+	sent  time.Time
+	calls int
+}
 
-func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
+func (f *fakeInitialPromptRepo) UpdateInitialPromptSentAt(_ context.Context, title string, t time.Time) error {
+	f.title = title
+	f.sent = t
+	f.calls++
+	return nil
+}
+
+// Bug: after a service restart, a fresh driver goroutine's local `sentInitial`
+// always starts false, so without a persisted record it would re-type
+// InitialPrompt into an already-completed session. SetInitialPromptSentAt is
+// the fix's persistence primitive: it must update both the in-memory
+// Instance/Snapshot (so this process's own driver can see it immediately) and
+// the injected repo (so the NEXT process's driver can see it after a restart).
+func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
 	t.Parallel()
-	// Build a 4098-byte input: 4090 ASCII bytes + 2 emoji (😀 = 4 bytes each = 8 bytes total).
-	// After truncation at 4096 bytes, the second emoji straddles the boundary (bytes 4093-4096).
-	// The sanitizer must step back to a valid UTF-8 boundary.
-	input := strings.Repeat("a", 4090) + "😀😀"
-	if len(input) != 4098 {
-		t.Fatalf("test setup: expected input length 4098, got %d", len(input))
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-initial-prompt-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
 	}
 
-	got := sanitizeInitialPromptForTmux(input)
-
-	if len(got) > 4096 {
-		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
+	if got := inst.GetInitialPromptSentAt(); !got.IsZero() {
+		t.Fatalf("GetInitialPromptSentAt() before any send = %v, want zero", got)
 	}
-	if !utf8.ValidString(got) {
-		t.Errorf("sanitizeInitialPromptForTmux: result is not valid UTF-8: %q", got[:min(len(got), 60)])
+
+	repo := &fakeInitialPromptRepo{}
+	inst.SetInitialPromptRepository(repo)
+
+	sentAt := time.Now()
+	inst.SetInitialPromptSentAt(sentAt)
+
+	if got := inst.GetInitialPromptSentAt(); !got.Equal(sentAt) {
+		t.Errorf("GetInitialPromptSentAt() = %v, want %v", got, sentAt)
+	}
+	if repo.calls != 1 {
+		t.Errorf("repo.calls = %d, want 1", repo.calls)
+	}
+	if repo.title != inst.Title {
+		t.Errorf("repo persisted title = %q, want %q", repo.title, inst.Title)
+	}
+	if !repo.sent.Equal(sentAt) {
+		t.Errorf("repo persisted time = %v, want %v", repo.sent, sentAt)
+	}
+}
+
+// Bug regression: runSessionDriverWithPrompt's startup selection logic must
+// treat a persisted InitialPromptSentAt as authoritative and skip re-sending
+// -- this is the exact restart scenario from the bug report (a completed
+// workflow session getting its prompt retyped after `make install-service`).
+func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{
+		Title:         "test-persisted-sent-at",
+		Path:          t.TempDir(),
+		Program:       "echo",
+		InitialPrompt: "review this PR",
+	})
+	if err != nil {
+		t.Fatalf("NewInstance: %v", err)
+	}
+
+	sentAt := time.Now().Add(-45 * time.Minute) // e.g. sent 45m ago, before a restart
+	inst.SetInitialPromptSentAt(sentAt)
+
+	// Mirrors runSessionDriverWithPrompt's own startup selection logic
+	// (session_driver.go) -- a fresh driver goroutine's local sentInitial
+	// always starts false for a non-empty InitialPrompt, so it must fall
+	// through to GetInitialPromptSentAt() rather than re-deriving via the
+	// output/JSONL heuristics.
+	sentInitial := inst.InitialPrompt == ""
+	var initialPromptSentAt time.Time
+	if !sentInitial {
+		if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+			sentInitial = true
+			initialPromptSentAt = persisted
+		}
+	}
+
+	if !sentInitial {
+		t.Fatal("sentInitial = false, want true (persisted InitialPromptSentAt should short-circuit the heuristics)")
+	}
+	if !initialPromptSentAt.Equal(sentAt) {
+		t.Errorf("initialPromptSentAt = %v, want the persisted %v", initialPromptSentAt, sentAt)
 	}
 }
 
@@ -902,6 +963,17 @@ func TestScanTerminalForPRURL(t *testing.T) {
 // waits 6 poll ticks (double Phase 0's original 3-tick reproduction window),
 // and asserts SendKeys("1\n") never exceeds maxDialogAnswerAttempts — the
 // shared body of the stuck-buffer and growing-buffer regression tests below.
+// shrinkDriverTiming makes driver goroutines started after this call tick fast
+// so tests observe real poll/ready-timeout behaviour in milliseconds. Callers
+// are non-parallel (they use t.Setenv), so no other test is mid-start.
+func shrinkDriverTiming(t *testing.T) driverTiming {
+	t.Helper()
+	fast := &driverTiming{pollInterval: 50 * time.Millisecond, readyTimeout: 500 * time.Millisecond}
+	testDriverTiming.Store(fast)
+	t.Cleanup(func() { testDriverTiming.Store(nil) })
+	return *fast
+}
+
 func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDialogProcessManager, logMsg string) {
 	t.Helper()
 	inst := &Instance{
@@ -912,8 +984,16 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	}
 	inst.started.Store(true)
 
+	timing := shrinkDriverTiming(t)
 	StartSessionDriver(inst, "/tmp")
-	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
+	// Wait for the 6 poll ticks themselves rather than a fixed sleep, so a starved
+	// scheduler cannot let the bound pass vacuously with fewer ticks than intended.
+	// contentCalls also counts non-tick previews, so also require 6 poll intervals of wall time.
+	started := time.Now()
+	wait.RequireEventually(t, func() bool {
+		return fakePM.contentCalls.Load() >= 6 && time.Since(started) >= timing.pollInterval*6
+	},
+		timing.pollInterval*6+10*time.Second, 5*time.Millisecond, "driver never reached 6 poll ticks")
 
 	count := fakePM.sendKeysCount.Load()
 	t.Logf(logMsg, count)
@@ -1280,6 +1360,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 
 	// startSessionDriverForTest exists because StartSessionDriver always
 	// resolves RetryPolicy fresh from config — see its doc comment for why.
+	timing := shrinkDriverTiming(t)
 	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
 	defer StopSessionDriver(inst)
 
@@ -1288,7 +1369,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// `continue`. It only fires via the timedOut fallback once
 	// driverReadyTimeout elapses; the 3x margin absorbs scheduler contention
 	// under -race (confirmed flaky at tighter budgets).
-	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	deadline := time.After(3*timing.readyTimeout + timing.pollInterval*3 + time.Second)
 	waitForSendKeysCountAbove(t, fakePM, maxDialogAnswerAttempts, deadline,
 		"SendKeys count never exceeded the dialog-answer cap — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)")
 }
@@ -1344,7 +1425,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	fakePM := &stuckDialogProcessManager{}
+	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
@@ -1357,7 +1438,12 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
-	time.Sleep(10 * time.Millisecond)
+
+	select {
+	case <-fakePM.pollEntered:
+	case <-time.After(driverPollInterval + 5*time.Second):
+		t.Fatal("driver never entered a poll")
+	}
 
 	stopSessionDriverConcurrently(t, inst)
 
@@ -1367,8 +1453,9 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	// A StartSessionDriver call arriving after Destroy() must be refused —
 	// driverDestroyed (set by StopSessionDriver) must permanently block it.
+	// A refused start returns synchronously without spawning; if it did spawn,
+	// the deferred goleak.VerifyNone below catches the leaked goroutine.
 	StartSessionDriver(inst, t.TempDir())
-	time.Sleep(20 * time.Millisecond)
 	if inst.driverRunning.Load() {
 		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
 	}
@@ -1478,4 +1565,121 @@ func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 	if gh.PRURL == "" {
 		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished after the raw write)")
 	}
+}
+
+// If this fails, the pane kill that archiving performs arrives here looking
+// like a crash and the driver restarts the retired session (ADR-001,
+// superseded-rework-session-retirement). The guard is at handleDriverFailure's
+// entry, not inside restartForRetry, which is also manual RetryNow's choke
+// point. The archived row uses "tmux_exited" inside restartGraceWindow — the
+// arm that actually spawns a process.
+func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+
+	t.Run("archived_restart_grace_is_not_restarted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-retry-test", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if got := inst.Snapshot().Status; got != Stopped {
+			t.Errorf("Status = %v, want Stopped (an archived session must not be marked PermanentlyFailed either)", got)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected no retry to be armed for an archived session")
+		}
+	})
+
+	t.Run("not_archived_still_schedules_a_retry", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-scheduled", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 0
+		inst.RetryMaxAttempts = 3
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}, InitialDelay: time.Second, MaxDelay: time.Minute}
+		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's failure must still arm a scheduled retry")
+		}
+	})
+
+	t.Run("not_archived_still_marks_permanently_failed_when_exhausted", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-retry-exhausted", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.RetryAttempt = 1
+		inst.RetryMaxAttempts = 1 // already at cap
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
+		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if got := inst.Snapshot().Status; got != PermanentlyFailed {
+			t.Errorf("control: Status = %v, want PermanentlyFailed for an exhausted live session", got)
+		}
+	})
+}
+
+// TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived
+// covers the other automated entry point into restartForRetry: a backoff-
+// scheduled retry armed *before* the archive landed must be dropped rather
+// than fired when its deadline arrives.
+func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(t *testing.T) {
+	t.Parallel()
+
+	t.Run("archived_pending_retry_is_dropped", func(t *testing.T) {
+		t.Parallel()
+		archivedAt := time.Now()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "archived-pending-retry", Status: Stopped, ArchivedAt: &archivedAt}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if shouldContinue || !shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (false, true)", shouldContinue, shouldReturn)
+		}
+		if mock.startCalls != 0 {
+			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
+		}
+		if inst.IsRetryPending() {
+			t.Error("expected the scheduled retry to be cleared for an archived session")
+		}
+	})
+
+	t.Run("not_archived_pending_but_not_elapsed_keeps_ticking", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockTmuxManager{}
+		inst := &Instance{Title: "live-pending-retry", Status: Stopped}
+		inst.processManager = NewTmuxBackend(mock)
+		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
+
+		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
+
+		if !shouldContinue || shouldReturn {
+			t.Errorf("got (shouldContinue, shouldReturn) = (%v, %v), want (true, false)", shouldContinue, shouldReturn)
+		}
+		if !inst.IsRetryPending() {
+			t.Error("control: a live session's not-yet-elapsed retry must stay pending")
+		}
+	})
 }

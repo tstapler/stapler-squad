@@ -12,11 +12,17 @@ export function truncateMiddle(name: string, maxLen: number): string {
     return name.slice(0, maxLen - 1) + "…";
   }
 
-  // Find the extension.
+  // Find the extension. Only treat a trailing dot as a real filename extension
+  // when nothing after it is a further path segment — a genuine extension like
+  // ".verylongext" has no "/" after the dot, no matter how long it is, but a
+  // dotted path segment (e.g. "github.com/some-org/repo-name") always does.
+  // Treating that whole tail as a preserved "suffix" starves `keep`'s head/tail
+  // budget and forces the right-truncation fallback below, which drops the most
+  // identifying trailing path segment instead of truncating the middle.
   const dotIdx = name.lastIndexOf(".");
   let suffix: string;
   let base: string;
-  if (dotIdx > 0) {
+  if (dotIdx > 0 && !name.slice(dotIdx).includes("/")) {
     suffix = name.slice(dotIdx); // e.g. ".tsx"
     base = name.slice(0, dotIdx);
   } else {

@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
   heading,
@@ -26,6 +26,11 @@ import {
   actions,
 } from "./GlobalDefaultsForm.css";
 
+// Mirrors config.AutonomousMaxTurnsOrDefault's [1, 200] bound; the server re-clamps regardless.
+function clampAutonomousMaxTurns(raw: string): number {
+  return Math.min(200, Math.max(1, parseInt(raw, 10) || 1));
+}
+
 export function GlobalDefaultsForm() {
   const [program, setProgram] = useState("");
   const [oneOffBaseDir, setOneOffBaseDir] = useState("");
@@ -34,7 +39,9 @@ export function GlobalDefaultsForm() {
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
-  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(3);
+  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(0); // set from the server-resolved default on load
+  // String draft so clearing/retyping the field isn't rewritten mid-edit; clamped on blur and save.
+  const [autonomousMaxTurns, setAutonomousMaxTurns] = useState(""); // set from the server-resolved default on load
   const [maxConcurrentBacklogWorkItems, setMaxConcurrentBacklogWorkItems] = useState(2);
   const [staleSessionThresholdMinutes, setStaleSessionThresholdMinutes] = useState(30);
   const [staleSessionNotifyEnabled, setStaleSessionNotifyEnabled] = useState(true);
@@ -58,7 +65,8 @@ export function GlobalDefaultsForm() {
         setNewProjectBaseDir(defaults.newProjectBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
-        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations || 3);
+        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations);
+        setAutonomousMaxTurns(String(defaults.autonomousMaxTurns));
         setMaxConcurrentBacklogWorkItems(defaults.maxConcurrentBacklogWorkItems || 2);
         setStaleSessionThresholdMinutes(defaults.staleSessionThresholdMinutes || 30);
         setStaleSessionNotifyEnabled(defaults.staleSessionNotifyEnabled);
@@ -76,7 +84,7 @@ export function GlobalDefaultsForm() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadDefaults();
   }, [loadDefaults]);
@@ -101,6 +109,7 @@ export function GlobalDefaultsForm() {
         envVars: envVarsMap,
         cliFlags,
         maxAutoReworkIterations,
+        autonomousMaxTurns: clampAutonomousMaxTurns(autonomousMaxTurns),
         maxConcurrentBacklogWorkItems,
         staleSessionThresholdMinutes,
         staleSessionNotifyEnabled,
@@ -192,13 +201,11 @@ export function GlobalDefaultsForm() {
           <label className={labelClass} htmlFor="global-one-off-base-dir">
             One-off Session Directory
           </label>
-          <input
+          <RepoPathInput
             id="global-one-off-base-dir"
-            type="text"
-            className={input}
             placeholder="~/oneoff"
             value={oneOffBaseDir}
-            onChange={(e) => setOneOffBaseDir(e.target.value)}
+            onChange={setOneOffBaseDir}
           />
         </div>
 
@@ -207,13 +214,11 @@ export function GlobalDefaultsForm() {
           <label className={labelClass} htmlFor="global-new-project-base-dir">
             New Project Base Directory
           </label>
-          <input
+          <RepoPathInput
             id="global-new-project-base-dir"
-            type="text"
-            className={input}
             placeholder="~/Projects"
             value={newProjectBaseDir}
-            onChange={(e) => setNewProjectBaseDir(e.target.value)}
+            onChange={setNewProjectBaseDir}
           />
         </div>
 
@@ -229,7 +234,7 @@ export function GlobalDefaultsForm() {
                   className={tagRemove}
                   onClick={() => handleRemoveTag(t)}
                   aria-label={`Remove tag ${t}`}
-                >
+                >{/* analytics-exempt */}
                   x
                 </button>
               </span>
@@ -248,7 +253,7 @@ export function GlobalDefaultsForm() {
               type="button"
               className="btn btn-secondary"
               onClick={handleAddTag}
-            >
+            >{/* analytics-exempt */}
               Add
             </button>
           </div>
@@ -281,7 +286,7 @@ export function GlobalDefaultsForm() {
                   className={deleteBtn}
                   onClick={() => handleRemoveEnvVar(i)}
                   aria-label="Remove environment variable"
-                >
+                >{/* analytics-exempt */}
                   Delete
                 </button>
               </div>
@@ -291,7 +296,7 @@ export function GlobalDefaultsForm() {
             type="button"
             className="btn btn-secondary"
             onClick={handleAddEnvVar}
-          >
+          >{/* analytics-exempt */}
             Add Variable
           </button>
         </div>
@@ -329,6 +334,29 @@ export function GlobalDefaultsForm() {
           <p className={hint}>
             How many times a backlog item can be auto-reopened for rework after a failed
             review before it&apos;s left in review for manual action.
+          </p>
+        </div>
+
+        {/* Max Autonomous Session Turns */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-autonomous-max-turns">
+            Max Autonomous Session Turns
+          </label>
+          <input
+            id="global-autonomous-max-turns"
+            type="number"
+            min={1}
+            max={200}
+            className={input}
+            inputMode="numeric"
+            aria-describedby="global-autonomous-max-turns-hint"
+            value={autonomousMaxTurns}
+            onChange={(e) => setAutonomousMaxTurns(e.target.value)}
+            onBlur={() => setAutonomousMaxTurns(String(clampAutonomousMaxTurns(autonomousMaxTurns)))}
+          />
+          <p id="global-autonomous-max-turns-hint" className={hint}>
+            How many turns a single autonomous session may run before it stops. Default 30,
+            maximum 200. Too low cuts work off mid-task; too high risks runaway cost.
           </p>
         </div>
 
@@ -402,7 +430,7 @@ export function GlobalDefaultsForm() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving..." : "Save"}
           </button>
         </div>

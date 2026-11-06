@@ -6,6 +6,8 @@ module.exports = {
       url: [
         'http://localhost:8543',
         'http://localhost:8543/review-queue',
+        // Nested route: guards deep-link loading of the SPA shell
+        'http://localhost:8543/settings/jules',
       ],
       numberOfRuns: 1,
       settings: {

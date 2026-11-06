@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestPrepareSnapshotContent is the direct unit test for the transform at the
@@ -108,7 +107,7 @@ func (f fakeCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
 // cursor lands one row/column off, which is exactly the kind of off-by-one
 // a compile-time type can't catch.
 func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *testing.T) {
-	got := withCursorSync("content", fakeCursorPositioner{x: 4, y: 9})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{x: 4, y: 9})
 	want := "content\x1b[10;5H"
 	if got != want {
 		t.Errorf("withCursorSync() = %q, want %q", got, want)
@@ -120,14 +119,15 @@ func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *te
 // corrupt or drop the snapshot, just skip the cosmetic cursor-sync suffix.
 func TestWithCursorSync_should_LeaveContentUnchanged_When_PositionLookupFails(t *testing.T) {
 	wantErr := errors.New("cursor lookup failed")
-	got := withCursorSync("content", fakeCursorPositioner{err: wantErr})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{err: wantErr})
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged on lookup error", got)
 	}
 }
 
-// slowCursorPositioner blocks for longer than withCursorSyncTimeout before
-// returning, simulating a degraded GetPaneCursorPosition (its own control-mode
+// slowCursorPositioner blocks until release is closed (the test closes it only
+// after withCursorSync has already returned, so the lookup outlasts
+// withCursorSyncTimeout), simulating a degraded GetPaneCursorPosition (its own control-mode
 // path has no timeout shorter than 3s, and its subprocess fallback has none
 // at all beyond a 5s exec-gate wait — see withCursorSyncTimeout's doc comment).
 // calledCh, if non-nil, is closed once GetPaneCursorPosition actually
@@ -135,12 +135,12 @@ func TestWithCursorSync_should_LeaveContentUnchanged_When_PositionLookupFails(t 
 // goroutine to finish before the test itself returns, so it can never bleed
 // into a later test's goleak.VerifyNone() check.
 type slowCursorPositioner struct {
-	delay    time.Duration
+	release  <-chan struct{}
 	calledCh chan struct{}
 }
 
 func (s slowCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
-	time.Sleep(s.delay)
+	<-s.release
 	if s.calledCh != nil {
 		close(s.calledCh)
 	}
@@ -159,22 +159,30 @@ func (s slowCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
 // escape for a position that arrived too late to be worth appending.
 func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *testing.T) {
 	calledCh := make(chan struct{})
-	// Delay only modestly past the timeout — long enough to prove
-	// withCursorSync doesn't wait for it, short enough that this test's own
-	// cleanup wait below (for the abandoned goroutine) doesn't slow the
-	// suite down.
-	slow := slowCursorPositioner{delay: withCursorSyncTimeout + 50*time.Millisecond, calledCh: calledCh}
+	// The lookup stays blocked until released below, so it can only
+	// return via withCursorSync's timeout branch.
+	release := make(chan struct{})
+	slow := slowCursorPositioner{release: release, calledCh: calledCh}
+	clock := newRecordingClock()
 
-	start := time.Now()
-	got := withCursorSync("content", slow)
-	elapsed := time.Since(start)
+	result := make(chan string, 1)
+	go func() { result <- withCursorSync(clock, "content", slow) }()
+	armed := <-clock.armed
+	if armed.d != withCursorSyncTimeout {
+		t.Fatalf("withCursorSync armed a %s timer, want withCursorSyncTimeout (%s)", armed.d, withCursorSyncTimeout)
+	}
+	select {
+	case got := <-result:
+		t.Fatalf("withCursorSync returned %q before the timeout elapsed", got)
+	default:
+	}
+	clock.Advance(withCursorSyncTimeout)
+	got := <-result
 
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged when the lookup times out", got)
 	}
-	if elapsed >= slow.delay {
-		t.Errorf("withCursorSync() took %s, want it bounded by withCursorSyncTimeout (%s), well under the %s lookup delay", elapsed, withCursorSyncTimeout, slow.delay)
-	}
+	close(release)
 
 	// Let the abandoned goroutine actually finish before this test returns —
 	// withCursorSync's timeout branch deliberately doesn't wait for it (that's

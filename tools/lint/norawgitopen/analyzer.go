@@ -1,6 +1,6 @@
 // Package norawgitopen defines a go/analysis pass that detects direct calls to
 // go-git's git.PlainOpen or git.PlainOpenWithOptions outside of
-// session/git.OpenRepo, the approved wrapper.
+// session/git/native.OpenRepo (or its session/git.OpenRepo alias), the approved wrapper.
 //
 // Background: neither call enables EnableDotGitCommonDir by default. Without it,
 // go-git silently resolves objects/refs for a linked worktree (`git worktree add`)
@@ -35,7 +35,7 @@ var Analyzer = &analysis.Analyzer{
 // git.PlainOpen/PlainOpenWithOptions directly because they independently
 // reproduce the commondir-resolution logic by hand (gogitstore does this
 // deliberately, to share a SharedObjectStore across worktrees — see its Open
-// doc comment). session/git itself is deliberately NOT exempted here: it's
+// doc comment). session/git and session/git/native are deliberately NOT exempted here: native is
 // where OpenRepo lives, and it's also where every original unfiltered call
 // site lived — a package-wide exemption there would mean this analyzer could
 // never re-catch the exact bug it exists to prevent. OpenRepo's own call is
@@ -68,7 +68,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 		pass.Reportf(call.Pos(),
-			"direct call to git.%s — use session/git.OpenRepo() so EnableDotGitCommonDir is always set for correct linked-worktree resolution; add //nolint:norawgitopen with a justification if this genuinely cannot use the wrapper",
+			"direct call to git.%s — use session/git/native.OpenRepo (or its session/git.OpenRepo alias) so EnableDotGitCommonDir is always set for correct linked-worktree resolution; add //nolint:norawgitopen with a justification if this genuinely cannot use the wrapper",
 			name)
 	})
 

@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // installHooksSubprocessTimeout bounds each `ssq-hooks install <target>`
@@ -178,8 +179,13 @@ func (s *SessionService) InstallHooks(
 			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install agy hook: %w (%s)", err, strings.TrimSpace(string(output))))
 			}
-			log.Info("[InstallHooks] installed Antigravity CLI rules hook", "bin", bin)
-			messages = append(messages, "Antigravity CLI rule enforcement hook installed.")
+			if st, ok := s.storage.(*session.Storage); ok {
+				if err := ExportAntigravityRulesFromDB(ctx, st); err != nil {
+					log.Warn("[InstallHooks] failed to export rules to Antigravity", "err", err)
+				}
+			}
+			log.Info("[InstallHooks] installed Antigravity CLI rules hook and exported permissions", "bin", bin)
+			messages = append(messages, "Antigravity CLI rule enforcement hook and permission definitions installed.")
 		} else {
 			messages = append(messages, "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install agy`.")
 		}

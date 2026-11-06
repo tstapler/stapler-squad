@@ -2,6 +2,9 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItem } from "./StuckItem";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
@@ -21,19 +24,27 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
 
 describe("StuckItem", () => {
   describe("StuckItem_should_exposeButtonRoleAndAriaExpanded_When_Toggled", () => {
-    it("renders role=button with aria-expanded=false when collapsed", () => {
+    it("exposes one real expand button with aria-expanded=false and no role=button card", () => {
       render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
       const card = screen.getByTestId("stuck-item");
-      expect(card).toHaveAttribute("role", "button");
-      expect(card).toHaveAttribute("aria-expanded", "false");
+      expect(card).not.toHaveAttribute("role");
+      expect(card).not.toHaveAttribute("tabindex");
+      const toggle = screen.getByTestId("stuck-item-toggle");
+      expect(toggle.tagName).toBe("BUTTON");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
     });
 
-    it("calls onToggleExpand on Enter and Space", () => {
+    it("does not nest a control inside the expand button", () => {
+      render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} onSnooze={jest.fn()} />);
+      expect(screen.getByTestId("stuck-item-toggle").querySelector("button, a, input, [tabindex]")).toBeNull();
+    });
+
+    it("calls onToggleExpand once per click on the card or its toggle", () => {
       const onToggleExpand = jest.fn();
       render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={onToggleExpand} />);
-      const card = screen.getByTestId("stuck-item");
-      fireEvent.keyDown(card, { key: "Enter" });
-      fireEvent.keyDown(card, { key: " " });
+      fireEvent.click(screen.getByTestId("stuck-item-toggle"));
+      expect(onToggleExpand).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId("stuck-item"));
       expect(onToggleExpand).toHaveBeenCalledTimes(2);
     });
 
@@ -137,9 +148,9 @@ describe("StuckItem", () => {
       const { rerender } = render(
         <StuckItem item={makeItem()} isExpanded={true} onToggleExpand={onToggleExpand} />
       );
-      const card = screen.getByTestId("stuck-item");
+      const toggle = screen.getByTestId("stuck-item-toggle");
       rerender(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={onToggleExpand} />);
-      expect(document.activeElement).toBe(card);
+      expect(document.activeElement).toBe(toggle);
     });
   });
 
@@ -423,6 +434,44 @@ describe("StuckItem", () => {
     it("does not scroll when focusItemId is not provided", () => {
       render(<StuckItem item={makeItem()} isExpanded={true} onToggleExpand={jest.fn()} />);
       expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("StuckItem_should_offerClaimOverrideWithReasonForm_When_BlockedByClaim", () => {
+    const claimItem = () => makeItem({ reason: StuckReason.BLOCKED_BY_CLAIM, prNumber: 0, prUrl: "" });
+
+    it("hides the control for other reasons or when no handler is given", () => {
+      const { rerender } = render(
+        <StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={jest.fn()} />
+      );
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+      rerender(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+    });
+
+    it("requires a >=5 character reason and calls the override without toggling the card", async () => {
+      const onOverrideClaimBlock = jest.fn().mockResolvedValue(undefined);
+      const onToggleExpand = jest.fn();
+      const item = claimItem();
+      render(<StuckItem item={item} isExpanded={false} onToggleExpand={onToggleExpand} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      const confirm = screen.getByTestId("claim-override-confirm");
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "abc" } });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(confirm);
+      await waitFor(() => expect(onOverrideClaimBlock).toHaveBeenCalledWith(item.itemId, "host is retired"));
+      expect(onToggleExpand).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByTestId("claim-override-form")).toBeNull());
+    });
+
+    it("shows the server error on the form when the override rejects", async () => {
+      const onOverrideClaimBlock = jest.fn().mockRejectedValue(new Error("no free work slot"));
+      render(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(screen.getByTestId("claim-override-confirm"));
+      await waitFor(() => expect(screen.getByTestId("claim-override-error")).toHaveTextContent("no free work slot"));
     });
   });
 });

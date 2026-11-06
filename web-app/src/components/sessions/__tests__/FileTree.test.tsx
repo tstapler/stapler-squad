@@ -16,12 +16,14 @@ import React from "react";
 import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import {
   FileTree,
+  TreeRow,
   buildTreeData,
   sortTreeData,
   filterChangedTreeData,
   buildChangedAncestorPrefixes,
 } from "../FileTree";
 import type { TreeNode } from "../FileTree";
+import { defined } from "@/lib/utils/defined";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -197,7 +199,7 @@ describe("buildTreeData", () => {
     const contents = new Map([["src", [child]]]);
     const result = buildTreeData([dir], contents);
     expect(result[0].children).toHaveLength(1);
-    expect(result[0].children![0].id).toBe("src/main.go");
+    expect(defined(result[0].children)[0].id).toBe("src/main.go");
   });
 
   it("recursively attaches nested loaded children", () => {
@@ -211,10 +213,10 @@ describe("buildTreeData", () => {
     const result = buildTreeData([root], contents);
     const srcNode = result[0];
     expect(srcNode.children).toHaveLength(1);
-    const subNode = srcNode.children![0];
+    const subNode = defined(srcNode.children)[0];
     expect(subNode.id).toBe("src/components");
     expect(subNode.children).toHaveLength(1);
-    expect(subNode.children![0].id).toBe("src/components/Button.tsx");
+    expect(defined(subNode.children)[0].id).toBe("src/components/Button.tsx");
   });
 
   it("mixes loaded and unloaded dirs correctly", () => {
@@ -262,7 +264,7 @@ describe("childrenAccessor logic", () => {
     const child = makeFileNode("src/main.go", false);
     const result = accessor(makeFileNode("src", true, [child]));
     expect(result).toHaveLength(1);
-    expect(result![0].id).toBe("src/main.go");
+    expect(defined(result)[0].id).toBe("src/main.go");
   });
 
   it("[] from accessor means isLeaf=false (Array.isArray([]) is true)", () => {
@@ -296,7 +298,8 @@ describe("FileTree – root loading", () => {
         "test-session-uuid",
         ".",
         false,
-        "http://localhost:8543"
+        "http://localhost:8543",
+        expect.any(AbortSignal)
       );
     });
   });
@@ -314,8 +317,35 @@ describe("FileTree – root loading", () => {
     await waitFor(() => {
       const srcNode = capturedData.find((n) => n.id === "src");
       expect(srcNode).toBeDefined();
-      expect(srcNode!.isDir).toBe(true);
+      expect(defined(srcNode).isDir).toBe(true);
     });
+  });
+});
+
+describe("FileTree – root wait states", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedData = [];
+  });
+
+  it("fileTree_should_ShowLoadingOnlyAfter150ms_And_FailureWithRetry_When_RootLoadSlowThenFails", async () => {
+    jest.useFakeTimers();
+    try {
+      let reject: (e: Error) => void = () => undefined;
+      mockFetchDirectoryFiles.mockReturnValueOnce(new Promise((_, r) => { reject = r; }));
+      const { queryByText, findByText, getByRole } = render(<FileTree {...defaultProps} />);
+      act(() => { jest.advanceTimersByTime(149); });
+      expect(queryByText("Loading files...")).toBeNull();
+      act(() => { jest.advanceTimersByTime(1); });
+      expect(queryByText("Loading files...")?.closest("[role=status]")).not.toHaveAttribute("aria-busy");
+      await act(async () => { reject(new Error("boom /secret")); });
+      expect(await findByText("Could not load files: network error")).toBeTruthy();
+      mockFetchDirectoryFiles.mockResolvedValueOnce(makeFileResponse([{ path: "src", isDir: true }]));
+      await act(async () => { fireEvent.click(getByRole("button", { name: "Retry" })); });
+      expect(queryByText(/Could not load files/)).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -352,7 +382,7 @@ describe("FileTree – handleToggle loads directories", () => {
 
     // Simulate user toggling "src" directory.
     await act(async () => {
-      capturedOnToggle!("src");
+      defined(capturedOnToggle)("src");
     });
 
     await waitFor(() => {
@@ -360,7 +390,8 @@ describe("FileTree – handleToggle loads directories", () => {
         "test-session-uuid",
         "src",
         false,
-        "http://localhost:8543"
+        "http://localhost:8543",
+        expect.any(AbortSignal)
       );
     });
   });
@@ -380,11 +411,11 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitForTreeWithNode("src");
 
     // First toggle loads src.
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(1));
 
     // Second toggle should NOT reload (already in dirContents).
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     expect(srcLoadCount).toBe(1);
   });
 
@@ -404,11 +435,11 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitForTreeWithNode("src");
 
     // First toggle — fails.
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(1));
 
     // Second toggle — should retry because errorPaths contains "src".
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(2));
   });
 
@@ -424,7 +455,7 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitFor(() => expect(capturedOnToggle).toBeDefined());
 
     // Toggle a file node — should not trigger any directory fetch.
-    await act(async () => { capturedOnToggle!("README.md"); });
+    await act(async () => { defined(capturedOnToggle)("README.md"); });
 
     // No fetch beyond root should have happened.
     expect(nonDirLoadCount).toBe(0);
@@ -455,10 +486,10 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(dirData, { isOpen: false });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.toggle).toHaveBeenCalledTimes(1);
     expect(mockNode.activate).not.toHaveBeenCalled();
@@ -471,10 +502,10 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(fileData);
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.activate).toHaveBeenCalledTimes(1);
     expect(mockNode.toggle).not.toHaveBeenCalled();
@@ -487,13 +518,88 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(dirData, { isOpen: true });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.toggle).toHaveBeenCalledTimes(1);
     expect(mockNode.activate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TreeRow – roving tabindex (modal-focus-trap AC5 follow-up, backlog item
+// 4a1f73c4-5558-41f8-9860-8508fb874fcc)
+// ---------------------------------------------------------------------------
+
+describe("TreeRow – roving tabindex", () => {
+  function renderRow(isFocused: boolean) {
+    const node = { isFocused, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container } = render(
+      <TreeRow node={node} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    return { container, node };
+  }
+
+  it("a focused row reports tabindex 0", () => {
+    const { container } = renderRow(true);
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("an unfocused row reports tabindex -1", () => {
+    const { container } = renderRow(false);
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("re-rendering after the focused node changes (e.g. a directory expand/collapse) recomputes tabindex from node.isFocused rather than caching the old value", () => {
+    const focusedNode = { isFocused: true, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container, rerender } = render(
+      <TreeRow node={focusedNode} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("0");
+
+    const unfocusedNode = { isFocused: false, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    rerender(
+      <TreeRow node={unfocusedNode} innerRef={() => {}} attrs={{}}>
+        <span>row content</span>
+      </TreeRow>
+    );
+    expect(container.querySelector("[tabindex]")?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("clicking the row delegates to node.handleClick", () => {
+    const { container, node } = renderRow(true);
+    fireEvent.click(defined(container.querySelector("[tabindex]")));
+    expect(node.handleClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a focus event from bubbling to an ancestor listener", () => {
+    const parentOnFocus = jest.fn();
+    const node = { isFocused: true, handleClick: jest.fn() } as unknown as Parameters<
+      typeof TreeRow
+    >[0]["node"];
+    const { container } = render(
+      <div onFocus={parentOnFocus}>
+        <TreeRow node={node} innerRef={() => {}} attrs={{}}>
+          <span>row content</span>
+        </TreeRow>
+      </div>
+    );
+
+    fireEvent.focus(defined(container.querySelector("[tabindex]")));
+
+    expect(parentOnFocus).not.toHaveBeenCalled();
   });
 });
 
@@ -526,7 +632,7 @@ describe("FileTree – keyboard navigation", () => {
       fireEvent.keyDown(div, { key, ...modifiers });
     }
 
-    return { fireKey };
+    return { fireKey, div };
   }
 
   beforeEach(() => {
@@ -563,6 +669,75 @@ describe("FileTree – keyboard navigation", () => {
     fireKey("k");
 
     expect(api.focus).toHaveBeenCalledWith(nodeA.id);
+  });
+
+  it("Tab key moves focus to the next visible node when not on the last row", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeA,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("Tab");
+
+    expect(api.focus).toHaveBeenCalledWith(nodeB.id);
+  });
+
+  it("Shift+Tab key moves focus to the previous visible node when not on the first row", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeB,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("Tab", { shiftKey: true });
+
+    expect(api.focus).toHaveBeenCalledWith(nodeA.id);
+  });
+
+  // Boundary case (modal-focus-trap AC5 follow-up, backlog item
+  // 4a1f73c4-5558-41f8-9860-8508fb874fcc): on the last/first row, Tab hands
+  // real DOM focus to the tree's own outer container (not tree.focus(), and
+  // not react-arborist's own document-wide walk) rather than getting stuck.
+  // Moving focus to that container — an ANCESTOR of react-arborist's
+  // internal row container — makes react-arborist's own onBlur see a
+  // relatedTarget it doesn't contain and clear its internal focusedNode, so
+  // the very next Tab/Shift+Tab is a plain, unintercepted browser tab move
+  // (handleTreeKeyDown no-ops with no focusedNode) — letting focus leave the
+  // widget on the following press whether or not a surrounding modal's
+  // focus trap is present (verified live via accessibility.spec.ts's
+  // BacklogFileBrowserModal Tab-loop tests; FilesTab has no trap at all, so
+  // this fallback is what lets Tab leave it normally).
+  it("Tab key on the last visible row moves DOM focus to the tree's own container instead of getting stuck", async () => {
+    const soleNode = makeMockNode(makeFileNode("a.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [soleNode],
+      focusedNode: soleNode,
+    });
+
+    const { fireKey, div } = await setupKeyboard(api);
+    fireKey("Tab");
+
+    expect(api.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(div);
+  });
+
+  it("Shift+Tab key on the first visible row moves DOM focus to the tree's own container instead of getting stuck", async () => {
+    const soleNode = makeMockNode(makeFileNode("a.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [soleNode],
+      focusedNode: soleNode,
+    });
+
+    const { fireKey, div } = await setupKeyboard(api);
+    fireKey("Tab", { shiftKey: true });
+
+    expect(api.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(div);
   });
 
   it("l key on directory opens it", async () => {
@@ -673,7 +848,7 @@ describe("sortTreeData", () => {
     const child1 = makeFileNode("src/a.go", false);
     const dir = makeFileNode("src", true, [child2, child1]);
     const result = sortTreeData([dir], "name");
-    expect(result[0].children!.map((c) => c.id)).toEqual(["src/a.go", "src/b.go"]);
+    expect(defined(result[0].children).map((c) => c.id)).toEqual(["src/a.go", "src/b.go"]);
   });
 });
 
@@ -710,7 +885,7 @@ describe("filterChangedTreeData", () => {
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("src");
     expect(result[0].children).toHaveLength(1);
-    expect(result[0].children![0].id).toBe("src/a.go");
+    expect(defined(result[0].children)[0].id).toBe("src/a.go");
   });
 
   it("keeps an ancestor directory visible even when it hasn't been loaded/expanded", () => {
@@ -759,7 +934,7 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData);
 
     const { getByTitle } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
     expect(getByTitle("+3 -1")).toBeTruthy();
@@ -771,7 +946,7 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData);
 
     const { queryByTitle } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
     expect(queryByTitle(/^\+\d+ -\d+$/)).toBeNull();
@@ -783,9 +958,9 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData, { level: 2 });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
-    const row = container.querySelector('[role="treeitem"]')!;
+    const row = defined(container.querySelector('[role="treeitem"]'));
     expect(row).not.toBeNull();
     expect(row.getAttribute("aria-level")).toBe("3");
     expect(row.getAttribute("aria-selected")).toBe("false");
@@ -797,16 +972,16 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const dirNode = makeMockNode(dirData, { isOpen: true });
 
     const { container: dirContainer } = render(
-      <>{capturedChildren!({ node: dirNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: dirNode, style: {} })}</>
     );
-    expect(dirContainer.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("true");
+    expect(defined(dirContainer.querySelector('[role="treeitem"]')).getAttribute("aria-expanded")).toBe("true");
 
     const fileData = makeFileNode("main.go", false);
     const fileNode = makeMockNode(fileData);
     const { container: fileContainer } = render(
-      <>{capturedChildren!({ node: fileNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: fileNode, style: {} })}</>
     );
-    expect(fileContainer.querySelector('[role="treeitem"]')!.hasAttribute("aria-expanded")).toBe(false);
+    expect(defined(fileContainer.querySelector('[role="treeitem"]')).hasAttribute("aria-expanded")).toBe(false);
   });
 });
 
@@ -832,10 +1007,37 @@ describe("FileTree – multi-session isolation", () => {
     render(<FileTree {...defaultProps} sessionId="session-b" sortBy="type" filterChangedOnly={true} />);
 
     await waitFor(() => {
-      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-a", ".", false, expect.any(String));
-      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-b", ".", false, expect.any(String));
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-a", ".", false, expect.any(String), expect.any(AbortSignal));
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-b", ".", false, expect.any(String), expect.any(AbortSignal));
     });
 
     unmountA();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1.6d: unmount cancels in-flight directory loads
+// ---------------------------------------------------------------------------
+
+describe("FileTree unmount cancellation", () => {
+  it("fileTree_should_AbortRootLoadAndStaySilent_When_UnmountedWithPendingListFiles", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    let resolve!: (v: unknown) => void;
+    mockFetchDirectoryFiles.mockReset();
+    mockFetchDirectoryFiles.mockReturnValue(new Promise((r) => { resolve = r; }));
+
+    const { unmount } = render(<FileTree {...defaultProps} />);
+    const signal = mockFetchDirectoryFiles.mock.calls[0][4] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    unmount();
+    expect(signal.aborted).toBe(true);
+
+    await act(async () => {
+      resolve(makeFileResponse([{ path: "a.go", isDir: false }]));
+      await Promise.resolve();
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

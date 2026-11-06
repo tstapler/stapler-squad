@@ -1,0 +1,15 @@
+{
+  "id": "session:unpin",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UnpinSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestPinSession_should_PersistPinnedTrue_When_RPCSucceeds",
+    "TestPinSession_should_ReturnNotFoundOrInvalid_When_IDBad"
+  ],
+  "lastModified": "2026-10-05T21:31:10.551579565-07:00"
+}

@@ -5,6 +5,9 @@ import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
 const sessionMonitorSpy = jest.fn((_props: unknown) => null);
 jest.mock("../SessionMonitor", () => ({ SessionMonitor: (props: unknown) => sessionMonitorSpy(props) }));
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
 
 beforeEach(() => {
   localStorage.clear();
@@ -31,6 +34,7 @@ function makeItem(linkedSessions: LinkedSession[], overrides: Partial<BacklogIte
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,

@@ -15,7 +15,7 @@ import (
 // two can't silently drift apart the way backlogExcludePatterns and .gitignore
 // did before this test existed. Patterns are compared with leading/trailing "/"
 // stripped, since the two files use slightly different (but equivalent) glob
-// forms for the same path (e.g. "web-app/.next/" here vs "/web-app/.next" in
+// forms for the same path (e.g. "web-app/.build/" here vs "/web-app/.build" in
 // .gitignore).
 //
 // This only checks the Go-slice -> .gitignore direction. The reverse (every
@@ -42,5 +42,21 @@ func TestScaffoldingExcludePatterns_MatchGitignore(t *testing.T) {
 	for _, p := range ScaffoldingExcludePatterns {
 		norm := strings.Trim(p, "/")
 		assert.True(t, lines[norm], "pattern %q (normalized %q) is in ScaffoldingExcludePatterns but not in .gitignore — add it so ignore rules match the shared exclude list", p, norm)
+	}
+}
+
+func TestScaffoldingPatternMatches_BunBuildScratch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		entry, pattern string
+		want           bool
+	}{
+		{"web-app/.out-tmp-ab12/index.html", "web-app/.out-tmp-*", true},
+		{"web-app/.build/stats.json", "web-app/.build/", true},
+		{"web-app/build/build.ts", "web-app/.build/", false},
+		{"web-app/build/build.ts", "web-app/.out-tmp-*", false},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, scaffoldingPatternMatches(c.entry, c.pattern), "%s vs %s", c.entry, c.pattern)
 	}
 }

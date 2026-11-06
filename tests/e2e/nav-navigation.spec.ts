@@ -8,8 +8,9 @@ const _features = [
 // Next.js's patched router, causing navigation to "/" instead of the target route.
 
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('nav-navigation', () => {
   test('nav-navigation > Up Next link navigates from sessions page', async ({ page }) => {
@@ -67,6 +68,7 @@ test.describe('nav-navigation', () => {
     await expect(link).toBeVisible({ timeout: 10000 });
     await link.click();
 
-    await expect(page).toHaveURL(/^\/?$|^\/?[?#]/, { timeout: 5000 });
+    // page.url() is absolute, so match the pathname, not the whole URL.
+    await expect(page).toHaveURL((url) => url.pathname === '/', { timeout: 5000 });
   });
 });

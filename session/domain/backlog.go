@@ -7,7 +7,47 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
+
+// TransitionDenial is the structured payload of a StuckReasonTransitionDenied
+// row, persisted in the row's context string so no schema change is needed.
+type TransitionDenial struct {
+	Caller, From, To, Reason string
+}
+
+const transitionDeniedPrefix = "transition denied: "
+
+// FormatTransitionDeniedContext renders d plus free-text detail as
+// "transition denied: caller=.. from=.. to=.. denied_reason=..; <detail>".
+func FormatTransitionDeniedContext(d TransitionDenial, detail string) string {
+	return fmt.Sprintf("%scaller=%s from=%s to=%s denied_reason=%s; %s", transitionDeniedPrefix, d.Caller, d.From, d.To, d.Reason, detail)
+}
+
+// ParseTransitionDeniedContext inverts FormatTransitionDeniedContext; ok is
+// false for any context it did not produce.
+func ParseTransitionDeniedContext(ctx string) (d TransitionDenial, ok bool) {
+	rest, found := strings.CutPrefix(ctx, transitionDeniedPrefix)
+	if !found {
+		return d, false
+	}
+	head, _, _ := strings.Cut(rest, ";")
+	for _, kv := range strings.Fields(head) {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "caller":
+			d.Caller = v
+		case "from":
+			d.From = v
+		case "to":
+			d.To = v
+		case "denied_reason":
+			d.Reason = v
+		}
+	}
+	return d, d.Caller != "" && d.From != "" && d.To != "" && d.Reason != ""
+}
 
 // BacklogStatus represents the lifecycle state of a backlog item. The type
 // is open, not a closed enum: the 9 constants below are its built-in subset,
@@ -205,7 +245,7 @@ const (
 	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
 	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
 	// already-active session with a PR-fix problem description
-	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// (SessionSteerer.SteerSessionGuarded) and the delivery itself failed —
 	// distinct from StuckReasonRespawnBlockedActive, which covers the
 	// degrade paths where a steer was never attempted at all (nil-safe
 	// SessionSteerer, session not live, or dedup/debounce suppression). See
@@ -228,6 +268,61 @@ const (
 	// (session/backlog_lifecycle_gates.go), mirroring
 	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
 	StuckReasonGateTimeout StuckReason = "gate_timeout"
+	// StuckReasonBlockedByClaim: DequeueNextQueuedItems skipped this item because
+	// a different host holds the cross-host claim for its ExternalURL
+	// (project_plans/cross-host-claim-dedup). Claims never expire, so a stale
+	// claim would otherwise starve the item silently; this makes the skip
+	// visible with an operator override (OverrideClaimBlock).
+	StuckReasonBlockedByClaim StuckReason = "blocked_by_claim"
+	// StuckReasonWorktreeInconsistent: the worktree consistency sweep flagged an
+	// inconsistency it declined to auto-repair. Dual-written alongside its
+	// notification when the session has a live linked BacklogItem.
+	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
+	// StuckReasonRepeatedNoopDispatch: an item with a PASS verdict, sitting in
+	// review/in_progress, has had N consecutive work sessions end with no new
+	// commits (session/stuck_decisions.go's isRepeatedNoopDispatch). Set by
+	// reconcileRepeatedNoopDispatch; while open, the dispatcher
+	// (BacklogService.spawnSessionAfterGates) refuses to spawn another work
+	// session so the loop cannot continue unattended. Resolved when the item
+	// leaves review/in_progress, a new commit lands, or the duplicate claim
+	// that usually explains it is confirmed/archived.
+	StuckReasonRepeatedNoopDispatch StuckReason = "repeated_noop_dispatch"
+	// StuckReasonMergedPRUnverified: a pr_pending item's PR is merged on GitHub,
+	// but ReconcilePRPending's ownership guard (session.prOwnership) found no
+	// recorded branch or tip commit matching the PR, so it refused the
+	// auto-done transition. Fails closed by design; this row exists so that
+	// refusal is visible and operator-resolvable (mark done) rather than a
+	// per-tick log line on an item that sits in pr_pending forever.
+	StuckReasonMergedPRUnverified StuckReason = "merged_pr_unverified"
+	// StuckReasonVerdictUndelivered: steerWorkSessionWithVerdict
+	// (server/services/backlog_service_verdict_steer.go) attempted to deliver a
+	// recorded review verdict to the item's live work session as a steer and
+	// could not — the work session never went idle within
+	// defaultVerdictSteerReadyTimeout, is a hidden/background session (read-only
+	// steer target), or the steer delivery itself errored. Before this reason
+	// existed, notifyVerdictSteerFailed only fired a one-shot WARNING
+	// notification with no durable record (confirmed live 2026-10-17: items
+	// 4666bc80, 1cfae441, and 6c24cbab all hit this path and aged out of
+	// NotificationHistoryStore's 7-day/500-row cap). Detection/visibility only,
+	// deliberately with no dedicated automated retry — mirrors
+	// StuckReasonSteerFailed's precedent for the structurally identical
+	// PR-fix-steer failure: force-writing to a busy/dead PTY is unsafe by the
+	// same invariant IsReadyForSteer/SteerSessionGuarded enforce everywhere
+	// else, and the work session always has a second delivery path (its own
+	// wait_for_backlog_event/ScheduleWakeup polling — the steer is an
+	// optimization on top of that, not the only way the verdict reaches it;
+	// see that file's header comment). Set by notifyVerdictSteerFailed,
+	// resolved by resolveVerdictUndeliveredLogged once a later steer succeeds,
+	// and anchored at BacklogStatusReview in selfHealStuck
+	// (session/backlog_lifecycle.go) as a backstop once the item leaves review
+	// for any other reason.
+	StuckReasonVerdictUndelivered StuckReason = "verdict_undelivered"
+	// StuckReasonTransitionDenied: an automated caller (today the dequeue
+	// claim) was denied by the workflow engine (graph or operator gate), which
+	// would otherwise only Warn on every sweep. The row's context carries
+	// structured caller/from/to/denied_reason (FormatTransitionDeniedContext);
+	// the same caller clears it on its next successful claim.
+	StuckReasonTransitionDenied StuckReason = "transition_denied"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -252,6 +347,12 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
 	StuckReasonGateTimeout,
+	StuckReasonBlockedByClaim,
+	StuckReasonWorktreeInconsistent,
+	StuckReasonRepeatedNoopDispatch,
+	StuckReasonMergedPRUnverified,
+	StuckReasonVerdictUndelivered,
+	StuckReasonTransitionDenied,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -263,7 +364,52 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
-		StuckReasonGateTimeout:
+		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch,
+		StuckReasonMergedPRUnverified, StuckReasonVerdictUndelivered, StuckReasonTransitionDenied:
+		return true
+	}
+	return false
+}
+
+// RequestScope is a validated string-backed enum identifying what a
+// GuidanceRequest is attached to — matching the house StuckReason/
+// BacklogStatus style. Determines the ownership check and delivery branch
+// (see GuidanceRequestDeliveryService).
+type RequestScope string
+
+const (
+	// RequestScopeBacklogItem: attached to a BacklogItem via item_id.
+	RequestScopeBacklogItem RequestScope = "backlog-item"
+	// RequestScopeSession: attached to a live/paused session via session_uuid.
+	RequestScopeSession RequestScope = "session"
+	// RequestScopeStandalone: not attached to anything; human-only surface.
+	RequestScopeStandalone RequestScope = "standalone"
+)
+
+// IsValid reports whether s is a known request scope value.
+func (s RequestScope) IsValid() bool {
+	switch s {
+	case RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone:
+		return true
+	}
+	return false
+}
+
+// QuestionType is a validated string-backed enum identifying a
+// GuidanceRequest's answer shape, driving which control the React component
+// renders.
+type QuestionType string
+
+const (
+	QuestionTypeYesNo          QuestionType = "yes-no"
+	QuestionTypeMultipleChoice QuestionType = "multiple-choice"
+	QuestionTypeShortAnswer    QuestionType = "short-answer"
+)
+
+// IsValid reports whether t is a known question type value.
+func (t QuestionType) IsValid() bool {
+	switch t {
+	case QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer:
 		return true
 	}
 	return false
@@ -524,10 +670,13 @@ var (
 	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
 	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
 	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrPlanArtifactsMissing         = errors.New("plan artifacts path is recorded but no longer exists on disk — re-run triage")
 	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
 	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
 	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
 	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
+	// ErrTransitionNotAllowed: the workflow engine's graph has no enabled edge for the requested transition.
+	ErrTransitionNotAllowed = errors.New("transition not allowed by the workflow graph")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -560,6 +709,13 @@ type BacklogItemTransitionInput struct {
 	// a batched query (see DequeueNextQueuedItems) rather than a per-item
 	// lookup.
 	HasUnresolvedBlockers bool
+	// PlanArtifactsPathMissing is true when PlanArtifactsPath is non-empty but
+	// the directory it names no longer exists on disk (e.g. a triage worktree
+	// was cleaned up after the item went terminal and then got reopened). This
+	// package does no I/O itself (see the package doc comment) — the caller
+	// performs the os.Stat and sets this field, the same pattern
+	// HasUnresolvedBlockers already uses for its own caller-side query.
+	PlanArtifactsPathMissing bool
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -587,6 +743,9 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPath == "" {
 			return ErrPlanArtifactsRequired
+		}
+		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPathMissing {
+			return ErrPlanArtifactsMissing
 		}
 		return nil
 

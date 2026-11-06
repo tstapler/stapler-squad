@@ -555,9 +555,11 @@ func TestParseTimeWithTZ_Abbreviation_PDT(t *testing.T) {
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm PDT'")
 	}
-	la, _ := time.LoadLocation("America/Los_Angeles")
-	if result.In(la).Hour() != 23 {
-		t.Errorf("expected hour 23 in LA, got %d", result.In(la).Hour())
+	// PDT is a fixed UTC-7 offset; America/Los_Angeles would read PST (UTC-8)
+	// outside daylight saving time and shift the hour.
+	pdt := time.FixedZone("PDT", -7*3600)
+	if result.In(pdt).Hour() != 23 {
+		t.Errorf("expected hour 23 in PDT (UTC-7), got %d", result.In(pdt).Hour())
 	}
 }
 
@@ -701,8 +703,8 @@ func TestDetector_CooldownPreventsImmediateReDetection(t *testing.T) {
 	// Trigger first detection manually so lastDetection is set
 	detector.ProcessOutput([]byte(output))
 
-	// The detector fires callback goroutine; give it a moment to settle
-	time.Sleep(10 * time.Millisecond)
+	// ProcessOutput sets state and lastDetection synchronously (no onDetection
+	// callback is registered here), so nothing needs to settle.
 
 	// Simulate recovery by resetting state — but lastDetection is still recent
 	detector.SetState(StateNone)
@@ -765,13 +767,9 @@ func TestManager_GetResetTime_DelegatesToDetector(t *testing.T) {
 
 	manager.ProcessOutput([]byte(output))
 
-	// Give the callback goroutine time to run
-	time.Sleep(50 * time.Millisecond)
-
-	resetTime := manager.GetResetTime()
-	if resetTime.IsZero() {
-		t.Error("expected non-zero reset time from manager after detection")
-	}
+	// The reset time is published by the detection callback goroutine.
+	wait.RequireEventually(t, func() bool { return !manager.GetResetTime().IsZero() }, 5*time.Second, time.Millisecond,
+		"expected non-zero reset time from manager after detection")
 }
 
 func TestManager_SetDetectionCallback_IsCalled(t *testing.T) {

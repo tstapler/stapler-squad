@@ -273,6 +273,7 @@ func TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails(t *
 // BeginGeneration, or passing nil) into a loud panic rather than a silent
 // no-op that leaves the dedup guard never acquired in the first place.
 func TestGenerateAndPersist_PanicsOnNilRelease(t *testing.T) {
+	t.Parallel()
 	gen, _, _ := newTestHandoffSummaryGenerator(t)
 
 	defer func() {

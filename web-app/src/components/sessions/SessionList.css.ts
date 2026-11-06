@@ -53,7 +53,7 @@ export const selectModeButton = style({
   border: `1px solid ${vars.color.borderColor}`,
   color: vars.color.textPrimary,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   whiteSpace: "nowrap",
   selectors: {
     "&:hover": {
@@ -244,6 +244,7 @@ export const categoryTitle = style({
   // Story 4.3: sticky group headers — stick to top of scrolling column
   position: "sticky",
   top: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 10,
   background: vars.color.surfaceSubtle,
   borderLeft: `4px solid ${vars.color.primary}`,
@@ -315,21 +316,13 @@ export const clearButton = style({
   fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
       borderColor: vars.color.borderHover,
     },
   },
-});
-
-export const emptyActions = style({
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: vars.space["4"],
-  marginTop: vars.space["2"],
 });
 
 export const emptyHint = style({
@@ -357,31 +350,6 @@ export const newSessionHeaderButton = style({
   selectors: {
     "&:hover": { background: vars.color.primaryHover, opacity: 0.9 },
     "&:active": { background: vars.color.primaryActive },
-  },
-});
-
-export const newSessionButtonLarge = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  padding: `14px 28px`,
-  borderRadius: vars.radii.lg,
-  fontSize: "1rem",
-  fontWeight: 600,
-  color: vars.color.primaryText,
-  background: vars.color.primary,
-  textDecoration: "none",
-  transition: "all 0.2s ease",
-  boxShadow: `0 2px 4px ${vars.color.glowSecondary}`,
-  border: "none",
-  cursor: "pointer",
-  selectors: {
-    "&:hover": {
-      background: vars.color.primaryHover,
-      transform: "translateY(-2px)",
-      boxShadow: `0 6px 12px ${vars.color.glowPrimary}`,
-    },
-    "&:active": { transform: "translateY(0)" },
   },
 });
 

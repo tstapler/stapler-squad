@@ -15,18 +15,22 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { LocalFileBrowser, serveUrl } from "./LocalFileBrowser";
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => new URLSearchParams("path=/home/user"),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 
-// RepoPathInput pulls in useSessionRepoPaths (Redux) and usePathCompletions (RPC).
-// Stub both so this test doesn't need a Redux store or ConnectRPC transport.
+// RepoPathInput pulls in useSessionRepoPaths (Redux), usePathCompletions (RPC),
+// and useGitHubEnterpriseHosts (RPC). Stub all three so this test doesn't need
+// a Redux store or ConnectRPC transport.
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
   useSessionRepoPaths: () => [],
 }));
 jest.mock("@/lib/hooks/usePathCompletions", () => ({
   usePathCompletions: () => ({ entries: [], isLoading: false }),
+}));
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({
+  useGitHubEnterpriseHosts: () => ({ hosts: [], refetch: jest.fn() }),
 }));
 
 const createSession = jest.fn();
@@ -37,6 +41,14 @@ jest.mock("@/lib/hooks/useSessionService", () => ({
 jest.mock("@/lib/contexts/AnalyticsContext", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
+
+jest.mock("react-markdown", () => ({
+  __esModule: true,
+  default: ({ children }: { children: string }) => (
+    <div data-testid="mock-markdown">{children}</div>
+  ),
+}));
+jest.mock("remark-gfm", () => ({ __esModule: true, default: () => {} }));
 
 function mockListingOnce(body: unknown) {
   (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -152,4 +164,64 @@ describe("LocalFileBrowser — truncation notice", () => {
     const notice = await screen.findByTestId("file-browser-truncation-notice", {}, { timeout: 15000 });
     expect(notice).toHaveTextContent("Showing first 2000 of 2001 entries");
   }, 20000);
+});
+
+describe("LocalFileBrowser — markdown viewer", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  it("renders .md files via the markdown path and toggles to the raw <pre> view", async () => {
+    mockListingOnce({
+      path: "/home/user",
+      parent: "/home",
+      total: 1,
+      has_more: false,
+      entries: [{ name: "README.md", path: "/home/user/README.md", is_dir: false, size: 10 }],
+    });
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve("# Hello"),
+    });
+
+    render(<LocalFileBrowser />);
+    fireEvent.click(await screen.findByText("README.md"));
+
+    expect(await screen.findByTestId("mock-markdown")).toHaveTextContent("# Hello");
+    const toggle = screen.getByTestId("file-browser-viewer-toggle-raw");
+    expect(toggle).toHaveTextContent("Raw");
+    expect(document.querySelector("pre")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(screen.queryByTestId("mock-markdown")).not.toBeInTheDocument();
+    expect(document.querySelector("pre")).toHaveTextContent("# Hello");
+    expect(toggle).toHaveTextContent("Rendered");
+  });
+
+  it("opens the next markdown file in Rendered mode after Raw was chosen on the previous one", async () => {
+    mockListingOnce({
+      path: "/home/user",
+      parent: "/home",
+      total: 2,
+      has_more: false,
+      entries: [
+        { name: "A.md", path: "/home/user/A.md", is_dir: false, size: 10 },
+        { name: "B.md", path: "/home/user/B.md", is_dir: false, size: 10 },
+      ],
+    });
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve("# A") })
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve("# B") });
+
+    render(<LocalFileBrowser />);
+    fireEvent.click(await screen.findByText("A.md"));
+    fireEvent.click(await screen.findByTestId("file-browser-viewer-toggle-raw"));
+    expect(document.querySelector("pre")).toHaveTextContent("# A");
+
+    fireEvent.click(screen.getByText("B.md"));
+
+    expect(await screen.findByTestId("mock-markdown")).toHaveTextContent("# B");
+    expect(screen.getByTestId("file-browser-viewer-toggle-raw")).toHaveTextContent("Raw");
+  });
 });

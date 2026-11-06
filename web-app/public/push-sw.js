@@ -3,6 +3,8 @@
 // This service worker intentionally has no fetch handler so its update cycle
 // is independent of the cache layer.
 
+importScripts('/push-sw-logic.js');
+
 self.addEventListener('push', (event) => {
   let data = {
     title: 'Stapler Squad',
@@ -61,18 +63,12 @@ self.addEventListener('notificationclick', (event) => {
     case 'review':
     case 'open':
     default: {
-      const urlToOpen = event.notification.data?.url || '/';
-
       event.waitUntil(
-        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-          for (const client of clientList) {
-            if (client.url.includes(urlToOpen) && 'focus' in client) {
-              return client.focus();
-            }
-          }
-          if (clients.openWindow) {
-            return clients.openWindow(urlToOpen);
-          }
+        self.PushSwLogic.handleNotificationClick({
+          url: event.notification.data?.url,
+          origin: self.location.origin,
+          matchAll: () => clients.matchAll({ type: 'window', includeUncontrolled: true }),
+          openWindow: clients.openWindow ? (u) => clients.openWindow(u) : null,
         })
       );
     }

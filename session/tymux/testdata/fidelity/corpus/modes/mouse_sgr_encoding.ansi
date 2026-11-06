@@ -1,0 +1,2 @@
+modes/mouse_sgr_encoding -- xterm ctlseqs ?1006 SGR mouse encoding
+[?1000h[?1006hnormal tracking + SGR encoding

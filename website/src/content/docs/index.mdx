@@ -1,0 +1,31 @@
+---
+title: Stapler Squad
+description: Web-based mission control for running multiple AI coding agents, with a real-time dashboard, automatic approval rules, and a structured review queue.
+template: splash
+hero:
+  tagline: Stapler Squad is a web-based mission control for running multiple AI coding agents (Claude Code, Codex, Gemini, Aider) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue.
+  actions:
+    - text: View on GitHub
+      link: https://github.com/tstapler/stapler-squad
+      icon: external
+      variant: primary
+---
+
+import InstallCommand from '../../components/InstallCommand.astro';
+import HeroVideo from '../../components/HeroVideo.astro';
+import FeatureGrid from '../../components/FeatureGrid.astro';
+import LandingFooterNav from '../../components/LandingFooterNav.astro';
+
+<InstallCommand command="brew tap tstapler/stapler-squad https://github.com/tstapler/stapler-squad && brew install tstapler/stapler-squad/stapler-squad" />
+
+Works on macOS and Linux via the Homebrew tap and the prebuilt-binary installer above.
+_(Windows/WSL support hasn't been exercised and isn't claimed here — `install.sh`'s
+shell detection only branches on zsh/bash/fish/ash.)_
+
+<HeroVideo src="/stapler-squad/demo.webm" poster="/stapler-squad/screenshot.png" />
+
+## Features
+
+<FeatureGrid />
+
+<LandingFooterNav />

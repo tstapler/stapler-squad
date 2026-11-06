@@ -2,7 +2,8 @@
 // +feature: remote-host-badge
 
 import { useState, useRef, useEffect, memo } from "react";
-import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus, PiExtensionHealth } from "@/gen/session/v1/types_pb";
+import type { Session, ReviewItem, CheckpointProto} from "@/gen/session/v1/types_pb";
+import { SessionStatus, SubStatus, InstanceType, RateLimitState, DetectedStatus, PiExtensionHealth } from "@/gen/session/v1/types_pb";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
@@ -11,6 +12,8 @@ import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -23,6 +26,11 @@ import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sess
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
+import { useTaggingRuleNames } from "@/lib/hooks/useTaggingRuleNames";
+import { UNCLASSIFIED_TAG, tagProvenanceTitle, tagProvenanceAriaLabel } from "@/lib/sessions/tagProvenance";
+import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
+import type { ColumnKey} from "./session-columns";
+import { CARD_DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -151,6 +159,7 @@ import {
   tagsContainer,
   tags,
   tag,
+  tagUnclassified,
   editTagsButton,
   body,
   info,
@@ -195,8 +204,15 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
+// Names/paths are never length-truncated — full text always renders. See
+// SessionRow's identically-named constant: `Infinity` keeps
+// `truncateWorkspacePath`'s home-dir "~" collapsing (not lossy) while
+// skipping its length-based truncation entirely.
+const CARD_PATH_MAX_LEN = Infinity;
+
 // Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
 // callback surface without duplicating this list.
+/* eslint-disable no-restricted-syntax -- SessionCardProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
@@ -209,12 +225,15 @@ export interface SessionCardProps {
   onRename?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestart?: (sessionId: string) => Promise<boolean>;
   onRetryNow?: (sessionId: string) => Promise<boolean>;
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned?: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
@@ -232,7 +251,12 @@ export interface SessionCardProps {
   // sites and tests that don't thread it through keep compiling; SessionList passes
   // the resolved value from useStaleSessionConfig().
   staleThresholdMinutes?: number;
+  /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
+  backlogEntry?: BacklogIndexEntry;
+  /** Which optional columns to render (Program row, memory badge). Defaults to CARD_DEFAULT_VISIBLE_COLUMNS (Card/Board's pre-PR always-on behavior — row view passes its own user-configurable set explicitly). */
+  visibleColumns?: ColumnKey[];
 }
+/* eslint-enable no-restricted-syntax */
 
 function SessionCardInner({
   session,
@@ -246,12 +270,15 @@ function SessionCardInner({
   onRename,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onUpdateTags,
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onTogglePinned,
   onToggleAutoApprove,
   onSteerAutonomousSession,
   onClearConversationState,
@@ -265,8 +292,12 @@ function SessionCardInner({
   detectedContext,
   suppressApprovalSubStatus = false,
   staleThresholdMinutes = 30,
+  backlogEntry,
+  visibleColumns,
 }: SessionCardProps) {
+  const effectiveColumns = visibleColumns ?? CARD_DEFAULT_VISIBLE_COLUMNS;
   const sessionActions = useSessionActions(session.id);
+  const tagRuleNames = useTaggingRuleNames();
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isInlineEditing, setIsInlineEditing] = useState(false);
@@ -575,10 +606,14 @@ function SessionCardInner({
       {isTagEditorOpen && onUpdateTags && (
         <TagEditor
           tags={session.tags || []}
+          tagProvenance={session.ruleTagProvenance}
+          tagRuleNames={tagRuleNames}
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
           triggerRef={tagEditorTriggerRef}
           sessionTitle={session.title}
+          sessionId={session.id}
+          onReclassified={(appliedTags) => { onUpdateTags(session.id, appliedTags); }}
         />
       )}
     <div
@@ -690,6 +725,7 @@ function SessionCardInner({
               owner={session.githubOwner}
               repo={session.githubRepo}
               sourceRef={session.githubSourceRef}
+              host={session.githubHost}
               prPriority={session.githubPrPriority}
               prState={session.githubPrState}
               isDraft={session.githubPrIsDraft}
@@ -698,6 +734,7 @@ function SessionCardInner({
               checkConclusion={session.githubCheckConclusion}
               compact={true}
             />
+            <BacklogOriginBadge entry={backlogEntry} compact={true} />
             {reviewItem && (
               <ReviewQueueBadge
                 priority={reviewItem.priority}
@@ -803,6 +840,7 @@ function SessionCardInner({
             {(() => {
               const mb = Number(session.memoryRssMb ?? 0n);
               if (mb <= 0) return null;
+              if (!effectiveColumns.includes("memory")) return null;
               const severityClass =
                 mb > 500 ? memoryBadgeHigh :
                 mb > 300 ? memoryBadgeWarning : "";
@@ -829,7 +867,7 @@ function SessionCardInner({
                   aria-label={`Auto-pilot active${session.autonomousMaxTurns > 0 ? ` (turn ${session.autonomousTurn}/${session.autonomousMaxTurns})` : ""} — click to disable`}
                   data-testid="badge-autonomous"
                   onClick={(e) => { e.stopPropagation(); onToggleAutonomousMode(session.id, false); }}
-                >
+                >{/* analytics-exempt */}
                   {session.autonomousMaxTurns > 0 ? `Auto-pilot ${session.autonomousTurn}/${session.autonomousMaxTurns}` : "Auto-pilot"}
                 </button>
               ) : (
@@ -881,7 +919,7 @@ function SessionCardInner({
                   aria-label="Auto-approve enabled — this session skips permission prompts; click to disable"
                   data-testid="badge-auto-approve"
                   onClick={(e) => { e.stopPropagation(); onToggleAutoApprove(session.id, false); }}
-                >
+                >{/* analytics-exempt */}
                   ⚡ Auto
                 </button>
               ) : (
@@ -953,11 +991,22 @@ function SessionCardInner({
         <div className={tagsContainer}>
           {session.tags && session.tags.length > 0 && (
             <div className={tags} role="list" aria-label="Session tags">
-              {session.tags.map((sessionTag) => (
-                <span key={sessionTag} className={tag} role="listitem">
-                  {sessionTag}
-                </span>
-              ))}
+              {session.tags.map((sessionTag) => {
+                const isUnclassified = sessionTag === UNCLASSIFIED_TAG;
+                return (
+                  <span
+                    key={sessionTag}
+                    className={`${tag} ${isUnclassified ? tagUnclassified : ""}`}
+                    role="listitem"
+                    tabIndex={0}
+                    title={tagProvenanceTitle(sessionTag, session.ruleTagProvenance, tagRuleNames)}
+                    aria-label={tagProvenanceAriaLabel(sessionTag, session.ruleTagProvenance)}
+                  >
+                    {isUnclassified && <span aria-hidden="true">? </span>}
+                    {sessionTag}
+                  </span>
+                );
+              })}
             </div>
           )}
           <button
@@ -968,7 +1017,7 @@ function SessionCardInner({
             tabIndex={selectMode ? -1 : undefined}
             aria-hidden={selectMode ? "true" : undefined}
             inert={selectMode || undefined}
-          >
+          >{/* analytics-exempt */}
             {session.tags && session.tags.length > 0 ? "Edit Tags" : "Add Tags"}
           </button>
         </div>
@@ -1004,28 +1053,41 @@ function SessionCardInner({
 
       <div className={body}>
         <div className={info}>
-          <div className={infoRow}>
-            <span className={label}>Program:</span>
-            <span className={value}>{session.program}</span>
-          </div>
+          {effectiveColumns.includes("agent") && (
+            <div className={infoRow}>
+              <span className={label}>Program:</span>
+              <span className={value}>{session.program}</span>
+            </div>
+          )}
+          {session.hostId && (
+            <div className={infoRow} data-testid="session-host">
+              <span className={label}>Host:</span>
+              <span className={value} title={session.hostStale ? "Host unreachable; showing last known state" : undefined}>
+                {session.hostDisplayName || session.hostId}
+                {session.hostStale ? " (offline)" : ""}
+              </span>
+            </div>
+          )}
           {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+          {session.existingDir && !isPathRedundantWithTitle(session.existingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Path:</span>
-              <span className={value} title={session.path}>
-                {session.path}
+              <span className={value} title={session.existingDir}>
+                {truncateWorkspacePath(session.existingDir, CARD_PATH_MAX_LEN)}
               </span>
             </div>
           )}
-          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
+          {session.activeDir && !isPathRedundantWithTitle(session.activeDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
-              <span className={value}>{session.workingDir}</span>
+              <span className={value} title={session.activeDir}>
+                {truncateWorkspacePath(session.activeDir, CARD_PATH_MAX_LEN)}
+              </span>
             </div>
           )}
           {session.githubOwner && session.githubRepo && (
@@ -1033,13 +1095,13 @@ function SessionCardInner({
               <span className={label}>Repository:</span>
               <span className={value}>
                 <a
-                  href={`https://github.com/${session.githubOwner}/${session.githubRepo}`}
+                  href={`https://${session.githubHost || "github.com"}/${session.githubOwner}/${session.githubRepo}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
                   className={githubLink}
                   aria-label={`GitHub repository ${session.githubOwner}/${session.githubRepo}, opens in new tab`}
-                >
+                >{/* analytics-exempt */}
                   {session.githubOwner}/{session.githubRepo}
                 </a>
               </span>
@@ -1056,7 +1118,7 @@ function SessionCardInner({
                   onClick={(e) => e.stopPropagation()}
                   className={githubLink}
                   aria-label={`Pull request #${session.githubPrNumber} on ${session.githubOwner}/${session.githubRepo}, opens in new tab`}
-                >
+                >{/* analytics-exempt */}
                   #{session.githubPrNumber}
                 </a>
               </span>
@@ -1066,7 +1128,7 @@ function SessionCardInner({
             <div className={infoRow}>
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
-                {session.clonedRepoPath}
+                {truncateWorkspacePath(session.clonedRepoPath, CARD_PATH_MAX_LEN)}
               </span>
             </div>
           )}
@@ -1137,7 +1199,7 @@ function SessionCardInner({
               aria-label="Cancel session creation"
               data-testid="cancel-creation-button"
               className={`${actionButton} ${actionButtonCompact}`}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           </div>
@@ -1166,7 +1228,7 @@ function SessionCardInner({
               aria-label="Retry creating session"
               data-testid="retry-creation-button"
               className={`${actionButton} ${actionButtonCompact}`}
-            >
+            >{/* analytics-exempt */}
               Retry
             </button>
           </div>
@@ -1181,7 +1243,7 @@ function SessionCardInner({
               onClick={() => setIsSnapshotOpen((prev) => !prev)}
               aria-expanded={isSnapshotOpen}
               aria-label={isSnapshotOpen ? "Collapse terminal preview" : "Expand terminal preview"}
-            >
+            >{/* analytics-exempt */}
               <span>Terminal Preview</span>
               <span className={snapshotToggleIcon} aria-hidden="true">
                 {isSnapshotOpen ? "▲" : "▼"}
@@ -1242,12 +1304,15 @@ function SessionCardInner({
           }}
           onRestart={onRestart}
           onRetryNow={onRetryNow}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
           onClone={onClone}
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onCreateCheckpoint={onCreateCheckpoint}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onTogglePinned={onTogglePinned}
           onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}

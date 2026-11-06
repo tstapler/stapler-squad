@@ -12,8 +12,10 @@ import React from "react";
 import { render } from "@testing-library/react";
 import SessionDetailRoute from "./page";
 
+jest.mock("@/lib/analytics/usePageView", () => ({ usePageView: jest.fn() }));
+
 const mockUseSearchParams = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockUseSearchParams(),
 }));
 

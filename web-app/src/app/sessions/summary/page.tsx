@@ -2,8 +2,7 @@
 // +feature: session-summary-standalone-route
 
 import { Suspense } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Link, useSearchParams } from "@/lib/nav";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { SessionSummaryPanel } from "@/components/sessions/SessionSummaryPanel";
 import * as styles from "./page.css";
@@ -34,7 +33,13 @@ function SessionSummaryPageInner() {
         ← Back
       </Link>
       <h1 className={styles.title}>Session Summary</h1>
-      {sessionId && <SessionSummaryPanel sessionId={sessionId} />}
+      {sessionId ? (
+        <SessionSummaryPanel sessionId={sessionId} />
+      ) : (
+        <p data-testid="summary-missing-session">
+          No session specified. Open a session&apos;s summary from the session list.
+        </p>
+      )}
     </main>
   );
 }

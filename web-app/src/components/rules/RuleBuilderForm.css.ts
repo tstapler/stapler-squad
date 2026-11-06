@@ -131,7 +131,7 @@ export const decisionBtn = style({
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.medium,
   cursor: "pointer",
-  transition: "all 0.1s",
+  transition: "background-color 0.1s, border-color 0.1s, color 0.1s, opacity 0.1s, transform 0.1s, box-shadow 0.1s",
   ":hover": { background: vars.color.hoverBackground },
 });
 

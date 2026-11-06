@@ -4,6 +4,8 @@ import { useRef } from "react";
 import { Provider } from "react-redux";
 import { store } from "@/lib/store/store";
 import { NotificationProvider } from "@/lib/contexts/NotificationContext";
+import { DeckViewportBridge } from "@/components/providers/DeckViewportBridge";
+import { PushClickHandoff } from "@/components/providers/PushClickHandoff";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
 import { ReviewQueueProvider } from "@/lib/contexts/ReviewQueueContext";
 import { ApprovalsProvider } from "@/lib/contexts/ApprovalsContext";
@@ -19,7 +21,9 @@ import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvid
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
 import { OtelInit } from "@/components/telemetry/OtelInit";
+import { ClientLogShipper } from "@/components/telemetry/ClientLogShipper";
 import { OnboardingProvider } from "@/lib/contexts/OnboardingContext";
+import { TerminalPoolProvider, DEFAULT_TERMINAL_POOL_MAX_SIZE } from "@/lib/terminal/TerminalPool";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // Create provider once per mount using a ref so the instance is stable.
@@ -34,12 +38,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AnalyticsContextProvider provider={analyticsProviderRef.current}>
       <OtelInit />
+      <ClientLogShipper />
       <WebVitalsReporter />
       <PageViewTracker />
+      <PushClickHandoff />
       <Provider store={store}>
         <ThemeProvider>
           <FeatureFlagsProvider>
           <NavigationProvider>
+            <DeckViewportBridge>
             <NotificationProvider>
               <GlobalSessionServiceProvider>
                 <SystemMemoryProvider>
@@ -48,7 +55,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
                     <ReviewQueueProvider>
                       <ApprovalsProvider>
                         <StuckBacklogItemsProvider>
-                          {children}
+                          {/* Story 3 (Task 3.4) — must live above PaneSplitRenderer's
+                              `key={pane.id}-{pane.sessionId}` remount boundary (see
+                              TerminalPool.tsx's module doc comment) so pooled terminal
+                              instances survive a pane's assigned session changing. */}
+                          <TerminalPoolProvider maxSize={DEFAULT_TERMINAL_POOL_MAX_SIZE}>
+                            {children}
+                          </TerminalPoolProvider>
                         </StuckBacklogItemsProvider>
                       </ApprovalsProvider>
                     </ReviewQueueProvider>
@@ -57,6 +70,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 </SystemMemoryProvider>
               </GlobalSessionServiceProvider>
             </NotificationProvider>
+            </DeckViewportBridge>
           </NavigationProvider>
           </FeatureFlagsProvider>
         </ThemeProvider>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 
 export function usePageView(): void {

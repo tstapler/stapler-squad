@@ -24,8 +24,10 @@
 
 import { test, expect, APIRequestContext, Page } from "@playwright/test";
 import { BacklogPage } from "./pages/BacklogPage";
+import { BacklogItemDetailPage } from "./pages/BacklogItemDetailPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 async function waitForBacklogRPCsEnabled(request: APIRequestContext) {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -73,7 +75,7 @@ async function openDetail(page: Page, itemTitle: string): Promise<BacklogPage> {
 }
 
 function planReviewStatus(page: Page) {
-  return page.getByRole("status", { name: "Plan review status" });
+  return new BacklogItemDetailPage(page).planReviewStatus;
 }
 
 test.describe("plan-review", () => {

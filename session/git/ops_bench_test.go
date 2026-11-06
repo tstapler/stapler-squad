@@ -20,7 +20,7 @@ func deepHistoryRepoForBench(b *testing.B, baseDepth, aheadCount int) (repoDir, 
 	b.Helper()
 	repoDir = setupBenchRepo(b)
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -56,8 +56,9 @@ func deepHistoryRepoForBench(b *testing.B, baseDepth, aheadCount int) (repoDir, 
 }
 
 // BenchmarkListShippedCommitsWithCap_AllocsPerOp is PerfFix-1's enforcement:
-// listShippedCommitsWithCap must cost roughly one bounded walk over base's
-// history, not one walk per commit ahead of base. Before the fix, each
+// listShippedCommitsWithCap must cost a walk bounded by the base..head range
+// (see walkShippedRange), not one walk per commit ahead of base or a walk of
+// base's whole history. Before the fix, each
 // visited commit called object.Commit.IsAncestor(base) — itself a full walk
 // of base's ancestry looking for a negative result — inside the outer BFS.
 // Measured directly against a scratch copy of the pre-fix code at

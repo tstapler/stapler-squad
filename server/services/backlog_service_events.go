@@ -124,10 +124,11 @@ func (s *BacklogService) watchBacklogItems(
 			if evt.Type != events.EventBacklogItemChanged || evt.BacklogItemPayload == nil {
 				continue
 			}
+			evt = withSourcePlugin(ctx, s.storage, evt)
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			converted := convertEventToBacklogItemEvent(ctx, s.storage, evt, costFor)
+			converted := convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor, s.checkWorkStageBudget)
 			// Force is_snapshot: true on every replayed event, unconditionally,
 			// regardless of the value the event was originally published
 			// with. A live event published in the race window between
@@ -152,12 +153,14 @@ func (s *BacklogService) watchBacklogItems(
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog items: %w", err))
 		}
+		visible := make([]*session.BacklogItemData, 0, len(items))
 		for i := range items {
-			item := &items[i]
-			if !backlogItemMatchesFilters(item, msg) {
-				continue
+			if backlogItemMatchesFilters(&items[i], msg) {
+				visible = append(visible, &items[i])
 			}
-			if err := sender.Send(snapshotEventForItem(ctx, s.storage, item, costFor)); err != nil {
+		}
+		for _, ev := range snapshotEventsForItems(ctx, s.storage, s.engine, visible, costFor, s.checkWorkStageBudget) {
+			if err := sender.Send(ev); err != nil {
 				return fmt.Errorf("failed to send initial backlog snapshot: %w", err)
 			}
 			initialPhaseSent++
@@ -182,10 +185,17 @@ func (s *BacklogService) watchBacklogItems(
 	}
 
 	// Stream events until client disconnects or context is canceled.
+	heartbeat := time.NewTicker(events.HeartbeatInterval)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-heartbeat.C:
+			if err := sender.Send(&sessionv1.BacklogItemEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
+				return fmt.Errorf("failed to send backlog heartbeat: %w", err)
+			}
 		case evt, ok := <-eventCh:
 			if !ok {
 				return nil
@@ -193,10 +203,11 @@ func (s *BacklogService) watchBacklogItems(
 			if evt.Type != events.EventBacklogItemChanged || evt.BacklogItemPayload == nil {
 				continue
 			}
+			evt = withSourcePlugin(ctx, s.storage, evt)
 			if !backlogItemMatchesFilters(evt.BacklogItemPayload.Item, msg) {
 				continue
 			}
-			if err := sender.Send(convertEventToBacklogItemEvent(ctx, s.storage, evt, costFor)); err != nil {
+			if err := sender.Send(convertEventToBacklogItemEvent(ctx, s.storage, s.engine, evt, costFor, s.checkWorkStageBudget)); err != nil {
 				return fmt.Errorf("failed to send backlog event: %w", err)
 			}
 		}
@@ -219,34 +230,51 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 	if categoryFilter := msg.GetCategoryFilter(); len(categoryFilter) > 0 && !slices.Contains(categoryFilter, item.RepoPath) {
 		return false
 	}
+	if pluginFilter := msg.GetSourcePluginFilter(); len(pluginFilter) > 0 && !slices.Contains(pluginFilter, item.SourcePluginID) {
+		return false
+	}
 	return true
 }
 
-// snapshotEventForItem builds the initial-snapshot BacklogItemEvent for a
-// single currently-visible item (fresh-connection branch, after_seq == 0).
-// Calls enrichItemSessionsWorktreeData so this path matches GetBacklogItem's
-// per-session worktree_branch/worktree_path population — without it, every
-// fresh WatchBacklogItems connection (e.g. opening the backlog detail pane)
-// immediately overwrote an already-loaded item's enriched worktree data with
-// this un-enriched snapshot, hiding BacklogFileBrowserModal's trigger.
-func snapshotEventForItem(ctx context.Context, storage *session.Storage, item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
-	protoItem := backlogItemToProto(item, costFor)
-	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
-	return &sessionv1.BacklogItemEvent{
-		Timestamp: timestamppb.Now(),
-		// Seq intentionally left at its zero value: this synthetic per-item
-		// snapshot isn't derived from a single published bus event, so it has
-		// no real sequence number. The frontend treats seq == 0 as "no seq
-		// info" and excludes these events from afterSeq/gap-detection
-		// bookkeeping — see BacklogItemEvent.seq's proto doc comment.
-		Event: &sessionv1.BacklogItemEvent_ItemUpdated{
-			ItemUpdated: &sessionv1.BacklogItemUpdatedEvent{
-				ItemId:     item.ID,
-				Item:       protoItem,
-				IsSnapshot: true,
-			},
-		},
+// snapshotEventsForItems builds the initial-snapshot BacklogItemEvents for
+// the currently-visible items (fresh-connection branch, after_seq == 0).
+// Worktree enrichment and unresolved-blocker lookup each run once for the whole
+// batch rather than once per item, which made one fresh WatchBacklogItems
+// connection issue about a thousand queries. The enrichment keeps this path
+// matching GetBacklogItem's per-session worktree_branch/worktree_path
+// population — without it, every fresh connection immediately overwrote an
+// already-loaded item's enriched worktree data, hiding BacklogFileBrowserModal's
+// trigger.
+func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, items []*session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
+	protoItems := make([]*sessionv1.BacklogItem, len(items))
+	for i, item := range items {
+		protoItems[i] = backlogItemToProto(item, engine, costFor)
 	}
+	enrichItemsSessionsWorktreeData(ctx, storage, protoItems)
+	attachUnresolvedBlockersTo(ctx, storage, protoItems)
+	out := make([]*sessionv1.BacklogItemEvent, len(items))
+	for i, item := range items {
+		protoItem := protoItems[i]
+		if checkBudget != nil {
+			checkBudget(item.ID, item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+		}
+		out[i] = &sessionv1.BacklogItemEvent{
+			Timestamp: timestamppb.Now(),
+			// Seq intentionally left at its zero value: this synthetic per-item
+			// snapshot isn't derived from a single published bus event, so it has
+			// no real sequence number. The frontend treats seq == 0 as "no seq
+			// info" and excludes these events from afterSeq/gap-detection
+			// bookkeeping — see BacklogItemEvent.seq's proto doc comment.
+			Event: &sessionv1.BacklogItemEvent_ItemUpdated{
+				ItemUpdated: &sessionv1.BacklogItemUpdatedEvent{
+					ItemId:     item.ID,
+					Item:       protoItem,
+					IsSnapshot: true,
+				},
+			},
+		}
+	}
+	return out
 }
 
 // convertEventToBacklogItemEvent converts an internal events.Event carrying a
@@ -254,7 +282,7 @@ func snapshotEventForItem(ctx context.Context, storage *session.Storage, item *s
 // on Kind to build the matching oneof variant. Mirrors convertEventToProto's
 // switch-on-event.Type pattern already used for session events
 // (event_converter.go).
-func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, evt *events.Event, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItemEvent {
+func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
 	out := &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		// evt.Seq is assigned by EventBus.Publish (0 means unpublished, which
@@ -264,6 +292,8 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 		// bookkeeping (useWatchBacklogItems.ts) work for both the live
 		// fan-out path and the after_seq replay path.
 		Seq: evt.Seq,
+		// Constant per process; lets clients distinguish a redeploy from a seq anomaly.
+		DeployId: deployID,
 	}
 
 	payload := evt.BacklogItemPayload
@@ -275,8 +305,14 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 	if payload.Item != nil {
 		itemID = payload.Item.ID
 	}
-	protoItem := backlogItemToProtoOrNil(payload.Item, costFor)
+	protoItem := backlogItemToProtoOrNil(payload.Item, engine, costFor)
 	enrichItemSessionsWorktreeData(ctx, storage, protoItem)
+	if protoItem != nil {
+		attachUnresolvedBlockersTo(ctx, storage, []*sessionv1.BacklogItem{protoItem})
+	}
+	if checkBudget != nil && payload.Item != nil {
+		checkBudget(itemID, payload.Item.CostBudgetThresholdUsd, protoItem.TotalEstimatedCostUsd)
+	}
 
 	switch payload.Kind {
 	case events.BacklogChangeStatusTransition:
@@ -364,11 +400,11 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 // BacklogItemEventPayload.Item may legitimately be nil (defensive only —
 // production publishers always populate it) so every call site here must
 // guard first.
-func backlogItemToProtoOrNil(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProtoOrNil(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	if item == nil {
 		return nil
 	}
-	return backlogItemToProto(item, costFor)
+	return backlogItemToProto(item, engine, costFor)
 }
 
 // activityNoteDataToProto converts a session.ActivityNoteData (the payload
@@ -449,4 +485,27 @@ func forceIsSnapshot(evt *sessionv1.BacklogItemEvent) {
 	case *sessionv1.BacklogItemEvent_ItemArchived:
 		e.ItemArchived.IsSnapshot = true
 	}
+}
+
+// withSourcePlugin returns evt with the payload item's SourcePluginID filled
+// in. Mutation paths publish items re-read without the Source edge (see
+// handleForwardSyncClose), so without this the plugin_id badge/filter would
+// vanish on every live update. Copies rather than mutating: the event is
+// shared across subscribers.
+func withSourcePlugin(ctx context.Context, storage *session.Storage, evt *events.Event) *events.Event {
+	payload := evt.BacklogItemPayload
+	if storage == nil || payload == nil || payload.Item == nil || payload.Item.SourcePluginID != "" {
+		return evt
+	}
+	current, err := storage.GetBacklogItem(ctx, payload.Item.ID)
+	if err != nil || current.SourcePluginID == "" {
+		return evt
+	}
+	itemCopy := *payload.Item
+	itemCopy.SourcePluginID = current.SourcePluginID
+	payloadCopy := *payload
+	payloadCopy.Item = &itemCopy
+	evtCopy := *evt
+	evtCopy.BacklogItemPayload = &payloadCopy
+	return &evtCopy
 }

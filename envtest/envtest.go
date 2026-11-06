@@ -68,6 +68,10 @@ func ClearAmbientStaplerSquadStateEnv() (restore func()) {
 // required migration, just the pattern to reach for in new tests. Like
 // t.Setenv, must be called before t.Parallel() on the same t (see
 // testing.T.Setenv's doc comment) — it panics otherwise.
+//
+// Callers in server/services must use that package's withIsolatedStateDir
+// helper instead: it additionally serializes the process-global variable
+// behind stateEnvMu, which this helper cannot do from outside the package.
 func NewIsolatedStateDir(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()

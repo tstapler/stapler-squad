@@ -27,7 +27,7 @@ func TestTUISessionCreation(t *testing.T) {
 		require.NoError(t, err, "Should start TUI")
 
 		// Give TUI time to initialize and render
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Verify TUI is running
 		assert.True(t, session.IsRunning(), "TUI should be running")
@@ -47,14 +47,13 @@ func TestTUISessionCreation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Send 'n' to trigger new session creation
 		err = session.SendKeys("n")
 		assert.NoError(t, err, "Should send 'n' key without error")
 
 		// Give time for session creation wizard to appear
-		time.Sleep(500 * time.Millisecond)
 
 		// Check if session is still running (didn't crash)
 		assert.True(t, session.IsRunning(), "TUI should still be running after 'n' press")
@@ -68,21 +67,19 @@ func TestTUISessionCreation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Send 'n' to trigger new session creation
 		err = session.SendKeys("n")
 		require.NoError(t, err)
 
 		// Wait for wizard to appear
-		time.Sleep(500 * time.Millisecond)
 
 		// Send escape to cancel
 		err = session.SendEscape()
 		assert.NoError(t, err, "Should send escape key")
 
 		// Wait for return to main view
-		time.Sleep(500 * time.Millisecond)
 
 		// TUI should still be running
 		assert.True(t, session.IsRunning(), "TUI should still be running after escape")
@@ -98,7 +95,7 @@ func TestTUISessionCreation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// List sessions before creation
 		sessionsBefore, err := tmuxServer.ListSessions()
@@ -113,7 +110,6 @@ func TestTUISessionCreation(t *testing.T) {
 
 		// In auto-yes mode, session creation should proceed automatically
 		// Give it time to create the session
-		time.Sleep(3 * time.Second)
 
 		// Check if TUI is still running
 		if session.IsRunning() {
@@ -147,14 +143,13 @@ func TestTUIHandling(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Send rapid key presses to test responsiveness
 		keys := []string{"?", "j", "k", "j", "k"}
 		for _, key := range keys {
 			err := session.SendKeys(key)
 			assert.NoError(t, err, "Should handle key %s", key)
-			time.Sleep(50 * time.Millisecond)
 		}
 
 		// TUI should still be running
@@ -168,7 +163,7 @@ func TestTUIHandling(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Try various operations that might cause hangs
 		operations := []struct {
@@ -184,7 +179,6 @@ func TestTUIHandling(t *testing.T) {
 		for _, op := range operations {
 			err := session.SendKeys(op.keys)
 			assert.NoError(t, err, "Should handle %s", op.name)
-			time.Sleep(200 * time.Millisecond)
 		}
 
 		// TUI should still be responsive

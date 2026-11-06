@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { Session, SessionSchema, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
@@ -11,6 +11,7 @@ import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDe
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
@@ -72,6 +73,9 @@ function ReviewQueueContent() {
     () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
     [backlogItems]
   );
+
+  // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
+  const { index: backlogSessionIndex } = useBacklogSessionIndex();
 
   // Acknowledge function for dismissing sessions from the modal.
   // allQueueItems is the unfiltered Redux store list — used as the existence oracle in the
@@ -286,6 +290,7 @@ function ReviewQueueContent() {
     ? reviewQueueItems.findIndex((s) => s.id === selectedSession.id) + 1
     : 0;
   const queueTotal = reviewQueueItems.length;
+  const selectedSessionBacklogEntry = selectedSession ? backlogSessionIndex.get(selectedSession.id) : undefined;
 
   return (
     <div className={styles.page}>
@@ -372,6 +377,8 @@ function ReviewQueueContent() {
               onDismissFromQueue={handleDismissFromQueue}
               queuePosition={queuePosition}
               queueTotal={queueTotal}
+              backlogItemId={selectedSessionBacklogEntry?.itemId}
+              backlogEntry={selectedSessionBacklogEntry}
             />
           </div>
         </div>

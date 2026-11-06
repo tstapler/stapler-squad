@@ -1,0 +1,21 @@
+# Matchers for next-nav-to-facade-tests.mjs (it applies the edits; ast-grep only locates the nodes).
+# Run through `ast-grep`, never `sg` (shadow-utils on Ubuntu). The driver also runs these as `language: TypeScript` for *.ts files.
+id: nav-mock
+language: Tsx
+rule:
+  pattern: jest.mock("next/navigation", $FACTORY)
+---
+id: link-mock
+language: Tsx
+rule:
+  pattern: jest.mock("next/link", $FACTORY)
+---
+id: nav-import
+language: Tsx
+rule:
+  kind: string_fragment
+  regex: ^next/(navigation|link)$
+  inside:
+    kind: string
+    inside:
+      kind: import_statement

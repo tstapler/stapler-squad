@@ -1,9 +1,13 @@
 .idea
 .aider*
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
 stapler-squad
 stapler-squad.prev
 stapler-squad-otel
+# analyzer fixtures mirror the module path, which the binary pattern above would hide
+!tools/lint/**/testdata/src/github.com/tstapler/stapler-squad/
 # otelc setup's per-checkout generated scaffolding (scripts/otel-auto-build.sh
 # removes these on exit, but ignore them too in case of an interrupted run)
 .otelc-build/
@@ -11,7 +15,7 @@ otel.instrumentation.go
 otelc.runtime.go
 claude-squad
 claude-mux
-ssq-hooks
+/ssq-hooks
 _CodeSignature/
 **.DS_Store
 cs
@@ -27,7 +31,7 @@ stapler-squad-test
 # proto-gen; CI generates fresh before every consuming step. Committing these files
 # has caused real breakage twice: once by force-adding a stale/incomplete generation,
 # once by a CI workflow step ordering bug that only "worked" because these were
-# force-added in the first place (see PR #445 and CI job "no-checked-in-generated-protos").
+# force-added in the first place (see PR #445 and CI job "pr-diff-guards" (backlog-scaffolding-guard.yml)).
 gen/
 web/src/gen/
 web-app/src/gen/
@@ -40,7 +44,7 @@ session/ent/*.go
 session/ent/*/
 !session/ent/schema/
 .ent-gen.stamp
-/web-app/.next
+/web-app/node_modules
 /web-app/node_modules/
 /web-app/out/
 /web-app/storybook-static/
@@ -48,6 +52,7 @@ session/ent/*/
 /server/web/dist/
 /.playwright-mcp
 /tools/ci-gates/node_modules/
+/tools/scanner/frontend/node_modules/
 
 # worktrees
 worktrees/
@@ -74,7 +79,7 @@ tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
-tests/e2e/fixtures/*-theme.json
+tests/e2e/fixtures/*-theme*.json
 tests/e2e/.bin/
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
@@ -83,14 +88,19 @@ bench-diff.txt
 benchmark_results.txt
 bench-otel-*.txt
 /web-app/out/
+# Bun build: per-PID temp output and stats
+/web-app/.out-tmp-*
+/web-app/.build/
 /server/web/dist/
 
 # Build artifacts
 build/
+# web-app/build/ holds tracked Bun build sources and tests, not output
+!/web-app/build/
 
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).
-.tmux-build.stamp
+.tmux-build*.stamp
 
 # Pinned tymuxd fetch stamp (records the last-fetched TYMUX_VERSION; see
 # scripts/fetch-tymuxd.sh and ADR-001).
@@ -115,7 +125,7 @@ docs/registry/coverage-gaps.json
 uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
-# .github/workflows/benchmark.yml / build.yml's benchmark-gate job), not
+# .github/workflows/benchmark.yml), not
 # committed. A prior version committed these on every push to main, which
 # flooded the commit history for very little value.
 benchmarks/
@@ -126,3 +136,10 @@ benchmarks/
 
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
+/server/services/backlog_item_public_id_backfill.lock
+
+# website demo-clip recorder output (scripts/record-website-demos.sh)
+tests/e2e/website-demo-output/
+
+# demo clips recorded during the deploy; never committed
+website/public/clips/

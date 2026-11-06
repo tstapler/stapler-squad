@@ -7,9 +7,9 @@ import {
   type ProfileDefaultsProto,
 } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
   heading,
@@ -94,7 +94,7 @@ export function DirectoryRulesManager() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadRules();
   }, [loadRules]);
@@ -231,7 +231,7 @@ export function DirectoryRulesManager() {
           type="button"
           className="btn btn-primary"
           onClick={handleNewRule}
-        >
+        >{/* analytics-exempt */}
           New Rule
         </button>
       </div>
@@ -258,7 +258,7 @@ export function DirectoryRulesManager() {
               <span className={ruleMeta}>Auto-yes: on</span>
             )}
             {(rule.overrides?.tags?.length ?? 0) > 0 && (
-              <span className={ruleMeta}>Tags: {rule.overrides!.tags.join(", ")}</span>
+              <span className={ruleMeta}>Tags: {(rule.overrides?.tags ?? []).join(", ")}</span>
             )}
           </div>
           <div className={ruleActions}>
@@ -266,14 +266,14 @@ export function DirectoryRulesManager() {
               type="button"
               className="btn btn-secondary"
               onClick={() => handleEdit(rule)}
-            >
+            >{/* analytics-exempt */}
               Edit
             </button>
             <button
               type="button"
               className="btn btn-danger"
               onClick={() => handleDelete(rule.path)}
-            >
+            >{/* analytics-exempt */}
               Delete
             </button>
           </div>
@@ -290,19 +290,17 @@ export function DirectoryRulesManager() {
               <label className={labelClass} htmlFor="rule-path">
                 Directory Path *
               </label>
-              <input
+              <RepoPathInput
                 id="rule-path"
-                type="text"
-                className={`${input}${pathError ? ` ${inputError}` : ""}`}
                 placeholder="/Users/you/projects/myrepo"
                 value={form.path}
-                onChange={(e) => {
-                  setForm({ ...form, path: e.target.value });
-                  if (pathError) setPathError(validatePath(e.target.value));
+                onChange={(v) => {
+                  setForm({ ...form, path: v });
+                  if (pathError) setPathError(validatePath(v));
                 }}
                 disabled={!!editingPath}
+                error={pathError || undefined}
               />
-              {pathError && <span className={fieldError}>{pathError}</span>}
             </div>
             <div className={field}>
               <label className={labelClass} htmlFor="rule-profile">
@@ -373,7 +371,7 @@ export function DirectoryRulesManager() {
                           className={tagRemove}
                           onClick={() => handleRemoveTag(t)}
                           aria-label={`Remove tag ${t}`}
-                        >
+                        >{/* analytics-exempt */}
                           x
                         </button>
                       </span>
@@ -392,7 +390,7 @@ export function DirectoryRulesManager() {
                       type="button"
                       className="btn btn-secondary"
                       onClick={handleAddTag}
-                    >
+                    >{/* analytics-exempt */}
                       Add
                     </button>
                   </div>
@@ -406,14 +404,14 @@ export function DirectoryRulesManager() {
               className="btn btn-primary"
               onClick={handleSave}
               disabled={saving}
-            >
+            >{/* analytics-exempt */}
               {saving ? "Saving..." : "Save"}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={handleCancel}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           </div>

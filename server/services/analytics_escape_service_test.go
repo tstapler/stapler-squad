@@ -32,7 +32,7 @@ func createTestServiceWithAnalytics(t *testing.T) (*SessionService, *ent.Client)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 	client := createTestAnalyticsClient(t)
-	svc.SetAnalyticsClient(client)
+	svc.SetEscapeEventsClient(client)
 	return svc, client
 }
 
@@ -128,7 +128,7 @@ func TestQueryEscapeAnalytics_NoClientReturnsUnavailable(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
-	// analyticsClient intentionally not set
+	// escapeEventsClient intentionally not set
 
 	req := connect.NewRequest(&sessionv1.QueryEscapeAnalyticsRequest{SessionId: "x"})
 	_, err := svc.QueryEscapeAnalytics(context.Background(), req)
@@ -203,6 +203,22 @@ func TestGetEscapeAnalyticsSummary_RequiresSessionID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+func TestGetEscapeAnalyticsSummary_SeparatesSourceVolumeFromCorrelationOutcomes(t *testing.T) {
+	svc, client := createTestServiceWithAnalytics(t)
+	insertEscapeEvent(t, client, "session-health", "pty_read", "SGR", false)
+	insertEscapeEvent(t, client, "session-health", "pty_read", "Cursor", false)
+	insertEscapeEvent(t, client, "session-health", "transport", "SGR", false)
+
+	resp, err := svc.GetEscapeAnalyticsSummary(context.Background(), connect.NewRequest(&sessionv1.GetEscapeAnalyticsSummaryRequest{SessionId: "session-health"}))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), resp.Msg.TotalSequences)
+	assert.Equal(t, int64(1), resp.Msg.CorrelationOutcomes)
+	assert.Equal(t, int64(1), resp.Msg.MatchedSequences)
+	assert.InDelta(t, 0.5, resp.Msg.CorrelationCoverage, 1e-9)
+	assert.False(t, resp.Msg.CaptureHealthy)
+	assert.Zero(t, resp.Msg.MangleRate)
+}
+
 // GetEscapeAnalyticsGlobalSummary tests
 // ---------------------------------------------------------------------------
 
@@ -211,7 +227,7 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ReturnUnavailable_When_Analytics
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
-	// analyticsClient intentionally not set
+	// escapeEventsClient intentionally not set
 
 	req := connect.NewRequest(&sessionv1.GetEscapeAnalyticsGlobalSummaryRequest{})
 	_, err := svc.GetEscapeAnalyticsGlobalSummary(context.Background(), req)

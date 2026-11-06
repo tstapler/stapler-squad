@@ -111,6 +111,7 @@ func TestSDDTriagePromptTemplate_WarnsAgainstBackgroundStatusPlaceholder(t *test
 	t.Parallel()
 	assert.Contains(t, sddTriagePromptTemplate, "single, non-interactive call")
 	assert.Contains(t, sddTriagePromptTemplate, "no later turn")
+	assert.Contains(t, sddTriagePromptTemplate, "hard-stopped by the host", "advisory fan-out budget (ADR-029)")
 }
 
 // TestEnsureDefaultSDDPipelineMode_should_NotError_When_CreateRaceLoses uses a

@@ -22,7 +22,7 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
 ```
 
-**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `docs/explanation/tmux-keep-server-on-restart.md`.
+**Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
 
 ### Profiling
 
@@ -45,6 +45,8 @@ use) instead of raw `go test`, for readable pass/fail-per-test output — see
 Makefile's `GOTESTSUM_BIN`. One-off single-package/single-test runs below still use
 plain `go test`.
 
+**Parallel by default.** Every new Go test calls `t.Parallel()` (and its subtests too) unless it mutates process-global state (`t.Setenv`, global caches, a fixed file path, `os.Chdir`); inject those dependencies instead of mutating them so the test stays eligible. `make test`'s `-p 1` is package-level serialization for a few contention-prone packages, not a reason to skip `t.Parallel()` inside a package. See the `deterministic-fast-tests` skill.
+
 ```bash
 make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
@@ -55,8 +57,8 @@ go test ./ui -run TestFoo   # Specific test
 make test-coverage
 
 # Frontend tests (not part of make ci)
-cd web-app && npx jest --no-coverage
-cd web-app && npx jest --testPathPatterns="<pattern>" --no-coverage
+cd web-app && bunx jest --no-coverage
+cd web-app && bunx jest --testPathPatterns="<pattern>" --no-coverage
 ```
 
 Benchmark reference (all benchmarks MUST be run with `&`): `docs/reference/benchmarks.md`
@@ -90,18 +92,21 @@ both fail the build, not just report:
   usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
-  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
-  like `--new-from-rev`, so this gates on an absolute `threshold` (0.1%) instead
-  of new-code-only — a ratchet against today's cleaned-up baseline (~0.09%,
-  ~215 duplicated lines), not zero-tolerance. `minLines`/`minTokens` are tuned
-  to 20/200: verified empirically (2026-08-24 repo-wide sweep + fix) that at
-  that size every finding was real, actionable duplication — component forks,
+  or `bun run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
+  raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
+  file added one more irreducible `jest.mock(...)` block and tripped the old
+  ratchet, then to 0.14% as later heavily-mocked test files landed — see below) instead of new-code-only — a ratchet against a cleaned-up
+  baseline, not zero-tolerance. `minLines`/`minTokens` are tuned to 20/200:
+  verified empirically (2026-08-24 repo-wide sweep + fix) that at that size
+  every finding was real, actionable duplication — component forks,
   copy-pasted hooks/effects, shared style/test-fixture blocks — not
   boilerplate noise, which dominates at jscpd's noisy 5-line/50-token
-  defaults. The ~0.09% baseline that remains is `jest.mock(...)` registration
-  lines that can't be extracted into a shared function (babel-jest hoists them
-  per test file), so it's irreducible, not unfixed debt. Long-term, true
-  diff-aware cross-file duplicate detection belongs in `kibitzer`
+  defaults. Most of the baseline is `jest.mock(...)` registration lines that
+  can't be extracted into a shared function (babel-jest hoists them per test
+  file), so it grows by a small, predictable amount every time a new
+  heavily-mocked test file is added — irreducible, not unfixed debt. Long-term,
+  true diff-aware cross-file duplicate detection belongs in `kibitzer`
   (github.com/tstapler/kibitzer) — see `tstapler/kibitzer#28`.
 
 For "which files are actually risky to touch" (complexity × git-churn, not
@@ -114,9 +119,9 @@ When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
 
 | Task | Skill |
 |---|---|
-| General idioms, error handling, interfaces, naming, project structure | `/go-development` |
-| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
-| pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
+| General idioms, error handling, interfaces, naming, project structure | `/golang-development` |
+| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/golang-concurrency` |
+| pprof profiling — CPU, memory, goroutine, mutex profiles | `/golang-profiling` |
 | Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
 
 Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
@@ -188,6 +193,8 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 3. Update protobuf definitions in `proto/session/v1/` if needed → `make proto-gen`
 4. Test with `make install-service`
 
+**New page:** also add a row to `web-app/src/app/route-meta.ts` (title and optional feature-flag `guard`); `route-meta.test.ts` fails with the fix instruction if it is missing or differs from the page's `metadata`. Gate a subtree with `<FeatureGuard>` in its layout. See `.claude/rules/nav-facade.md`.
+
 ### New Omnibar Capabilities
 Two registries must stay in sync — see `docs/reference/feature-testing-registry.md`:
 - **OmnibarAction union** (`types.ts` + `dispatch.ts` + `dispatch.test.ts`) for user-triggerable actions
@@ -235,13 +242,14 @@ Markers: `// +api: session:create` in Go handlers; `// +feature: session-list` i
 
 Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server first** — `tests/e2e/global-setup.ts` does this automatically for every run, fully isolated from any already-running instance:
 
-- Spawns `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` with `PORT=<dynamically-assigned free port>` (`findFreePort()` in `tests/e2e/helpers/test-server.ts`) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
-- `--test-dir` (backed by `STAPLER_SQUAD_TEST_DIR`) points at a PID-scoped temp directory (`/tmp/stapler-squad-test-<pid>` by default, or `TEST_SERVER_DIR` to override) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service.
-- Playwright's `baseURL` is set dynamically to that port via `TEST_SERVER_URL` (see `playwright.config.ts`); the hardcoded `:8544` fallback there only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
-- Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
+- Spawns `E2E_WORKERS` (default 1) isolated `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` servers, one per Playwright worker slot, each with `PORT=<dynamically-assigned free port>` (ports are reserved together in `helpers/server-pool.ts`; `findFreePort()` in `helpers/test-server.ts` is the single-server path) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
+- Each server has its own `--test-dir` (`/tmp/stapler-squad-test-<pid>` at one worker, `...-w<slot>` otherwise; `TEST_SERVER_DIR` overrides the base) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service or with another slot — and its own private tmux socket (`ssq-e2e-<random>`).
+- A worker finds its server through `TEST_PARALLEL_INDEX` (Playwright sets it before loading config and specs): use `baseUrl()` / `testDir()` / `slotTmp(name)` from `tests/e2e/helpers/base-url.ts`, never `process.env.TEST_SERVER_URL` / `BASE_URL` / `TEST_SERVER_TESTDIR` (a jest guard fails on those). `playwright.config.ts`'s `baseURL` and storage state are per-slot too; at one worker the hardcoded `:8544` fallback only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
+- Global teardown (`global-teardown.ts`) kills the isolated servers and cleans up their temp dirs when the run ends.
 
 ```bash
-cd tests/e2e && npm test                                 # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && bun run test                                # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && E2E_WORKERS=4 bun run test                  # same suite, 4 workers each with its own server
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
@@ -257,20 +265,23 @@ make e2e-lighthouse
 
 ### Manual/interactive testing without touching the live deployed instance
 
-Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `docs/explanation/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it briefly takes the live server down during the restart and ships your in-progress build to every session/backlog item in flight; tmux sessions themselves survive the restart — see the Note above — but the binary swap and restart-window downtime are still real). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
 mkdir -p ~/.stapler-squad/manual-builds/manual-1
 go build -o ~/.stapler-squad/manual-builds/manual-1/stapler-squad .
-PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
+ss -ltnp | grep -E '62871|62872'   # must print nothing — stale manual instances can still hold these ports
+PORT=62871 STAPLER_SQUAD_INSTANCE=claude-manual-test STAPLER_SQUAD_TMUX_SOCKET=ssq-manual-1 ~/.stapler-squad/manual-builds/manual-1/stapler-squad --tmux-keep-server &
 # ...test in a browser at http://localhost:62871...
 # for --remote-access, also pass: --remote-port 62872   (its default, 8444, collides with the live instance)
 kill %1   # stop it when done
+tmux -L ssq-manual-1 kill-server   # drop its private tmux server (touches only that socket, never the live one)
 ```
 
 - Build to `~/.stapler-squad/manual-builds/manual-<N>/stapler-squad` — never `./stapler-squad` (the live launchd/systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open) and never a bare `/tmp/ssq-manual-test` path (no per-instance separation, so a second concurrent manual build silently overwrites the first instance's running binary, and `/tmp` can be cleared by the OS between reboots, unlike `~/.stapler-squad/`). Number the directory to match the port-block instance (`manual-1` ↔ `62871`/`62872`, `manual-2` ↔ `62873`/`62874`) so the binary path and the port it's bound to stay obviously paired.
 - Use ports from the **manual dev port block** below — `PORT` must differ from `:8543` (and `--remote-port` from `:8444`) or the bind will fail.
-- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `docs/reference/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
+- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `docs/reference/state-isolation.md`) — config, DB, logs, sessions and backlog are separate from the live instance. This is separate from the build directory above: `instances/<name>/` holds runtime state (sessions, config, worktrees), `manual-builds/manual-<N>/` holds the binary.
+- **`STAPLER_SQUAD_TMUX_SOCKET=<unique-name>` is what isolates tmux** (name: 1–64 chars of `[A-Za-z0-9._-]`, not starting with `-`; an invalid value makes startup fail). `STAPLER_SQUAD_INSTANCE` and `--test-mode`/`--test-dir` do **not** — without the socket var the instance shares the live service's default tmux server, sees its sessions, and its leaked-control-mode sweeper (`session/tmux/leaked_control_mode_sweeper.go`) can kill the live service's control clients. Use a different name per concurrent instance (e.g. `ssq-manual-2` for `manual-2`). Startup logs `Using private tmux socket` when it is active.
 - `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
 
 #### Manual dev port block
@@ -283,7 +294,8 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | 62872 | Manual instance #1 — `--remote-port` |
 | 62873 | Manual instance #2 — `PORT` (when a second concurrent instance is needed, e.g. comparing before/after) |
 | 62874 | Manual instance #2 — `--remote-port` |
-| 62875–62880 | Spare |
+| 62875 | Bun dev server (`web-app/build/dev.ts`; localhost only) |
+| 62876–62880 | Spare |
 
 `tests/e2e/` doesn't use this block — it allocates a free ephemeral port per run via `findFreePort()` (`tests/e2e/helpers/test-server.ts`), which needs no fixed reservation.
 
@@ -318,14 +330,22 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Topic | File |
 |---|---|
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
+| Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
+| Build the web UI (Bun): `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
 | Tag-based session organization | `docs/reference/tag-organization.md` |
+| Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
+| Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| CI job budget: checks per PR run, where each check runs, how to add a job without growing it | `docs/reference/ci-job-budget.md` |
+| Terminal WebSocket pool (`terminal_ws_pool`: flag, size knobs, wire format, limits, metrics) | `docs/reference/terminal-ws-pool.md`, `docs/how-to/tune-terminal-ws-pool.md`, `docs/adr/ADR-033-terminal-websocket-pool.md` |
+| Unary request batching (`batch_unary` flag, `POST /api/batch/unary`, allow-list, fallback) | `docs/reference/unary-request-batching.md` |
+| Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `docs/how-to/bundle-tmux.md` |
@@ -340,16 +360,36 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
-| Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
-| Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
+| Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
+| Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
+| A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
+| Why autonomous-mode sessions stop early: every driver exit path, cited, with verdicts | `docs/explanation/autonomous-stall-causes.md` |
+| Profile DB usage from Grafana/VictoriaMetrics (pool wait, SQLite contention, slow queries, ent-read sizing, decision tree, verified PromQL) | `profile-db-usage` skill |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
 | Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
+| SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
+| Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
+| Unfinished-scanner caches: `/actuator/unfinished-scanner` counters, shadow verify, per-flag rollback | `docs/how-to/tune-unfinished-scanner-caches.md` |
+| Start a git backend cohort shadow soak (`git_backend_cohorts`), read counters (`/actuator/git-backend`, `make git-soak-status`), flip criteria, revert | `docs/how-to/flip-git-backend-cohort.md` |
+| Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
+| Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
+| Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
+| Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
+| Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
+| Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
+| Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
+| Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |
+| Verify the notification-actions rollout on an isolated instance, per flag | `docs/how-to/verify-notification-actions-rollout.md` |
+| Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
+| Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |
+| Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
+| Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |

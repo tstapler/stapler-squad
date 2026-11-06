@@ -3,10 +3,9 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { TmuxVersionMismatch } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 import { SystemBanner } from "@/components/ui/SystemBanner";
 import { RestartTmuxServerConfirmDialog } from "./RestartTmuxServerConfirmDialog";
 
@@ -31,7 +30,7 @@ export function TmuxVersionMismatchBanner() {
   const [restartError, setRestartError] = useState<string | null>(null);
 
   const client = useMemo(
-    () => createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() })),
+    () => createClient(SessionService, getConnectTransport()),
     []
   );
 

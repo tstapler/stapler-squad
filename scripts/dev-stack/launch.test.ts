@@ -10,6 +10,7 @@ import {
   reconcileStaleManifest,
   reapOrphanedChildren,
   getManifestPath,
+  frontendSpawnPlan,
   DevStackManifest,
 } from "./launch";
 
@@ -107,6 +108,23 @@ afterAll(async () => {
       await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Frontend spawn (mocked, no real process started)
+// ---------------------------------------------------------------------------
+
+describe("frontendSpawnPlan", () => {
+  const config = { instance: "x", backendPort: 1, frontendPort: 62875, apiBaseUrl: "http://localhost:1/api" };
+
+  it("spawns bun build/dev.ts from web-app with PORT and the API URL set", () => {
+    const plan = frontendSpawnPlan(config, {});
+    expect(plan.command).toBe("bun");
+    expect(plan.args).toEqual(["build/dev.ts"]);
+    expect(plan.cwd).toMatch(/web-app$/);
+    expect(plan.env.PORT).toBe("62875");
+    expect(plan.env.NEXT_PUBLIC_API_URL).toBe(config.apiBaseUrl);
+  });
 });
 
 // ---------------------------------------------------------------------------

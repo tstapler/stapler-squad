@@ -99,7 +99,7 @@ const withCursorSyncTimeout = 300 * time.Millisecond
 // A failed position lookup, or one that doesn't return within
 // withCursorSyncTimeout, leaves content unchanged rather than blocking the
 // whole snapshot over a best-effort cosmetic fix.
-func withCursorSync(content string, target cursorPositioner) string {
+func withCursorSync(clock Clock, content string, target cursorPositioner) string {
 	type cursorResult struct {
 		x, y int
 		err  error
@@ -111,6 +111,9 @@ func withCursorSync(content string, target cursorPositioner) string {
 		x, y, err := target.GetPaneCursorPosition()
 		resultCh <- cursorResult{x, y, err}
 	}()
+	timedOut := make(chan struct{})
+	timer := clock.AfterFunc(withCursorSyncTimeout, func() { close(timedOut) })
+	defer timer.Stop()
 	select {
 	case res := <-resultCh:
 		// The goroutine's defer runs immediately after the send above, but
@@ -126,7 +129,7 @@ func withCursorSync(content string, target cursorPositioner) string {
 		}
 		// CUP is 1-based; tmux cursor coords are 0-based.
 		return content + fmt.Sprintf("\x1b[%d;%dH", res.y+1, res.x+1)
-	case <-time.After(withCursorSyncTimeout):
+	case <-timedOut:
 		log.Warn("streamhub: GetPaneCursorPosition exceeded timeout, skipping cursor sync", "timeout", withCursorSyncTimeout)
 		return content
 	}

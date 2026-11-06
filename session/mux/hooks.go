@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
 )
 
 // HooksConfig represents the Claude Code hooks configuration file format.
@@ -106,12 +110,12 @@ func GenerateHooksFile(meta *HooksMetadata) (string, error) {
 				Matcher: HookMatcher{Event: "PermissionRequest"},
 				Hooks: []HookCommand{
 					{
-						Type:    "http",
-						URL:     "http://localhost:8543/api/hooks/permission-request",
-						Timeout: 300,
-						Headers: map[string]string{
-							"X-CS-Session-ID": meta.TmuxSession,
-						},
+						// A command hook, not an http hook: it reads the local API
+						// token from its 0600 file at run time, so the secret is
+						// never written into the hooks file.
+						Type:    "command",
+						Command: permissionRequestHookCommand(meta.TmuxSession),
+						Timeout: 300000, // ms; matches Claude Code's 300s max
 					},
 				},
 			},
@@ -298,4 +302,17 @@ func processExists(pid int) bool {
 	// On Unix, FindProcess always succeeds. We need to send signal 0 to check.
 	err = process.Signal(os.Signal(nil))
 	return err == nil
+}
+
+// permissionRequestHookCommand POSTs the hook payload (stdin) to the local
+// listener and prints the decision JSON, like the http hook it replaces.
+func permissionRequestHookCommand(sessionID string) string {
+	authArg := ""
+	if dir, err := config.GetConfigDir(); err == nil {
+		if a := localtoken.CurlHeaderArg(dir); a != "" {
+			authArg = " " + a
+		}
+	}
+	return fmt.Sprintf("curl -s --max-time 300 -X POST 'http://localhost:8543/api/hooks/permission-request' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s'%s -d @-",
+		strings.ReplaceAll(sessionID, "'", ""), authArg)
 }

@@ -211,3 +211,94 @@ func Test_webauthnForHost_should_RateLimitPerSourceIP_When_ManyDistinctHostnames
 		t.Fatalf("expected at most %d validator calls (the burst size), got %d", ipLimiterBurst, calls)
 	}
 }
+
+// TestHandler_RegisterHostname_AddsNewRPIDAndOrigin verifies the happy path:
+// proactively registering a not-yet-known hostname adds it to both h.rpIDs
+// and h.webauthn, with a derived origin matching webauthnForHost's own
+// dynamic-registration logic.
+func TestHandler_RegisterHostname_AddsNewRPIDAndOrigin(t *testing.T) {
+	const newHost = "netflix1.newwifi.local"
+	h := newTestHandler(t, []string{"onyx.local"}, nil)
+
+	if err := h.RegisterHostname(newHost); err != nil {
+		t.Fatalf("RegisterHostname: %v", err)
+	}
+
+	h.mu.RLock()
+	wa, known := h.webauthn[newHost]
+	rpIDs := append([]string(nil), h.rpIDs...)
+	h.mu.RUnlock()
+
+	if !known {
+		t.Fatalf("expected %s to be registered in webauthn map", newHost)
+	}
+	found := false
+	for _, rpID := range rpIDs {
+		if rpID == newHost {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s to be appended to rpIDs, got %v", newHost, rpIDs)
+	}
+
+	wantOrigin := "https://" + newHost
+	originFound := false
+	for _, o := range wa.Config.RPOrigins {
+		if o == wantOrigin {
+			originFound = true
+		}
+	}
+	if !originFound {
+		t.Fatalf("expected RPOrigins to contain %q, got %v", wantOrigin, wa.Config.RPOrigins)
+	}
+}
+
+// TestHandler_RegisterHostname_IdempotentOnRepeat verifies that registering
+// an already-registered hostname a second time is a no-op: no error, and no
+// duplicate rpIDs entry.
+func TestHandler_RegisterHostname_IdempotentOnRepeat(t *testing.T) {
+	const newHost = "netflix1.newwifi.local"
+	h := newTestHandler(t, []string{"onyx.local"}, nil)
+
+	if err := h.RegisterHostname(newHost); err != nil {
+		t.Fatalf("first RegisterHostname: %v", err)
+	}
+	h.mu.RLock()
+	countAfterFirst := len(h.rpIDs)
+	h.mu.RUnlock()
+
+	if err := h.RegisterHostname(newHost); err != nil {
+		t.Fatalf("second RegisterHostname: %v", err)
+	}
+	h.mu.RLock()
+	countAfterSecond := len(h.rpIDs)
+	h.mu.RUnlock()
+
+	if countAfterSecond != countAfterFirst {
+		t.Fatalf("expected rpIDs count to stay %d after re-registering, got %d", countAfterFirst, countAfterSecond)
+	}
+}
+
+// TestHandler_RegisterHostname_SubsequentRequestSkipsHostnameValidator verifies
+// that proactive registration and the reactive webauthnForHost request path
+// share state: once RegisterHostname has added a hostname, a later request
+// for it must never fall through to hostnameValidator.
+func TestHandler_RegisterHostname_SubsequentRequestSkipsHostnameValidator(t *testing.T) {
+	const newHost = "netflix1.newwifi.local"
+	h := newTestHandler(t, []string{"onyx.local"}, func(hostname string) bool {
+		t.Fatalf("hostnameValidator should not be called for a proactively-registered hostname, got %q", hostname)
+		return false
+	})
+
+	if err := h.RegisterHostname(newHost); err != nil {
+		t.Fatalf("RegisterHostname: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = newHost
+
+	if _, err := h.webauthnForHost(req); err != nil {
+		t.Fatalf("webauthnForHost: %v", err)
+	}
+}

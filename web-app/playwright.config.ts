@@ -4,8 +4,8 @@ import { defineConfig, devices } from '@playwright/test';
  * Playwright configuration for terminal stress tests.
  *
  * Usage:
- *   pnpm run test:e2e             # Run all E2E tests
- *   pnpm run test:stress          # Run only terminal stress tests
+ *   bun run test:e2e             # Run all E2E tests
+ *   bun run test:stress          # Run only terminal stress tests
  *   npx playwright test           # Direct invocation
  *
  * The webServer will automatically start on an available port.
@@ -16,6 +16,8 @@ import { defineConfig, devices } from '@playwright/test';
 // Use a fixed port for consistency between webServer and tests
 // Can be overridden with TEST_PORT environment variable
 const TEST_PORT = process.env.TEST_PORT || '3333';
+
+const webServerCommand = `env PORT=${TEST_PORT} bun build/dev.ts`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -79,7 +81,7 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   /* Use webpack mode (not turbopack) for protobuf .js import compatibility */
   webServer: {
-    command: `npx next dev --port ${TEST_PORT}`,
+    command: webServerCommand,
     url: `http://localhost:${TEST_PORT}`,
     reuseExistingServer: process.env.TEST_REUSE_SERVER === '1' || !process.env.CI,
     timeout: 120 * 1000,

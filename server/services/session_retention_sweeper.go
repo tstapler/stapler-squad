@@ -161,7 +161,7 @@ func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, cutof
 
 // sessionSafeToDelete applies baseSafeToDelete plus the shared-worktree convergence
 // check: backlog rework/reopen reuses the same deterministic branch (and therefore the
-// same worktree directory — see session/git.findExistingWorktreeForBranch) across
+// same worktree directory — see session/git.nativeFindExistingWorktreeForBranch) across
 // rounds, so an old archived round's session can point at the exact directory another
 // round's session is using.
 //

@@ -4,8 +4,9 @@ const _features = [
   FEATURE_CATALOG['session-create'],
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('one-off session creation', () => {
   test('shows one-off option in creation panel', async ({ page }) => {
@@ -29,7 +30,7 @@ test.describe('one-off session creation', () => {
     await expect(page.getByPlaceholder(/path|directory|repo/i)).not.toBeVisible();
 
     // Session name input must still be visible and required
-    await expect(page.getByLabel('Session Name')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /^Session Name/ })).toBeVisible();
   });
 
   test('creation panel stays visible while typing session name', async ({ page }) => {
@@ -41,7 +42,7 @@ test.describe('one-off session creation', () => {
 
     await page.getByRole('radio', { name: /one.off/i }).click();
 
-    const nameInput = page.getByLabel('Session Name');
+    const nameInput = page.getByRole('textbox', { name: /^Session Name/ });
     await expect(nameInput).toBeVisible({ timeout: 5000 });
 
     // Type character-by-character — each keystroke previously triggered the bug
@@ -61,7 +62,7 @@ test.describe('one-off session creation', () => {
 
     // Select One-off and fill title via the labelled Session Name field
     await page.getByRole('radio', { name: /one.off/i }).click();
-    await page.getByLabel('Session Name').fill('e2e-one-off-test');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-one-off-test');
 
     // Intercept the CreateSession RPC to verify one_off is set
     const requestPromise = page.waitForRequest(

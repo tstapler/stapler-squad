@@ -5,6 +5,7 @@ package session.v1;
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
 import "session/v1/events.proto";
+import "session/v1/notification_action.proto";
 
 // SessionService manages AI agent session lifecycle operations.
 // Provides CRUD operations and real-time streaming for session management.
@@ -159,6 +160,32 @@ service SessionService {
   // Optionally filters by timestamp to only clear older notifications.
   rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
 
+  // PruneHiddenSessionNotifications removes stored notification rows that
+  // belong to hidden sessions. Operator-triggered; dry run unless apply is set.
+  // Keeps rows whose session cannot be determined; guarded as a local write.
+  // +api: notification:prune-hidden
+  rpc PruneHiddenSessionNotifications(PruneHiddenSessionNotificationsRequest) returns (PruneHiddenSessionNotificationsResponse) {}
+
+  // ReplyToPendingQuestion answers one outstanding single-select AskUserQuestion
+  // in one hidden session by writing one option digit to its terminal. Audited
+  // before the write, rate limited, guarded as a local write, no MCP tool.
+  // Expected business outcomes are in the response enum, never Connect errors.
+  // +api: session:reply-to-question
+  rpc ReplyToPendingQuestion(ReplyToPendingQuestionRequest) returns (ReplyToPendingQuestionResponse) {}
+
+  // InvokeNotificationAction applies one inline action from a notification
+  // descriptor (approve, deny, answer, backlog decision, guidance answer).
+  // Idempotent per idempotency_key; expected conditions are ActionOutcome
+  // values, never Connect errors. Tier B is refused on the remote listener.
+  // +api: notification:invoke-action
+  rpc InvokeNotificationAction(InvokeNotificationActionRequest) returns (InvokeNotificationActionResponse) {}
+
+  // GetDeliveryGateStats reports the hidden-session delivery gate's counters and
+  // the persisted hourly soak buckets. Aggregate counters only; no row content.
+  // Unavailable when the gate is not configured.
+  // +api: notification:gate-stats
+  rpc GetDeliveryGateStats(GetDeliveryGateStatsRequest) returns (GetDeliveryGateStatsResponse) {}
+
   // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
   rpc ListApprovalRules(ListApprovalRulesRequest) returns (ListApprovalRulesResponse) {}
 
@@ -173,6 +200,37 @@ service SessionService {
   // classifier. Malformed files are skipped; previously loaded rules for that file are
   // retained.
   rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
+
+  // ListTaggingRules returns all session-tagging rules (user and seed), each with its
+  // 7-day fire count.
+  rpc ListTaggingRules(ListTaggingRulesRequest) returns (ListTaggingRulesResponse) {}
+
+  // UpsertTaggingRule creates or updates a user-defined session-tagging rule.
+  rpc UpsertTaggingRule(UpsertTaggingRuleRequest) returns (UpsertTaggingRuleResponse) {}
+
+  // DeleteTaggingRule removes a user-defined session-tagging rule by ID.
+  rpc DeleteTaggingRule(DeleteTaggingRuleRequest) returns (DeleteTaggingRuleResponse) {}
+
+  // ReclassifySessionTags synchronously re-runs the LLM tag classifier for one session,
+  // bypassing the poller's classify-once gate. Successfully applied sessions are otherwise
+  // never reclassified automatically — this RPC is the explicit user action that does.
+  rpc ReclassifySessionTags(ReclassifySessionTagsRequest) returns (ReclassifySessionTagsResponse) {}
+
+  // GetTaggingClassifierConfig returns the LLM model hierarchy used for session-tag
+  // classification (primary model plus ordered fallbacks).
+  rpc GetTaggingClassifierConfig(GetTaggingClassifierConfigRequest) returns (GetTaggingClassifierConfigResponse) {}
+
+  // UpdateTaggingClassifierConfig replaces the LLM model hierarchy used for session-tag
+  // classification. Takes effect on the next classification with no restart.
+  rpc UpdateTaggingClassifierConfig(UpdateTaggingClassifierConfigRequest) returns (UpdateTaggingClassifierConfigResponse) {}
+
+  // GetBackgroundModels returns the model/effort pins for unattended LLM work (overrides
+  // plus built-in defaults).
+  rpc GetBackgroundModels(GetBackgroundModelsRequest) returns (GetBackgroundModelsResponse) {}
+
+  // UpdateBackgroundModels replaces the model/effort overrides. Applies on the next call
+  // with no restart.
+  rpc UpdateBackgroundModels(UpdateBackgroundModelsRequest) returns (UpdateBackgroundModelsResponse) {}
 
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
@@ -254,10 +312,33 @@ service SessionService {
   // Files over 10MB are rejected; files over 1MB are served truncated with is_truncated=true.
   rpc GetFileContent(GetFileContentRequest) returns (GetFileContentResponse) {}
 
+  // StatFile returns the version token, size and read-only reason of a file
+  // without its content. Reads at most the 1 MiB editable window to hash it.
+  rpc StatFile(StatFileRequest) returns (StatFileResponse) {}
+
+  // GetFileTransportCapabilities reports which file operations and wires this
+  // listener serves right now. Read-only; an older server returns Unimplemented.
+  rpc GetFileTransportCapabilities(GetFileTransportCapabilitiesRequest) returns (GetFileTransportCapabilitiesResponse) {}
+
+  // ReadFileRange returns one line-aligned (or byte-anchored) window of a file
+  // without reading the rest. Dark until the files:range-read flag is on; every
+  // refusal matches GetFileContent's typed refusals.
+  rpc ReadFileRange(ReadFileRangeRequest) returns (ReadFileRangeResponse) {}
+
+  // WriteFile atomically replaces a file in a session's worktree after verifying the
+  // caller's version token. A changed file yields a Conflict arm; every refusal is a
+  // Connect error carrying a ReadOnlyReasonDetail. Gated by the global files:editing flag.
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse) {}
+
   // SearchFiles performs a recursive name-substring search in a session's worktree.
   // Returns matching files with full relative paths for frontend tree reconstruction.
   // Results are capped at max_results (default 500). Minimum query length is 2 characters.
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse) {}
+
+  // SearchContent greps file contents in a session's worktree and streams batches
+  // of matches followed by one final stats message. Newest search per
+  // (session_id, client_id) wins; the repo-root fallback is never searched.
+  rpc SearchContent(SearchContentRequest) returns (stream SearchContentResponse) {}
 
   // Path Completion RPCs
 
@@ -386,14 +467,14 @@ service SessionService {
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
-  // override of the global stream-hub default, taking effect immediately
-  // for every session connection resolved after this call — no process
-  // restart required. Forcing it on still goes through the same rollback
-  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
-  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
-  // env var default. Like all stream-hub resolution, this can only affect
-  // sessions whose ownership lock hasn't resolved yet — an already-connected
-  // session's resolution is cached for its lifetime and cannot be moved.
+  // override of the global stream-hub default (the "stream_hub" feature
+  // flag), taking effect immediately for every session connection resolved
+  // after this call — no process restart required, and no rollback-rehearsal
+  // gate on either direction (config.EffectiveStreamHubEnabled). Clearing it
+  // (force_hub unset) reverts to that flag's on-by-default resolution. Like
+  // all stream-hub resolution, this can only affect sessions whose ownership
+  // lock hasn't resolved yet — an already-connected session's resolution is
+  // cached for its lifetime and cannot be moved.
   rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
@@ -406,6 +487,13 @@ service SessionService {
 
   // Batch session creation (S2)
   rpc BatchCreateSessions(BatchCreateSessionsRequest) returns (BatchCreateSessionsResponse) {}
+
+  // FanOutSession creates N (2-5) sessions from one prompt, each in its own worktree,
+  // grouped by a shared fanout tag so the UI can compare them (/fanout/:groupId).
+  rpc FanOutSession(FanOutSessionRequest) returns (FanOutSessionResponse) {}
+  // PickFanoutWinner merges the chosen variant's branch into the group's base branch and
+  // archives every other session in the group.
+  rpc PickFanoutWinner(PickFanoutWinnerRequest) returns (PickFanoutWinnerResponse) {}
 
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
@@ -520,6 +608,13 @@ service SessionService {
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
 
+  // WatchWorkflows streams real-time workflow definition events
+  // (created/updated/deleted/run). Server-streaming RPC so every open
+  // Workflows panel reflects changes from any client (MCP tool, another
+  // tab, a cron fire) without a manual refresh -- mirrors WatchBacklogItems'
+  // snapshot-then-live-fanout shape.
+  rpc WatchWorkflows(WatchWorkflowsRequest) returns (stream WorkflowEvent) {}
+
   // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
   // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
   // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
@@ -544,12 +639,34 @@ service SessionService {
   // DeleteAlias removes an alias preset by name.
   rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
 
+  // ListProgramsConfig returns all program configurations (built-in and custom).
+  rpc ListProgramsConfig(ListProgramsConfigRequest) returns (ListProgramsConfigResponse) {}
+
+  // UpsertProgramConfig creates or updates a custom program configuration.
+  rpc UpsertProgramConfig(UpsertProgramConfigRequest) returns (UpsertProgramConfigResponse) {}
+
+  // DeleteProgramConfig removes a custom program configuration by ID.
+  rpc DeleteProgramConfig(DeleteProgramConfigRequest) returns (DeleteProgramConfigResponse) {}
+
+  // ProbeProgram resolves a command to an executable on the server and, when
+  // permitted, parses its --help output into flags. Deliberately not marked
+  // NO_SIDE_EFFECTS: that would enable Connect GET, and the RPC executes a
+  // program (ADR-001).
+  rpc ProbeProgram(ProbeProgramRequest) returns (ProbeProgramResponse) {}
+
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
 
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
+
+  // PinSession pins a session so it surfaces in the dedicated Pinned section.
+  // Idempotent; rejects an archived session.
+  rpc PinSession(PinSessionRequest) returns (PinSessionResponse) {}
+
+  // UnpinSession clears the pinned flag. Idempotent.
+  rpc UnpinSession(UnpinSessionRequest) returns (UnpinSessionResponse) {}
 
   // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
   // Active, Creating, and Paused sessions are silently skipped.
@@ -574,6 +691,14 @@ service SessionService {
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
 
+  // GetTCCEnrichmentStatus lists heuristic protected roots discovered by background enrichment.
+  // +api: tcc:enrichment-status
+  rpc GetTCCEnrichmentStatus(GetTCCEnrichmentStatusRequest) returns (GetTCCEnrichmentStatusResponse) {}
+
+  // ContinueTCCEnrichment persists app consent, not an OS permission grant.
+  // +api: tcc:continue-enrichment
+  rpc ContinueTCCEnrichment(ContinueTCCEnrichmentRequest) returns (ContinueTCCEnrichmentResponse) {}
+
   // GetTmuxVersionStatus reports any detected tmux client/server version
   // mismatch (see session/tmux/version_check.go) -- a mismatch disables
   // control mode for the affected socket, degrading terminal input/output to
@@ -590,6 +715,19 @@ service SessionService {
   // obtain explicit user confirmation before calling this.
   // +api: tmux:restart-server
   rpc RestartTmuxServer(RestartTmuxServerRequest) returns (RestartTmuxServerResponse) {}
+
+  // SetCaptureTap turns the terminal-stream capture tap on or off at runtime,
+  // for the named sessions or (empty session_ids) all sessions. Loopback
+  // requests only; the output directory is fixed server-side. Every enable
+  // expires after ttl_seconds. The tap records raw terminal output, which can
+  // include secrets. See docs/how-to/capture-terminal-stream-tap.md.
+  // +api: capture-tap:set
+  rpc SetCaptureTap(SetCaptureTapRequest) returns (SetCaptureTapResponse) {}
+
+  // GetCaptureTap reports the capture tap's current state. Loopback requests
+  // only, because the response names local file paths.
+  // +api: capture-tap:get
+  rpc GetCaptureTap(GetCaptureTapRequest) returns (GetCaptureTapResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -619,6 +757,10 @@ message ListSessionsRequest {
   // When true, include archived sessions in results.
   // Defaults to false — archived sessions are excluded unless explicitly requested.
   bool include_archived = 8;
+
+  // When true, return only hidden (system/background) sessions, regardless of
+  // include_hidden. Used by the tray's Background activity section.
+  bool hidden_only = 9;
 }
 
 message ListSessionsResponse {
@@ -861,6 +1003,15 @@ message UpdateSessionRequest {
   // not updatable). Toggling this on an Active session restarts it so the
   // flag takes effect (see SetAutoApprove's doc comment).
   optional bool auto_approve = 13;
+
+  // Opt-in escape hatch for stopping a session whose worktree is broken (git
+  // cannot determine whether it has uncommitted changes). Only meaningful when
+  // status is STOPPED. Skips the fail-closed dirty-state check solely when that
+  // check errored; the worktree and branch are kept on disk. A worktree known
+  // to be dirty is still committed first. Rejected with InvalidArgument unless
+  // status is STOPPED. The kept worktree is not protected from a later explicit
+  // session delete, which removes it without a dirty check.
+  optional bool force_stop = 14;
 }
 
 message UpdateSessionResponse {
@@ -871,7 +1022,8 @@ message DeleteSessionRequest {
   // Session identifier.
   string id = 1;
 
-  // Force deletion even if session is running.
+  // Discard uncommitted changes in the session's worktree. Without it, deleting a session
+  // whose worktree is dirty (or whose state can't be checked) fails with FAILED_PRECONDITION.
   bool force = 2;
 }
 
@@ -931,6 +1083,11 @@ message WatchSessionsRequest {
 message GetSessionDiffRequest {
   // Session identifier.
   string id = 1;
+  // Unchanged lines of context around each hunk.
+  // 0 = server default (3). -1 = whole file (expand all). Positive = literal count (above 10000 = whole file).
+  // Values below -1 are rejected with INVALID_ARGUMENT. Applies to worktree sessions; directory
+  // sessions always return the default context.
+  int32 context_lines = 2;
 }
 
 message GetSessionDiffResponse {
@@ -941,6 +1098,13 @@ message GetSessionDiffResponse {
 message GetVCSStatusRequest {
   // Session identifier.
   string id = 1;
+
+  // When true the server never answers from a cache entry past its TTL while
+  // refreshing in the background (stale-while-revalidate), and will not join a
+  // computation that began before this request. The short fresh-TTL cache still
+  // applies. Set by callers reacting to a known change (session-updated event,
+  // user-clicked refresh); interval polls leave it false.
+  bool wait_for_fresh = 2;
 }
 
 message GetVCSStatusResponse {
@@ -1486,6 +1650,13 @@ message RestartSessionRequest {
 
   // Optional: preserve terminal output before restart (default: false).
   bool preserve_output = 2;
+
+  // Optional: migrate the session to a different backend ("tmux"/"tymux")
+  // as part of this restart. Empty, or equal to the current backend, is an
+  // ordinary same-backend respawn. No live hand-off exists between
+  // backends: this kills, rebuilds under the target, and resumes. Mirrors
+  // CreateSessionRequest.backend_override (field 34).
+  optional string backend_override = 3;
 }
 
 // RestartSessionResponse indicates restart success.
@@ -1677,6 +1848,16 @@ message NotificationHistoryRecord {
   // Timestamp of the most recent occurrence (may differ from created_at
   // which tracks the first occurrence).
   optional google.protobuf.Timestamp last_occurred_at = 13;
+
+  // True when this record is an unread decision the operator must act on:
+  // an actionable type that is not stamped auto_remediating=true. Computed by
+  // the server's single IsPendingDecision predicate; clients must not re-derive it.
+  bool is_pending_decision = 14;
+
+  // Actions valid on this record right now, computed at read time from the
+  // underlying entity and never stored. Empty when resolved or the flag is
+  // off; clients fall back to open-session.
+  repeated NotificationActionDescriptor actions = 15;
 }
 
 // GetNotificationHistoryRequest filters and paginates notification history.
@@ -1720,12 +1901,178 @@ message MarkNotificationReadResponse {
 message ClearNotificationHistoryRequest {
   // Optional: Clear notifications older than this timestamp (RFC3339 string).
   optional string before_timestamp = 1;
+
+  // Clear exactly these notification ids (pending decisions among them are
+  // kept and listed in the response's kept_ids). Takes precedence over
+  // before_timestamp.
+  repeated string notification_ids = 2;
+}
+
+// PruneHiddenSessionNotificationsRequest selects what a prune removes.
+message PruneHiddenSessionNotificationsRequest {
+  // When false (the default) nothing is deleted and the response lists what would be.
+  bool apply = 1;
+  // When true, unread actionable rows of hidden sessions are removed too.
+  bool include_unread_actionable = 2;
+}
+
+// PruneHiddenSessionNotificationsResponse reports the planned or applied removal.
+message PruneHiddenSessionNotificationsResponse {
+  // True when rows were deleted (apply was set and the call succeeded).
+  bool applied = 1;
+  // Ids of the rows removed, or that would be removed on a dry run.
+  repeated string notification_ids = 2;
+  // Unread actionable rows of hidden sessions that were kept.
+  int32 kept_unread_actionable = 3;
+  // Rows whose session cannot be classified; always kept.
+  int32 undeterminable = 4;
+  // Path of the timestamped backup written before an apply.
+  string backup_path = 5;
+}
+
+// ReplyOutcome is the result of a Reply attempt. Every expected business outcome
+// is a value here; Connect errors are only InvalidArgument, Internal,
+// PermissionDenied and Unauthenticated.
+enum ReplyOutcome {
+  REPLY_OUTCOME_UNSPECIFIED = 0;
+  // The digit was written and the dialog closed.
+  REPLY_OUTCOME_SENT = 1;
+  // The digit may or may not have been written, or the dialog stayed open; no Retry.
+  REPLY_OUTCOME_SEND_INDETERMINATE = 2;
+  // Failed strictly before the first byte; Retry with the same reply_id is safe.
+  REPLY_OUTCOME_NOT_SENT = 3;
+  // No such pending question for this session (answered, expired or unknown).
+  REPLY_OUTCOME_NO_PENDING = 4;
+  // The question is not the dialog on screen (stale or replaced).
+  REPLY_OUTCOME_STALE_PROMPT = 5;
+  // The session is visible; answer in the terminal.
+  REPLY_OUTCOME_NOT_HIDDEN = 6;
+  // The session's dialog cannot be read right now.
+  REPLY_OUTCOME_NOT_WAITING = 7;
+  // Rate limited; see retry_after_seconds.
+  REPLY_OUTCOME_RATE_LIMITED = 8;
+  // The hidden_session_reply kill switch is off.
+  REPLY_OUTCOME_DISABLED = 9;
+}
+
+// ReplyToPendingQuestionRequest selects one option of one pending question.
+message ReplyToPendingQuestionRequest {
+  // Session id (UUID, title or tmux name; resolved to the UUID server side).
+  string session_id = 1;
+  // question_id from the INPUT_REQUIRED notification metadata.
+  string question_id = 2;
+  // Exactly one ASCII digit, the option number (1..N).
+  string reply_text = 3;
+  // Client-generated idempotency key; a Retry reuses it.
+  string reply_id = 4;
+}
+
+// ReplyToPendingQuestionResponse carries the outcome.
+message ReplyToPendingQuestionResponse {
+  ReplyOutcome outcome = 1;
+  // Seconds to wait before retrying when outcome is RATE_LIMITED.
+  int32 retry_after_seconds = 2;
+}
+
+// GetDeliveryGateStatsRequest has no parameters.
+message GetDeliveryGateStatsRequest {}
+
+// DeliveryGateCounter is one counter at full labels.
+message DeliveryGateCounter {
+  // Counter name, e.g. "suppressed", "would_suppress", "hidden_delivered".
+  string counter = 1;
+  // Session kind: review|triage|diagnose|other|unresolved.
+  string kind = 2;
+  // Delivery class: needs_human|failure|routine.
+  string class = 3;
+  int64 count = 4;
+}
+
+// DeliveryGateBucket is one persisted hour of gate activity.
+message DeliveryGateBucket {
+  google.protobuf.Timestamp hour_start = 1;
+  // Seconds the process was running in this hour.
+  int32 uptime_seconds = 2;
+  // Seconds the global gate value was on in this hour.
+  int32 gate_on_seconds = 3;
+  // Seconds each kind's effective value was on, keyed by kind.
+  map<string, int32> gate_on_seconds_by_kind = 4;
+  int64 hidden_events_seen = 5;
+  int64 hidden_events_while_on = 6;
+  // Hidden events the gate decided to suppress: a resolved hidden session,
+  // routine class, evaluated while that scope was on. An Unresolved session is
+  // delivered fail-open and is not counted.
+  int64 routine_events_while_on = 7;
+  repeated DeliveryGateCounter counters = 8;
+}
+
+// DeliveryGateFlagChange is one change to hidden_session_gate.
+message DeliveryGateFlagChange {
+  // "global" or "kind:<name>".
+  string scope = 1;
+  // The explicit value after the change; false when the value was cleared.
+  bool value = 2;
+  google.protobuf.Timestamp at = 3;
+  // The mutation applied, so a clear or reset is distinguishable from a set false.
+  FlagMutation mutation = 4;
+}
+
+// DeliveryGateSoak is the server-computed evidence the Stage 3 prerequisites read.
+message DeliveryGateSoak {
+  double gate_on_hours = 1;
+  int64 routine_events_while_on = 2;
+  // Empty when there was no off flip in the 72-hour window.
+  google.protobuf.Timestamp last_off_flip_at = 3;
+  // Hidden events delivered while the gate was on that traversed the real gate
+  // with class failure, since last_off_flip_at.
+  int64 failure_delivered_while_on = 4;
+  // The same for class needs-human.
+  int64 needs_human_delivered_while_on = 5;
+  // The subset of the two counts whose title starts with "[synthetic-probe]".
+  int64 probe_delivered_while_on = 6;
+  // Scopes with an explicit persisted false: "global", "kind:review", ...
+  repeated string explicit_off_scopes = 7;
+  // Sum over the buckets since last_off_flip_at of
+  // min(gate_on_seconds, uptime_seconds)/3600, counting only buckets with
+  // routine_events_while_on > 0 and excluding the bucket that contains
+  // last_off_flip_at.
+  double soak_streak_hours = 8;
+  // The same figure per kind, keyed by kind.
+  map<string, double> soak_streak_hours_by_kind = 9;
+}
+
+// DeliveryGateStatsFileStatus describes the persisted bucket file.
+message DeliveryGateStatsFileStatus {
+  bool loaded = 1;
+  bool quarantined = 2;
+  // False when the file cannot be written; the streak figure is then lost on restart.
+  bool writable = 3;
+}
+
+// GetDeliveryGateStatsResponse separates totals that reset on restart from
+// buckets that do not.
+message GetDeliveryGateStatsResponse {
+  google.protobuf.Timestamp process_start = 1;
+  int64 uptime_seconds = 2;
+  // Counters since process start, at full labels. Reset on restart.
+  repeated DeliveryGateCounter since_process_start = 3;
+  // The last 72 hourly buckets, oldest first. Persisted across restarts.
+  repeated DeliveryGateBucket buckets = 4;
+  // The last 20 changes of hidden_session_gate, newest last.
+  repeated DeliveryGateFlagChange flag_history = 5;
+  // Hidden events resolved to each kind in the last 24 hours.
+  map<string, int64> events_by_kind_24h = 6;
+  DeliveryGateSoak soak = 7;
+  DeliveryGateStatsFileStatus stats_file_status = 8;
 }
 
 // ClearNotificationHistoryResponse confirms how many notifications were cleared.
 message ClearNotificationHistoryResponse {
   bool success = 1;
   int32 cleared_count = 2;
+  // Requested ids the server refused to delete because they are still pending
+  // decisions. Always empty for the before_timestamp / clear-everything paths.
+  repeated string kept_ids = 3;
 }
 
 // ============================================================================
@@ -1765,6 +2112,98 @@ message ReloadClaudeSettingsRulesResponse {
   bool success = 1;
   int32 rule_count = 2;
   string message = 3;
+}
+
+// ============================================================================
+// Session-Tagging Rules Messages
+// ============================================================================
+
+message ListTaggingRulesRequest {}
+
+message ListTaggingRulesResponse {
+  repeated TaggingRuleProto rules = 1;
+}
+
+message UpsertTaggingRuleRequest {
+  TaggingRuleProto rule = 1;
+}
+
+message UpsertTaggingRuleResponse {
+  TaggingRuleProto rule = 1;
+  bool created = 2;
+}
+
+message DeleteTaggingRuleRequest {
+  string id = 1;
+}
+
+message DeleteTaggingRuleResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ReclassifySessionTagsRequest {
+  // Session ID or title (matched the same way as the tag poller's instance list).
+  string session_id = 1;
+}
+
+message ReclassifySessionTagsResponse {
+  // Tags applied by this run (post provenance/suppression filtering, as stored).
+  repeated string tags = 1;
+}
+
+message TaggingClassifierConfigProto {
+  // Primary model passed as --model to the headless CLI (e.g. "haiku").
+  // Empty means the server default ("haiku").
+  string model = 1;
+  // Ordered fallback models tried after the primary fails, first success wins.
+  repeated string fallback_models = 2;
+}
+
+message GetTaggingClassifierConfigRequest {}
+
+message GetTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
+  // True when STAPLER_SQUAD_TAGGING_MODEL / STAPLER_SQUAD_TAGGING_FALLBACK_MODELS
+  // are set: env wins over the stored config, so form edits take effect only after
+  // the env overrides are unset. The UI surfaces this as a warning banner.
+  bool env_override_active = 2;
+}
+
+message UpdateTaggingClassifierConfigRequest {
+  TaggingClassifierConfigProto config = 1;
+}
+
+message UpdateTaggingClassifierConfigResponse {
+  TaggingClassifierConfigProto config = 1;
+}
+
+message BackgroundModelsProto {
+  // Headless feature key -> model alias/ID override.
+  map<string, string> features = 1;
+  // Backlog stage role ("work", "review") -> model alias/ID override.
+  map<string, string> stages = 2;
+  // --effort level for background work sessions; empty = server default ("medium"); "off" = no --effort flag.
+  string effort = 3;
+}
+
+message GetBackgroundModelsRequest {}
+
+message GetBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
+  // Built-in defaults, keyed like settings; a blank override resolves to these.
+  map<string, string> feature_defaults = 2;
+  map<string, string> stage_defaults = 3;
+  // Accepted --effort values.
+  repeated string effort_levels = 4;
+}
+
+message UpdateBackgroundModelsRequest {
+  BackgroundModelsProto settings = 1;
+}
+
+message UpdateBackgroundModelsResponse {
+  BackgroundModelsProto settings = 1;
 }
 
 message GetApprovalAnalyticsRequest {
@@ -1959,6 +2398,264 @@ message GetFileContentResponse {
 
   // True if the file exceeded 1MB and was truncated to the first 1MB.
   bool is_truncated = 6;
+
+  // Optimistic-concurrency token "v1:<size>:<mtime_ns>:<sha256hex>". The hash
+  // segment is "-" when read_only_reason is anything but NONE.
+  string version_token = 7;
+
+  // Line endings of the on-disk file; content keeps them as read.
+  LineEnding line_ending = 8;
+
+  // True if the on-disk file starts with a UTF-8 BOM (stripped from content).
+  bool has_bom = 9;
+
+  // Why the file cannot be edited; NONE when it can.
+  ReadOnlyReason read_only_reason = 10;
+}
+
+// LineEnding is the end-of-line convention detected on read.
+enum LineEnding {
+  LINE_ENDING_UNSPECIFIED = 0;
+  LINE_ENDING_LF = 1;
+  LINE_ENDING_CRLF = 2;
+  // Both kinds, or a lone CR; such files are read-only.
+  LINE_ENDING_MIXED = 3;
+}
+
+// ReadOnlyReason explains why a file is not editable (or why an operation was refused).
+enum ReadOnlyReason {
+  READ_ONLY_REASON_UNSPECIFIED = 0;
+  READ_ONLY_REASON_NONE = 1;
+  READ_ONLY_REASON_FLAG_OFF = 2;
+  READ_ONLY_REASON_BINARY = 3;
+  READ_ONLY_REASON_TRUNCATED = 4;
+  READ_ONLY_REASON_TOO_LARGE = 5;
+  READ_ONLY_REASON_NON_UTF8 = 6;
+  READ_ONLY_REASON_MIXED_EOL = 7;
+  READ_ONLY_REASON_SYMLINK = 8;
+  READ_ONLY_REASON_WORKTREE_MISSING = 9;
+  READ_ONLY_REASON_HIDDEN_SESSION = 10;
+  READ_ONLY_REASON_GIT_INTERNAL = 11;
+  // File gone from disk; used only inside a conflict's Unavailable arm.
+  READ_ONLY_REASON_DELETED = 12;
+}
+
+// ReadOnlyReasonDetail is the typed Connect error detail attached to a refusal.
+message ReadOnlyReasonDetail {
+  ReadOnlyReason reason = 1;
+  // For SYMLINK refusals: the link's raw target string (metadata only).
+  string link_target = 2;
+}
+
+message StatFileRequest {
+  string session_id = 1;
+  // File path relative to session worktree root.
+  string path = 2;
+  // Ask for whole-file analysis to be started or reported; default is the cheap path.
+  bool want_analysis = 3;
+  // Ask for the sha256 even above the cheap hashing cap.
+  bool want_sha256 = 4;
+}
+
+message StatFileResponse {
+  string version_token = 1;
+  int64 size = 2;
+  ReadOnlyReason read_only_reason = 3;
+  // Whole-file analysis state; UNSPECIFIED on the cheap path.
+  FileAnalysisState analysis = 4;
+}
+
+enum FileAnalysisState {
+  FILE_ANALYSIS_STATE_UNSPECIFIED = 0;
+  FILE_ANALYSIS_STATE_PENDING = 1;
+  FILE_ANALYSIS_STATE_READY = 2;
+  FILE_ANALYSIS_STATE_FAILED = 3;
+}
+
+enum FileOp {
+  FILE_OP_UNSPECIFIED = 0;
+  FILE_OP_STAT = 1;
+  FILE_OP_READ_ALL = 2;
+  FILE_OP_READ_LINES = 3;
+  FILE_OP_READ_BYTES = 4;
+  FILE_OP_READ_STREAM = 5;
+  FILE_OP_PATCH = 6;
+  FILE_OP_WRITE_FULL = 7;
+}
+
+enum FileWire {
+  FILE_WIRE_UNSPECIFIED = 0;
+  FILE_WIRE_CONNECT_UNARY = 1;
+  FILE_WIRE_CONNECT_STREAM = 2;
+  FILE_WIRE_WS_STREAM = 3;
+  FILE_WIRE_HTTP_RANGE = 4;
+}
+
+message FileTransportLimits {
+  int64 max_range_bytes = 1;
+  int32 max_range_lines = 2;
+  int32 preferred_chunk_bytes = 3;
+  int32 max_patch_ops = 4;
+  int64 max_patch_body_bytes = 5;
+  int64 max_insert_bytes = 6;
+  int64 max_write_full_bytes = 7;
+  // Editable ceiling: files above this get the "-" token.
+  int64 hash_cap_bytes = 8;
+  int32 max_concurrent_ranges = 9;
+}
+
+message FileTransportCapabilities {
+  // Major version; breaking changes only.
+  uint32 protocol_version = 1;
+  // Additive feature strings; clients ignore unknown ones.
+  repeated string features = 2;
+  repeated FileOp ops = 3;
+  repeated FileWire wires = 4;
+  FileTransportLimits limits = 5;
+  // Bumps whenever a files flag changes.
+  uint64 caps_epoch = 6;
+}
+
+message GetFileTransportCapabilitiesRequest {
+  string session_id = 1;
+}
+
+message GetFileTransportCapabilitiesResponse {
+  FileTransportCapabilities capabilities = 1;
+}
+
+// RangeDir says which way a window extends from its anchor.
+enum RangeDir {
+  RANGE_DIR_UNSPECIFIED = 0;
+  // Centered on the anchor (the default for line anchors).
+  RANGE_DIR_AROUND = 1;
+  // Starts at the anchor and reads toward the end of the file.
+  RANGE_DIR_FORWARD = 2;
+  // Ends at the anchor and reads toward the start of the file.
+  RANGE_DIR_BACKWARD = 3;
+}
+
+// LineAnchor anchors a window on a 1-based line number.
+message LineAnchor {
+  int64 anchor_line = 1;
+  RangeDir dir = 2;
+  // Lines wanted; clamped to 4,000 and by max_bytes.
+  int32 want_lines = 3;
+}
+
+// ByteAnchor anchors a window on a raw-file byte offset; the window start snaps
+// back over at most three continuation bytes to a rune start.
+message ByteAnchor {
+  int64 offset = 1;
+  // Bytes wanted; clamped by max_bytes.
+  int64 length = 2;
+  RangeDir dir = 3;
+}
+
+message ReadFileRangeRequest {
+  string session_id = 1;
+  // File path relative to session worktree root.
+  string path = 2;
+  oneof anchor {
+    LineAnchor lines = 3;
+    ByteAnchor bytes = 4;
+  }
+  // Byte cap for the served window; 0 means the 128 KiB default, above 1 MiB is clamped.
+  int64 max_bytes = 5;
+  // When the file is at most this many bytes, the whole file is served in one response.
+  int64 prefer_full_if_le = 6;
+  // Validator the client last saw; a mismatch is reported through validator, not an error.
+  string if_validator = 7;
+  // caps_epoch the client holds; a stale epoch is answered with the current one.
+  uint64 caps_epoch = 8;
+}
+
+message ReadFileRangeResponse {
+  // Window text: LF-normalized, BOM stripped, invalid UTF-8 replaced.
+  string content = 1;
+  // 1-based first and last line in the window (0 when the window holds no lines).
+  int64 start_line = 2;
+  int64 end_line = 3;
+  // Raw-file byte offsets of the window, [start_byte, end_byte); a BOM never shifts them.
+  int64 start_byte = 4;
+  int64 end_byte = 5;
+  // Window touches the start / end of the file.
+  bool bof = 6;
+  bool eof = 7;
+  // line_count is exact only when line_count_known (whole-file analysis is ready).
+  bool line_count_known = 8;
+  int64 line_count = 9;
+  // "<size>:<mtime_ns>:<inode>" of the file the window was read from.
+  string validator = 10;
+  // Same format as StatFile; the "-" form while analysis is pending or the file is read-only.
+  string version_token = 11;
+  // CRC32C (Castagnoli) of the raw bytes served for the window.
+  uint32 chunk_crc32c = 12;
+  // The file changed between the pre-read and post-read fstat; the window may be torn.
+  bool torn = 13;
+  LineEnding eol_class = 14;
+  bool has_bom = 15;
+  bool is_binary = 16;
+  // Raw offset of the first NUL after the first 8 KiB inside this window.
+  optional int64 contains_nul_at = 17;
+  bool non_utf8 = 18;
+  // A line over 256 KiB switched the region to read-only byte-window mode.
+  bool long_line = 19;
+  // The window ends mid-line (byte-window mode or the byte cap).
+  bool partial_last_line = 20;
+  FileAnalysisState analysis = 21;
+  uint64 caps_epoch = 22;
+  int64 size = 23;
+  ReadOnlyReason read_only_reason = 24;
+}
+
+// RangeBusyDetail is the typed detail on a ResourceExhausted ReadFileRange refusal.
+message RangeBusyDetail {
+  // "per_client" or "per_ip".
+  string reason = 1;
+}
+
+message WriteFileRequest {
+  string session_id = 1;
+  // File path relative to the session's active directory.
+  string path = 2;
+  // New content: LF-normalized UTF-8 without BOM. The server re-applies the on-disk
+  // file's own line ending and BOM; NUL or any CR is rejected.
+  bytes content = 3;
+  // FileVersionToken of the content the edit started from.
+  string expected_token = 4;
+}
+
+// WriteFileResponse has exactly two arms; every refusal is a Connect error.
+message WriteFileResponse {
+  oneof outcome {
+    WriteFileSaved saved = 1;
+    WriteFileConflict conflict = 2;
+  }
+}
+
+message WriteFileSaved {
+  // Token of the bytes now on disk.
+  string token = 1;
+}
+
+// WriteFileConflict carries the current on-disk version when it is safe to show.
+message WriteFileConflict {
+  oneof theirs {
+    WriteFileFullText full_text = 1;
+    WriteFileUnavailable unavailable = 2;
+  }
+}
+
+message WriteFileFullText {
+  // Current disk text, LF-normalized, BOM stripped.
+  string content = 1;
+  string token = 2;
+}
+
+message WriteFileUnavailable {
+  // One of DELETED, TOO_LARGE, BINARY, NON_UTF8, MIXED_EOL, SYMLINK.
+  ReadOnlyReason reason = 1;
 }
 
 message SearchFilesRequest {
@@ -1985,6 +2682,109 @@ message SearchFilesResponse {
 
   // Total matches found before the cap was applied.
   int32 total_matches = 3;
+}
+
+// SearchMatchMode says how SearchOptions.pattern is interpreted.
+enum SearchMatchMode {
+  SEARCH_MATCH_MODE_UNSPECIFIED = 0;
+  SEARCH_MATCH_MODE_LITERAL = 1;
+  // RE2 syntax.
+  SEARCH_MATCH_MODE_REGEX = 2;
+}
+
+enum SearchCaseMode {
+  SEARCH_CASE_MODE_UNSPECIFIED = 0;
+  SEARCH_CASE_MODE_SENSITIVE = 1;
+  SEARCH_CASE_MODE_INSENSITIVE = 2;
+}
+
+enum SearchWordMode {
+  SEARCH_WORD_MODE_UNSPECIFIED = 0;
+  // Match anywhere in a line.
+  SEARCH_WORD_MODE_ANY = 1;
+  // Match only on word boundaries.
+  SEARCH_WORD_MODE_WHOLE = 2;
+}
+
+message SearchScope {
+  // doublestar globs on slash-separated, root-relative paths. Empty include = all files.
+  repeated string include_globs = 1;
+  repeated string exclude_globs = 2;
+  // Search gitignored and hard-skipped (build, dist, vendor...) directories; .git is never searched.
+  bool include_ignored = 3;
+}
+
+message SearchLimits {
+  // Total matches to emit; 0 uses the server default (1000), larger values are clamped to it.
+  int32 max_results = 1;
+  // Reserved for context lines around a match; not yet honoured by the server.
+  int32 context_lines = 2;
+}
+
+message SearchOptions {
+  // 2 to 1024 bytes.
+  string pattern = 1;
+  SearchMatchMode match_mode = 2;
+  SearchCaseMode case_mode = 3;
+  SearchWordMode word_mode = 4;
+  SearchScope scope = 5;
+  SearchLimits limits = 6;
+  // Raise the per-file cap above 2 MB under a time budget (ADR-036).
+  bool large_files = 7;
+}
+
+message SearchContentRequest {
+  string session_id = 1;
+  // Per-browser-tab random id; keys newest-wins and nothing else.
+  string client_id = 2;
+  SearchOptions options = 3;
+}
+
+// SearchMatch is one occurrence of the pattern in one line.
+message SearchMatch {
+  // Root-relative, slash-separated.
+  string path = 1;
+  // 1-based.
+  int32 line = 2;
+  // The matched line, clamped to 512 bytes.
+  string text = 3;
+  // Match range inside text, in UTF-16 code units, end exclusive.
+  int32 start_utf16 = 4;
+  int32 end_utf16 = 5;
+  // Raw-file offset of the matched line's start (ADR-036); never logged.
+  int64 byte_offset = 6;
+}
+
+message SearchBatch {
+  repeated SearchMatch matches = 1;
+}
+
+message SearchStats {
+  int32 files_scanned = 1;
+  int32 binary_skipped = 2;
+  bool truncated = 3;
+  int64 duration_ms = 4;
+  // Files past the large-file cap or time budget (ADR-036).
+  int32 large_files_skipped = 5;
+}
+
+// SearchQueued is sent while the search waits for a walk slot.
+message SearchQueued {
+  int32 ahead = 1;
+}
+
+message SearchContentResponse {
+  oneof message {
+    SearchBatch batch = 1;
+    SearchStats stats = 2;
+    SearchQueued queued = 3;
+  }
+}
+
+// SearchBusyDetail is the typed detail on a ResourceExhausted SearchContent refusal.
+message SearchBusyDetail {
+  // "per_ip", "total" or "queue_timeout".
+  string reason = 1;
 }
 
 // ============================================================================
@@ -2069,7 +2869,7 @@ message SessionDefaultsConfig {
   string new_project_base_dir = 9;
   // Max automated rework iterations before a backlog item's auto-reopen loop
   // leaves it in review for manual action. 0 in a request means "use the
-  // server default (3)"; the response always echoes the resolved value.
+  // server default (5)"; the response always echoes the resolved value.
   int32 max_auto_rework_iterations = 10;
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
@@ -2082,6 +2882,9 @@ message SessionDefaultsConfig {
   // Global default configurable crash/stall retry policy
   // (session-retry-backoff). Always the resolved value in responses.
   RetryPolicyConfig retry_policy = 14;
+  // Max turns one autonomous-driver session may run. The response always echoes the
+  // resolved value (default 30, bounded [1, 200]).
+  int32 autonomous_max_turns = 15;
 }
 
 // RetryPolicyConfig describes the automated crash/stall retry policy: how
@@ -2150,7 +2953,7 @@ message UpdateGlobalDefaultsRequest {
   string one_off_base_dir = 6;
   // Base directory where new project folders are created. Defaults to ~/Projects.
   string new_project_base_dir = 7;
-  // 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+  // 0 = use the server default (5). See SessionDefaultsConfig.max_auto_rework_iterations.
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
@@ -2161,6 +2964,8 @@ message UpdateGlobalDefaultsRequest {
   // (session-retry-backoff). Applies to newly-started retry episodes only —
   // a session already mid-backoff keeps the policy it started with.
   RetryPolicyConfig retry_policy = 12;
+  // 0 = use the server default (30). See SessionDefaultsConfig.autonomous_max_turns.
+  int32 autonomous_max_turns = 13;
 }
 
 message UpdateGlobalDefaultsResponse {
@@ -2468,6 +3273,80 @@ message DeleteAliasRequest {
 
 message DeleteAliasResponse {}
 
+// ProgramConfigProto represents one program definition (built-in or custom).
+message ProgramConfigProto {
+  string id = 1;
+  string label = 2;
+  string command = 3;
+  string cli_flags = 4;
+  string description = 5;
+  map<string, string> env = 6;
+  bool is_builtin = 7;
+}
+
+// ProbeProgramRequest asks the server to check one program command.
+message ProbeProgramRequest {
+  string command = 1;
+  // confirm_execute: the user explicitly asked to run this program's --help.
+  // Required for scripts; sent only by the explicit Check button.
+  bool confirm_execute = 2;
+  // resolve_only: resolve and stat only, never execute.
+  bool resolve_only = 3;
+}
+
+// FlagInfo is one option parsed from a program's --help output.
+message FlagInfo {
+  string name = 1;
+  string short = 2;
+  bool takes_value = 3;
+  string description = 4;
+  repeated string aliases = 5;
+}
+
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_FOUND_PARSED = 1;
+  PROBE_STATUS_FOUND_NO_FLAGS = 2;
+  PROBE_STATUS_NOT_FOUND = 3;
+  PROBE_STATUS_TIMEOUT = 4;
+  PROBE_STATUS_ERROR = 5;
+  PROBE_STATUS_BUSY = 6;
+  PROBE_STATUS_NEEDS_CONFIRM = 7;
+}
+
+// ProbeProgramResponse: found is derived from probe_status (true iff
+// FOUND_PARSED, FOUND_NO_FLAGS, TIMEOUT or NEEDS_CONFIRM). NEEDS_CONFIRM means
+// the file exists but was not executed. ERROR and BUSY mean "could not
+// determine": found is false, but clients must not render them as "not found".
+message ProbeProgramResponse {
+  bool found = 1;
+  string resolved_path = 2;
+  repeated FlagInfo flags = 3;
+  ProbeStatus probe_status = 4;
+  bool truncated = 5;
+  bool is_wrapper = 6;
+}
+
+message ListProgramsConfigRequest {}
+
+message ListProgramsConfigResponse {
+  repeated ProgramConfigProto programs = 1;
+}
+
+message UpsertProgramConfigRequest {
+  ProgramConfigProto program = 1;
+}
+
+message UpsertProgramConfigResponse {
+  ProgramConfigProto program = 1;
+}
+
+message DeleteProgramConfigRequest {
+  string id = 1;
+}
+
+message DeleteProgramConfigResponse {}
+
 // LauncherPresetProto represents one hand-authored launcher preset loaded from
 // ~/.stapler-squad/launcher-presets.json.
 message LauncherPresetProto {
@@ -2572,6 +3451,41 @@ message BatchCreateSessionsResponse {
   repeated BatchCreateResult results = 1;
   int32 succeeded = 2;
   int32 failed = 3;
+}
+
+// ============================================================================
+// Parallel fan-out
+// ============================================================================
+
+// FanOutSessionRequest runs one prompt across count isolated sessions. The base
+// CreateSessionRequest carries title (used as a prefix), path, program, prompt, etc.;
+// its tags are extended with the fan-out group tags.
+message FanOutSessionRequest {
+  CreateSessionRequest base = 1;
+  // Number of variants, 2-5 inclusive. Rejected server-side outside that range.
+  int32 count = 2;
+  // Optional per-variant program/model override (index i applies to variant i).
+  // Empty entries (or a shorter list) fall back to base.program.
+  repeated string program_overrides = 3;
+}
+
+message FanOutSessionResponse {
+  string group_id = 1;
+  repeated Session sessions = 2;
+}
+
+message PickFanoutWinnerRequest {
+  string group_id = 1;
+  string winner_session_id = 2;
+}
+
+message PickFanoutWinnerResponse {
+  // Branch the winner was merged into.
+  string base_branch = 1;
+  // IDs of the sessions archived as losers.
+  repeated string archived_session_ids = 2;
+  // IDs of losers whose archival failed; the merge already landed, so retry via ArchiveSession.
+  repeated string failed_archive_session_ids = 3;
 }
 
 // ============================================================================
@@ -2818,12 +3732,34 @@ message FeatureFlag {
   // Optional human-readable status line (e.g. why a controller-backed flag is
   // currently off). Empty when not applicable.
   string status_detail = 4;
+  // Explicit per-scope overrides, read back from the persisted config. Empty
+  // for a flag that is not scopable or has no override.
+  repeated FeatureFlagScopeOverride scopes = 5;
 }
 
-message GetFeatureFlagsRequest {}
+// FeatureFlagScopeOverride is one persisted per-scope value of a scopable flag.
+message FeatureFlagScopeOverride {
+  // Scope key, e.g. "kind:review".
+  string scope = 1;
+  // The explicit value stored for that scope.
+  bool enabled = 2;
+}
+
+message GetFeatureFlagsRequest {
+  // Validator (ETag) of the body the caller already holds. When it matches the
+  // current flags the server answers not_modified instead of re-sending them.
+  // Empty means "send everything" (and is what clients predating this field send).
+  string if_none_match = 1;
+}
 
 message GetFeatureFlagsResponse {
+  // Empty when not_modified is true; keep the previously held flags.
   repeated FeatureFlag flags = 1;
+  // Validator for this body. Echo it as if_none_match on the next poll.
+  // Absent from servers predating this field: treat the body as authoritative.
+  string etag = 2;
+  // True when if_none_match matched and flags was elided.
+  bool not_modified = 3;
 }
 
 message GetHookStatusRequest {}
@@ -2861,6 +3797,33 @@ message InstallHooksResponse {
   repeated string messages = 2;
 }
 
+message GetTCCEnrichmentStatusRequest {}
+
+message TCCEnrichmentRoot {
+  string id = 1;
+  string root = 2;
+  repeated string paths = 3;
+  repeated string session_titles = 4;
+  bool app_consented = 5;
+  // Enrichment outcome only: pending, unresolved/slow, error, denied, or completed.
+  // "denied" means a probe failed with a permission error (EPERM/EACCES).
+  string outcome = 6;
+  // System Settings deep link for this root's TCC service; set only when outcome is denied.
+  string settings_url = 7;
+}
+
+message GetTCCEnrichmentStatusResponse {
+  bool enabled = 1;
+  repeated TCCEnrichmentRoot roots = 2;
+}
+
+message ContinueTCCEnrichmentRequest {
+  // Must be a known opaque ID returned by GetTCCEnrichmentStatus.
+  string root_id = 1;
+}
+
+message ContinueTCCEnrichmentResponse {}
+
 message GetTmuxVersionStatusRequest {}
 
 // TmuxVersionMismatch describes one socket where the client and the
@@ -2892,11 +3855,38 @@ message RestartTmuxServerResponse {
   int32 sessions_affected = 1;
 }
 
+// FlagMutation says what an UpdateFeatureFlag call does. The set values carry
+// the enabled state, so a set can never write false because `enabled` was
+// omitted.
+enum FlagMutation {
+  // The legacy shape an old client sends: `scope` must be empty and `enabled`
+  // is read as a global set.
+  FLAG_MUTATION_UNSPECIFIED = 0;
+  // Persist true at `scope`.
+  FLAG_MUTATION_SET_ENABLED = 1;
+  // Persist false at `scope`.
+  FLAG_MUTATION_SET_DISABLED = 2;
+  // Delete the explicit value at a "kind:" `scope` (inherit).
+  FLAG_MUTATION_CLEAR_SCOPE = 3;
+  // Delete the explicit global value so the registry default applies.
+  FLAG_MUTATION_RESET_GLOBAL = 4;
+}
+
 message UpdateFeatureFlagRequest {
   // The feature name to update (e.g. "backlog").
   string name = 1;
-  // The new enabled state.
+  // The new enabled state. Read only when `mutation` is
+  // FLAG_MUTATION_UNSPECIFIED; ignored (neither a conflict nor an error) for
+  // every other mutation.
   bool enabled = 2;
+  // "kind:<name>" for a per-kind change, or the literal "global" for a global
+  // set. Validation (enforced by the server):
+  // UNSPECIFIED with a non-empty scope, an unknown enum value, a set with an
+  // empty scope and RESET_GLOBAL with a scope are InvalidArgument; CLEAR_SCOPE
+  // requires a "kind:" scope.
+  string scope = 3;
+  // What to do. Zero is the legacy "set `enabled` globally" shape.
+  FlagMutation mutation = 4;
 }
 
 message UpdateFeatureFlagResponse {
@@ -2921,6 +3911,8 @@ message EscapeEventProto {
   string mangle_type = 10;
   google.protobuf.Timestamp wall_time = 11;
   int64 session_seq = 12;
+  string project_path = 13;
+  string sequence_signature = 14;
 }
 
 message QueryEscapeAnalyticsRequest {
@@ -2957,6 +3949,11 @@ message GetEscapeAnalyticsSummaryResponse {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 message GetEscapeAnalyticsGlobalSummaryRequest {
@@ -2970,6 +3967,13 @@ message GetEscapeAnalyticsGlobalSummaryResponse {
   int64 total_mangled = 3;
   double mangle_rate = 4;
   repeated SessionEscapeSummary per_session = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+  int64 dropped_events = 11;
+  repeated ProjectEscapeSummary per_project = 12;
 }
 
 message SessionEscapeSummary {
@@ -2977,6 +3981,24 @@ message SessionEscapeSummary {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+  string project_path = 5;
+  int64 correlation_outcomes = 6;
+  int64 matched_sequences = 7;
+  int64 stripped_sequences = 8;
+  double correlation_coverage = 9;
+  bool capture_healthy = 10;
+}
+
+message ProjectEscapeSummary {
+  string project_path = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  int64 correlation_outcomes = 5;
+  int64 matched_sequences = 6;
+  int64 stripped_sequences = 7;
+  double correlation_coverage = 8;
+  bool capture_healthy = 9;
 }
 
 // ============================================================================
@@ -3342,6 +4364,83 @@ message RunWorkflowResponse {
   string session_id = 1;
 }
 
+message WatchWorkflowsRequest {
+  // Optional: if non-zero, replay buffered events with seq > after_seq
+  // before going live, instead of sending a fresh initial snapshot. Pass
+  // the last seq received before disconnecting. Mirrors
+  // WatchSessionsRequest.after_seq / WatchBacklogItemsRequest.after_seq.
+  uint64 after_seq = 1;
+}
+
+// WorkflowEvent represents a real-time change to a saved workflow
+// definition. Used by the WatchWorkflows streaming RPC.
+message WorkflowEvent {
+  google.protobuf.Timestamp timestamp = 1;
+
+  oneof event {
+    WorkflowCreatedEvent workflow_created = 2;
+    WorkflowUpdatedEvent workflow_updated = 3;
+    WorkflowDeletedEvent workflow_deleted = 4;
+    WorkflowRunEvent workflow_run = 5;
+    // Synthetic marker (no corresponding bus event) sent exactly once, at
+    // the end of WatchWorkflows' initial phase (fresh snapshot or after_seq
+    // replay), but ONLY when that phase sent zero other events -- e.g. no
+    // workflows saved yet. Without it, a zero-workflow connection produces
+    // zero bytes on the wire and the client's `for await` loop never
+    // resolves past its first iteration -- see
+    // BacklogItemEvent.snapshot_complete's identical doc comment.
+    WorkflowSnapshotCompleteEvent snapshot_complete = 6;
+  }
+
+  // Monotonically increasing sequence number assigned by the server
+  // EventBus, mirroring SessionEvent.seq/BacklogItemEvent.seq. Zero means
+  // "no sequence information" -- used for the synthetic initial-snapshot
+  // events, which don't correspond to a single published bus event.
+  uint64 seq = 7;
+
+  // Synthetic marker (oneof left unset) sent periodically on an otherwise-
+  // idle connection -- see SessionEvent.heartbeat's identical doc comment.
+  bool heartbeat = 8;
+
+  // Identifies the server process that produced this event; constant for the process lifetime and
+  // different after every restart or redeploy. A change between events means the server restarted
+  // and seq has reset, so clients can tell a redeploy from a real seq anomaly. Empty from servers
+  // that predate this field.
+  string deploy_id = 9;
+}
+
+// WorkflowCreatedEvent is emitted when a new workflow is saved.
+message WorkflowCreatedEvent {
+  WorkflowProto workflow = 1;
+  // True when sent as part of WatchWorkflows' initial snapshot rather than
+  // a live creation. The frontend should not flash/notify for these.
+  bool is_snapshot = 2;
+}
+
+// WorkflowUpdatedEvent is emitted when an existing workflow is modified.
+message WorkflowUpdatedEvent {
+  WorkflowProto workflow = 1;
+  bool is_snapshot = 2;
+}
+
+// WorkflowDeletedEvent is emitted when a workflow is permanently removed.
+message WorkflowDeletedEvent {
+  string id = 1;
+}
+
+// WorkflowRunEvent is emitted when RunWorkflow fires a workflow manually
+// (including via the MCP run_workflow tool) -- distinct from a
+// cron-triggered fire, which does not go through the RunWorkflow RPC and is
+// not broadcast here.
+message WorkflowRunEvent {
+  string workflow_id = 1;
+  string session_id = 2;
+}
+
+// WorkflowSnapshotCompleteEvent carries no data -- see
+// WorkflowEvent.snapshot_complete's doc comment.
+message WorkflowSnapshotCompleteEvent {}
+
 // TriggerFireEventProto is the wire representation of a single trigger evaluation
 // attempt (fired/no-match/rejected) — the durable audit trail behind
 // ListTriggerFireEvents (webhook-triggers Epic 1.2).
@@ -3398,6 +4497,16 @@ message UnarchiveSessionRequest {
 
 message UnarchiveSessionResponse {}
 
+message PinSessionRequest {
+  string session_id = 1;
+}
+message PinSessionResponse {}
+
+message UnpinSessionRequest {
+  string session_id = 1;
+}
+message UnpinSessionResponse {}
+
 message ArchiveWorkflowSessionsRequest {
   string workflow_id = 1;
 }
@@ -3443,3 +4552,83 @@ message GetProviderLimitsResponse {
   ProviderLimitsProto limits = 1;
 }
 
+// SetCaptureTapRequest enables or disables the terminal-stream capture tap.
+message SetCaptureTapRequest {
+  // true starts recording; false stops it and closes the files.
+  bool enabled = 1;
+
+  // Session titles to apply to (the title shown in the UI, not the tmux
+  // name). Empty means all sessions. Each id is at most 200 bytes with no
+  // control characters. Disabling named sessions while the tap is on for all
+  // sessions is rejected. Enabling all sessions replaces the operator env
+  // override's no-expiry with the TTL; disabling all sessions turns an
+  // env-enabled tap off until restart.
+  repeated string session_ids = 2;
+
+  // Seconds an enable lasts. 0 uses the default (30 minutes); values above
+  // 4 hours are clamped; negative is rejected when enabled is true. Ignored
+  // when enabled is false.
+  int32 ttl_seconds = 3;
+}
+
+// CaptureTapSessionStatus describes one session's capture file.
+message CaptureTapSessionStatus {
+  // Session title, the key used in SetCaptureTapRequest.session_ids.
+  string name = 1;
+
+  // Absolute path of the JSONL file. Empty until the file is first opened.
+  string path = 2;
+
+  // true while this session is recording.
+  bool enabled = 3;
+
+  // Size of the file, including earlier appends.
+  int64 bytes_written = 4;
+
+  // The 64 MiB per-file cap stopped the tap for this session. Enabling again
+  // rotates the full file to "<path>.old" (replacing any earlier .old) and
+  // records into a fresh file.
+  bool capped = 5;
+
+  // A file or write error stopped the tap for this session. Enabling again
+  // retries.
+  bool failed = 6;
+
+  // The full file was rotated to "<path>.old" by the latest enable.
+  bool rotated = 7;
+}
+
+// CaptureTapState is the capture tap's current state.
+message CaptureTapState {
+  // true while any session is recording.
+  bool enabled = 1;
+
+  // "all" (every session), "sessions" (only session_ids) or "off".
+  string scope = 2;
+
+  // Session titles enabled by name.
+  repeated string session_ids = 3;
+
+  // Latest deadline among the enabled scopes. Unset when off or when the
+  // operator enabled the tap at startup (no expiry).
+  google.protobuf.Timestamp ttl_expires_at = 4;
+
+  // Directory the files are written to.
+  string dir = 5;
+
+  // Sessions that are recording or were stopped by the cap or an error.
+  repeated CaptureTapSessionStatus sessions = 6;
+}
+
+// SetCaptureTapResponse carries the state after the change.
+message SetCaptureTapResponse {
+  CaptureTapState state = 1;
+}
+
+// GetCaptureTapRequest has no fields.
+message GetCaptureTapRequest {}
+
+// GetCaptureTapResponse carries the current state.
+message GetCaptureTapResponse {
+  CaptureTapState state = 1;
+}

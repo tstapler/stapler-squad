@@ -34,16 +34,22 @@ func newAnalyticsSubscriber(provider AnalyticsProvider) *analyticsSubscriber {
 //	session.deleted          → event_name="session.deleted",      category="user_action", session_id=event.SessionID
 //	session.updated          → event_name="session.status_changed" when status transitions, category="user_action", labels={"old_status","new_status"}
 //	session.user_interaction → event_name="session.user_interaction", category="user_action"
-func StartAnalyticsSubscriber(ctx context.Context, bus *events.EventBus, provider AnalyticsProvider) {
+//
+// The returned channel is closed once the subscriber goroutine has exited, so a
+// caller can join it (an in-flight recordFromEvent writes to the analytics DB).
+func StartAnalyticsSubscriber(ctx context.Context, bus *events.EventBus, provider AnalyticsProvider) <-chan struct{} {
+	done := make(chan struct{})
 	if bus == nil || provider == nil {
 		log.Warn("analytics/subscriber EventBus or provider is nil, not starting subscriber")
-		return
+		close(done)
+		return done
 	}
 
 	sub := newAnalyticsSubscriber(provider)
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
+		defer close(done)
 		log.Info("analytics/subscriber started listening for session events")
 		defer log.Info("analytics/subscriber stopped")
 		for {
@@ -62,6 +68,7 @@ func StartAnalyticsSubscriber(ctx context.Context, bus *events.EventBus, provide
 			}
 		}
 	}()
+	return done
 }
 
 // recordFromEvent maps an events.Event to an analytics.Event and records it.

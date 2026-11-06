@@ -42,7 +42,7 @@ jobs:
           fetch-depth: 0
 
       # See release-please.yml's identical step for why this replaced eight
-      # hand-duplicated steps here (pnpm/node/buf/web-build) rather than
+      # hand-duplicated steps here (bun/node/buf/web-build) rather than
       # patching the missing ent-gen step back in a second time — that
       # duplication is exactly how this workflow drifted from
       # release-please.yml's own copy and ended up missing ent-gen in the

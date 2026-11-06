@@ -8,14 +8,21 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
@@ -25,29 +32,123 @@ import (
 // parent session package without a cycle.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
-// runGitCommand executes a git command scoped to path and returns any error.
-// Routes through g.commandRunner() unconditionally, exactly like every other
-// call site in this file (PushChanges, PushBranch, OpenBranchURL, CreatePR,
-// findExistingPR, GetPRStatus, EnablePRAutoMerge, RequestCopilotReview,
-// ClosePR, IsPRMerged) — see ADR-002's addendum for the history here: this
-// was previously the one call site with a g.cmdExec-gated branch (an
-// executor.Executor test-injection seam, never circuit-breaker-wrapped
-// anywhere in this package, unlike session/tmux's genuinely orthogonal
-// cmdExec), which made it dead code for all ~25 production callers of this
-// method. IsDirtyWithHint, stageAndCommit, StageAllExceptScaffolding, and
-// HasStagedChanges have since moved onto go-git directly (no subprocess —
-// the `prefer-go-git-over-subshells` skill); RenameBranch and every
-// worktree_ops.go worktree add/remove/prune/list call remain on this seam.
-func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+// ghCommandCallsTotal / ghCommandDurationMs mirror github/gh_exec.go's
+// runGHCLICommand instrumentation (same metric names, same attribute keys),
+// registered separately here because session/git cannot import package
+// github to reuse its instruments directly: github/clone.go already imports
+// session/git, so the reverse import would be a compile-time cycle — the
+// same constraint already documented on isTraversalPathSegment above.
+// Registering the same instrument name from two packages against the one
+// global meter is expected and merges into a single series — both
+// registrations use the identical description text (see the constants
+// below) so the merged series never carries two conflicting descriptions.
+//
+// Registration failures are logged, not fatal, mirroring
+// github/telemetry_transport.go's registerGitHubTelemetry: these vars are
+// left nil on failure and every call site below nil-guards before using
+// them, so a meter that rejects registration (e.g. a duplicate-instrument
+// conflict) degrades to "telemetry silently skipped" rather than crashing
+// the whole binary at package-init time.
+var (
+	registerGHCommandTelemetryOnce sync.Once
 
-	output, err := g.commandRunner().Run(ctx, path, "git", args...)
-	if err != nil {
-		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
+	ghCommandCallsTotal metric.Int64Counter
+	ghCommandDurationMs metric.Int64Histogram
+)
+
+func init() {
+	registerGHCommandTelemetry()
+}
+
+// githubCallsTotalDescription / githubCallDurationMsDescription must stay
+// byte-identical to the descriptions github/telemetry_transport.go's
+// registerGitHubTelemetry registers under the same two instrument names
+// (github.calls_total / github.call.duration_ms) — two different
+// descriptions for the same instrument name is a duplicate-instrument
+// conflict most OTel SDKs warn or error on.
+const (
+	githubCallsTotalDescription     = "Count of GitHub API calls (native HTTP and gh CLI subprocess), tagged by call origin, call site, and resource where applicable"
+	githubCallDurationMsDescription = "GitHub API call latency in milliseconds (native HTTP and gh CLI subprocess)"
+)
+
+// registerGHCommandTelemetry registers this package's gh-CLI call
+// instruments against telemetry.GetMeter(). Safe to call before
+// telemetry.Initialize (returns a no-op meter) and idempotent via
+// sync.Once, matching github/telemetry_transport.go's
+// registerGitHubTelemetry pattern.
+func registerGHCommandTelemetry() {
+	registerGHCommandTelemetryOnce.Do(func() {
+		registerGHCommandTelemetryWithMeter(telemetry.GetMeter())
+	})
+}
+
+// registerGHCommandTelemetryWithMeter does the actual instrument
+// registration against meter. Split out from registerGHCommandTelemetry so
+// tests can exercise the non-fatal-on-error path with a meter constructed to
+// fail, since a real OTel SDK meter's registration call doesn't itself
+// return an error for the specific duplicate-name/description conflict this
+// fix targets (that surfaces later, asynchronously, via the SDK's error
+// handler) — only for other rejections such as an invalid instrument name.
+func registerGHCommandTelemetryWithMeter(meter metric.Meter) {
+	var err error
+	if ghCommandCallsTotal, err = meter.Int64Counter("github.calls_total",
+		metric.WithDescription(githubCallsTotalDescription)); err != nil {
+		log.Error("session/git: failed to register github.calls_total", "err", err)
 	}
 
-	return string(output), nil
+	if ghCommandDurationMs, err = meter.Int64Histogram("github.call.duration_ms",
+		metric.WithDescription(githubCallDurationMsDescription),
+		metric.WithUnit("ms")); err != nil {
+		log.Error("session/git: failed to register github.call.duration_ms", "err", err)
+	}
+}
+
+// runGHCommand wraps a `gh` CLI invocation routed through g.commandRunner()
+// with span/metric telemetry, matching github/gh_exec.go's runGHCLICommand
+// shape for the sites that adapter can't reach (see ghCommandCallsTotal's
+// doc comment for why this can't just call runGHCLICommand directly). It
+// does not attempt to set a github.call.origin attribute: none of
+// GitWorktree's gh-CLI methods thread a caller-supplied context today (each
+// builds its own context.WithTimeout(context.Background(), ...) internally,
+// unchanged by Epic 1.1's scope), so there is never a tagged origin to read
+// here even where the import cycle wasn't in the way.
+func (g *GitWorktree) runGHCommand(ctx context.Context, callSite string, args ...string) ([]byte, error) {
+	ctx, span := telemetry.StartSpan(ctx, "gh."+callSite, trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+
+	attrs := []attribute.KeyValue{
+		attribute.String("process.command", "gh"),
+		attribute.String("github.call_site", callSite),
+	}
+	span.SetAttributes(attrs...)
+
+	start := time.Now()
+	output, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	duration := time.Since(start)
+
+	if ghCommandCallsTotal != nil {
+		ghCommandCallsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+	if ghCommandDurationMs != nil {
+		ghCommandDurationMs.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attrs...))
+	}
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	return output, err
+}
+
+// pushSetUpstream is `git push -u origin <branch>` from the worktree.
+func (g *GitWorktree) pushSetUpstream(ctx context.Context) error {
+	if g.branchName == "" {
+		return fmt.Errorf("worktree has no branch name to push")
+	}
+	return g.gitBackend().Push(ctx, g.locate(g.worktreePath), backend.PushRequest{
+		Remote: "origin", Branch: backend.BranchName(g.branchName), SetUpstream: true,
+	})
 }
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
@@ -72,20 +173,20 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if _, err := g.commandRunner().Run(pushCtx, g.worktreePath, "gh", "repo", "sync", "--source", "-b", g.branchName); err != nil {
+	if _, err := g.runGHCommand(pushCtx, "repo.sync_source", "repo", "sync", "--source", "-b", g.branchName); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
-		if pushOutput, pushErr := g.commandRunner().Run(gitPushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); pushErr != nil {
+		if pushErr := g.pushSetUpstream(gitPushCtx); pushErr != nil {
 			log.Error("failed to push branch", "err", pushErr)
-			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
+			return fmt.Errorf("failed to push branch: %w", pushErr)
 		}
 	}
 
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCancel()
-	if output, err := g.commandRunner().Run(syncCtx, g.worktreePath, "gh", "repo", "sync", "-b", g.branchName); err != nil {
+	if output, err := g.runGHCommand(syncCtx, "repo.sync", "repo", "sync", "-b", g.branchName); err != nil {
 		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
@@ -126,7 +227,9 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 // before the LLM call reveals the item's slug, then renames it afterward to the
 // same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
 func (g *GitWorktree) RenameBranch(newBranchName string) error {
-	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := g.gitBackend().RenameCurrentBranch(ctx, g.locate(g.worktreePath), backend.BranchName(newBranchName)); err != nil {
 		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
 	}
 	g.branchName = newBranchName
@@ -283,8 +386,8 @@ func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
-	g.gitignoreFS.reset()
-	g.headTreeCache.v.Store(headTreeCacheEntry{}) //nolint:exhaustruct // zero entry, defensive reset — see headTreeCache's doc comment
+	g.gitignoreFS.Reset()
+	g.headTreeCache.Reset() // defensive reset — see headTreeCache's doc comment
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
@@ -412,7 +515,7 @@ func (g *GitWorktree) OpenBranchURL() error {
 
 	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer browseCancel()
-	if _, err := g.commandRunner().Run(browseCtx, g.worktreePath, "gh", "browse", "--branch", g.branchName); err != nil {
+	if _, err := g.runGHCommand(browseCtx, "browse", "browse", "--branch", g.branchName); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil
@@ -421,8 +524,8 @@ func (g *GitWorktree) OpenBranchURL() error {
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if out, err := g.commandRunner().Run(pushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); err != nil {
-		return fmt.Errorf("failed to push branch: %s (%w)", out, err)
+	if err := g.pushSetUpstream(pushCtx); err != nil {
+		return fmt.Errorf("failed to push branch: %w", err)
 	}
 	return nil
 }
@@ -467,7 +570,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 	if baseBranch != "" {
 		args = append(args, "--base", baseBranch)
 	}
-	out, runErr := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
+	out, runErr := g.runGHCommand(ctx, "pr.create", args...)
 	if runErr != nil {
 		// A race: PR was created between our check and now. Re-check once.
 		if u, n, err2 := g.findExistingPR(); err2 == nil && n > 0 {
@@ -501,7 +604,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 		// original gh-view-based lookup as a last resort.
 		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer numCancel()
-		numOut, numErr := g.commandRunner().Run(numCtx, g.worktreePath, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
+		numOut, numErr := g.runGHCommand(numCtx, "pr.view.number", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
 		if numErr == nil {
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
 		}
@@ -515,7 +618,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 func (g *GitWorktree) findExistingPR() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "list", "--head", g.branchName,
+	out, err := g.runGHCommand(ctx, "pr.list", "pr", "list", "--head", g.branchName,
 		"--json", "number,url", "--jq", ".[0] | .number, .url")
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", 0, fmt.Errorf("no existing PR")
@@ -543,14 +646,14 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 // not existing locally — so a check failure never causes a caller to skip PR
 // creation for a branch that may well need it.
 func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
-	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	exists, ahead, err := BranchHasCommitsAhead(g.repoPath, g.branchName, mainBranch)
 	if err != nil {
 		return true, err
 	}
-	if !status.BranchExists {
+	if !exists {
 		return true, nil
 	}
-	return status.AheadOfMain > 0, nil
+	return ahead, nil
 }
 
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.
@@ -614,6 +717,10 @@ func parseFeedbackTimestamp(raw, fieldLabel string) time.Time {
 type PRStatus struct {
 	// CIFailing is true when at least one CI check has a terminal failure.
 	CIFailing bool
+	// CIPending is true when at least one check has not reached a terminal
+	// conclusion yet (queued/in progress, or a legacy status still PENDING).
+	// Without it, "CI still running" is indistinguishable from "no CI configured".
+	CIPending bool
 	// HasBlockingReviews is true when a reviewer has requested changes.
 	HasBlockingReviews bool
 	// HasConflicts is true when GitHub reports mergeStateStatus == "DIRTY" or
@@ -659,8 +766,15 @@ type PRStatus struct {
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
 
-	failedChecks    []string     // unexported; captured CI failures, consumed by render()
-	blockingReviews []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
+	failedChecks []string // unexported; captured CI failures, consumed by render()
+	// failedRunIDs holds the distinct GitHub Actions run IDs behind failed
+	// checks (parsed from their details URLs); checks from other CI systems
+	// have no run ID and are tracked only via nonActionsFailure.
+	failedRunIDs []int64
+	// nonActionsFailure is true when any failed check has no Actions run ID,
+	// so a rerun of the Actions runs alone could not clear CIFailing.
+	nonActionsFailure bool
+	blockingReviews   []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
 	// conflictMergeStateStatus is the raw mergeStateStatus value that tripped
 	// HasConflicts; only meaningful when HasConflicts is true. A plain string
 	// rather than a nil-checked pointer, since HasConflicts is already the
@@ -776,16 +890,78 @@ func (s *PRStatus) FeedbackAuthors() []string {
 	return authors
 }
 
-// GetPRStatus fetches the combined CI check status, reviewer decisions,
-// mergeability, and PR comments for the given pull request number.
-func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
+// FailedChecks returns a copy of the human-readable "<name> FAILED (<url>)"
+// entries captured for every CI check with a terminal failure on the most
+// recent GetPRStatus call. Exported for stuck-item root-cause reporting
+// (get_backlog_stuck_report), which needs the per-check detail URL to look
+// up the failing job's log — FeedbackText only renders these into prose.
+func (s *PRStatus) FailedChecks() []string {
+	return append([]string(nil), s.failedChecks...)
+}
+
+// GetPRDiffFiles returns the list of file paths changed by prNumber's diff
+// (`gh pr diff --name-only`), used to tell whether a failing check's test
+// touches the PR's own changed files or is a pre-existing/flaky failure
+// elsewhere in the repo (see get_backlog_stuck_report).
+func (g *GitWorktree) GetPRDiffFiles(ctx context.Context, prNumber int) ([]string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, just above
 	if err := g.checkGHCLI(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	raw, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber),
+	raw, err := g.runGHCommand(ctx, "pr.diff.nameonly", "pr", "diff", strconv.Itoa(prNumber), "--name-only")
+	if err != nil {
+		return nil, fmt.Errorf("gh pr diff failed: %s (%w)", raw, err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// CheckRunRef identifies one GitHub Actions job within a run — the pair
+// GetCheckRunLog needs together to fetch a single failing check's log, and
+// the shape its callers parse out of a check's details URL
+// (".../actions/runs/<RunID>/job/<JobID>").
+type CheckRunRef struct {
+	RunID string
+	JobID string
+}
+
+// GetCheckRunLog fetches only the failed-step log for one CI job
+// (`gh run view --job <jobID> --log-failed`), used to identify which test(s)
+// actually failed inside a check GetPRStatus reported as failing.
+func (g *GitWorktree) GetCheckRunLog(ctx context.Context, ref CheckRunRef) (string, error) {
+	// kibitzer:ignore go-error-context -- matches GetPRStatus's identical unwrapped checkGHCLI error, above
+	if err := g.checkGHCLI(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "run.view.logfailed", "run", "view", ref.RunID, "--job", ref.JobID, "--log-failed")
+	if err != nil {
+		return "", fmt.Errorf("gh run view --log-failed failed: %s (%w)", raw, err)
+	}
+	return string(raw), nil
+}
+
+// GetPRStatus fetches the combined CI check status, reviewer decisions,
+// mergeability, and PR comments for the given pull request number. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) GetPRStatus(ctx context.Context, prNumber int) (*PRStatus, error) {
+	if err := g.checkGHCLI(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	raw, err := g.runGHCommand(ctx, "pr.view.status", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
@@ -802,6 +978,16 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 // literal from another package cannot set directly.
 func ParsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	return parsePRStatusPayload(raw)
+}
+
+// isCheckInFlight reports whether a check with no terminal conclusion is still
+// running (CheckRun status) or awaiting a result (legacy StatusContext state).
+func isCheckInFlight(status, state string) bool {
+	switch status {
+	case "QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED":
+		return true
+	}
+	return state == "PENDING" || state == "EXPECTED"
 }
 
 // parsePRStatusPayload parses gh pr view's combined JSON output, evaluates
@@ -883,6 +1069,15 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 				entry += " (" + url + ")"
 			}
 			status.failedChecks = append(status.failedChecks, entry)
+			if id := extractActionsRunID(url); id == 0 {
+				status.nonActionsFailure = true
+			} else if !containsInt64(status.failedRunIDs, id) {
+				status.failedRunIDs = append(status.failedRunIDs, id)
+			}
+			continue
+		}
+		if conclusion == "" && isCheckInFlight(strings.ToUpper(check.Status), state) {
+			status.CIPending = true
 		}
 	}
 
@@ -939,13 +1134,15 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 // EnablePRAutoMerge enables GitHub auto-merge on the given PR so it merges
 // automatically once required CI checks pass. Best-effort: fails silently
 // when the repo does not have auto-merge enabled in its branch protection rules.
-func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
+// ctx is the caller's context (timeout/cancellation and any github.CallOrigin
+// tag thread through to runGHCommand) rather than a fresh context.Background().
+func (g *GitWorktree) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
+	out, err := g.runGHCommand(ctx, "pr.merge.auto", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
 	}
@@ -958,14 +1155,15 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 // Uses the legacy bot-login form (copilot-pull-request-reviewer[bot]) via
 // --add-reviewer rather than the newer @copilot alias, since the literal
 // login is accepted by every gh version this repo targets while the alias is
-// version-gated (see plan.md's Pattern Decisions table).
-func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
+// version-gated (see plan.md's Pattern Decisions table). ctx is the caller's
+// context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
+	out, err := g.runGHCommand(ctx, "pr.edit.add_reviewer", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
 	if err != nil {
 		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
@@ -975,30 +1173,64 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 // ClosePR closes prNumber without merging, posting comment as an explanatory
 // PR comment first. Used when a PR is discovered to be superseded (its
 // branch's work already landed on main through a different path) rather than
-// genuinely broken — see BUG-032.
-func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
+// genuinely broken — see BUG-032. ctx is the caller's context, per
+// EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
+	out, err := g.runGHCommand(ctx, "pr.close", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
 		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
 	}
 	return nil
 }
 
-// IsPRMerged reports whether the given PR number has been merged.
-func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
+// IsPRMerged reports whether the given PR number has been merged. ctx is the
+// caller's context, per EnablePRAutoMerge's doc comment above.
+func (g *GitWorktree) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if err := g.checkGHCLI(); err != nil {
 		return false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
+	out, err := g.runGHCommand(ctx, "pr.view.state", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}
 	return strings.TrimSpace(string(out)) == "MERGED", nil
+}
+
+// FailedRunIDs returns the distinct GitHub Actions run IDs behind failed
+// checks, and whether every failed check was an Actions check (false when any
+// failure came from another CI system or carried no parseable URL).
+func (s *PRStatus) FailedRunIDs() (ids []int64, allActions bool) {
+	return append([]int64(nil), s.failedRunIDs...), !s.nonActionsFailure
+}
+
+func containsInt64(xs []int64, x int64) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+var actionsRunURLRe = regexp.MustCompile(`/actions/runs/(\d+)(?:/|$)`)
+
+// extractActionsRunID returns the workflow run ID in a GitHub Actions check
+// URL, or 0 when url is not one.
+func extractActionsRunID(url string) int64 {
+	m := actionsRunURLRe.FindStringSubmatch(url)
+	if m == nil {
+		return 0
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }

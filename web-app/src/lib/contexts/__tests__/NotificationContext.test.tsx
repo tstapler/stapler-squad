@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { NotificationProvider, useNotifications } from "@/lib/contexts/NotificationContext";
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS } from "@/lib/notification-policy";
 import type { NotificationData } from "@/lib/types/notification";
+import { resetReviewedMarksForTests } from "@/lib/hooks/useReviewedMarks";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
 // AttentionReason numeric values — matches proto/session/v1/types.proto
@@ -41,14 +42,19 @@ jest.mock("@/lib/utils/broadcastChannel", () => ({
   }),
 }));
 
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: () => false,
+}));
+
 jest.mock("@/lib/utils/notificationStorage", () => ({
   markAcknowledged: jest.fn(),
 }));
 
+let mockServerUnread = 0;
 jest.mock("@/lib/hooks/useNotificationHistory", () => ({
   useNotificationHistory: () => ({
     notifications: [],
-    unreadCount: 0,
+    unreadCount: mockServerUnread,
     loading: false,
     error: null,
     hasMore: false,
@@ -820,5 +826,333 @@ describe("NotificationContext", () => {
       // Toast still present — NOTIFICATION_ACKNOWLEDGED has no handler
       expect(result.current.notifications).toHaveLength(1);
     });
+  });
+  describe("toast timer registry (Story 3.1)", () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("showActionToast expires on its own: success after 5s, error after 10s", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.showActionToast("Saved", "success", "ok");
+        result.current.showActionToast("Failed", "error", "bad");
+      });
+      expect(result.current.notifications).toHaveLength(2);
+
+      act(() => {
+        jest.advanceTimersByTime(5_000);
+      });
+      expect(result.current.notifications.map((n) => n.message)).toEqual(["Failed"]);
+
+      act(() => {
+        jest.advanceTimersByTime(5_000);
+      });
+      expect(result.current.notifications).toHaveLength(0);
+    });
+
+    it("showUndoToast expires after the given duration", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.showUndoToast("Deleted", jest.fn(), 2_000);
+      });
+      act(() => {
+        jest.advanceTimersByTime(1_999);
+      });
+      expect(result.current.notifications).toHaveLength(1);
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(result.current.notifications).toHaveLength(0);
+    });
+
+    it("context_should_cancel_pending_timers_when_clearAll_or_unmount", () => {
+      const { result, unmount } = renderHook(() => useNotifications(), { wrapper });
+      const baseline = jest.getTimerCount(); // the stale-sweep interval
+
+      act(() => {
+        result.current.showActionToast("Saved", "success", "k1");
+      });
+      act(() => {
+        jest.advanceTimersByTime(1_500); // let the Announcer's one-second hold finish
+      });
+      // The toast's auto-dismiss timer plus ToastStack's deck-anchor poll (setInterval,
+      // alive only while a deck shows); both must be gone after clearAll.
+      expect(jest.getTimerCount()).toBe(baseline + 2);
+
+      act(() => {
+        result.current.clearAll();
+      });
+      expect(jest.getTimerCount()).toBe(baseline);
+      expect(result.current.notifications).toHaveLength(0);
+
+      act(() => {
+        result.current.showActionToast("Saved again", "success", "k2");
+      });
+      unmount();
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("notification_context_should_pass_all_existing_tests_unmodified_and_shrink_below_532_lines", () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require("fs") as typeof import("fs");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const path = require("path") as typeof import("path");
+      const source = fs.readFileSync(path.join(process.cwd(), "src/lib/contexts/NotificationContext.tsx"), "utf8");
+      expect(source.split("\n").length).toBeLessThan(532);
+    });
+  });
+  describe("isPendingDecision (Story 3.2)", () => {
+    it("clears the pending flag on a history row once it is marked read", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ notificationType: "warning", isPendingDecision: true }));
+      });
+      const id = result.current.notificationHistory[0].id;
+      expect(result.current.notificationHistory[0].isPendingDecision).toBe(true);
+
+      act(() => {
+        result.current.markAsRead(id);
+      });
+      expect(result.current.notificationHistory[0].isRead).toBe(true);
+      expect(result.current.notificationHistory[0].isPendingDecision).toBe(false);
+    });
+  });
+  describe("cross-tab bulk dismissal (Story 3.9)", () => {
+    const seed = (result: { current: ReturnType<typeof useNotifications> }) => {
+      act(() => {
+        result.current.addNotification({ ...makeNotification({ sessionId: "sa" }), id: "a" });
+        result.current.addNotification({ ...makeNotification({ sessionId: "sb" }), id: "b" });
+        result.current.addNotification({ ...makeNotification({ sessionId: "sc" }), id: "c" });
+      });
+    };
+
+    it("bulk_sync_should_apply_id_set_idempotently_and_ignore_late_arrivals_when_message_replayed", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+      const message = { type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["a", "b"] };
+
+      act(() => capturedSubscribeHandler?.(message));
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["c"]);
+
+      // A toast that arrived after the click is unaffected, and a replay changes nothing.
+      act(() => {
+        result.current.addNotification({ ...makeNotification({ sessionId: "sd" }), id: "d" });
+      });
+      act(() => capturedSubscribeHandler?.(message));
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["c", "d"]);
+    });
+
+    it("a moved message drops the toast but leaves its history row unread", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => capturedSubscribeHandler?.({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "moved", ids: ["a"] }));
+
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["b", "c"]);
+      const row = result.current.notificationHistory.find((n) => n.id === "a");
+      expect(row).toBeDefined();
+      expect(row?.isRead).toBe(false);
+    });
+
+    it("a dismissed message also drops the cleared history rows", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => capturedSubscribeHandler?.({ type: "NOTIFICATIONS_BULK_DISMISSED", kind: "dismissed", ids: ["a"] }));
+      expect(result.current.notificationHistory.map((n) => n.id).sort()).toEqual(["b", "c"]);
+    });
+
+    it("action_resolved_sync_should_mark_exactly_the_id_set_answered_elsewhere_and_be_idempotent_when_replayed", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+      const message = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["a", "ghost"], summary: "Redis" };
+
+      act(() => capturedSubscribeHandler?.(message));
+      act(() => capturedSubscribeHandler?.(message));
+
+      expect(result.current.answeredElsewhere).toEqual({ a: "Redis", ghost: "Redis" });
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["b", "c"]);
+      const byId = (id: string) => result.current.notificationHistory.find((n) => n.id === id);
+      expect(byId("a")?.isRead).toBe(true);
+      expect(byId("b")?.isRead).toBe(false);
+    });
+
+    it("broadcastActionResolved sends the id set and the result to the other tabs", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      act(() => result.current.broadcastActionResolved(["q1"], "Redis"));
+      expect(mockBroadcast).toHaveBeenCalledWith({ type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1"], summary: "Redis" });
+    });
+
+    it("moveAllToTray broadcasts the moved ids once", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+
+      act(() => {
+        result.current.moveAllToTray();
+      });
+
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "NOTIFICATIONS_BULK_DISMISSED",
+        kind: "moved",
+        ids: ["a", "b", "c"],
+      });
+    });
+  });
+});
+
+describe("Quiet mode (Story 4.5)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.localStorage.clear();
+  });
+
+  it("quiet_mode_should_demote_a_custom_toast_to_the_tray_and_still_toast_a_pending_decision", () => {
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => result.current.setQuietMode(true));
+    expect(result.current.quietMode).toBe(true);
+
+    act(() => {
+      result.current.addNotification(makeNotification({ sessionId: "s-custom", notificationType: "custom" }));
+    });
+    expect(result.current.notifications).toHaveLength(0);
+    expect(result.current.notificationHistory).toHaveLength(1);
+    expect(result.current.getUnreadCount()).toBe(1);
+
+    act(() => {
+      result.current.addNotification(
+        makeNotification({ sessionId: "s-err", notificationType: "error", isPendingDecision: true }),
+      );
+    });
+    expect(result.current.notifications).toHaveLength(1);
+    expect(result.current.notifications[0].sessionId).toBe("s-err");
+  });
+
+  it("quiet_mode_should_persist_and_survive_a_reload", () => {
+    const first = renderHook(() => useNotifications(), { wrapper });
+    act(() => first.result.current.setQuietMode(true));
+    first.unmount();
+
+    const second = renderHook(() => useNotifications(), { wrapper });
+    expect(second.result.current.quietMode).toBe(true);
+    act(() => {
+      second.result.current.addNotification(makeNotification({ notificationType: "custom" }));
+    });
+    expect(second.result.current.notifications).toHaveLength(0);
+  });
+
+  it("quiet_mode_should_render_off_and_not_crash_when_localstorage_throws", () => {
+    const get = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const set = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    expect(result.current.quietMode).toBe(false);
+    expect(() => act(() => result.current.setQuietMode(true))).not.toThrow();
+    // The in-memory setting still applies for this page even though it cannot persist.
+    expect(result.current.quietMode).toBe(true);
+    get.mockRestore();
+    set.mockRestore();
+  });
+
+});
+
+describe("unread count floor (TH-1)", () => {
+  afterEach(() => {
+    mockServerUnread = 0;
+  });
+
+  it("badge_should_use_the_server_unread_total_when_only_a_page_of_history_is_loaded", () => {
+    mockServerUnread = 120;
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    expect(result.current.getUnreadCount()).toBe(120);
+  });
+
+  it("badge_should_count_live_rows_above_a_stale_server_total", () => {
+    mockServerUnread = 1;
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addNotification(makeNotification({ sessionId: "a" }));
+      result.current.addNotification(makeNotification({ sessionId: "b" }));
+      result.current.addNotification(makeNotification({ sessionId: "c" }));
+    });
+    expect(result.current.getUnreadCount()).toBe(3);
+  });
+
+  it("mark_as_read_by_session_should_send_one_rpc_under_strict_mode_when_history_has_unread_rows", () => {
+    mockMarkAsRead.mockClear();
+    const strict = ({ children }: { children: React.ReactNode }) => (
+      <React.StrictMode>{wrapper({ children })}</React.StrictMode>
+    );
+    const { result } = renderHook(() => useNotifications(), { wrapper: strict });
+    act(() => {
+      result.current.addToHistoryOnly(makeNotification({ sessionId: "s1" }));
+    });
+    act(() => {
+      result.current.markAsReadBySessionId("s1");
+    });
+    expect(mockMarkAsRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
+  afterEach(() => {
+    mockServerUnread = 0;
+    window.localStorage.clear();
+    act(() => resetReviewedMarksForTests());
+  });
+
+  it("marked_handled_should_leave_this_browsers_badge_and_Needs_you_without_a_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "ans-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "ans-2" });
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markAnswerHandled(["ans-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    const handled = result.current.notificationHistory.find((n) => n.id === "ans-1");
+    expect(handled).toMatchObject({ isRead: true, isPendingDecision: false });
+    expect(result.current.notificationHistory.find((n) => n.id === "ans-2")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
+  it("reviewed_background_records_should_leave_the_bell_but_stay_unread_in_the_list_with_no_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "bg-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "bg-2" });
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markBackgroundReviewed(["bg-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    expect(result.current.notificationHistory.find((n) => n.id === "bg-1")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
+  it("marked_handled_should_survive_a_reload_in_this_browser_only", () => {
+    const first = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      first.result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "z" }), id: "ans-9" });
+    });
+    act(() => first.result.current.markAnswerHandled(["ans-9"]));
+    expect(window.localStorage.getItem("ssq.background.reviewed")).toContain("answer:ans-9@");
   });
 });

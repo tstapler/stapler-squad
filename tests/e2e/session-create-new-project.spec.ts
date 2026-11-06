@@ -4,8 +4,9 @@ const _features = [
   FEATURE_CATALOG['session-create'],
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = baseUrl();
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -46,7 +47,7 @@ test.describe('new project session creation', () => {
   test('T-E2E-NP-004: submit is disabled until both parent dir and project name are filled', async ({ page }) => {
     await openInCreationMode(page);
     await page.getByRole('radio', { name: 'New Project' }).click();
-    await page.getByLabel('Session Name').fill('test-project');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('test-project');
 
     // Neither field filled — submit disabled
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeDisabled();
@@ -87,8 +88,8 @@ test.describe('new project session creation', () => {
     await openInCreationMode(page);
     await page.getByRole('radio', { name: 'New Project' }).click();
 
-    await page.getByLabel('Session Name').fill('e2e-new-project');
-    await page.getByLabel('Parent Directory *').fill('/tmp/e2e-projects');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-new-project');
+    await page.getByLabel('Parent Directory *').fill(slotTmp('e2e-projects'));
     await page.getByLabel('Project Name *').fill('test-repo');
 
     // Switch to Directory mode (simpler — no branch required)
@@ -107,7 +108,7 @@ test.describe('new project session creation', () => {
 
     // sessionType 4 = SESSION_TYPE_NEW_PROJECT
     expect(body.sessionType).toBe(4);
-    expect(body.path).toBe('/tmp/e2e-projects/test-repo');
+    expect(body.path).toBe(`${slotTmp('e2e-projects')}/test-repo`);
     expect(body.oneOff).toBeFalsy();
   });
 
@@ -127,7 +128,7 @@ test.describe('directory mode path confirmation', () => {
 
     // Fill in a path that definitely doesn't exist
     await page.locator('input[aria-label="Session source input"]').fill('/tmp/nonexistent-e2e-path-xyz');
-    await page.getByLabel('Session Name').fill('e2e-dir-confirm');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-dir-confirm');
 
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
@@ -144,7 +145,7 @@ test.describe('directory mode path confirmation', () => {
     await page.getByRole('radio', { name: 'Directory' }).click();
 
     await page.locator('input[aria-label="Session source input"]').fill('/tmp/nonexistent-e2e-path-abc');
-    await page.getByLabel('Session Name').fill('e2e-dir-cancel');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-dir-cancel');
 
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
@@ -162,7 +163,7 @@ test.describe('directory mode path confirmation', () => {
     await page.getByRole('radio', { name: 'Directory' }).click();
 
     await page.locator('input[aria-label="Session source input"]').fill('/tmp/nonexistent-e2e-path-def');
-    await page.getByLabel('Session Name').fill('e2e-dir-confirm-create');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-dir-confirm-create');
 
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
     await page.getByRole('button', { name: 'Create Session' }).click();

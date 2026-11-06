@@ -28,6 +28,7 @@ import { render, act } from '@testing-library/react';
 const mockXtermHandle = {
   terminal: null as null,
   fit: jest.fn(),
+  refit: jest.fn(),
   // Pre-sizing (fix xterm theme flip and unpainted rows beyond 80x24): grows
   // the xterm buffer to preCols/preRows before connect() so capture-pane's
   // cursor-positioning sequences for rows beyond xterm's 80x24 default aren't
@@ -66,7 +67,12 @@ jest.mock('@/lib/hooks/useTerminalStream', () => ({
   useTerminalStream: jest.fn(),
 }));
 
+// saveDimensions(sessionId, cols, rows, options): the options object when no cell metrics are available.
+const FONT_ONLY_OPTIONS = { fontSize: expect.any(Number), fontFamily: expect.any(String) };
+
 jest.mock('@/lib/terminal/TerminalDimensionCache', () => ({
+  // Keep the real MIN_COLS/MIN_ROWS/XTERM_DEFAULT_* constants TerminalOutput imports from here.
+  ...jest.requireActual('@/lib/terminal/TerminalDimensionCache'),
   getCachedDimensions: jest.fn(),
   saveDimensions: jest.fn(),
   validateCellDimensions: jest.fn((cached: unknown) => cached),
@@ -76,6 +82,9 @@ jest.mock('@/lib/terminal/TerminalStreamManager', () => ({
   TerminalStreamManager: jest.fn().mockImplementation(() => ({
     setOnFirstOutput: jest.fn(),
     setOnFullSnapshot: jest.fn(),
+    setOnAltScreenChange: jest.fn(),
+    setOnAppScrollback: jest.fn(),
+    handleAppScrollback: jest.fn(),
     setSerializeAddon: jest.fn(),
     installDebugMonitor: jest.fn(),
     writeInitialContent: jest.fn().mockResolvedValue(undefined),
@@ -106,6 +115,8 @@ import { useTerminalStream } from '@/lib/hooks/useTerminalStream';
 import { getCachedDimensions, saveDimensions } from '@/lib/terminal/TerminalDimensionCache';
 // eslint-disable-next-line import/first
 import { TerminalStreamManager } from '@/lib/terminal/TerminalStreamManager';
+// eslint-disable-next-line import/first
+import { TerminalPoolProvider } from '@/lib/terminal/TerminalPool';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -161,9 +172,16 @@ function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
   };
 }
 
+// Story 3 — TerminalOutput now sources its xterm.js instance from
+// TerminalPoolProvider (see TerminalPool.tsx); every render/rerender in this
+// file must be wrapped in one, matching production's app-level provider.
+function withPool(children: React.ReactNode) {
+  return <TerminalPoolProvider>{children}</TerminalPoolProvider>;
+}
+
 function renderTerminalOutput(sessionId = 'session-1') {
   return render(
-    <TerminalOutput sessionId={sessionId} baseUrl="http://localhost:8543" />
+    withPool(<TerminalOutput sessionId={sessionId} baseUrl="http://localhost:8543" />)
   );
 }
 
@@ -368,7 +386,7 @@ describe('MIN_COLS/MIN_ROWS: tiny dims do not corrupt the cache or trigger fast-
 
     await act(async () => { capturedOnResize?.(30, 10); });
 
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10, undefined, undefined, expect.anything(), expect.anything());
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10, FONT_ONLY_OPTIONS);
     expect(stream.connect).toHaveBeenCalledWith(30, 10);
   });
 
@@ -570,7 +588,7 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
     });
 
     const { rerender } = render(
-      <TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />
+      withPool(<TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />)
     );
 
     // Trigger a resize so XtermTerminal's ref is populated
@@ -583,7 +601,7 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
 
     // Call onOutput while STABLE → write should be called immediately
     await act(async () => {
-      capturedOnOutput!('chunk-stable');
+      capturedOnOutput?.('chunk-stable');
     });
 
     // Grab the TerminalStreamManager instance that was created.
@@ -602,12 +620,12 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
     currentTerminalState = 'RESIZING';
 
     await act(async () => {
-      rerender(<TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />);
+      rerender(withPool(<TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />));
     });
 
     // Output during RESIZING must NOT reach write()
     await act(async () => {
-      capturedOnOutput!('chunk-during-resize');
+      capturedOnOutput?.('chunk-during-resize');
     });
 
     expect((managerInstance.write as jest.Mock).mock.calls.length).toBe(writeCallsBefore);
@@ -617,7 +635,7 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
     currentTerminalState = 'STABLE';
 
     await act(async () => {
-      rerender(<TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />);
+      rerender(withPool(<TerminalOutput sessionId="session-queue" baseUrl="http://localhost:8543" />));
     });
 
     // The queued chunk should have been flushed by the RESIZING→STABLE useEffect
@@ -655,7 +673,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
       return stream;
     });
 
-    render(<TerminalOutput sessionId="session-scrollback-err" baseUrl="http://localhost:8543" />);
+    render(withPool(<TerminalOutput sessionId="session-scrollback-err" baseUrl="http://localhost:8543" />));
 
     expect(capturedOnScrollbackReceived).toBeDefined();
 
@@ -664,7 +682,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
     // First call: initial scrollback — creates the TerminalStreamManager lazily and
     // writes via writeInitialContent, sets isInitialScrollbackDoneRef=true.
     await act(async () => {
-      await capturedOnScrollbackReceived!('initial-content', {
+      await capturedOnScrollbackReceived?.('initial-content', {
         hasMore: true,
         oldestSequence: 50,
         newestSequence: 100,
@@ -684,7 +702,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
 
     // Second call: paged history — triggers prependScrollbackBatch which will throw
     await act(async () => {
-      await capturedOnScrollbackReceived!('paged-content', {
+      await capturedOnScrollbackReceived?.('paged-content', {
         hasMore: false,
         oldestSequence: 1,
         newestSequence: 49,
@@ -706,7 +724,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
     (managerInstance.prependScrollbackBatch as jest.Mock).mockResolvedValue(undefined);
 
     await act(async () => {
-      await capturedOnScrollbackReceived!('paged-content-2', {
+      await capturedOnScrollbackReceived?.('paged-content-2', {
         hasMore: false,
         oldestSequence: 1,
         newestSequence: 49,
@@ -727,6 +745,11 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
 // pre-size without waiting for xterm to fire onResize.
 // ---------------------------------------------------------------------------
 describe('Cell dim extraction: saves pixel metrics from xterm private API', () => {
+  // Runs even when an assertion throws, so a failure here can't leak a fake terminal into later tests.
+  afterEach(() => {
+    (mockXtermHandle as any).terminal = null;
+  });
+
   it('saves cell pixel dimensions to cache when terminal provides them', async () => {
     (getCachedDimensions as jest.Mock).mockReturnValue(null);
     const stream = makeStreamMock();
@@ -748,11 +771,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     await act(async () => { capturedOnResize?.(200, 50); });
 
     expect(saveDimensions).toHaveBeenCalledWith(
-      expect.any(String), 200, 50, 8.4, 17.0, expect.anything(), expect.anything(),
+      expect.any(String), 200, 50, { ...FONT_ONLY_OPTIONS, cellWidth: 8.4, cellHeight: 17.0 },
     );
-
-    // Restore
-    (mockXtermHandle as any).terminal = null;
   });
 
   it('saves only cols/rows when terminal cell API is unavailable', async () => {
@@ -764,11 +784,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
-    expect(saveDimensions).not.toHaveBeenCalledWith(
-      expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
-    );
+    // No cellWidth/cellHeight keys at all — only fontSize/fontFamily.
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, FONT_ONLY_OPTIONS);
   });
 
   it('saves only cols/rows when cell dims are non-finite', async () => {
@@ -790,12 +807,7 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
-    expect(saveDimensions).not.toHaveBeenCalledWith(
-      expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
-    );
-
-    (mockXtermHandle as any).terminal = null;
+    // No cellWidth/cellHeight keys at all — only fontSize/fontFamily.
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, FONT_ONLY_OPTIONS);
   });
 });

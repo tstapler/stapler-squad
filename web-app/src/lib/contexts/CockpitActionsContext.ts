@@ -13,6 +13,11 @@ export interface CockpitActions {
   onNewWorkspaceSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession: (sessionId: string) => Promise<boolean>;
+  onHibernateSession: (sessionId: string) => void;
+  onResumeFromHibernation: (sessionId: string) => void;
+  onRetryNowSession: (sessionId: string) => Promise<boolean>;
+  onArchiveSession: (sessionId: string) => Promise<boolean>;
+  onUnarchiveSession: (sessionId: string) => Promise<boolean>;
   onUpdateTags: (sessionId: string, tags: string[]) => void;
   onNewSession: () => void;
   onCreateCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
@@ -20,6 +25,7 @@ export interface CockpitActions {
   onForkFromCheckpoint: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onSetRateLimitEnabled: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode: (sessionId: string, enabled: boolean) => void;
+  onTogglePinned: (sessionId: string, pinned: boolean) => void;
   onToggleAutoApprove: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState: (sessionId: string) => Promise<boolean>;

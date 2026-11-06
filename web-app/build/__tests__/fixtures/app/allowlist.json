@@ -1,0 +1,5 @@
+[
+  { "path": "push-sw.js", "reason": "fixture service worker" },
+  { "path": "icons/*", "reason": "fixture icons" },
+  { "path": "docs/*.md", "reason": "fixture docs" }
+]

@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "POST /registrations/{instance_id}/disable and /delete request. compat must equal, exactly, the tuple persisted at creation, and name a currently supported capability revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "expected_version", "compat"],
+  "properties": {
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{8,128}$" },
+    "expected_version": { "type": "integer", "minimum": 1 },
+    "compat": { "$ref": "reconcile-request.schema.json#/properties/compat" }
+  }
+}

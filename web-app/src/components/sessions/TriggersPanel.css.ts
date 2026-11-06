@@ -55,7 +55,7 @@ export const refreshButton = style({
   fontSize: 16,
   cursor: "pointer",
   color: vars.color.textPrimary,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": { background: vars.color.accentHover },
     "&:disabled": { opacity: 0.5, cursor: "not-allowed" },
@@ -132,7 +132,7 @@ export const tab = style({
   fontSize: 13,
   cursor: "pointer",
   color: vars.color.textSecondary,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": { background: vars.color.accentHover, color: vars.color.textPrimary },
   },
@@ -214,9 +214,8 @@ export const typeBadge = style({
 });
 
 export const typeCron = style({ background: vars.color.panelBgSecondary, color: vars.color.textSecondary });
-export const typeGithubPush = style({ background: vars.color.accentHover, color: vars.color.primary });
-export const typeWebhook = style({ background: vars.color.warningBg, color: vars.color.warning });
-export const typeManual = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted });
+export const typeGithubPush = style({ background: vars.color.accentHover, color: vars.color.accentText });
+export const typeWebhook = style({ background: vars.color.warningBg, color: vars.color.warningText });
 
 // ── 5-state outcome/status badges (research/ux.md §4) ──────────────────────
 // Status must never be color-only (WCAG 1.4.1) — every badge below pairs a
@@ -234,10 +233,9 @@ export const statusBadge = style({
 });
 
 export const statusFiredSuccess = style({ background: vars.color.successBg, color: vars.color.success });
-export const statusFiredFailed = style({ background: vars.color.warningBg, color: vars.color.warning });
+export const statusFiredFailed = style({ background: vars.color.warningBg, color: vars.color.warningText });
 export const statusRejected = style({ background: vars.color.errorBg, color: vars.color.error });
 export const statusNoMatch = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted });
-export const statusDisabled = style({ background: vars.color.panelBgSecondary, color: vars.color.textMuted, border: `1px solid ${vars.color.borderSubtle}` });
 
 export const lastFired = style({
   fontSize: 12,
@@ -257,7 +255,7 @@ export const toggle = style({
   fontSize: 11,
   fontWeight: 700,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   minWidth: 44,
   minHeight: 28,
   selectors: {
@@ -284,7 +282,7 @@ export const iconButton = style({
   borderRadius: 4,
   background: "transparent",
   color: "inherit",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": { background: vars.color.hoverBackground },
   },
@@ -393,7 +391,7 @@ export const historyToggle = style({
   background: "none",
   border: "none",
   cursor: "pointer",
-  color: vars.color.primary,
+  color: vars.color.accentText,
   fontSize: 12,
   padding: "2px 4px",
   textDecoration: "underline",
@@ -442,7 +440,7 @@ export const historyError = style({
 });
 
 export const historySessionLink = style({
-  color: vars.color.primary,
+  color: vars.color.accentText,
   fontSize: 11,
   textDecoration: "underline",
 });

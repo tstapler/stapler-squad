@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -388,6 +389,49 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 	require.Equal(t, comment, gotBody["body"])
 }
 
+func TestGitHubIssuesPlugin_PostProgressComment(t *testing.T) {
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+
+	t.Run("success returns read-back updated_at", func(t *testing.T) {
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(`{"id":1}`))
+				return
+			}
+			w.Write([]byte(`{"updated_at":"2024-06-01T12:00:00Z"}`))
+		})
+		got, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.NoError(t, err)
+		require.True(t, got.Equal(time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)))
+	})
+
+	t.Run("read-back HTTP error yields zero time and nil error", func(t *testing.T) {
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(`{"id":1}`))
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		got, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.NoError(t, err)
+		require.True(t, got.IsZero())
+	})
+
+	t.Run("post failure returns error and never reads back", func(t *testing.T) {
+		gets := 0
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				gets++
+			}
+			w.WriteHeader(http.StatusForbidden)
+		})
+		_, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.Error(t, err)
+		require.Zero(t, gets)
+	})
+}
+
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "github_prs", NewGitHubPRsPlugin().PluginID())
@@ -439,6 +483,8 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.T) {
 	const prCount = 12
 	var inFlight, maxInFlight int32
+	saturated := make(chan struct{})
+	var saturatedOnce sync.Once
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/widgets/pulls":
@@ -464,7 +510,15 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 					break
 				}
 			}
-			time.Sleep(20 * time.Millisecond) // widen the overlap window so concurrent requests actually coincide
+			// Hold this request open until the bounded pool is saturated (or a
+			// safety deadline passes) so concurrent requests actually coincide.
+			if atomic.LoadInt32(&maxInFlight) >= int32(githubCILabelConcurrency) {
+				saturatedOnce.Do(func() { close(saturated) })
+			}
+			select {
+			case <-saturated:
+			case <-time.After(2 * time.Second):
+			}
 
 			var num int
 			fmt.Sscanf(r.URL.Path, "/repos/acme/widgets/commits/sha-%d/check-runs", &num)
@@ -507,4 +561,26 @@ func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	data := p.MapToBacklogItem(item, "src-2")
 	require.Len(t, data.Title, 200)
 	require.Equal(t, "9", data.ExternalID)
+}
+
+func TestGitHubIssuesPlugin_ReadIssueState(t *testing.T) {
+	for _, state := range []string{"open", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.Equal(t, "/repos/acme/widgets/issues/42", r.URL.Path)
+				fmt.Fprintf(w, `{"number":42,"state":%q,"updated_at":"2026-11-01T00:00:00Z"}`, state)
+			})
+			got, updatedAt, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+			require.NoError(t, err)
+			require.Equal(t, state, got)
+			require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), updatedAt)
+		})
+	}
+}
+
+func TestGitHubIssuesPlugin_ReadIssueState_NonOKReturnsError(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	_, _, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+	require.Error(t, err)
 }

@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,8 +16,11 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
@@ -62,26 +66,33 @@ type launchCommandBuilder interface {
 	// Build returns the full launch command for i. resumeSessionID is
 	// buildLaunchCommand's claudeSessionID parameter passed through — only
 	// claudeLaunchBuilder uses it; piLaunchBuilder reads i.piSession instead.
-	Build(i *Instance, base, resumeSessionID string) string
-	// StderrRedirect returns the shell redirect suffix (e.g. " 2>>'<path>'")
-	// to append so this program's stderr doesn't reach the visible pane, or
-	// "" to leave stderr alone. Must redirect to a real file, never
-	// /dev/null -- see piLaunchBuilder.StderrRedirect's doc comment.
-	StderrRedirect(i *Instance) string
+	Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand
+	// StderrLog returns the file this program's stderr is appended to so it
+	// doesn't reach the visible pane, or "" to leave stderr alone. Must be a
+	// real file, never /dev/null -- see piLaunchBuilder.StderrLog's doc comment.
+	StderrLog(i *Instance) string
+	// PromptChannel reports how this program accepts Instance.Prompt at launch.
+	PromptChannel() promptChannel
 }
 
 // launchBuilders is the ordered, stateless set of builders buildLaunchCommand
 // checks before falling back to the default (shell-quote-and-run-as-is) path.
 // A future program's builder is appended here, never a new case in
 // buildLaunchCommand itself.
-var launchBuilders = []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
+var launchBuilders = []launchCommandBuilder{
+	&claudeLaunchBuilder{},
+	&piLaunchBuilder{},
+	&opencodeLaunchBuilder{},
+	&agyLaunchBuilder{},
+	&geminiLaunchBuilder{},
+}
 
 // claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
 type claudeLaunchBuilder struct{}
 
 func (b *claudeLaunchBuilder) Matches(program string) bool { return isClaude(program) }
 
-func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
 	// AutoApprove is injected inside buildClaudeCommand, before the trailing
 	// "--" prompt separator -- see that function's comment for why appending
 	// it here (after the separator) would be silently swallowed as inert
@@ -89,14 +100,16 @@ func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) s
 	return i.buildClaudeCommand(base, resumeSessionID)
 }
 
-func (b *claudeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+func (b *claudeLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *claudeLaunchBuilder) PromptChannel() promptChannel { return promptChannelArgv }
 
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
 
 func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
 
-func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
+func (b *piLaunchBuilder) Build(i *Instance, base, _ string) launchcmd.ExecCommand {
 	i.piSessionMu.Lock()
 	var piSessionID string
 	if i.piSession != nil {
@@ -106,7 +119,7 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 	return i.buildPiCommand(base, piSessionID)
 }
 
-// StderrRedirect keeps pi's stderr out of the visible pane -- pi writes a
+// StderrLog keeps pi's stderr out of the visible pane -- pi writes a
 // harmless per-project trust-gate diagnostic there on every launch (confirmed
 // empirically: the session still reaches "Working..." right after) with
 // nothing else in this pipeline able to distinguish it from pi's real TUI
@@ -115,14 +128,16 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 // silently vanishing. Returns "" (no redirect) if the log path can't be
 // resolved, since a resolution failure here means the whole app's logging is
 // already broken -- failing open to visibility, not silently to /dev/null.
-func (b *piLaunchBuilder) StderrRedirect(i *Instance) string {
+func (b *piLaunchBuilder) StderrLog(i *Instance) string {
 	path, err := piStderrLogPath(i)
 	if err != nil {
 		log.ForSession(i.Title).Warn("could not resolve pi stderr log path; leaving stderr unredirected", "err", err)
 		return ""
 	}
-	return " 2>>" + shellQuote(path)
+	return path
 }
+
+func (b *piLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
 
 // piStderrLogPath returns the path to a plain-text file (distinct from the
 // session_<id>.log the Logs tab reads, which is JSON-lines and would be
@@ -141,11 +156,107 @@ func piStderrLogPath(i *Instance) (string, error) {
 	return filepath.Join(logDir, fmt.Sprintf("pi-stderr_%s.log", safeTitle)), nil
 }
 
+// opencodeLaunchBuilder implements launchCommandBuilder for OpenCode.
+type opencodeLaunchBuilder struct{}
+
+func (b *opencodeLaunchBuilder) Matches(program string) bool { return isOpencode(program) }
+
+func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
+	if env, ok := i.opencodeMCPEnv(); ok {
+		cmd.Env = append([]launchcmd.EnvVar{env}, cmd.Env...)
+	}
+	if resumeSessionID != "" {
+		cmd = cmd.With(launchcmd.MustFlag("--session"), launchcmd.Literal(resumeSessionID))
+	}
+	if i.AutoYes {
+		cmd = cmd.With(flagAuto)
+	}
+	return cmd
+}
+
+func (b *opencodeLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *opencodeLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
+
+// agyLaunchBuilder implements launchCommandBuilder for Antigravity (agy).
+type agyLaunchBuilder struct{}
+
+func (b *agyLaunchBuilder) Matches(program string) bool { return isAgy(program) }
+
+func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
+	if resumeSessionID != "" {
+		cmd = cmd.With(flagResume, launchcmd.Literal(resumeSessionID))
+	}
+	if i.AutoYes {
+		cmd = cmd.With(flagAuto)
+	}
+	return cmd
+}
+
+func (b *agyLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *agyLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
+
+// geminiLaunchBuilder implements launchCommandBuilder for Gemini CLI.
+type geminiLaunchBuilder struct{}
+
+func (b *geminiLaunchBuilder) Matches(program string) bool { return isGemini(program) }
+
+func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
+	if resumeSessionID != "" {
+		cmd = cmd.With(flagResume, launchcmd.Literal(resumeSessionID))
+	}
+	if i.AutoYes {
+		cmd = cmd.With(flagAuto)
+	}
+	return cmd
+}
+
+func (b *geminiLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *geminiLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
+
+// isOpencode reports whether the program command invokes the opencode binary.
+func isOpencode(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	return strings.Contains(strings.ToLower(program), "opencode")
+}
+
+// isAgy reports whether the program command invokes the agy / antigravity binary.
+func isAgy(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity")
+}
+
+// isGemini reports whether the program command invokes the gemini binary (excluding agy/antigravity).
+func isGemini(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
+	p := strings.ToLower(program)
+	return strings.Contains(p, "gemini") && !strings.Contains(p, "agy") && !strings.Contains(p, "antigravity")
+}
+
 // isClaude reports whether the program command invokes the claude binary.
 // It checks each whitespace-delimited token's basename to avoid false positives
 // from env wrappers (e.g. "env -u VAR claude") and to reject similar names
-// like "claude-squad" or "myclaudeapp".
+// like "claude-squad" or "myclaudeapp". Custom program IDs are resolved first.
 func isClaude(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "claude" {
 			return true
@@ -158,8 +269,12 @@ func isClaude(program string) bool {
 // isClaude: it checks each whitespace-delimited token's basename, so it
 // matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
 // while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
-// exactly "pi".
+// exactly "pi". Custom program IDs are resolved first.
 func isPi(program string) bool {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "pi" {
 			return true
@@ -180,8 +295,12 @@ var yoloFlagByAgent = map[string]string{
 
 // yoloFlagFor returns the yolo/auto-approve flag for the agent detected in
 // program's whitespace-delimited tokens (basename match, mirroring isClaude),
-// or "" if the agent has no known flag.
+// or "" if the agent has no known flag. Custom program IDs are resolved first.
 func yoloFlagFor(program string) string {
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+	}
 	for _, token := range strings.Fields(program) {
 		if flag, ok := yoloFlagByAgent[filepath.Base(token)]; ok {
 			return flag
@@ -215,7 +334,7 @@ func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
 			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
@@ -231,22 +350,51 @@ func (i *Instance) GetTmuxSessionName() string {
 	return i.pm().GetSessionIdentifier()
 }
 
+// currentLaunchCommand rebuilds the launch command from the CURRENT
+// conversation UUID, read fresh via the thread-safe GetConversationUUID
+// rather than whatever was current when this instance's *tmux.TmuxSession
+// was constructed. Passed as tmux.WithProgramProvider so RestoreWithWorkDir
+// uses this -- not the frozen command captured at construction time -- when
+// it must actually relaunch a confirmed-missing session (see that function's
+// doc comment; BUG matching #791, a different call site).
+func (i *Instance) currentLaunchCommand() launchcmd.LaunchCommand {
+	return i.launchCommand(i.GetConversationUUID())
+}
+
 // buildLaunchCommand constructs the final command string used to launch the program
 // in tmux. It checks each registered launchCommandBuilder in turn (see that
 // type's doc comment); a program none of them recognizes is shell-quoted and
 // run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
-	// Single read, reused below for both Matches and Build -- see
-	// .claude/rules/instance-lock-free-reads.md: i.Program is mutated by
-	// SetProgram under i.mu.Lock(), so reading the field twice here could
-	// observe two different values if a mutation lands in between.
-	program := i.Program
+	return i.launchCommand(claudeSessionID).ShellString()
+}
+
+// launchCommand is buildLaunchCommand's typed form: the same command as data,
+// so a backend that can exec directly never has to re-parse a quoted string.
+func (i *Instance) launchCommand(claudeSessionID string) launchcmd.ExecCommand {
+	// One Snapshot() read: SetProgram mutates Program under i.mu, so two raw reads
+	// could observe different values (.claude/rules/instance-lock-free-reads.md).
+	snap := i.Snapshot()
+	program := snap.Program
+	cliFlags := snap.CLIFlags
+
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
+		program = res.Command
+		if res.CLIFlags != "" {
+			if cliFlags != "" {
+				cliFlags = res.CLIFlags + " " + cliFlags
+			} else {
+				cliFlags = res.CLIFlags
+			}
+		}
+	}
 
 	matched := matchLaunchBuilder(program)
 	cmd := i.buildBaseLaunchCommand(program, claudeSessionID, matched)
-	cmd = appendLaunchExtras(cmd, i.CLIFlags, i.ExtraArgs)
+	cmd = appendLaunchExtras(cmd, cliFlags, i.ExtraArgs)
 	if matched != nil {
-		cmd = cmd + matched.StderrRedirect(i)
+		cmd.StderrAppend = matched.StderrLog(i)
 	}
 	return cmd
 }
@@ -266,18 +414,18 @@ func matchLaunchBuilder(program string) launchCommandBuilder {
 // ExtraArgs, and StderrRedirect are appended: matched.Build's output, or --
 // when no builder recognizes program -- the default shell-quote-and-run-as-is
 // path with AutoApprove's yolo-flag lookup.
-func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, matched launchCommandBuilder) string {
+func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, matched launchCommandBuilder) launchcmd.ExecCommand {
 	if matched != nil {
 		return matched.Build(i, program, claudeSessionID)
 	}
-	// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
-	// Program values like "sleep 300" that rely on shell word-splitting, while still
-	// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
-	// /tmp/pwned" -- from terminating the command and injecting a second one.
-	cmd := shellQuoteFields(program)
+	// Each whitespace-separated token is one literal argument (not one whole-string
+	// Literal), preserving legitimate multi-word Program values like "sleep 300" while
+	// still preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of
+	// "true; touch /tmp/pwned" -- from terminating the command and injecting a second one.
+	cmd := launchcmd.ExecCommand{Argv: literalFields(program)}
 	if i.AutoApprove {
 		if flag := yoloFlagFor(program); flag != "" {
-			cmd = cmd + " " + flag
+			cmd = cmd.With(launchcmd.Word(flag))
 			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
 		}
 	}
@@ -285,19 +433,42 @@ func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, match
 }
 
 // appendLaunchExtras appends cliFlags and each extraArgs element to cmd.
-func appendLaunchExtras(cmd, cliFlags string, extraArgs []string) string {
-	if flags := shellQuoteFields(cliFlags); flags != "" {
-		cmd = cmd + " " + flags
-	}
-	// ExtraArgs elements are appended after CLIFlags, each independently shell-quoted as one
-	// unit — never whitespace-split — so a multi-word element (e.g. a remote-exec fragment
-	// like "cd ~/repo && exec claude") survives intact instead of being re-split into several
-	// argv positions.
+func appendLaunchExtras(cmd launchcmd.ExecCommand, cliFlags string, extraArgs []string) launchcmd.ExecCommand {
+	cmd = cmd.With(literalFields(cliFlags)...)
+	// ExtraArgs elements are each one argument -- never whitespace-split -- so a
+	// multi-word element (e.g. a remote-exec fragment like "cd ~/repo && exec claude")
+	// survives intact instead of being re-split into several argv positions.
 	for _, a := range extraArgs {
-		cmd = cmd + " " + shellQuote(a)
+		cmd = cmd.With(launchcmd.Literal(a))
 	}
 	return cmd
 }
+
+// literalFields splits s on whitespace into one Literal per token.
+func literalFields(s string) []launchcmd.Arg {
+	fields := strings.Fields(s)
+	args := make([]launchcmd.Arg, len(fields))
+	for k, f := range fields {
+		args[k] = launchcmd.Literal(f)
+	}
+	return args
+}
+
+// programCommand turns a configured program string into the command's program
+// and leading arguments. Text that is more than plain words (an expansion, a
+// glob) stays as one RawShell word so a shell still interprets it as before.
+func programCommand(program string) launchcmd.ExecCommand {
+	cmd, err := launchcmd.ParseProgram(program)
+	if err != nil {
+		return launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.RawShell(program)}}
+	}
+	return cmd
+}
+
+var (
+	flagResume = launchcmd.MustFlag("--resume")
+	flagAuto   = launchcmd.MustFlag("--auto")
+)
 
 // shellQuote POSIX-single-quotes s for safe interpolation into a shell command
 // string. tmux launches the assembled command through a shell, and Go's %q
@@ -305,57 +476,60 @@ func appendLaunchExtras(cmd, cliFlags string, extraArgs []string) string {
 // expansion. Single quotes do: the only special case is a literal single
 // quote, escaped by closing the quoted string, emitting \', and reopening.
 func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// shellQuoteFields splits s on whitespace and shell-quotes each resulting token
-// independently, joining them back with single spaces. Used wherever a caller-supplied
-// string must be safe against embedded shell metacharacters while still preserving
-// multi-word values that rely on ordinary shell word-splitting (e.g. cli_flags,
-// or a plainProgram value like "sleep 300"). Returns "" for an empty/whitespace-only s.
-func shellQuoteFields(s string) string {
-	fields := strings.Fields(s)
-	quoted := make([]string, len(fields))
-	for i, f := range fields {
-		quoted[i] = shellQuote(f)
-	}
-	return strings.Join(quoted, " ")
+	return launchcmd.Quote(s)
 }
 
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
 // It is only called via claudeLaunchBuilder.Build, which already proved the
 // program is claude (Matches), so no isClaude guard is needed here.
-func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
-	parts := []string{base}
+func (i *Instance) buildClaudeCommand(base, claudeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if claudeSessionID != "" {
 		// claudeSessionID traces back to the client-supplied resume_id RPC field
-		// (CreateSessionRequest) with no format validation, so it needs the same
-		// shell-quoting as the other interpolated flag values.
-		parts = append(parts, "--resume", shellQuote(claudeSessionID))
+		// (CreateSessionRequest) with no format validation; as a Literal it is
+		// quoted (shell) or passed untouched (exec), never interpreted.
+		cmd = cmd.With(flagResume, launchcmd.Literal(claudeSessionID))
 	}
-	if i.MCPServerURL != "" {
-		flag, val := i.claudeMCPConfigArgs()
-		parts = append(parts, flag, val)
+	// Load the provider once and reuse it below -- calling resolveMCPServerURL()
+	// then separately re-Load()ing would race against a concurrent
+	// SetMCPServerURLProvider call (deliberately not actor-routed, see that
+	// setter's doc comment) and could log a misleading "provider is wired"
+	// message for a launch where it briefly wasn't.
+	provider := i.mcpServerURLProvider.Load()
+	mcpURL := i.resolveMCPServerURLFrom(provider)
+	if mcpURL != "" {
+		flag, val := i.claudeMCPConfigArgs(mcpURL)
+		cmd = cmd.With(flag, val)
+	} else if provider != nil {
+		// Provider is wired but resolved empty (and so did the Snapshot()
+		// fallback) -- every session-scoped MCP tool call will hard-fail
+		// until a later relaunch re-resolves a non-empty URL. A nil provider
+		// (not yet wired, e.g. the narrow server-boot window before
+		// WireInstanceCallbacks runs) is not logged: expected, not a failure.
+		log.Error("claude launch: MCP server URL unresolved, session will not be able to call session-scoped MCP tools", "session", i.Title, "program", i.Program)
+	}
+	if flag, val, ok := i.claudeSettingsEnvOverrideArgs(); ok {
+		cmd = cmd.With(flag, val)
 	}
 	if i.AppendSystemPrompt != "" {
-		parts = append(parts, "--append-system-prompt", shellQuote(i.AppendSystemPrompt))
+		cmd = cmd.With(launchcmd.MustFlag("--append-system-prompt"), launchcmd.Literal(i.AppendSystemPrompt))
 	}
 	if i.AllowedTools != "" {
-		parts = append(parts, "--allowedTools", shellQuote(i.AllowedTools))
+		cmd = cmd.With(launchcmd.MustFlag("--allowedTools"), launchcmd.Literal(i.AllowedTools))
 	}
-	parts = i.appendClaudePermissionFlags(parts, base)
-	parts = i.appendClaudeOutputAndPromptFlags(parts, claudeSessionID)
-	return strings.Join(parts, " ")
+	cmd = i.appendClaudePermissionFlags(cmd, base)
+	return i.appendClaudeOutputAndPromptFlags(cmd, claudeSessionID)
 }
 
 // appendClaudePermissionFlags appends the PermissionMode/AutoYes/AutoApprove
 // permission-bypass flags to parts.
-func (i *Instance) appendClaudePermissionFlags(parts []string, base string) []string {
+func (i *Instance) appendClaudePermissionFlags(cmd launchcmd.ExecCommand, base string) launchcmd.ExecCommand {
+	flagPermissionMode := launchcmd.MustFlag("--permission-mode")
 	if i.PermissionMode != "" {
-		parts = append(parts, "--permission-mode", shellQuote(i.PermissionMode))
+		cmd = cmd.With(flagPermissionMode, launchcmd.Literal(i.PermissionMode))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--permission-mode", PermissionModeBypassPermissions)
+		cmd = cmd.With(flagPermissionMode, launchcmd.Word(PermissionModeBypassPermissions))
 	}
 	if i.AutoApprove {
 		// Must be appended here, before the "--" prompt separator emitted by
@@ -368,25 +542,27 @@ func (i *Instance) appendClaudePermissionFlags(parts []string, base string) []st
 		// line without error (both bypass in the same direction; harmless if
 		// both are set).
 		if flag := yoloFlagFor(base); flag != "" {
-			parts = append(parts, flag)
+			cmd = cmd.With(launchcmd.Word(flag))
 			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
 		}
 	}
-	return parts
+	return cmd
 }
 
 // appendClaudeOutputAndPromptFlags appends OneShot's output-format flags and,
 // when applicable, the trailing "-- <prompt>" positional argument.
-func (i *Instance) appendClaudeOutputAndPromptFlags(parts []string, claudeSessionID string) []string {
+func (i *Instance) appendClaudeOutputAndPromptFlags(cmd launchcmd.ExecCommand, claudeSessionID string) launchcmd.ExecCommand {
 	if i.OneShot {
-		parts = append(parts, "-p", "--output-format", "json")
+		cmd = cmd.With(launchcmd.MustFlag("-p"), launchcmd.MustFlag("--output-format"), launchcmd.Word("json"))
 	}
-	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
-		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
-		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
-		parts = append(parts, "--", i.promptArg())
+	if claudeSessionID == "" || i.OneShot {
+		mode := promptInteractive
+		if i.OneShot {
+			mode = promptNonInteractive
+		}
+		cmd = i.appendLaunchPrompt(cmd, (&claudeLaunchBuilder{}).PromptChannel(), mode)
 	}
-	return parts
+	return cmd
 }
 
 // buildPiCommand assembles the pi invocation, injecting the resume flag when a
@@ -396,14 +572,14 @@ func (i *Instance) appendClaudeOutputAndPromptFlags(parts []string, claudeSessio
 // context. When piSessionID is empty this is a no-op — base is returned
 // unmodified, matching buildClaudeCommand's "no session data means no flag"
 // behavior — not an error.
-func (i *Instance) buildPiCommand(base, piSessionID string) string {
-	parts := []string{base}
+func (i *Instance) buildPiCommand(base, piSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if piSessionID != "" {
 		// piSessionID traces back to persisted PiSessionData with no format
-		// validation, so it needs the same shell-quoting as claudeSessionID.
-		parts = append(parts, "--session", shellQuote(piSessionID))
+		// validation; as a Literal it is never interpreted, like claudeSessionID.
+		cmd = cmd.With(launchcmd.MustFlag("--session"), launchcmd.Literal(piSessionID))
 	}
-	return strings.Join(parts, " ")
+	return cmd
 }
 
 // promptArg returns the shell syntax used to supply i.Prompt as the trailing
@@ -434,26 +610,26 @@ func promptFileDir() string {
 	return dir
 }
 
-func (i *Instance) promptArg() string {
+func (i *Instance) promptArg() launchcmd.Arg {
 	if len(i.Prompt) < maxInlinePromptBytes {
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	f, err := os.CreateTemp(promptFileDir(), "prompt-*.txt")
 	if err != nil {
 		log.Warn("promptArg: failed to create temp file for large prompt, embedding inline", "err", err, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	path := f.Name()
 	if _, writeErr := f.WriteString(i.Prompt); writeErr != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		log.Warn("promptArg: failed to write temp prompt file, embedding inline", "err", writeErr, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	if closeErr := f.Close(); closeErr != nil {
 		_ = os.Remove(path)
 		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	i.promptFilePath.Store(&path)
 	// This timer is a fallback safety net, not the primary cleanup path:
@@ -471,7 +647,7 @@ func (i *Instance) promptArg() string {
 			log.Warn("promptArg: failed to clean up temp prompt file", "path", path, "err", rmErr)
 		}
 	}()
-	return fmt.Sprintf(`"$(cat %s)"`, shellQuote(path))
+	return launchcmd.FileContents(path)
 }
 
 // cleanupPromptFile removes the most recently created temp-file-backed prompt
@@ -489,21 +665,248 @@ func (i *Instance) cleanupPromptFile() {
 }
 
 // claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
-// Uses the Streamable HTTP transport (type "http") pointing at MCPServerURL, with the
+// Uses the Streamable HTTP transport (type "http") pointing at mcpURL, with the
 // session UUID passed as a request header. The server middleware at /mcp extracts
 // X-Stapler-Session-UUID and injects it into the request context for tool handlers.
 // Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
-func (i *Instance) claudeMCPConfigArgs() (string, string) {
-	cfg := fmt.Sprintf(
-		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
-		i.MCPServerURL, i.UUID,
-	)
-	return "--mcp-config", shellQuote(cfg)
+//
+// When the local API token exists (require_local_auth), the config carries an
+// Authorization header and is written to a 0600 file whose path is passed instead
+// of the JSON, so the token never appears in the process's argv.
+func (i *Instance) claudeMCPConfigArgs(mcpURL string) (launchcmd.Flag, launchcmd.Literal) {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		dir = ""
+	}
+	token := ""
+	if dir != "" {
+		token = localtoken.FromConfigDir(dir)
+	}
+	return i.claudeMCPConfigArgsWithToken(mcpURL, dir, token)
+}
+
+// claudeMCPConfigArgsWithToken adds the session's MCP proof (when a provider is
+// wired) to the credentials; see claudeMCPConfigArgsWithCredentials.
+func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (launchcmd.Flag, launchcmd.Literal) {
+	return i.claudeMCPConfigArgsWithCredentials(mcpURL, configDir, mcpCredentials{Token: token, Proof: i.mcpProofHeaderValue()})
+}
+
+// resolveMCPServerURLFrom returns the MCP server URL to pass to claude for
+// this launch, given an already-Load()ed provider (so callers needing the
+// provider's presence for another decision don't race a second Load() --
+// see buildClaudeCommand). Falls back to GetMCPServerURL() when provider is
+// nil or resolves empty.
+func (i *Instance) resolveMCPServerURLFrom(provider *func() string) string {
+	if provider != nil {
+		if url := (*provider)(); url != "" {
+			return url
+		}
+	}
+	return i.GetMCPServerURL()
+}
+
+// GetMCPServerURL returns the instance's last known-good MCP server URL via
+// the lock-free published Snapshot() rather than the bare MCPServerURL
+// field. Used only as resolveMCPServerURL's fallback when no provider is
+// wired.
+func (i *Instance) GetMCPServerURL() string {
+	return i.Snapshot().MCPServerURL
+}
+
+// resolveExtraEnvVars returns the custom-program and instance-level env vars
+// that buildExtraEnv() injects via tmux -e flags, keyed by name (instance-level
+// EnvVars win over program-level defaults on key collision). Shared with
+// claudeSettingsEnvOverrideArgs() so both injection paths -- the tmux
+// environment and the claude --settings override -- always agree on the same
+// resolved set.
+func (i *Instance) resolveExtraEnvVars() map[string]string {
+	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	snap := i.Snapshot()
+	envVars := make(map[string]string)
+	cfg := config.LoadConfig()
+	if res := config.ResolveProgramConfig(cfg, snap.Program); res.IsCustom {
+		for k, v := range res.EnvVars {
+			envVars[k] = v
+		}
+	}
+	for k, v := range snap.EnvVars {
+		envVars[k] = v
+	}
+	return envVars
+}
+
+// buildExtraEnv returns the KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Combines STAPLER_SESSION_UUID with
+// resolveExtraEnvVars()'s custom program env vars and instance-level EnvVars.
+func (i *Instance) buildExtraEnv() []string {
+	snap := i.Snapshot()
+	var extraEnv []string
+	if snap.UUID != "" {
+		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+snap.UUID)
+	}
+	for k, v := range i.resolveExtraEnvVars() {
+		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+	return extraEnv
+}
+
+// claudeSettingsEnvOverrideArgs returns the --settings flag and its
+// shell-quoted JSON value carrying the same env vars buildExtraEnv() injects
+// via tmux -e, so they also win over a global ~/.claude/settings.json's own
+// `env` block. A plain inherited process env var does NOT do this: Claude
+// Code's settings-file `env` block takes precedence over an inherited
+// environment variable of the same name, so a custom program's registered
+// env (e.g. ANTHROPIC_BASE_URL, routing through a local proxy) was silently
+// discarded whenever the user's global settings.json set the same key --
+// e.g. via Netflix's wrapper-installed settings.json (GitHub issue #852).
+// The CLI --settings flag ranks above project/user settings files (though
+// still below org-managed settings), per
+// https://code.claude.com/docs/en/settings.md's precedence order, and merges
+// by key rather than replacing the file wholesale -- only the specific env
+// var keys set here are overridden, everything else in settings.json still
+// applies. Returns ("", "") when there is nothing to override.
+func (i *Instance) claudeSettingsEnvOverrideArgs() (launchcmd.Flag, launchcmd.Literal, bool) {
+	envVars := i.resolveExtraEnvVars()
+	if len(envVars) == 0 {
+		return launchcmd.Flag{}, "", false
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"env": envVars})
+	if err != nil {
+		log.Warn("claudeSettingsEnvOverrideArgs: failed to marshal settings override, custom env vars won't override settings.json", "session", i.Title, "err", err)
+		return launchcmd.Flag{}, "", false
+	}
+	return launchcmd.MustFlag("--settings"), launchcmd.Literal(payload), true
+}
+
+// applyLaunchEnv forwards the VNC display and CDP env to the backend before Start.
+func (i *Instance) applyLaunchEnv() {
+	if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+		i.pm().AppendLaunchEnv(displayEnv)
+	}
+	if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+		i.pm().AppendLaunchEnv(cdpEnvs...)
+	}
+}
+
+// shellLaunch turns configured program text into a LaunchCommand; nil when the text is empty.
+func shellLaunch(text string) launchcmd.LaunchCommand {
+	cmd, err := launchcmd.FromShell(text)
+	if err != nil {
+		return nil
+	}
+	return cmd
+}
+
+// shellString renders command for backends that run shell text; "" for nil.
+func shellString(command launchcmd.LaunchCommand) string {
+	if command == nil {
+		return ""
+	}
+	return command.ShellString()
+}
+
+// wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
+// and sets it on the instance's process manager.
+func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
+	program := shellString(command)
+	snap := i.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+
+	runner := i.executionTarget().Runner()
+	newTmuxSession := func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession {
+		opts := append([]tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand), tmux.WithLaunchCommand(command)}, extra...)
+		var session *tmux.TmuxSession
+		if snap.TmuxServerSocket != "" {
+			// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
+			session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
+				append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
+		} else {
+			session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
+		}
+		if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
+			session.SetExtraEnv(extraEnv)
+		}
+		return session
+	}
+	i.processManager.WireLaunch(LaunchSpec{Program: program, Command: command, NewTmuxSession: newTmuxSession})
+}
+
+// updateProcessManagerForRestart swaps i.processManager and persists
+// i.Backend when migrating to a different backend, or reconfigures the
+// existing manager in place otherwise. Holds i.pmMu across all branches so a
+// concurrent Restart's pointer swap can never be observed mid-assignment by
+// this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
+// write below -- no call site anywhere else in the package nests the other
+// way (mu-then-pmMu), so keep that ordering if this ever changes.
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, command launchcmd.LaunchCommand) error {
+	i.pmMu.Lock()
+	defer i.pmMu.Unlock()
+
+	if !migrating {
+		// Same choke point initTmuxSession uses -- handles both TmuxBackend
+		// (SetSession, with the orphan-process guard and extra env) and
+		// TymuxBackend (SetCommand) dispatch internally.
+		i.wireTmuxSession(command)
+		return nil
+	}
+
+	tmuxPrefix := i.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	// A different backend means a different daemon entirely (tmux vs.
+	// tymuxd) -- no live hand-off is possible, so build a brand-new
+	// ProcessManager via the same factory CreateSession uses.
+	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+		Backend:      backendOverride,
+		SessionName:  i.Title,
+		Program:      shellString(command),
+		Command:      command,
+		Prefix:       tmuxPrefix,
+		ServerSocket: i.TmuxServerSocket,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
+	}
+	i.processManager = newPM
+	i.wireTmuxSession(command)
+	if backendOverride == BackendTymux {
+		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
+	}
+	newPM.ResetExitOnce()
+	newPM.SetOnExitCallback(instanceOnExitCallback(i))
+
+	i.mu.Lock()
+	i.Backend = backendOverride
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+	return nil
+}
+
+// validateBackendOverride rejects an unrecognized backendOverride before
+// Restart tears down the live session -- NewProcessManager's own validation
+// runs too late for this call path, after KillSession has already run.
+func validateBackendOverride(backendOverride ProcessManagerBackend) error {
+	if backendOverride == "" {
+		return nil
+	}
+	switch backendOverride {
+	case BackendTmux, BackendNative, BackendTymux:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
+	}
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
+// Reuse needs HasSession() AND (cached IsAlive() OR IsBackendProcessAlive()): the pointer
+// stays non-nil after the tmux server dies, which once skipped the --resume rebuild (#791).
 func (i *Instance) initTmuxSession() {
-	if i.pm().HasSession() {
+	if i.pm().HasSession() && (i.pm().IsAlive() || i.IsBackendProcessAlive()) {
 		log.Info("reusing existing tmux session", "session", i.Title)
 		return
 	}
@@ -511,52 +914,39 @@ func (i *Instance) initTmuxSession() {
 	if i.claudeSession != nil {
 		claudeSessionID = i.claudeSession.ConversationUUID
 	}
-	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
+	command := i.launchCommand(claudeSessionID)
+	enrichedProgram := command.ShellString()
 	i.LaunchCommand = enrichedProgram
-	log.Info("creating tmux session", "session", i.Title, "program", enrichedProgram)
+	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
-	// Pre-trust the working directory so claude never blocks this
-	// (possibly-unattended) session on its interactive "trust this folder?"
-	// dialog. Every Start() path calls initTmuxSession() before starting the
-	// tmux session, so this is the single choke point that covers all of
-	// them (first-time setup, cold/hot restore, worktree creation). See
-	// markWorkingDirTrusted's doc comment.
+	// Single choke point: every Start path funnels through here.
 	i.markWorkingDirTrusted()
 
-	tmuxPrefix := i.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_"
-	}
-
-	// runner threads i.ExecutionTarget through TmuxSession construction (ssh-remote-workspaces
-	// Phase 4, Task 4.2.1d) -- tmux.LocalRunner{} for LocalTarget (the default, identical to
-	// every construction site's pre-Phase-4 behavior) or the dialed *tmux.SSHRunner for a
-	// remote target, so this session's tmux subprocess calls run on the same host the
-	// CreateSession mode-specific block (server/services/session_service.go) already created
-	// the remote tmux session on.
-	runner := i.executionTarget().Runner()
-	var session *tmux.TmuxSession
-	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
-	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, tmux.WithCommandRunner(runner))
-	}
-	if i.UUID != "" {
-		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
-	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
-	}
+	i.wireTmuxSession(command)
 }
 
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
-	if i.pm().HasSession() {
+	// An unrestored tymux record has no pane yet but still owns a daemon session.
+	return i.killSession(i.tymuxSessionID() != "")
+}
+
+// killSession closes the process session when a pane is attached, and also when
+// includeUnrestored is set and the record only stores a daemon session id.
+func (i *Instance) killSession(includeUnrestored bool) error {
+	if i.pm().HasSession() || includeUnrestored {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
 	}
 	return nil
+}
+
+// killSessionAttachedByThisAttempt is KillSession for a failed Start's cleanup: it never
+// closes a stored daemon session the failed attempt did not attach or create, which a
+// transient create/list error must not turn into killing a running agent.
+func (i *Instance) killSessionAttachedByThisAttempt() error {
+	return i.killSession(false)
 }
 
 // KillSessionKeepWorktree terminates tmux session but preserves worktree for recovery scenarios.
@@ -641,12 +1031,29 @@ func (i *Instance) SetPreviewSize(width, height int) error {
 	return i.pm().SetDetachedSize(width, height, i.Title)
 }
 
-// trackRestartRate records a restart timestamp and logs a warning when the
-// session has restarted more than 5 times in the last 5 minutes (crash loop).
-func (i *Instance) trackRestartRate() {
-	const window = 5 * time.Minute
-	const threshold = 5
+// restartStormWindow/restartStormThreshold bound how many restarts are
+// tolerated before checkRestartStorm starts refusing further Start() calls —
+// see its doc comment for why this must actually block, not just log.
+const restartStormWindow = 5 * time.Minute
+const restartStormThreshold = 5
 
+// restartStormCooldown is how long checkRestartStorm blocks Start() once a
+// storm is detected. Deliberately equal to restartStormWindow: by the time
+// the cooldown expires, every timestamp that tripped the breaker has also
+// aged out of recentRestartTimes, so the next Start() call sees a clean
+// slate instead of immediately re-tripping on stale entries.
+const restartStormCooldown = restartStormWindow
+
+// trackRestartRate records a restart timestamp and, when the session has
+// restarted restartStormThreshold+ times within restartStormWindow, arms a
+// cooldown that checkRestartStorm enforces. Previously this only logged a
+// warning ("restart storm detected") with nothing actually stopping the
+// loop -- a session whose Start() keeps failing (e.g. a wedged tmux server)
+// would retry forever, every retry forking real tmux subprocesses and
+// driving the exact fork/exec-under-memory-pressure failures that caused
+// the crash loop in the first place (see docs/bugs or the incident this
+// fixes: titus-soaktest-followup hit 89+ restarts in under 90 minutes).
+func (i *Instance) trackRestartRate() {
 	now := time.Now()
 	i.restartMu.Lock()
 	defer i.restartMu.Unlock()
@@ -654,7 +1061,7 @@ func (i *Instance) trackRestartRate() {
 	i.restartCount++
 
 	// Drop timestamps outside the window.
-	cutoff := now.Add(-window)
+	cutoff := now.Add(-restartStormWindow)
 	kept := i.recentRestartTimes[:0]
 	for _, t := range i.recentRestartTimes {
 		if t.After(cutoff) {
@@ -663,9 +1070,26 @@ func (i *Instance) trackRestartRate() {
 	}
 	i.recentRestartTimes = append(kept, now)
 
-	if int64(len(i.recentRestartTimes)) >= threshold {
-		log.Warn("restart storm detected, possible crash loop", "session", i.Title, "count", len(i.recentRestartTimes), "window", window.Seconds(), "total", i.restartCount)
+	if int64(len(i.recentRestartTimes)) >= restartStormThreshold {
+		i.restartStormUntil = now.Add(restartStormCooldown)
+		log.Warn("restart storm detected, possible crash loop -- blocking further restarts until cooldown expires",
+			"session", i.Title, "count", len(i.recentRestartTimes), "window", restartStormWindow.Seconds(),
+			"total", i.restartCount, "cooldownUntil", i.restartStormUntil)
 	}
+}
+
+// checkRestartStorm reports whether Start() should be refused right now
+// because trackRestartRate armed a cooldown. Must be called before any real
+// work in startLocked/start() -- the whole point is to short-circuit before
+// forking tmux subprocesses, not after.
+func (i *Instance) checkRestartStorm() error {
+	i.restartMu.Lock()
+	defer i.restartMu.Unlock()
+	if i.restartStormUntil.IsZero() || time.Now().After(i.restartStormUntil) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start %q: %d+ restarts within %s (crash loop) -- cooldown until %s",
+		i.Title, restartStormThreshold, restartStormWindow, i.restartStormUntil.Format(time.RFC3339))
 }
 
 // TmuxSessionExists reports whether the underlying tmux session is currently alive.
@@ -688,12 +1112,89 @@ func (i *Instance) TmuxAlive() bool {
 	return i.pm().IsAlive()
 }
 
-// IsBackendProcessAlive reports raw process liveness with no Status/started
-// gating (unlike TmuxAlive()) and no cached liveness flag — the
-// backend-agnostic replacement for reaching into a concrete
-// *tmux.TmuxSession's DoesSessionExistNoCache().
+// IsBackendProcessAlive is the canonical, direct-to-OS/tmux liveness-truth
+// check for this instance — no Status/started gating (unlike TmuxAlive()), no
+// cached flag, no reliance on a pointer/map merely being non-nil. It is the
+// single primitive initTmuxSession (below), RestoreWithWorkDir's orphan guard
+// (session/tmux, via CachedPanePIDStillAlive), and
+// SessionService.findConfirmedLiveInstance all bottom out in — three
+// independent liveness bugs (#791, #799, and the backlog-layer one this
+// comment was added for) each shipped their own incomplete proxy before this
+// existed.
+//
+// Checks two signals because either alone has a false negative:
+// HasLiveSessionNoCache() (fresh backend round trip) misses a process that
+// outlived a killed/restarted tmux server; CachedPanePIDStillAlive() (OS PID +
+// creation-time, tmux backend only) catches that case but is only meaningful
+// once a pane PID has actually been cached.
 func (i *Instance) IsBackendProcessAlive() bool {
-	return i.pm().HasSession() && i.pm().HasLiveSessionNoCache()
+	if !i.pm().HasSession() {
+		return false
+	}
+	if i.pm().HasLiveSessionNoCache() {
+		return true
+	}
+	if p, ok := capabilityOf[OrphanProber](i.processManager); ok {
+		return p.PanePIDStillAlive()
+	}
+	return false
+}
+
+// IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
+// pane (a liveness shadow or a not-yet-restored record), the record's persisted
+// daemon session. Only for "is some session still running" lookups: stream
+// paths must keep using IsBackendProcessAlive, since a true answer there means
+// a pane is attached and skips RestoreProcess.
+func (i *Instance) IsLiveOrStoredSessionLive() bool {
+	if i.IsBackendProcessAlive() {
+		return true
+	}
+	if i.pm().HasSession() {
+		return false
+	}
+	if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+		return p.StoredSessionLive()
+	}
+	return false
+}
+
+// GetCurrentWorkingDirectory returns the actual runtime working directory of
+// the instance's live pane/process (via pane or process introspection) — as
+// opposed to GetPath()/GetEffectiveRootDir(), which report the persisted
+// repo-root/worktree path and can diverge from where the process is really
+// running. Used by worktree-deletion safety checks that must know whether
+// some OTHER session's real cwd sits inside a worktree about to be removed.
+func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
+	return i.pm().GetCurrentWorkingDirectory()
+}
+
+// PrepareRetainedTerminalView adopts an existing pane for inactive-session viewing.
+// handled distinguishes this read-only path from normal active-session restoration.
+func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled bool, err error) {
+	snap := i.Snapshot()
+	if snap.ArchivedAt == nil && (snap.Status == Active || snap.Status == Creating || snap.Status == Restoring) {
+		return false, nil
+	}
+	p, ok := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		if snap.ArchivedAt != nil {
+			return true, nil // An archived view must never enter the mutating restore path.
+		}
+		return false, nil
+	}
+	return true, p.AdoptForViewing(ctx)
+}
+
+// terminalScreenReady separates retained-screen reads from process/input readiness.
+func (i *Instance) terminalScreenReady() bool {
+	if i.Snapshot().Status == Paused {
+		return false
+	}
+	if i.started.Load() {
+		return true
+	}
+	_, retained := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	return retained && i.pm().HasSession()
 }
 
 // RestoreProcess is the backend-agnostic replacement for reaching into a
@@ -736,15 +1237,11 @@ func (i *Instance) paneExitInfoIgnoringStatus() (dead bool, code int, signal str
 	if !i.started.Load() || !i.pm().HasSession() || !i.pm().IsAlive() {
 		return false, 0, ""
 	}
-	tb, ok := i.pm().(*TmuxBackend)
+	r, ok := capabilityOf[ExitStatusReporter](i.pm())
 	if !ok {
 		return false, 0, ""
 	}
-	tm := tb.TmuxManager()
-	if tm == nil {
-		return false, 0, ""
-	}
-	code, signal, dead = tm.PaneExitStatus()
+	code, signal, dead = r.PaneExitStatus()
 	return dead, code, signal
 }
 
@@ -854,6 +1351,9 @@ func (i *Instance) WriteToPTY(data []byte) (int, error) {
 // ResizePTY resizes the terminal dimensions.
 // This is used when clients resize their terminal windows.
 func (i *Instance) ResizePTY(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("invalid terminal size %dx%d", cols, rows)
+	}
 	if !i.started.Load() {
 		return fmt.Errorf("session not started")
 	}
@@ -913,11 +1413,12 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().CapturePaneContentPriority()
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.CapturePaneContentPriority()
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentPriority")
-	return i.pm().CapturePaneContent()
+	// Scroll-forward and resync read an exited pane's final grid, so don't surface the exit.
+	return tymux.FinalScreen(i.pm().CapturePaneContent())
 }
 
 // CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
@@ -932,11 +1433,11 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 // GetPaneDimensionsPriority in sequence, and all of them must share the same
 // overall deadline rather than each getting an independent fresh one.
 func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		content, err := tb.TmuxManager().CapturePaneContentRawPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		content, err := p.CapturePaneContentRawPriority(ctx)
 		return streamhub.RawPaneContent(content), err
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentRawPriority")
@@ -950,8 +1451,8 @@ func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub
 // CapturePaneContentPriority's doc comment for the fallback rationale, and
 // CapturePaneContentRawPriority's for why ctx is caller-supplied.
 func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().RefreshClientPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.RefreshClientPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("RefreshTmuxClientPriority")
 	return i.pm().RefreshClient()
@@ -963,8 +1464,8 @@ func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
 // comment. ctx is caller-supplied, for the same shared-deadline reason as
 // CapturePaneContentRawPriority.
 func (i *Instance) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().GetPaneDimensionsPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.GetPaneDimensionsPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("GetPaneDimensionsPriority")
 	return i.pm().GetPaneDimensions()
@@ -987,10 +1488,38 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 		"method", method, "instanceID", i.UUID, "title", i.Title)
 }
 
+// IsAlternateScreenActiveBootstrap directly queries tmux (`#{alternate_on}`)
+// for whether this instance's pane is currently showing its alternate
+// screen buffer -- unlike GetAltScreenActive(), which only reflects
+// transitions ObserveAltScreenTransition has actually observed live. Used
+// once to bootstrap the initial snapshot sent to a fresh connection/hub
+// (server/services/connectrpc_websocket.go's altScreenActiveForSnapshot):
+// a session that entered alt screen before any output tap started
+// observing it would otherwise report false forever, since byte-stream
+// tracking alone can never recover a transition it missed. A successful
+// query also persists its result via SetAltScreenActiveBootstrap, so
+// AppScrollGate's own GetAltScreenActive() read sees the corrected value
+// too, not just the one-off snapshot this call was made for. Returns false
+// (not an error) for a non-tmux backend or a failed query -- this is a
+// best-effort bootstrap, not a required capability.
+func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
+	q, ok := capabilityOf[AltScreenQuerier](i.processManager)
+	if !ok {
+		return false
+	}
+	active, err := q.IsAlternateScreenActive()
+	if err != nil {
+		log.ForSession(i.Title).Debug("IsAlternateScreenActiveBootstrap query failed", "err", err)
+		return false
+	}
+	i.SetAltScreenActiveBootstrap(active)
+	return active
+}
+
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 
@@ -1006,6 +1535,32 @@ func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 // StreamHub.applyNegotiatedSize.
 func (i *Instance) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
 	return i.CapturePaneContentRawPriority(ctx)
+}
+
+// CapturePaneRedraw captures a first paint that restores terminal state (modes, title, alt
+// screen, scroll region, cursor) when the backend can produce one, so an attaching client's keys,
+// paste and mouse work immediately. ok is false for backends that only have a text capture (tmux)
+// and for a daemon too old to report terminal state, leaving callers on CapturePaneContentRaw's
+// legacy paint; the no-capability case never touches the pane.
+// Satisfies streamhub.FullStateSnapshotter.
+func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSnapshot, bool, error) {
+	c, ok := capabilityOf[RedrawCapturer](i.pm())
+	if !ok {
+		return streamhub.FullStateSnapshot{}, false, nil
+	}
+	if !i.terminalScreenReady() {
+		return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted
+	}
+	data, altScreen, ok, err := c.CapturePaneRedraw(ctx)
+	if err != nil || !ok {
+		return streamhub.FullStateSnapshot{}, false, err
+	}
+	// The daemon's emulator is the authority on alt screen; keep the live-tracked flag that
+	// AppScrollGate reads in step, as IsAlternateScreenActiveBootstrap does for tmux.
+	if !i.GetAltScreenBootstrapped() || i.GetAltScreenActive() != altScreen {
+		i.SetAltScreenActiveBootstrap(altScreen)
+	}
+	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.
@@ -1049,11 +1604,10 @@ func (i *Instance) SendPrompt(prompt string) error {
 // GetTmuxSession returns the underlying tmux session for direct access.
 // Returns nil if the session hasn't been started yet or if the backend is not tmux.
 func (i *Instance) GetTmuxSession() *tmux.TmuxSession {
-	tb, ok := i.pm().(*TmuxBackend)
-	if !ok {
-		return nil
+	if a, ok := capabilityOf[TmuxSessionAccessor](i.pm()); ok {
+		return a.TmuxSession()
 	}
-	return tb.TmuxManager().Session()
+	return nil
 }
 
 // ---- SessionStreamer delegation methods ----
@@ -1112,8 +1666,8 @@ func (i *Instance) UnsubscribeControlModeUpdates(id string) {
 
 // SetTmuxSession sets the tmux session for testing purposes.
 func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
+	if a, ok := capabilityOf[TmuxSessionAccessor](i.processManager); ok {
+		a.SetTmuxSession(session)
 	}
 	i.started.Store(session != nil)
 }
@@ -1209,6 +1763,16 @@ func (i *Instance) SendKeys(keys string) error {
 	return err
 }
 
+// SendKeysN is SendKeys that keeps the byte count, so a caller can tell a write
+// that provably wrote nothing (0, err) from one that may have written. Its only
+// caller is SubmitReplyOnce.
+func (i *Instance) SendKeysN(keys string) (int, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
+	}
+	return i.pm().SendKeys(keys)
+}
+
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {
@@ -1216,6 +1780,13 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)
+}
+
+// CanFallBackToTmuxSendKeys reports whether the pane is a real tmux session, so `tmux send-keys`
+// against a title-derived session name can reach it. False for tymux and native backends.
+func (i *Instance) CanFallBackToTmuxSendKeys() bool {
+	_, ok := capabilityOf[TmuxSessionAccessor](i.pm())
+	return ok
 }
 
 // GetPanePID returns the PID of the foreground process in the tmux pane.

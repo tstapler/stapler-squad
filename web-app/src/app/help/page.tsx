@@ -1,7 +1,8 @@
 "use client";
 
 // analytics-exempt
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "@/lib/nav";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type Fuse from "fuse.js";
@@ -10,15 +11,29 @@ import type { DocEntry } from "@/lib/docs/docLoader";
 import * as styles from "./help.css";
 
 export default function HelpPage() {
+  // useSearchParams requires a Suspense boundary for static prerendering.
+  return (
+    <Suspense fallback={null}>
+      <HelpPageContent />
+    </Suspense>
+  );
+}
+
+function HelpPageContent() {
+  const docParam = useSearchParams()?.get("doc") ?? null;
   const [docs, setDocs] = useState<DocEntry[]>([]);
   const [filteredDocs, setFilteredDocs] = useState<DocEntry[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const [fuseIndex, setFuseIndex] = useState<Fuse<DocEntry> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
     loadDocs()
       .then((entries) => {
         if (cancelled) return;
@@ -27,11 +42,15 @@ export default function HelpPage() {
         setFilteredDocs(entries);
         setFuseIndex(index);
         if (entries.length > 0) {
-          setSelectedSlug(entries[0].slug);
+          const deepLinked = docParam && entries.find((d) => d.slug === docParam);
+          setSelectedSlug(deepLinked ? deepLinked.slug : entries[0].slug);
+        } else {
+          // loadDocs() swallows per-file failures (allSettled), so "nothing loaded" is the failure signal.
+          setLoadError(true);
         }
       })
       .catch(() => {
-        // silently handle fetch errors — filtered/docs remain empty
+        if (!cancelled) setLoadError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -39,7 +58,17 @@ export default function HelpPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+    // docParam is read once per load; later changes are handled by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadTick]);
+
+  useEffect(() => {
+    if (docParam && docs.some((d) => d.slug === docParam)) {
+      setQuery("");
+      setFilteredDocs(docs);
+      setSelectedSlug(docParam);
+    }
+  }, [docParam, docs]);
 
   const handleSearch = useCallback(
     (value: string) => {
@@ -92,6 +121,11 @@ export default function HelpPage() {
       <main className={styles.articlePane}>
         {loading ? (
           <div className={styles.loadingContainer}>Loading documentation…</div>
+        ) : loadError ? (
+          <div className={styles.loadingContainer} data-testid="help-load-error">
+            <p role="alert">Couldn&apos;t load the documentation.</p>
+            <button type="button" autoFocus onClick={() => setReloadTick((t) => t + 1)}>Retry</button>
+          </div>
         ) : selectedDoc ? (
           <article className={styles.markdownBody}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>

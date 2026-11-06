@@ -49,6 +49,9 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Bool("auto_create_pr").
 			Default(false).
 			Comment("When true, a PR is created automatically (via the same one-shot prompt the manual Review Queue 'Create PR' button uses) once a work session for this item reaches TASK_COMPLETE — no manual click required."),
+		field.Bool("auto_approve_plan").
+			Default(false).
+			Comment("When true, a plan produced by TriggerTriage is approved automatically (PlanApproved set true) once its artifacts exist on disk — no manual 'Approve Plan' click required. See ApprovePlan's precondition, mirrored at the auto-approve call site in TriggerTriage."),
 		field.String("pipeline_mode").
 			Default("").
 			Comment("Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline)."),
@@ -120,6 +123,12 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item high-water mark: the GitHub issue updated_at value most recently synced from GitHub into this item. Stops a forward-sync write from GitHub from being re-observed and re-synced back to GitHub on the next poll (loop prevention)."),
+		field.String("claiming_host_id").
+			Optional().
+			Comment("HostID of the host that created this item from an external issue (non-empty external_url); empty for locally-created items."),
+		field.String("github_last_progress_comment_status").
+			Optional().
+			Comment("Last item status for which a GitHub progress comment was posted; stops a re-entered status from commenting twice."),
 		field.String("shipped_file_stats").
 			Optional().
 			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),
@@ -131,6 +140,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
+		field.Float("cost_budget_threshold_usd").
+			Optional().
+			Nillable().
+			Comment("Per-item soft-budget-warning threshold in USD. Nil = no threshold configured, no warning ever fires for this item. Mirrors rework_cap_override's single-pointer-presence convention."),
 		field.UUID("next_workflow_id", uuid.UUID{}).
 			Optional().
 			Nillable().
@@ -222,6 +235,16 @@ func (BacklogItem) Edges() []ent.Edge {
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("blocked_by_dependencies", BacklogItemDependency.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		// Deliberately NOT cascade, unlike every other child edge above:
+		// BacklogItem supports genuine hard deletion (DeleteBacklogItem), and
+		// a cascade here would let a hard delete silently destroy a pending OR
+		// answered-but-undelivered GuidanceRequest row with no trace —
+		// contradicting the "no answer is ever silently lost" bar. A
+		// hard-deleted item's still-open rows go stale instead, and are
+		// caught by Phase 8's self-heal sweep. See
+		// project_plans/durable-guidance-request/implementation/plan.md
+		// Task 1.1.1b.
+		edge.To("guidance_requests", GuidanceRequest.Type),
 	}
 }
 
@@ -233,6 +256,7 @@ func (BacklogItem) Edges() []ent.Edge {
 // session_id).
 func (BacklogItem) Indexes() []ent.Index {
 	return []ent.Index{
+		index.Fields("priority", "updated_at"),
 		index.Fields("status", "priority"),
 		index.Fields("status", "updated_at"),
 		index.Fields("status", "queued_at"),

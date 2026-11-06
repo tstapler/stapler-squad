@@ -151,7 +151,7 @@ export function SessionEscapeBreakdownTable({
                 <td className={styles.td}>
                   <MangleRateIndicator
                     mangleRate={row.mangleRate}
-                    totalSequences={row.totalSequences}
+                    totalSequences={row.correlationOutcomes}
                     totalMangled={row.totalMangled}
                   />
                 </td>

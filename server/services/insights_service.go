@@ -3,8 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +15,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,12 +29,45 @@ const findingsCap = 20
 // Compile-time check: InsightsService must implement the generated handler.
 var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
 
+// insightsBacklogReader is the narrow interface InsightsService uses to source
+// persisted session_role at summary-build time (ADR-029). Satisfied by *session.Storage.
+type insightsBacklogReader interface {
+	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]session.ItemSessionBacklogEntry, error)
+}
+
+// insightsDeletedCostLedgerReader is the narrow interface InsightsService uses
+// to source the durable deleted-item cost ledger (session/ent/schema/deleted_item_session_cost.go).
+// A separate seam from insightsBacklogReader so a backlogReader test double
+// that doesn't implement it is just treated as having no ledger (nil-safe).
+type insightsDeletedCostLedgerReader interface {
+	GetDeletedItemSessionCostLedger(ctx context.Context) ([]session.DeletedItemSessionCostEntry, error)
+}
+
+// DismissedFindingsRepository is the seam for finding-dismissal persistence.
+// Satisfied implicitly by *session.Storage. nil (the zero value of
+// InsightsService.dismissedFindings) means the feature is unavailable — the
+// same "nil means unavailable" idiom as RulesService's configStore/aiClient —
+// so tests that construct InsightsService without wiring it still work.
+type DismissedFindingsRepository interface {
+	DismissFinding(ctx context.Context, data session.DismissedFindingData) error
+	ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error)
+}
+
 // InsightsService implements the ConnectRPC InsightsServiceHandler.
 // It reads from a TokenStoreReader to serve token usage analytics.
 type InsightsService struct {
-	store      tokens.TokenStoreReader
-	pricing    *tokens.PricingTable
-	associator *tokens.Associator
+	store         tokens.TokenStoreReader
+	pricing       *tokens.PricingTable
+	associator    *tokens.Associator
+	backlogReader insightsBacklogReader
+
+	// dismissedFindings persists DismissFinding calls and is consulted by
+	// GetInsightsSummary to filter dismissed findings out of the response.
+	// nil means dismissal is unavailable (see doc comment on the interface).
+	dismissedFindings DismissedFindingsRepository
+
+	// contextHistory serves the context-history RPCs. nil means unavailable.
+	contextHistory *contexthistory.Store
 
 	// logMu guards loggedUnpricedFamilies.
 	logMu sync.Mutex
@@ -39,6 +77,16 @@ type InsightsService struct {
 	// bounded in practice by the number of distinct model families ever seen —
 	// safe to leave unbounded (see pre-mortem's minor note).
 	loggedUnpricedFamilies map[string]bool
+	// backfillOnce runs BackfillConversationUUIDs once per process, on the first
+	// summary request. If the token store is still empty then, nothing is stamped
+	// and the next process start retries.
+	backfillOnce sync.Once
+
+	// summaries caches GetInsightsSummary responses (see summaryCache).
+	summaries summaryCache
+
+	// watchMeta throttles the per-event backlog scan in watchInsights.
+	watchMeta sessionMetaCache
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -46,13 +94,275 @@ func NewInsightsService(
 	store tokens.TokenStoreReader,
 	pricing *tokens.PricingTable,
 	associator *tokens.Associator,
+	backlogReader insightsBacklogReader,
 ) *InsightsService {
 	return &InsightsService{
 		store:                  store,
 		pricing:                pricing,
 		associator:             associator,
+		backlogReader:          backlogReader,
 		loggedUnpricedFamilies: make(map[string]bool),
 	}
+}
+
+// untrackedItemIDPrefix marks a role_breakdown item entry synthesized by
+// sessionDisplayTitle rather than sourced from a real backlog item — see
+// groupUnattributed's doc comment.
+const untrackedItemIDPrefix = "untracked:"
+
+// worktreeTitlePattern extracts a stapler-squad worktree's session title from a
+// Claude transcript's decoded project path (".../worktrees/<title>/<16-hex id>").
+// Mirrors web-app/src/app/insights/insightsFormatters.ts's WORKTREE_PATH regex —
+// keep the two in sync.
+var worktreeTitlePattern = regexp.MustCompile(`/worktrees/(.+?)/[0-9a-f]{16}(?:/|$)`)
+
+// sessionDisplayTitle returns a human-readable label for projectPath: the
+// worktree's session title if the path is a stapler-squad worktree, else the
+// path's final segment. "" in, "" out.
+func sessionDisplayTitle(projectPath string) string {
+	if m := worktreeTitlePattern.FindStringSubmatch(projectPath); m != nil {
+		return strings.ReplaceAll(m[1], "/", "-")
+	}
+	return path.Base(strings.TrimRight(projectPath, "/"))
+}
+
+// groupUnattributed returns meta unchanged unless it carries no backlog
+// attribution (Role == ""), in which case it groups it under a synthetic
+// per-title item keyed by sessionDisplayTitle(projectPath) — untrackedItemIDPrefix
+// keeps that ID unambiguous from a real backlog-item UUID (BacklogItemDetail
+// relies on this). Role is further set to "external" when projectPath isn't a
+// stapler-squad worktree path; a raw `claude` run inside the main checkout
+// itself is indistinguishable from this and accepted as unsolved.
+func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
+	if meta.Role != "" {
+		return meta
+	}
+	title := sessionDisplayTitle(projectPath)
+	if title == "" {
+		return meta
+	}
+	if !worktreeTitlePattern.MatchString(projectPath) {
+		meta.Role = session.SessionRoleExternal
+	}
+	meta.ItemID = untrackedItemIDPrefix + title
+	meta.ItemTitle = title
+	return meta
+}
+
+// SessionMeta is the per-session backlog attribution sessionMetaForSessions
+// looks up by tmux session ID: its SessionRole plus the backlog item it
+// belongs to (Epic 4.1's item-drilldown data).
+type SessionMeta struct {
+	Role      string
+	ItemID    string
+	ItemTitle string
+	// ItemSessionUUID is the ItemSession's session_uuid, so a conversation-matched
+	// transcript can mark that row covered for the fold-in dedupe.
+	ItemSessionUUID string
+}
+
+// metaFor resolves r's attribution: by live session ID first, else by Claude
+// conversation UUID (survives the session row's deletion). ok reports a match.
+func metaFor(meta map[string]SessionMeta, sessionID string, r *tokens.ParseResult) (SessionMeta, bool) {
+	if m, ok := meta[sessionID]; ok && sessionID != "" {
+		return m, true
+	}
+	if r != nil && r.SessionUUID != "" {
+		m, ok := meta[conversationKey(r.SessionUUID)]
+		return m, ok
+	}
+	return SessionMeta{}, false
+}
+
+// conversationKey namespaces conversation UUIDs inside the shared SessionMeta map.
+func conversationKey(conversationUUID string) string { return "conv:" + conversationUUID }
+
+// sessionMetaResult is sessionMetaForSessions' return value: the built
+// sessionID→SessionMeta map, plus the raw rows it was built from. A caller
+// that also needs to fold the same backlog entries/ledger rows into a
+// separate aggregate (GetInsightsSummary's transcript-less fold-in passes)
+// reuses entries/ledgerEntries instead of re-querying
+// GetAllItemSessionsWithBacklogInfo/GetDeletedItemSessionCostLedger a second
+// time per request.
+type sessionMetaResult struct {
+	meta          map[string]SessionMeta
+	entries       []session.ItemSessionBacklogEntry
+	ledgerEntries []session.DeletedItemSessionCostEntry
+}
+
+// sessionMetaForSessions builds a sessionUUID→SessionMeta map from one unfiltered
+// GetAllItemSessionsWithBacklogInfo scan, keeping the first (most-recently-created,
+// per that query's explicit Order(Desc(CreatedAt))) entry seen per UUID (ADR-029).
+func (s *InsightsService) sessionMetaForSessions(ctx context.Context) sessionMetaResult {
+	if s.backlogReader == nil {
+		return sessionMetaResult{}
+	}
+	entries, err := s.backlogReader.GetAllItemSessionsWithBacklogInfo(ctx)
+	if err != nil {
+		log.Warn("failed to fetch session roles for insights", "err", err)
+		return sessionMetaResult{}
+	}
+	meta := make(map[string]SessionMeta, len(entries))
+	for _, e := range entries {
+		m := SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle, ItemSessionUUID: e.SessionUUID}
+		if _, exists := meta[e.SessionUUID]; !exists {
+			meta[e.SessionUUID] = m
+		}
+		if e.ConversationUUID != "" {
+			if _, exists := meta[conversationKey(e.ConversationUUID)]; !exists {
+				meta[conversationKey(e.ConversationUUID)] = m
+			}
+		}
+	}
+
+	// Story 3: fold in the deleted-item cost ledger, keyed by conversation UUID
+	// only — a ledger row's snapshotted session_uuid belongs to a session row
+	// that was already gone before the item was even deleted, so it can never
+	// resolve a live association; only metaFor's conversation-UUID fallback can
+	// ever reach these rows.
+	var ledgerEntries []session.DeletedItemSessionCostEntry
+	if ledgerReader, ok := s.backlogReader.(insightsDeletedCostLedgerReader); ok {
+		le, err := ledgerReader.GetDeletedItemSessionCostLedger(ctx)
+		if err != nil {
+			log.Warn("failed to fetch deleted item session cost ledger for insights", "err", err)
+		} else {
+			ledgerEntries = le
+			for _, e := range ledgerEntries {
+				if e.ConversationUUID == "" {
+					continue
+				}
+				key := conversationKey(e.ConversationUUID)
+				if _, exists := meta[key]; !exists {
+					meta[key] = SessionMeta{Role: e.SessionRole, ItemID: e.ItemID, ItemTitle: e.ItemTitle}
+				}
+			}
+		}
+	}
+	return sessionMetaResult{meta: meta, entries: entries, ledgerEntries: ledgerEntries}
+}
+
+// SetDismissedFindingsStore wires dismissal persistence (nil disables it —
+// see DismissedFindingsRepository's doc comment).
+func (s *InsightsService) SetDismissedFindingsStore(store DismissedFindingsRepository) {
+	s.dismissedFindings = store
+}
+
+// SetContextHistoryStore wires the persisted context-history store (nil disables
+// the context-history RPCs).
+func (s *InsightsService) SetContextHistoryStore(store *contexthistory.Store) {
+	s.contextHistory = store
+}
+
+func (s *InsightsService) requireContextHistory() error {
+	if s.contextHistory == nil {
+		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("context history is not available"))
+	}
+	return nil
+}
+
+func toCeilingSummary(sum contexthistory.SessionSummary) *sessionv1.ContextCeilingSummary {
+	return &sessionv1.ContextCeilingSummary{
+		ConversationId:       sum.SessionUUID,
+		Turns:                int32(sum.Turns),
+		PeakTokens:           sum.PeakTokens,
+		FractionAtOrAbove_75: sum.FractionWarn,
+		FractionAtOrAbove_90: sum.FractionCritical,
+	}
+}
+
+// GetContextHistory returns a session's persisted context series, ceiling summary and compactions.
+// +api: GetContextHistory
+func (s *InsightsService) GetContextHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetContextHistoryRequest],
+) (*connect.Response[sessionv1.GetContextHistoryResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	id := req.Msg.ConversationId
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("conversation_id is required"))
+	}
+	series, err := s.contextHistory.Series(ctx, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	compactions, err := s.contextHistory.Compactions(ctx, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	resp := &sessionv1.GetContextHistoryResponse{
+		Samples: make([]*sessionv1.ContextSample, 0, len(series)),
+		Summary: toCeilingSummary(contexthistory.Summarize(id, series)),
+	}
+	for _, sm := range series {
+		resp.Samples = append(resp.Samples, &sessionv1.ContextSample{
+			TurnIndex:     int32(sm.TurnIndex),
+			SampledAt:     timestamppb.New(sm.SampledAt),
+			Model:         sm.Model,
+			ContextTokens: sm.ContextTokens,
+			ContextMax:    sm.ContextMax,
+		})
+	}
+	for _, c := range compactions {
+		resp.Compactions = append(resp.Compactions, &sessionv1.CompactionEvent{
+			ConversationId: c.SessionUUID,
+			TurnIndex:      int32(c.TurnIndex),
+			OccurredAt:     timestamppb.New(c.OccurredAt),
+			Trigger:        c.Trigger,
+			TokensBefore:   c.TokensBefore,
+			TokensAfter:    c.TokensAfter,
+			TokensFreed:    c.TokensFreed,
+		})
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// ListSessionsByCeilingTime ranks sessions by time spent near the context ceiling.
+// +api: ListSessionsByCeilingTime
+func (s *InsightsService) ListSessionsByCeilingTime(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListSessionsByCeilingTimeRequest],
+) (*connect.Response[sessionv1.ListSessionsByCeilingTimeResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	ranked, err := s.contextHistory.RankByCeilingTime(ctx, int(req.Msg.Limit))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	resp := &sessionv1.ListSessionsByCeilingTimeResponse{}
+	for _, sum := range ranked {
+		resp.Sessions = append(resp.Sessions, toCeilingSummary(sum))
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// GetCompactionStats aggregates compaction telemetry across sessions.
+// +api: GetCompactionStats
+func (s *InsightsService) GetCompactionStats(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetCompactionStatsRequest],
+) (*connect.Response[sessionv1.GetCompactionStatsResponse], error) {
+	if err := s.requireContextHistory(); err != nil {
+		return nil, err
+	}
+	var since time.Time
+	if req.Msg.Since != nil {
+		since = req.Msg.Since.AsTime()
+	}
+	st, err := s.contextHistory.CompactionStats(ctx, since)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&sessionv1.GetCompactionStatsResponse{
+		Count:                  int32(st.Count),
+		ManualCount:            int32(st.ManualCount),
+		AutoCount:              int32(st.AutoCount),
+		TotalTokensFreed:       st.TotalFreed,
+		AverageTokensFreed:     st.AverageFreed,
+		SessionsWithCompaction: int32(st.SessionsWithAny),
+	}), nil
 }
 
 // warnNewUnpricedFamilies logs a warning for each family in families that has
@@ -79,20 +389,51 @@ func (s *InsightsService) warnNewUnpricedFamilies(families map[string]bool) {
 // are a separate, non-summable response-level list (see
 // ADR-002-findings-non-summable-dollar-impact.md), not a SessionTokenSummary
 // field.
+//
+// Also returns the grouped SessionMeta (post-groupUnattributed) it computed
+// for this session, so a caller that also feeds accumulateRoleCost — the
+// proto's SessionRole field alone doesn't carry ItemID/ItemTitle — reuses
+// this value instead of recomputing metaFor+groupUnattributed a second time
+// and risking the two falling out of sync (see 0107988f9).
 func buildSessionSummary(
 	r *tokens.ParseResult,
 	pt *tokens.PricingTable,
 	associator *tokens.Associator,
 	snapshot []tokens.SessionRecord,
-) *sessionv1.SessionTokenSummary {
+	sessionMeta map[string]SessionMeta,
+) (*sessionv1.SessionTokenSummary, SessionMeta) {
+	rec, isOrphan := tokens.SessionRecord{}, true
+	if associator != nil {
+		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
+	}
+	return buildSessionSummaryForRecord(r, pt, rec, isOrphan, sessionMeta)
+}
+
+// buildSessionSummaryForRecord is buildSessionSummary with the association
+// already resolved, so a caller that has associated r (GetInsightsSummary's
+// filter pass) does not scan the session snapshot a second time.
+func buildSessionSummaryForRecord(
+	r *tokens.ParseResult,
+	pt *tokens.PricingTable,
+	rec tokens.SessionRecord,
+	isOrphan bool,
+	sessionMeta map[string]SessionMeta,
+) (*sessionv1.SessionTokenSummary, SessionMeta) {
 	firstTs, lastTs := sessionTimestamps(r)
 
-	sessionID, isOrphan := "", true
-	if associator != nil {
-		sessionID, isOrphan = associator.AssociateWithSnapshot(r, snapshot)
+	sessionID, tags := rec.SessionID, rec.Tags
+	attributed, byConversation := metaFor(sessionMeta, sessionID, r)
+	if byConversation {
+		isOrphan = false
 	}
+	// Reclassify "" -> "external" the same way accumulateRoleCost's caller does
+	// (groupUnattributed), so SessionRole matches the role_breakdown bucket this
+	// session is actually counted under — otherwise a click on the "external" bar
+	// would filter SessionsTable by a role value no session ever reports.
+	attributed = groupUnattributed(attributed, r.ProjectPath)
 
-	costUSD, unpriced := pt.EstimateCost(r)
+	categoryCosts, unpriced := pt.EstimateCostByCategory(r)
+	costUSD := categoryCosts.Total()
 	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
 	activityType := tokens.ClassifyActivity(r)
 	topTools := sessionTopTools(r, pt)
@@ -103,16 +444,20 @@ func buildSessionSummary(
 	}
 
 	summary := &sessionv1.SessionTokenSummary{
-		SessionId:           sessionID,
-		ConversationId:      r.SessionUUID,
-		ProjectPath:         r.ProjectPath,
-		PrimaryModel:        r.PrimaryModel,
-		TotalInputTokens:    r.TotalInput,
-		TotalOutputTokens:   r.TotalOutput,
-		CacheCreationTokens: r.CacheCreation,
-		CacheReadTokens:     r.CacheRead,
-		EstimatedCostUsd:    costUSD,
-		CacheHitRate:        cacheHitRate,
+		SessionId:            sessionID,
+		ConversationId:       r.SessionUUID,
+		ProjectPath:          r.ProjectPath,
+		PrimaryModel:         r.PrimaryModel,
+		TotalInputTokens:     r.TotalInput,
+		TotalOutputTokens:    r.TotalOutput,
+		CacheCreationTokens:  r.CacheCreation,
+		CacheReadTokens:      r.CacheRead,
+		EstimatedCostUsd:     costUSD,
+		InputCostUsd:         categoryCosts.Input,
+		OutputCostUsd:        categoryCosts.Output,
+		CacheCreationCostUsd: categoryCosts.CacheCreation,
+		CacheReadCostUsd:     categoryCosts.CacheRead,
+		CacheHitRate:         cacheHitRate,
 		// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
 		MessageCount:     int32(r.MessageCount),
 		IsOrphan:         isOrphan,
@@ -120,6 +465,8 @@ func buildSessionSummary(
 		TopTools:         topTools,
 		UnpricedModels:   unpriced,
 		ActivityType:     activityType,
+		Tags:             tags,
+		SessionRole:      attributed.Role,
 	}
 	if !firstTs.IsZero() {
 		summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -133,320 +480,28 @@ func buildSessionSummary(
 	if roi, ok := tokens.ComputeCacheROI(r, pt); ok {
 		summary.CacheRoiUsd = roi
 	}
-	return summary
+	return summary, attributed
 }
 
 // GetInsightsSummary returns aggregated token and cost data for a time range.
+// Results are served from a short-TTL cache with singleflight coalescing; see
+// summaryCache.
 func (s *InsightsService) GetInsightsSummary(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.GetInsightsSummaryRequest],
 ) (*connect.Response[sessionv1.GetInsightsSummaryResponse], error) {
-	results := s.store.GetAll()
-	msg := req.Msg
-
-	// Extract time filter bounds.
-	var fromTime, toTime time.Time
-	if msg.From != nil {
-		fromTime = msg.From.AsTime()
-	}
-	if msg.To != nil {
-		toTime = msg.To.AsTime()
-	}
-
-	// Accumulate aggregates.
-	var (
-		totalCostUSD         float64
-		totalInputTokens     int64
-		totalOutputTokens    int64
-		totalCacheReadTokens int64
-		totalCacheHitNumer   int64 // for cache hit rate: cache_read
-		totalCacheHitDenom   int64 // for cache hit rate: input + cache_read
-
-		dailyMap    = make(map[string]*sessionv1.DailyTokenBucket)                      // key = "2026-05-15"
-		modelMap    = make(map[string]*sessionv1.ModelBreakdown)                        // key = normalized family
-		skillMap    = make(map[string]int32)                                            // skill name → activation count
-		toolMap     = make(map[string]int64)                                            // tool name → call count
-		activityMap = make(map[sessionv1.ActivityType]*sessionv1.ActivityCostBreakdown) // key = ActivityType
-
-		allUnpricedFamilies = make(map[string]bool)            // union of unpriced families across all sessions
-		dailyUnpriced       = make(map[string]map[string]bool) // day → set of unpriced families rolled into that day
-	)
-
-	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
-	allFindings := make([]*sessionv1.WasteFinding, 0, len(results))
-
-	var sessionSnapshot []tokens.SessionRecord
-	if s.associator != nil {
-		sessionSnapshot = s.associator.Snapshot()
-	}
-
-	for _, r := range results {
-		if r == nil {
-			continue
-		}
-
-		// Determine timeline bounds for this session.
-		firstTs, lastTs := sessionTimestamps(r)
-
-		// Apply time filter: if filter set, skip sessions outside range.
-		if !fromTime.IsZero() && !lastTs.IsZero() && lastTs.Before(fromTime) {
-			continue
-		}
-		if !toTime.IsZero() && !firstTs.IsZero() && firstTs.After(toTime) {
-			continue
-		}
-
-		// Apply model filter.
-		if msg.ModelFilter != nil && *msg.ModelFilter != "" {
-			if tokens.NormalizeModelFamily(r.PrimaryModel) != *msg.ModelFilter {
-				continue
-			}
-		}
-
-		// Determine session ID and orphan status.
-		sessionID, isOrphan := "", true
-		if s.associator != nil {
-			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
-		}
-
-		// Apply orphan filter.
-		if isOrphan && !msg.IncludeOrphans {
-			continue
-		}
-
-		// Apply session ID / conversation ID filters. Either filter, if set,
-		// can independently match and keep the session — this lets an orphan
-		// session (sessionID always "") be selected via conversation_id_filter,
-		// which session_id_filter alone can never match. If both are set and
-		// neither matches, skip; if neither is set, keep everything (unchanged
-		// from before this filter existed).
-		hasSessionIDFilter := msg.SessionIdFilter != nil && *msg.SessionIdFilter != ""
-		hasConversationIDFilter := msg.ConversationIdFilter != nil && *msg.ConversationIdFilter != ""
-		if hasSessionIDFilter || hasConversationIDFilter {
-			matchedSessionID := hasSessionIDFilter && sessionID == *msg.SessionIdFilter
-			matchedConversationID := hasConversationIDFilter && r.SessionUUID == *msg.ConversationIdFilter
-			if !matchedSessionID && !matchedConversationID {
-				continue
-			}
-		}
-
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
-		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
-		for _, f := range unpriced {
-			allUnpricedFamilies[f] = true
-		}
-		// Computed once per session and reused below for both the daily rollup
-		// and the model breakdown — avoids walking r.TurnTimeline twice.
-		modelFamilyCosts, unpricedFamilies := s.pricing.ModelFamilyCost(r)
-		activityType := summary.ActivityType
-
-		// Activity-cost breakdown (Epic 1.2, Story 1.2.4): total cost and
-		// session count sliced by ActivityType across all in-range sessions.
-		ab := activityMap[activityType]
-		if ab == nil {
-			ab = &sessionv1.ActivityCostBreakdown{ActivityType: activityType}
-			activityMap[activityType] = ab
-		}
-		ab.EstimatedCostUsd += costUSD
-		ab.SessionCount++
-
-		// Waste-pattern findings (Epic 1.1). ComputeFindings isolates each
-		// detector's panic internally, so one malformed session can never
-		// fail the whole request. Findings are a separate, non-summable
-		// response-level list (ADR-002) — not a SessionTokenSummary field, so
-		// buildSessionSummary doesn't compute them.
-		for _, f := range tokens.ComputeFindings(r, s.pricing) {
-			allFindings = append(allFindings, &sessionv1.WasteFinding{
-				FindingType:     f.Type,
-				Severity:        f.Severity,
-				DollarImpactUsd: float64(f.DollarImpact),
-				SessionId:       sessionID,
-				ConversationId:  r.SessionUUID,
-				Message:         f.Message,
-			})
-		}
-
-		sessions = append(sessions, summary)
-
-		// Aggregate global totals.
-		totalCostUSD += costUSD
-		totalInputTokens += r.TotalInput
-		totalOutputTokens += r.TotalOutput
-		totalCacheReadTokens += r.CacheRead
-		totalCacheHitNumer += r.CacheRead
-		totalCacheHitDenom += r.TotalInput + r.CacheRead
-
-		// Daily rollup — bucket by calendar day of last message (or FileModTime).
-		bucketDay := dailyBucketKey(lastTs, r.FileModTime)
-		if bucketDay != "" {
-			b := dailyMap[bucketDay]
-			if b == nil {
-				t, _ := time.Parse("2006-01-02", bucketDay)
-				b = &sessionv1.DailyTokenBucket{
-					Date:          timestamppb.New(t),
-					CostByModel:   make(map[string]float64),
-					TokensByModel: make(map[string]int64),
-				}
-				dailyMap[bucketDay] = b
-			}
-			b.TotalInputTokens += r.TotalInput
-			b.TotalOutputTokens += r.TotalOutput
-			b.CacheReadTokens += r.CacheRead
-			b.EstimatedCostUsd += costUSD
-			b.SessionCount++
-			// Per-model breakdown within this day.
-			for family, cost := range modelFamilyCosts {
-				b.CostByModel[family] += cost
-			}
-			for _, turn := range r.TurnTimeline {
-				family := tokens.NormalizeModelFamily(turn.Model)
-				if family != "" {
-					b.TokensByModel[family] += turn.Input + turn.Output
-				}
-			}
-			if dailyUnpriced[bucketDay] == nil {
-				dailyUnpriced[bucketDay] = make(map[string]bool)
-			}
-			for family := range unpricedFamilies {
-				dailyUnpriced[bucketDay][family] = true
-			}
-		}
-
-		// Model breakdown.
-		for _, turn := range r.TurnTimeline {
-			family := tokens.NormalizeModelFamily(turn.Model)
-			// Skip turns with no usage at all across every counter — e.g. Claude
-			// Code's internal "<synthetic>" turns, which the parser already
-			// filters out of TurnTimeline in production. A zero-usage turn has
-			// nothing to break out into its own model-breakdown row.
-			if family == "" || (turn.Input == 0 && turn.Output == 0 && turn.CacheRead == 0 && turn.CacheCreation == 0) {
-				continue
-			}
-			mb := modelMap[family]
-			if mb == nil {
-				mb = &sessionv1.ModelBreakdown{ModelFamily: family}
-				modelMap[family] = mb
-			}
-			mb.TotalInputTokens += turn.Input
-			mb.TotalOutputTokens += turn.Output
-			mb.CacheReadTokens += turn.CacheRead
-		}
-		// Set per-model costs and session count.
-		for family, cost := range modelFamilyCosts {
-			mb := modelMap[family]
-			if mb == nil {
-				mb = &sessionv1.ModelBreakdown{ModelFamily: family}
-				modelMap[family] = mb
-			}
-			mb.EstimatedCostUsd += cost
-			mb.SessionCount++
-		}
-		// Flag families that had usage but no pricing entry. Mirrors the
-		// defensive nil-check idiom used in the loop directly above, and
-		// increments SessionCount the same way so an unpriced-but-heavily-used
-		// family's row doesn't show real nonzero token counts alongside a
-		// contradictory SessionCount: 0 (architecture-review.md's Concerns).
-		for family := range unpricedFamilies {
-			mb := modelMap[family]
-			if mb == nil {
-				mb = &sessionv1.ModelBreakdown{ModelFamily: family}
-				modelMap[family] = mb
-			}
-			mb.PricingUnavailable = true
-			mb.SessionCount++
-		}
-
-		// Skill activations.
-		for _, sa := range r.SkillActivations {
-			skillMap[sa.Name]++
-		}
-
-		// Tool usage.
-		for toolName, stat := range r.ToolUsage {
-			toolMap[toolName] += int64(stat.CallCount) //nolint:gosec
-		}
-	}
-
-	// Emit a deduped runtime warning for any newly-observed unpriced family
-	// (AC-5 runtime-signal half) — logs each family at most once for the life
-	// of the process, not once per request.
-	s.warnNewUnpricedFamilies(allUnpricedFamilies)
-
-	// Build sorted daily slice.
-	dailyKeys := make([]string, 0, len(dailyMap))
-	for k := range dailyMap {
-		dailyKeys = append(dailyKeys, k)
-	}
-	sort.Strings(dailyKeys)
-	daily := make([]*sessionv1.DailyTokenBucket, 0, len(dailyKeys))
-	for _, k := range dailyKeys {
-		dailyMap[k].UnpricedModels = sortedKeys(dailyUnpriced[k])
-		daily = append(daily, dailyMap[k])
-	}
-
-	// Build sorted model slice.
-	modelFamilies := make([]string, 0, len(modelMap))
-	for k := range modelMap {
-		modelFamilies = append(modelFamilies, k)
-	}
-	sort.Strings(modelFamilies)
-	models := make([]*sessionv1.ModelBreakdown, 0, len(modelFamilies))
-	for _, k := range modelFamilies {
-		models = append(models, modelMap[k])
-	}
-
-	// Build top skills (sorted by activation count desc).
-	topSkills := buildTopEntries(skillMap, 20)
-	topTools := buildTopToolEntries(toolMap, 20)
-
-	// Build activity-cost breakdown, sorted by cost desc — same pattern as models.
-	activityBreakdown := make([]*sessionv1.ActivityCostBreakdown, 0, len(activityMap))
-	for _, ab := range activityMap {
-		activityBreakdown = append(activityBreakdown, ab)
-	}
-	sort.Slice(activityBreakdown, func(i, j int) bool {
-		return activityBreakdown[i].EstimatedCostUsd > activityBreakdown[j].EstimatedCostUsd
+	resp, err := s.summaries.get(ctx, req.Msg, s.store.IsLoading, func(ctx context.Context) (*sessionv1.GetInsightsSummaryResponse, error) {
+		return s.computeInsightsSummary(ctx, req.Msg)
 	})
-
-	// Sort findings by dollar impact descending and cap at findingsCap — the
-	// panel is a "find the driver fast" ranked view, not an exhaustive log.
-	sort.Slice(allFindings, func(i, j int) bool {
-		return allFindings[i].DollarImpactUsd > allFindings[j].DollarImpactUsd
-	})
-	if len(allFindings) > findingsCap {
-		allFindings = allFindings[:findingsCap]
+	if err != nil {
+		return nil, err
 	}
-
-	// Overall cache hit rate.
-	overallCacheHitRate := float64(0)
-	if totalCacheHitDenom > 0 {
-		overallCacheHitRate = float64(totalCacheHitNumer) / float64(totalCacheHitDenom)
-	}
-
-	resp := &sessionv1.GetInsightsSummaryResponse{
-		Sessions:             sessions,
-		TotalCostUsd:         totalCostUSD,
-		TotalInputTokens:     totalInputTokens,
-		TotalOutputTokens:    totalOutputTokens,
-		TotalCacheReadTokens: totalCacheReadTokens,
-		OverallCacheHitRate:  overallCacheHitRate,
-		Daily:                daily,
-		Models:               models,
-		TopSkills:            topSkills,
-		TopTools:             topTools,
-		IsLoading:            s.store.IsLoading(),
-		PricingAsOf:          timestamppb.New(s.pricing.LoadedAt),
-		UnpricedModels:       sortedKeys(allUnpricedFamilies),
-		Findings:             allFindings,
-		ActivityBreakdown:    activityBreakdown,
-	}
-
 	return connect.NewResponse(resp), nil
 }
 
 // ListSessionTokens returns per-session token summaries with pagination.
 func (s *InsightsService) ListSessionTokens(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionTokensRequest],
 ) (*connect.Response[sessionv1.ListSessionTokensResponse], error) {
 	results := s.store.GetAll()
@@ -467,6 +522,7 @@ func (s *InsightsService) ListSessionTokens(
 	if s.associator != nil {
 		sessionSnapshot = s.associator.Snapshot()
 	}
+	sessionMeta := s.sessionMetaForSessions(ctx).meta
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -479,7 +535,7 @@ func (s *InsightsService) ListSessionTokens(
 			continue
 		}
 
-		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
+		summary, _ := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
 		for _, f := range summary.UnpricedModels {
 			allUnpricedFamilies[f] = true
 		}
@@ -612,15 +668,23 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 			if !ok {
 				return nil
 			}
+			// The client refetches the summary on this event; drop the cache first
+			// so that refetch is not served pre-change data for up to the TTL.
+			s.summaries.invalidate()
 			var evt *sessionv1.InsightsEvent
 			if result != nil {
 				var snapshot []tokens.SessionRecord
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
+				// Up to watchSessionMetaTTL stale: a refetch via GetInsightsSummary reads fresh meta.
+				sessionMeta := s.watchMeta.get(ctx, func(ctx context.Context) map[string]SessionMeta {
+					return s.sessionMetaForSessions(ctx).meta
+				})
+				summary, _ := buildSessionSummary(result, s.pricing, s.associator, snapshot, sessionMeta)
 				evt = &sessionv1.InsightsEvent{
 					EventType: "update",
-					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot),
+					Session:   summary,
 					AllParsed: !s.store.IsLoading(),
 				}
 			} else {
@@ -670,6 +734,36 @@ func (s *InsightsService) GetSessionTurnTimeline(
 		turns = append(turns, stat)
 	}
 	return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{Turns: turns}), nil
+}
+
+// DismissFinding persists a WasteFinding dismissal keyed by its finding_id,
+// so subsequent GetInsightsSummary calls exclude it. Returns CodeUnimplemented
+// when no DismissedFindingsRepository has been wired (see
+// SetDismissedFindingsStore).
+// +api: DismissFinding
+func (s *InsightsService) DismissFinding(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DismissFindingRequest],
+) (*connect.Response[sessionv1.DismissFindingResponse], error) {
+	if s.dismissedFindings == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("finding dismissal is not available"))
+	}
+	if req.Msg.FindingId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("finding_id is required"))
+	}
+
+	err := s.dismissedFindings.DismissFinding(ctx, session.DismissedFindingData{
+		FindingID:      req.Msg.FindingId,
+		SessionID:      req.Msg.SessionId,
+		ConversationID: req.Msg.ConversationId,
+		FindingType:    int32(req.Msg.FindingType),
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dismiss finding: %w", err))
+	}
+	s.summaries.invalidate() // dismissed findings must disappear from the next summary
+
+	return connect.NewResponse(&sessionv1.DismissFindingResponse{Success: true}), nil
 }
 
 // ---------- helpers ----------
@@ -748,6 +842,78 @@ func sessionTopTools(r *tokens.ParseResult, pt *tokens.PricingTable) []*sessionv
 		})
 	}
 	return result
+}
+
+// roleCostAccumulator collects one SessionRole's RoleCostBreakdown plus its
+// per-item ItemRoleCost buckets while GetInsightsSummary's main loop runs;
+// buildRoleBreakdown flattens it into the response's sorted role_breakdown slice.
+type roleCostAccumulator struct {
+	breakdown *sessionv1.RoleCostBreakdown
+	items     map[string]*sessionv1.ItemRoleCost // keyed by ItemID
+}
+
+// accumulateRoleCost folds one session's cost into roleAccums, bucketed by
+// meta.Role (empty string for a session with no backlog-item attribution —
+// kept, never dropped) and, within that bucket, by meta.ItemID. An unpriced
+// session increments UnpricedSessionCount and is excluded from
+// EstimatedCostUsd in both the role bucket and its item entry — the same
+// exclusion rule GetInsightsSummary applies to total_cost_usd, so
+// sum(role_breakdown[].estimated_cost_usd) always equals total_cost_usd.
+func accumulateRoleCost(roleAccums map[string]*roleCostAccumulator, meta SessionMeta, costUSD float64, unpriced bool) {
+	ra := roleAccums[meta.Role]
+	if ra == nil {
+		ra = &roleCostAccumulator{
+			breakdown: &sessionv1.RoleCostBreakdown{SessionRole: meta.Role},
+			items:     make(map[string]*sessionv1.ItemRoleCost),
+		}
+		roleAccums[meta.Role] = ra
+	}
+	ra.breakdown.SessionCount++
+	if unpriced {
+		ra.breakdown.UnpricedSessionCount++
+	} else {
+		ra.breakdown.EstimatedCostUsd += costUSD
+	}
+
+	item := ra.items[meta.ItemID]
+	if item == nil {
+		item = &sessionv1.ItemRoleCost{ItemId: meta.ItemID, ItemTitle: meta.ItemTitle}
+		ra.items[meta.ItemID] = item
+	}
+	item.SessionCount++
+	if unpriced {
+		item.UnpricedSessionCount++
+	} else {
+		item.EstimatedCostUsd += costUSD
+	}
+}
+
+// buildRoleBreakdown flattens roleAccums into a slice sorted by cost
+// descending (matching activityBreakdown's existing sort), with each
+// bucket's items sorted the same way.
+func buildRoleBreakdown(roleAccums map[string]*roleCostAccumulator) []*sessionv1.RoleCostBreakdown {
+	roles := make([]*sessionv1.RoleCostBreakdown, 0, len(roleAccums))
+	for _, ra := range roleAccums {
+		items := make([]*sessionv1.ItemRoleCost, 0, len(ra.items))
+		for _, it := range ra.items {
+			items = append(items, it)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].EstimatedCostUsd != items[j].EstimatedCostUsd {
+				return items[i].EstimatedCostUsd > items[j].EstimatedCostUsd
+			}
+			return items[i].ItemId < items[j].ItemId
+		})
+		ra.breakdown.Items = items
+		roles = append(roles, ra.breakdown)
+	}
+	sort.Slice(roles, func(i, j int) bool {
+		if roles[i].EstimatedCostUsd != roles[j].EstimatedCostUsd {
+			return roles[i].EstimatedCostUsd > roles[j].EstimatedCostUsd
+		}
+		return roles[i].SessionRole < roles[j].SessionRole
+	})
+	return roles
 }
 
 // sortedKeys returns the true keys of a map[string]bool as a sorted slice.

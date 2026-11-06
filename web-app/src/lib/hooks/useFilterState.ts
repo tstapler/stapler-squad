@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 
 type FilterValue = string | undefined;
 
@@ -21,7 +21,7 @@ export function useFilterState<K extends string>(keys: readonly K[]) {
       } else {
         params.set(key, value);
       }
-      router.replace(`?${params.toString()}`, { scroll: false });
+      router.replace(`?${params.toString()}`, { resetScroll: false });
     },
     [searchParams, router]
   );
@@ -29,7 +29,7 @@ export function useFilterState<K extends string>(keys: readonly K[]) {
   const clearFilters = useCallback(() => {
     const params = new URLSearchParams(searchParams.toString());
     keys.forEach((k) => params.delete(k));
-    router.replace(`?${params.toString()}`, { scroll: false });
+    router.replace(`?${params.toString()}`, { resetScroll: false });
   }, [keys, searchParams, router]);
 
   return { filterState, setFilter, clearFilters };

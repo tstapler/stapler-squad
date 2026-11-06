@@ -2,14 +2,14 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import { Tree } from "react-arborist";
-import type { NodeApi, TreeApi } from "react-arborist";
+import type { NodeApi, TreeApi, RowRendererProps } from "react-arborist";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon } from "@/lib/utils/fileIcons";
 import { truncateMiddle } from "@/lib/utils/truncateMiddle";
 import type { LineStats } from "@/lib/utils/gitStatus";
 import {
-  container, loading as loadingClass, error as errorClass, retryButton, empty,
+  container, empty,
   node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
   symlinkBadge, statusBadge, spinner, inlineError,
   searchContainer, searchInput, toolbar, toolbarButton, toolbarLabel,
@@ -17,6 +17,7 @@ import {
   searchOverlay, lineStats as lineStatsClass, lineStatsAdd, lineStatsDel,
 } from "./FileTree.css";
 import { vars } from "@/styles/theme.css";
+import { WaitState, usePendingDelay } from "./files/PendingState";
 
 // ---- Data model ----
 
@@ -386,6 +387,25 @@ function NodeRenderer({
   );
 }
 
+// ---- Row renderer ----
+
+// Real roving tabindex: react-arborist's DefaultRow hardcodes tabIndex=-1
+// forever, which breaks useFocusTrap's [tabindex]:not([tabindex="-1"]) query.
+// Exported for unit testing.
+export function TreeRow<T>({ node, innerRef, attrs, children }: RowRendererProps<T>) {
+  return (
+    <div
+      {...attrs}
+      tabIndex={node.isFocused ? 0 : -1}
+      ref={innerRef}
+      onFocus={(e) => e.stopPropagation()}
+      onClick={node.handleClick}
+    >
+      {children}
+    </div>
+  );
+}
+
 // ---- Imperative handle ----
 
 export interface FileTreeHandle {
@@ -462,11 +482,20 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     return () => ro.disconnect();
   }, []);
 
+  // Aborted on unmount so pending listFiles calls are cancelled and never set state afterwards.
+  const lifeRef = useRef(new AbortController());
+  useEffect(() => {
+    lifeRef.current = new AbortController();
+    const life = lifeRef.current;
+    return () => life.abort();
+  }, []);
+
   // Load a directory's children.
   const loadDirectory = useCallback(
     async (dirPath: string) => {
       if (loadingPathsRef.current.has(dirPath)) return;
 
+      const { signal } = lifeRef.current;
       loadingPathsRef.current.add(dirPath);
       setLoadingPaths(new Set(loadingPathsRef.current));
       setErrorPaths((prev) => {
@@ -480,8 +509,10 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           sessionId,
           dirPath === "." ? "." : dirPath,
           includeIgnored,
-          baseUrl
+          baseUrl,
+          signal
         );
+        if (signal.aborted) return;
         const nodes = (response.files || []).map(fileNodeToTreeNode);
 
         setDirContents((prev) => {
@@ -490,11 +521,12 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           return next;
         });
       } catch (err) {
+        if (signal.aborted) return;
         const msg = err instanceof Error ? err.message : "Failed to load directory";
         setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
       } finally {
         loadingPathsRef.current.delete(dirPath);
-        setLoadingPaths(new Set(loadingPathsRef.current));
+        if (!signal.aborted) setLoadingPaths(new Set(loadingPathsRef.current));
       }
     },
     [sessionId, baseUrl, includeIgnored]
@@ -513,17 +545,22 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     setRootLoading(true);
     setRootError(null);
 
-    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
+    // Per-run controller: cancels on unmount and when session/ignore settings change.
+    const ctrl = new AbortController();
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl, ctrl.signal)
       .then((response) => {
+        if (ctrl.signal.aborted) return;
         const nodes = (response.files || []).map(fileNodeToTreeNode);
         setDirContents(new Map([[".", nodes]]));
       })
       .catch((err) => {
+        if (ctrl.signal.aborted) return;
         setRootError(err instanceof Error ? err.message : "Failed to load files");
       })
       .finally(() => {
-        setRootLoading(false);
+        if (!ctrl.signal.aborted) setRootLoading(false);
       });
+    return () => ctrl.abort();
   }, [sessionId, baseUrl, includeIgnored]);
 
   // Debounced backend search: fires when searchTerm changes.
@@ -725,6 +762,26 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       if (!visible || visible.length === 0) return;
 
       switch (e.key) {
+        case "Tab": {
+          // react-arborist's own DefaultContainer already moved DOM focus via
+          // its document-wide walk (not safely overridable — depends on
+          // unexported internals). Redo the move correctly using the row it
+          // moved focus from: step within the tree like j/k, or at a boundary
+          // hand off to our own container so useFocusTrap resolves the wrap.
+          if (!focusedNode) break;
+          e.preventDefault();
+          const idx = visible.findIndex((n) => n.id === focusedNode.id);
+          if (e.shiftKey) {
+            const prev = idx > 0 ? visible[idx - 1] : undefined;
+            if (prev) tree.focus(prev.id);
+            else containerRef.current?.focus();
+          } else {
+            const next = idx >= 0 && idx < visible.length - 1 ? visible[idx + 1] : undefined;
+            if (next) tree.focus(next.id);
+            else containerRef.current?.focus();
+          }
+          break;
+        }
         case "j": {
           e.preventDefault();
           const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
@@ -794,41 +851,25 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     [] // treeRef and lastGRef are refs — stable, no deps needed
   );
 
+  const retryRoot = () => {
+    setRootLoading(true);
+    setRootError(null);
+    const { signal } = lifeRef.current;
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl, signal)
+      .then((response) => !signal.aborted && setDirContents(new Map([[".", (response.files || []).map(fileNodeToTreeNode)]])))
+      .catch((err) => !signal.aborted && setRootError(err instanceof Error ? err.message : "Failed to load files"))
+      .finally(() => !signal.aborted && setRootLoading(false));
+  };
+  const showTreePending = usePendingDelay(rootLoading);
+
   if (rootLoading) {
-    return (
-      <div className={container}>
-        <div className={loadingClass}>
-          <span className={spinner} />
-          Loading files…
-        </div>
-      </div>
-    );
+    return <div className={container}>{showTreePending && <WaitState kind="tree" />}</div>;
   }
 
   if (rootError) {
     return (
       <div className={container}>
-        <div className={errorClass}>
-          <span>⚠ {rootError}</span>
-          <button
-            className={retryButton}
-            onClick={() => {
-              setRootLoading(true);
-              setRootError(null);
-              fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
-                .then((response) => {
-                  const nodes = (response.files || []).map(fileNodeToTreeNode);
-                  setDirContents(new Map([[".", nodes]]));
-                })
-                .catch((err) => {
-                  setRootError(err instanceof Error ? err.message : "Failed to load files");
-                })
-                .finally(() => setRootLoading(false));
-            }}
-          >
-            Retry
-          </button>
-        </div>
+        <WaitState kind="tree" failure={{ reason: "rpc_error", actions: [{ label: "Retry", onClick: retryRoot }] }} />
       </div>
     );
   }
@@ -892,6 +933,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           }}
           disableDrag={true}
           disableDrop={true}
+          renderRow={TreeRow}
           onActivate={handleActivate}
           onToggle={handleToggle}
           rowHeight={rowHeight}

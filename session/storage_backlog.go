@@ -22,6 +22,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 )
 
+// ErrTransitionNotAllowed re-exports the domain sentinel next to the other
+// session.Err* transition errors so callers can errors.Is against it.
+var ErrTransitionNotAllowed = domain.ErrTransitionNotAllowed
+
 // resolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
 // — either a legacy raw UUID string or a bl_-prefixed public id
 // (BacklogItemID, see session/backlog_item_id.go) — to the row's underlying
@@ -85,7 +89,9 @@ const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 // "" as "skip locking" — there is no filesystem location to coordinate on,
 // and no plausible second OS process to race against in either case.
 func (r *EntRepository) backfillLockFilePath(name string) string {
-	if r.dbPath == "" || strings.HasPrefix(r.dbPath, "file:") {
+	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
+	// process cwd and litter the working tree with a lock file.
+	if r.dbPath == "" || r.dbPath == ":memory:" || strings.HasPrefix(r.dbPath, "file:") {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(r.dbPath), name)
@@ -195,15 +201,38 @@ type ItemSessionData struct {
 	ItemID      string // BacklogItem UUID
 	SessionUUID string
 	SessionRole string
-	AcSnapshot  AcCriteriaJSON
+	// ConversationUUID is the Claude transcript UUID when already known at creation
+	// (a headless call that has finished); "" otherwise — see EntRepository.Delete
+	// and UpdateItemSessionConversationUUID for the other ways it gets recorded.
+	ConversationUUID string
+	// BranchName is the work session's git branch, stamped once at spawn
+	// time — see ItemSession.branch_name's schema comment for why this
+	// needs to outlive the Session/Worktree rows it would otherwise be
+	// read from.
+	BranchName string
+	AcSnapshot AcCriteriaJSON
 	// PipelineModeSnapshot/PipelineModeSnapshotHash freeze the resolved
 	// PipelineMode slug and its content hash at the moment this session
 	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
 	PipelineModeSnapshot     string
 	PipelineModeSnapshotHash string
-	TriageResult             string
-	VerificationNotes        string  // Freeform verification evidence reported via request_review
-	EstimatedCostUsd         float64 // Only set for headless sessions where cost is known at creation time
+	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
+	// ExecutorFallbackReason freeze this stage's resolved executor at spawn
+	// time — see ItemSessionSummary's fields of the same name and the
+	// ItemSession ent schema's field comments.
+	ResolvedProgram        string
+	ResolvedModel          string
+	ExecutorSnapshotHash   string
+	ConfiguredProgram      string
+	ExecutorFallbackReason string
+	TriageResult           string
+	VerificationNotes      string  // Freeform verification evidence reported via request_review
+	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
+	// CostUnpriced marks EstimatedCostUsd as untrustworthy (see headless.CostSink's
+	// priced signal) rather than a genuine dollar figure — e.g. an unpriced Gemini
+	// model family. Zero-value false means priced, matching cost_priced's ent
+	// schema default, so existing callers that never set this field are unaffected.
+	CostUnpriced bool
 	// ClaimantHostID is the claiming/attaching process's own stable host identifier
 	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
 	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
@@ -238,15 +267,25 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 	q := r.client.ItemSession.Create().
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
+		SetConversationUUID(data.ConversationUUID).
+		SetBranchName(data.BranchName).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(data.PipelineModeSnapshotHash).
+		SetResolvedProgram(data.ResolvedProgram).
+		SetResolvedModel(data.ResolvedModel).
+		SetExecutorSnapshotHash(data.ExecutorSnapshotHash).
+		SetConfiguredProgram(data.ConfiguredProgram).
+		SetExecutorFallbackReason(data.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
 		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
 		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
+	}
+	if data.CostUnpriced {
+		q = q.SetCostPriced(false)
 	}
 	is, err := q.Save(ctx)
 	if err != nil {
@@ -314,6 +353,48 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	return result, nil
 }
 
+// itemSessionBatchChunk keeps IN (...) lists well under SQLite's bound-variable limit.
+const itemSessionBatchChunk = 500
+
+// ListItemSessionsForItems is the batched form of ListItemSessions for
+// UUID-shaped item IDs: three statements total (sessions, verdicts, owning
+// item id) instead of two per item. IDs that are not UUIDs are skipped, and an
+// item with no sessions maps to no entry. Each slice is oldest-first, matching
+// ListItemSessions.
+func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
+	result := make(map[string][]ItemSessionSummary, len(itemIDs))
+	uuids := make([]uuid.UUID, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		if u, err := uuid.Parse(id); err == nil {
+			uuids = append(uuids, u)
+		}
+	}
+	// Results are keyed by canonical lowercase UUID string; callers holding
+	// another spelling must look up with uuid.Parse(id).String().
+	for start := 0; start < len(uuids); start += itemSessionBatchChunk {
+		chunk := uuids[start:min(start+itemSessionBatchChunk, len(uuids))]
+		rows, err := r.client.ItemSession.Query().
+			Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(chunk...))).
+			WithReviewVerdict().
+			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
+			Order(ent.Asc(itemsession.FieldCreatedAt)).
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list item sessions for %d items: %w", len(chunk), err)
+		}
+		for _, is := range rows {
+			if is.Edges.BacklogItem == nil {
+				continue
+			}
+			key := is.Edges.BacklogItem.ID.String()
+			summary := itemSessionToSummary(is)
+			summary.BacklogItemID = key
+			result[key] = append(result[key], summary)
+		}
+	}
+	return result, nil
+}
+
 // GetBaseCommitSHAsForSessions returns a map of sessionUUID → base_commit_sha for
 // the given session UUIDs, including only rows with a non-empty value. Used at
 // startup to restore dirBaseSHA for directory-mode backlog sessions — the
@@ -361,6 +442,54 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
 	}
 	return itemSessionToSummary(is), nil
+}
+
+// ListItemSessionsBySessionUUIDs returns the most recent ItemSession for each
+// of the given session UUIDs in a single query (UUIDs with no row are absent
+// from the map). The ReviewVerdict edge is loaded; the BacklogItem edge is not.
+func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]ItemSessionSummary, error) {
+	if len(sessionUUIDs) == 0 {
+		return map[string]ItemSessionSummary{}, nil
+	}
+	rows, err := r.client.ItemSession.Query().
+		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
+		WithReviewVerdict().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item sessions by session uuids: %w", err)
+	}
+	result := make(map[string]ItemSessionSummary, len(rows))
+	for _, row := range rows {
+		if _, seen := result[row.SessionUUID]; !seen { // newest first
+			result[row.SessionUUID] = itemSessionToSummary(row)
+		}
+	}
+	return result, nil
+}
+
+// ClaimDiagnoseNudgeAttempt atomically marks the diagnose-role ItemSession
+// identified by sessionUUID as having attempted its one nudge write —
+// a single UPDATE ... WHERE diagnose_nudge_attempted_at IS NULL statement, so
+// the read-and-check-then-write a caller would otherwise do in Go can't race
+// against the caller's own retry. Returns claimed=false (not an error) when
+// no such row exists (not a diagnose-role session, or storage.CreateItemSession
+// hasn't landed yet) or the row already has a claim — the caller must refuse
+// the write in either case. See session/diagnose_nudge.go for why this is a
+// separate concept from the item-level diagnose_nudge_count cap.
+func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
+	n, err := r.client.ItemSession.Update().
+		Where(
+			itemsession.SessionUUID(sessionUUID),
+			itemsession.SessionRoleEQ(SessionRoleDiagnose),
+			itemsession.DiagnoseNudgeAttemptedAtIsNil(),
+		).
+		SetDiagnoseNudgeAttemptedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim diagnose nudge attempt for session %s: %w", sessionUUID, err)
+	}
+	return n > 0, nil
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
@@ -469,6 +598,27 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 	return nil
 }
 
+// UpdateItemSessionEndedWithDetail is UpdateItemSessionEndedWithReason plus the
+// error_detail column — used only for classifyHeadlessCallError's "other" bucket so the
+// underlying error text survives log rotation. A separate method keeps the many
+// detail-less callers of UpdateItemSessionEndedWithReason unchanged.
+func (r *EntRepository) UpdateItemSessionEndedWithDetail(ctx context.Context, id string, endedAt time.Time, reason, detail string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetEndedAt(endedAt).
+		SetEndReason(reason).
+		SetErrorDetail(detail).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set ended_at/error_detail on item session %s: %w", id, err)
+	}
+	return nil
+}
+
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
 // call that errored or produced unparseable output — see the failure_capture_path
@@ -490,21 +640,45 @@ func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id 
 	return nil
 }
 
-// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. Additive
-// (not a Set) so a session with multiple headless calls attributed to it — e.g.
-// the autonomous fix-loop's per-turn LLM calls — accumulates a real running total
-// instead of each call overwriting the last.
-func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+// UpdateItemSessionConversationUUID records the Claude transcript UUID of a headless
+// call on an ItemSession created before the call ran (triage), so its transcript stays
+// attributable to the item/role in Insights.
+func (r *EntRepository) UpdateItemSessionConversationUUID(ctx context.Context, id string, conversationUUID string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+	if err := r.client.ItemSession.UpdateOneID(parsedID).SetConversationUUID(conversationUUID).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set conversation_uuid on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd and
+// records whether that cost is trustworthy. Additive (not a Set) so a session
+// with multiple headless calls attributed to it — e.g. the autonomous fix-loop's
+// per-turn LLM calls — accumulates a real running total instead of each call
+// overwriting the last.
+//
+// When priced is false, usd is not added (it should already be 0 per
+// headless.CostSink's contract) and cost_priced is set to false on the row.
+// cost_priced is sticky: a priced call never resets it back to true once any
+// contributing call for this session has been unpriced, since the row's running
+// total is then permanently missing that call's real cost.
+func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
-		AddEstimatedCostUsd(usd).
-		Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to add estimated_cost_usd on item session %s: %w", id, err)
+	q := r.client.ItemSession.UpdateOneID(parsedID)
+	if priced {
+		q = q.AddEstimatedCostUsd(usd)
+	} else {
+		q = q.SetCostPriced(false)
+	}
+	if _, err := q.Save(ctx); err != nil {
+		return fmt.Errorf("failed to update cost on item session %s: %w", id, err)
 	}
 	return nil
 }
@@ -524,7 +698,10 @@ func (r *EntRepository) AddHeadlessCostBySessionUUID(ctx context.Context, sessio
 		}
 		return err
 	}
-	return r.UpdateItemSessionCost(ctx, is.ID, usd)
+	// CostSinkForSessionUUID (the sole caller of this method) already discards
+	// unpriced results before reaching here, so every call arriving at this
+	// point is Claude-authoritative.
+	return r.UpdateItemSessionCost(ctx, is.ID, usd, true)
 }
 
 // SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
@@ -788,13 +965,22 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	isq := tx.ItemSession.Create().
 		SetSessionUUID(isData.SessionUUID).
 		SetSessionRole(isData.SessionRole).
+		SetConversationUUID(isData.ConversationUUID).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmptyJSON(isData.AcSnapshot)).
 		SetPipelineModeSnapshot(isData.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(isData.PipelineModeSnapshotHash).
+		SetResolvedProgram(isData.ResolvedProgram).
+		SetResolvedModel(isData.ResolvedModel).
+		SetExecutorSnapshotHash(isData.ExecutorSnapshotHash).
+		SetConfiguredProgram(isData.ConfiguredProgram).
+		SetExecutorFallbackReason(isData.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(isData.TriageResult))
 	if isData.EstimatedCostUsd > 0 {
 		isq = isq.SetEstimatedCostUsd(isData.EstimatedCostUsd)
+	}
+	if isData.CostUnpriced {
+		isq = isq.SetCostPriced(false)
 	}
 	is, err := isq.Save(ctx)
 	if err != nil {
@@ -845,11 +1031,10 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 
 // --- Reconciler ---
 
-// ReconcileStuckItems finds in_progress items whose all linked ItemSessions have ended,
-// and transitions them to review status. Returns the count of transitioned items.
-// All updates are wrapped in a single transaction so they succeed or fail atomically.
-func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
-	// Find in_progress items that have at least one item session, where none have nil ended_at.
+// FindStuckInProgressCandidates returns in_progress items that have at least one
+// item session and none still running. It only reads; Storage.GatedReconcileStuck
+// moves each one to review through the transition gate.
+func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]BacklogItemData, error) {
 	items, err := r.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusInProgress)),
@@ -860,63 +1045,13 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		).
 		All(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to query stuck items: %w", err)
+		return nil, fmt.Errorf("failed to query stuck items: %w", err)
 	}
-
-	if len(items) == 0 {
-		return 0, nil
-	}
-
-	tx, err := r.client.Tx(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	var transitionedIDs []uuid.UUID
-	now := time.Now()
+	out := make([]BacklogItemData, 0, len(items))
 	for _, item := range items {
-		note := item.Notes
-		if note != "" {
-			note += "\n"
-		}
-		note += "[auto] Transitioned to review: all work sessions ended."
-		_, updateErr := tx.BacklogItem.UpdateOne(item).
-			SetStatus(string(BacklogStatusReview)).
-			SetUserModifiedStatusAt(now).
-			SetNotes(note).
-			Save(ctx)
-		if updateErr != nil {
-			continue
-		}
-		recordStatusEvent(ctx, tx.BacklogStatusEvent, item.ID, item.Status, string(BacklogStatusReview), TriggeredBySystem, "")
-		transitionedIDs = append(transitionedIDs, item.ID)
+		out = append(out, backlogItemToData(item))
 	}
-
-	if err = tx.Commit(); err != nil {
-		return 0, fmt.Errorf("failed to commit reconcile transaction: %w", err)
-	}
-
-	// Best-effort publish: this reconciler mutates status via a raw
-	// transaction rather than going through TransitionBacklogItemStatus, so
-	// without this it would silently bypass the live-event stream — exactly
-	// the "missed call site" failure mode requirements.md's Feasibility Risks
-	// section calls out for internal reconcilers that touch storage directly.
-	for _, id := range transitionedIDs {
-		updated, getErr := r.client.BacklogItem.Get(ctx, id)
-		if getErr != nil {
-			log.WarningLog().Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
-			continue
-		}
-		result := backlogItemToData(updated)
-		r.publishItemChanged(ctx, &result, BacklogItemChange{
-			Kind:      ChangeStatusTransition,
-			OldStatus: string(BacklogStatusInProgress),
-			NewStatus: string(BacklogStatusReview),
-		})
-	}
-
-	return len(transitionedIDs), nil
+	return out, nil
 }
 
 // FindReviewItemsWithoutGate returns backlog items in "review" status that have
@@ -1096,21 +1231,23 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // boundary — callers never need to re-check ResolvedAt/SnoozedUntil
 // nullability themselves (parse-don't-validate at the repository boundary).
 type OpenStuckStateData struct {
-	ID                  string
-	ItemID              string
-	Reason              domain.StuckReason
-	FirstDetectedAt     time.Time
-	LastCheckedAt       time.Time
-	NotifiedAt          *time.Time
-	Context             string
-	ItemTitle           string
-	ItemStatus          BacklogStatus
-	PrNumber            int
-	PrURL               string
-	RemediationAttempts int32
-	NextRemediationAt   *time.Time
-	GraceBootTime       *time.Time
-	PlanArtifactsPath   string
+	ID                     string
+	ItemID                 string
+	Reason                 domain.StuckReason
+	FirstDetectedAt        time.Time
+	LastCheckedAt          time.Time
+	NotifiedAt             *time.Time
+	Context                string
+	ItemTitle              string
+	ItemStatus             BacklogStatus
+	PrNumber               int
+	PrURL                  string
+	RemediationAttempts    int32
+	NextRemediationAt      *time.Time
+	GraceBootTime          *time.Time
+	PlanArtifactsPath      string
+	DiagnoseNudgeCount     int32
+	DiagnoseNextEligibleAt *time.Time
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -1137,16 +1274,18 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	result := make([]OpenStuckStateData, 0, len(rows))
 	for _, row := range rows {
 		data := OpenStuckStateData{
-			ID:                  row.ID.String(),
-			ItemID:              row.ItemID.String(),
-			Reason:              domain.StuckReason(row.Reason),
-			FirstDetectedAt:     row.FirstDetectedAt,
-			LastCheckedAt:       row.LastCheckedAt,
-			NotifiedAt:          row.NotifiedAt,
-			Context:             row.Context,
-			RemediationAttempts: row.RemediationAttempts,
-			NextRemediationAt:   row.NextRemediationAt,
-			GraceBootTime:       row.GraceBootTime,
+			ID:                     row.ID.String(),
+			ItemID:                 row.ItemID.String(),
+			Reason:                 domain.StuckReason(row.Reason),
+			FirstDetectedAt:        row.FirstDetectedAt,
+			LastCheckedAt:          row.LastCheckedAt,
+			NotifiedAt:             row.NotifiedAt,
+			Context:                row.Context,
+			RemediationAttempts:    row.RemediationAttempts,
+			NextRemediationAt:      row.NextRemediationAt,
+			GraceBootTime:          row.GraceBootTime,
+			DiagnoseNudgeCount:     row.DiagnoseNudgeCount,
+			DiagnoseNextEligibleAt: row.DiagnoseNextEligibleAt,
 		}
 		if item := row.Edges.Item; item != nil {
 			data.ItemTitle = item.Title
@@ -1156,6 +1295,55 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 			data.PlanArtifactsPath = item.PlanArtifactsPath
 		}
 		result = append(result, data)
+	}
+	return result, nil
+}
+
+// StuckStateHistoryData is a single BacklogStuckState row for one item,
+// open or resolved — the full-history counterpart to OpenStuckStateData,
+// which deliberately filters to open-only. Used by
+// ListStuckStatesForItem for stuck-item root-cause reporting, where a
+// resolved row (e.g. an exhausted bounce or a since-fixed PR check) is
+// exactly the history a human or diagnose session needs to see.
+type StuckStateHistoryData struct {
+	ID                  string
+	Reason              domain.StuckReason
+	FirstDetectedAt     time.Time
+	LastCheckedAt       time.Time
+	ResolvedAt          *time.Time
+	Context             string
+	RemediationAttempts int32
+	DiagnoseNudgeCount  int32
+}
+
+// ListStuckStatesForItem returns every BacklogStuckState row for itemID,
+// open or resolved, ordered oldest-first. Unlike FindOpenStuckStates this
+// applies no resolved_at/snoozed_until filter — it's a single-item history
+// read, not a sweep's work queue.
+func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID string) ([]StuckStateHistoryData, error) {
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id: %w", err)
+	}
+	rows, err := r.client.BacklogStuckState.Query().
+		Where(backlogstuckstate.ItemIDEQ(id)).
+		Order(ent.Asc(backlogstuckstate.FieldFirstDetectedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query stuck states for item %s: %w", itemID, err)
+	}
+	result := make([]StuckStateHistoryData, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, StuckStateHistoryData{
+			ID:                  row.ID.String(),
+			Reason:              domain.StuckReason(row.Reason),
+			FirstDetectedAt:     row.FirstDetectedAt,
+			LastCheckedAt:       row.LastCheckedAt,
+			ResolvedAt:          row.ResolvedAt,
+			Context:             row.Context,
+			RemediationAttempts: row.RemediationAttempts,
+			DiagnoseNudgeCount:  row.DiagnoseNudgeCount,
+		})
 	}
 	return result, nil
 }

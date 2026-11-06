@@ -5,8 +5,8 @@
   "method": "DeleteSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/session_service.go",
+  "handlerFile": "server/services/session_service_lifecycle.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "lastModified": "2026-10-05T21:31:10.551579565-07:00"
 }

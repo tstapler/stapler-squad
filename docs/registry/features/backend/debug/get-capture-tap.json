@@ -1,0 +1,14 @@
+{
+  "id": "debug:get-capture-tap",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetCaptureTap",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestSetCaptureTap_should_EnableAndReportState_When_CalledFromLoopback",
+    "TestCaptureTap_should_RejectWithPermissionDenied_When_PeerIsNotLoopback"
+  ],
+  "lastModified": "2026-09-29T20:31:36.157524-07:00"
+}

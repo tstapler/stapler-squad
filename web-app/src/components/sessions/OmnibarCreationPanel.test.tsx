@@ -5,6 +5,8 @@ import type { OmnibarCreationPanelProps, RemoteOption } from "./OmnibarCreationP
 import type { OmnibarFormState } from "./Omnibar";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 
+jest.mock("@/lib/hooks/useProbeProgram", () => require("@/lib/hooks/__mocks__/probeProgramMock").hookMockFactory());
+
 const DEFAULT_FORM_STATE: OmnibarFormState = {
   sessionName: "test-session",
   branch: "",
@@ -23,6 +25,7 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   autonomousMode: false,
   autoApprove: false,
   extraArgs: [],
+  fanoutCount: 1,
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {
@@ -47,6 +50,33 @@ describe("omnibar-create-session-button testid", () => {
   it("resolves to exactly one element", () => {
     render(<OmnibarCreationPanel {...buildProps()} />);
     expect(screen.getByTestId("omnibar-create-session-button")).toBeInTheDocument();
+  });
+});
+
+describe("omnibar-create-backlog-button (footer action)", () => {
+  it("renders in the footer next to Create Session and fires onCreateBacklog", () => {
+    const onCreateBacklog = jest.fn();
+    render(<OmnibarCreationPanel {...buildProps({ onCreateBacklog })} />);
+    const btn = screen.getByTestId("omnibar-create-backlog-button");
+    expect(btn.parentElement).toBe(screen.getByTestId("omnibar-create-session-button").parentElement);
+    fireEvent.click(btn);
+    expect(onCreateBacklog).toHaveBeenCalledTimes(1);
+  });
+
+  it("is disabled while submitting and enabled when only canSubmit is false", () => {
+    const { rerender } = render(
+      <OmnibarCreationPanel {...buildProps({ onCreateBacklog: jest.fn(), isSubmitting: true })} />
+    );
+    expect(screen.getByTestId("omnibar-create-backlog-button")).toBeDisabled();
+    rerender(
+      <OmnibarCreationPanel {...buildProps({ onCreateBacklog: jest.fn(), canSubmit: false })} />
+    );
+    expect(screen.getByTestId("omnibar-create-backlog-button")).toBeEnabled();
+  });
+
+  it("is absent when no onCreateBacklog handler is supplied", () => {
+    render(<OmnibarCreationPanel {...buildProps()} />);
+    expect(screen.queryByTestId("omnibar-create-backlog-button")).not.toBeInTheDocument();
   });
 });
 
@@ -115,5 +145,17 @@ describe("SESSION_TYPES hint copy", () => {
   it("gives every session type a distinct description", () => {
     const descriptions = SESSION_TYPES.map((t) => t.description);
     expect(new Set(descriptions).size).toBe(descriptions.length);
+  });
+});
+
+describe("ProgramProbeSection wiring", () => {
+  it("OmnibarCreationPanel_should_RenderProgramProbeSectionAndNoOldSpan_When_ProgramSelected", () => {
+    const { resetProbeMocks, setProbeHookState, probeStates } = require("@/lib/hooks/__mocks__/probeProgramMock");
+    resetProbeMocks();
+    setProbeHookState(probeStates.notFound);
+    render(<OmnibarCreationPanel {...buildProps({ showAdvanced: true })} />);
+    expect(screen.getAllByTestId("preset-program-warning")).toHaveLength(1);
+    expect(screen.queryByText(/not found in PATH/)).toBeNull();
+    expect(screen.getByLabelText("Program")).toHaveAttribute("aria-describedby", "omnibar-program-probe-status");
   });
 });

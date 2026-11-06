@@ -22,6 +22,7 @@ import {
   ResetStuckRemediationRequestSchema,
   BulkResetStuckRemediationRequestSchema,
   TriggerRemediationNowRequestSchema,
+  OverrideClaimBlockRequestSchema,
   type StuckBacklogItem,
   type StuckReason,
 } from "@/gen/session/v1/backlog_pb";
@@ -52,6 +53,19 @@ export interface UseStuckBacklogItemsReturn {
    * callers can show a specific error, e.g. "already parked — use Reset".
    */
   triggerRemediationNow: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * Dequeues an item skipped for STUCK_REASON_BLOCKED_BY_CLAIM despite the
+   * other host's claim. `reason` is required (>= 5 chars) and audit-logged
+   * server-side. Throws on failure so the form can show the message.
+   */
+  overrideClaimBlock: (itemId: string, reason: string) => Promise<void>;
+  /**
+   * Re-checks the repo auto-merge setting bypassing the server cache and
+   * resolves with the refreshed item (undefined if it is no longer listed).
+   * Does not touch `items`/`error`: the caller owns the per-line result, and
+   * a failed lookup is carried in the item's status, not thrown.
+   */
+  refreshAutoMerge: (itemId: string) => Promise<StuckBacklogItem | undefined>;
 }
 
 /**
@@ -85,7 +99,7 @@ function useStuckBacklogItemsImpl(
 
   // Memoized transport/client — the explicit pitfall this hook must NOT
   // reproduce from useUnfinishedWork.ts (which builds a new
-  // createConnectTransport/createClient pair on every render).
+  // transport/createClient pair on every render).
   const transport = useMemo(() => getConnectTransport(), []);
   const client = useMemo(() => createClient(BacklogService, transport), [transport]);
 
@@ -187,6 +201,24 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
+  const overrideClaimBlock = useCallback(
+    async (itemId: string, reason: string): Promise<void> => {
+      await client.overrideClaimBlock(create(OverrideClaimBlockRequestSchema, { itemId, reason }));
+      await fetchItems();
+    },
+    [client, fetchItems]
+  );
+
+  const refreshAutoMerge = useCallback(
+    async (itemId: string): Promise<StuckBacklogItem | undefined> => {
+      const res = await client.listStuckBacklogItems(
+        create(ListStuckBacklogItemsRequestSchema, { refreshAutoMerge: true })
+      );
+      return res.items.find((i) => i.itemId === itemId);
+    },
+    [client]
+  );
+
   return {
     items,
     isLoading,
@@ -197,6 +229,8 @@ function useStuckBacklogItemsImpl(
     resetRemediation,
     bulkResetParkedRemediation,
     triggerRemediationNow,
+    overrideClaimBlock,
+    refreshAutoMerge,
   };
 }
 

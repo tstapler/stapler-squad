@@ -37,7 +37,10 @@ import (
 // fallback behavior around HOME, not a consumer of that behavior, so it
 // needs full, uncontended control of the raw env var.
 func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
+	homeLock.acquire(t)
+	stateLock.acquire(t)
 	fakeHome := t.TempDir()
+	// Intentional exception to the withFakeHome rule (raw setters, locks held): see the doc comment above.
 	t.Setenv("HOME", fakeHome)
 	// t.Setenv can only set a value, not unset one, so clear any inherited
 	// STAPLER_SQUAD_TEST_DIR explicitly and restore it afterward -- config.GetConfigDir()

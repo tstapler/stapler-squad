@@ -4,20 +4,17 @@ package session
 // history file detection, UUID extraction, and conversation reattachment.
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
-
-// staleResumePattern is the prefix Claude CLI emits when --resume is used with a
-// conversation ID that no longer exists in Claude's backend.
-const staleResumePattern = "No conversation found with session ID"
 
 // claudeExtension holds Claude Code conversation-resume session state.
 // Unlike piExtension (instance_pi_status.go), this is populated for a
@@ -71,14 +68,11 @@ const (
 	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
 )
 
-// isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
-// that indicates a stale or expired --resume argument.  ANSI escape sequences are
-// stripped before the check so colour output does not prevent matching.
-func isStaleResumeExit(exitContent []byte) bool {
-	if len(exitContent) == 0 {
-		return false
-	}
-	return bytes.Contains(stripANSISimple(exitContent), []byte(staleResumePattern))
+// isStaleResumeExit returns true when the PTY exit tail contains CLI errors
+// indicating a stale or expired resume argument for program.
+func isStaleResumeExit(program string, exitContent []byte) bool {
+	detector := resolveStaleResumeDetector(program)
+	return detector.IsStaleResumeExit(exitContent)
 }
 
 // stripANSISimple removes ANSI CSI/OSC/single-char escape sequences so that
@@ -129,6 +123,16 @@ func stripANSISimple(b []byte) []byte {
 // fresh (without --resume) so it does not loop forever on the same bad UUID.
 // Safe to call from a goroutine; uses startMu to serialise concurrent calls.
 func (i *Instance) recoverFromStaleResume() {
+	// An archived session is deliberately retired; a stale --resume on its way
+	// out is not a reason to spawn a brand-new (un-resumed) conversation
+	// (ADR-001, superseded-rework-session-retirement). KillTmuxPaneOnly closes
+	// the pane without stopping the controller, so the archive's own kill is
+	// what delivers the PTY EOF that gets here.
+	if i.IsArchived() {
+		log.Info("stale --resume uuid on an archived session; not restarting", "session", i.Title)
+		return
+	}
+
 	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
 	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
 
@@ -401,19 +405,9 @@ func (i *Instance) tryExtractConversationUUID() {
 			return
 		}
 		var err error
-		info, err = detector.DetectByPath(effectivePath)
+		info, err = i.detectAdoptableByPath(detector, effectivePath)
 		if err != nil {
 			log.Warn("tryextractconversationuuid: path-based detect error", "session", i.Title, "err", err)
-		}
-		if info != nil {
-			i.claudeSessionMu.RLock()
-			clearedAt := i.conversationClearedAt
-			i.claudeSessionMu.RUnlock()
-			if !clearedAt.IsZero() && !info.ModTime.After(clearedAt) {
-				log.Debug("tryextractconversationuuid: found jsonl predates last explicit clear, skipping recovery",
-					"session", i.Title, "path", info.HistoryFilePath, "clearedAt", clearedAt)
-				info = nil
-			}
 		}
 		if info != nil {
 			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
@@ -486,6 +480,13 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 
 	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
 	cmd.Dir = i.GetEffectiveRootDir()
+	// Resume is a claude-CLI conversation; the selector may only keep it on a
+	// backend that declares Resume (claude, or consolette via ANTHROPIC_BASE_URL).
+	if env, err := headless.ResumeEnv(headless.FeatureKeyInstanceResume); err != nil {
+		return "", err
+	} else if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	out, runErr := cmd.Output()
 	output := string(out)

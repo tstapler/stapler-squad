@@ -11,12 +11,85 @@
 | `service.log` / `service.log.old` | Raw stdout/stderr of the systemd/launchd-managed service — startup banners, panics that happen before logging is initialized, and anything written outside the `log` package. Check here first for crash-on-boot issues the structured log never saw. |
 | `debug-snapshot-*.json` | One-off diagnostic dumps (goroutine/heap snapshots), not part of the regular log stream — see `docs/how-to/profile-lockups.md`. |
 
+The path above is the **shared/default** location only. A named instance
+(`STAPLER_SQUAD_INSTANCE=<name>`) or workspace mode
+(`STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+preference) logs elsewhere instead — see `docs/reference/state-isolation.md`
+for the full priority list. If `~/.stapler-squad/logs/staplersquad.log` looks
+stale despite the service clearly being active, that's why: check
+`service.log`'s startup banner for the `Global log: <path>` line, which
+always names the file actually being written to for that run.
+
 Every line is a flat JSON object — pull specific fields with `jq` rather than `grep`ping text:
 
 ```bash
 jq -r 'select(.level=="ERROR")' ~/.stapler-squad/logs/staplersquad.log
 jq -r 'select(.session=="my-session-title")' ~/.stapler-squad/logs/staplersquad.log
 ```
+
+**Note:** the backlog/triage/review call sites (`server/services/backlog_service_triage.go`,
+`server/services/backlog_service_trigger_triage.go`, `session/backlog_lifecycle.go`,
+`session/backlog_lifecycle_triage.go`) used to log through the older
+`log.InfoLog()/ErrorLog().Printf(...)` API, which wrote a plain
+`[pid-...] LEVEL:timestamp file:line: [Tag] message key=val ...` line — not a
+JSON object, so `jq` silently skipped it. These four files were migrated to
+the structured API (2026-09-15); `tools/lint/nolegacylog` now fails the build
+if a legacy call is reintroduced into any of them. If you find a line from
+one of these files that `jq` can't see, it's a regression — file a bug rather
+than reaching for `grep` as the permanent workaround.
+
+## Browser (client) logs
+
+The web UI ships `console.warn`, `console.error`, `window.onerror` and unhandled rejections to
+`POST /api/client-logs` (`web-app/src/lib/telemetry/clientLogShipper.ts`, mounted in `Providers.tsx`).
+They land in the same `staplersquad.log`, interleaved with server records, tagged `source=client`
+with `window` (the `?window=` id), `url`, `user_agent` and, for errors, `stack`:
+
+```bash
+jq -r 'select(.source=="client")' ~/.stapler-squad/workspaces/<hash>/logs/staplersquad.log
+jq -r 'select(.source=="client" and .window=="c76c8d49")' <log>
+```
+
+`console.log`/`info` are deliberately not shipped (the terminal code logs on every resize). The
+endpoint caps a request at 256 KB / 100 entries and the server at 600 entries per minute total,
+returning 429 beyond that; the browser re-queues a failed batch (max 200 buffered).
+
+## Retention
+
+Rotation is lumberjack: 50 MB per segment, gzip, at most 100 segments or 14 days. Before 2026-10-15
+the default was 10 MB x 5 segments, which at ~11 MB/hour kept about 4.5 hours of history. Existing
+`config.json` files holding exactly the old triple (`10/5/30`) are upgraded on load; any other
+values are treated as deliberate and kept.
+
+## Filtering logs for one backlog/triage session
+
+Every `TriggerTriage`/`TriggerReReview`/`BacklogLifecycle` log line carries an
+`item` and/or `session` field with the item ID / `headless-triage-<uuid>` /
+`headless-re-review-<uuid>` session ID shown in the backlog item's Sessions
+list in the web UI:
+
+```bash
+jq -r 'select(.session=="headless-triage-34925c72-c4de-4036-8a17-249d25b7aab2")' ~/.stapler-squad/logs/staplersquad.log
+jq -r 'select(.item=="<item-id>")' ~/.stapler-squad/logs/staplersquad.log
+```
+
+Plain `grep` on the same ID still works too (and is the only option for any
+file that hasn't been migrated yet, or across gzipped rotated segments):
+
+```bash
+grep "headless-triage-34925c72-c4de-4036-8a17-249d25b7aab2" ~/.stapler-squad/logs/staplersquad.log
+# or, across rotated segments too:
+grep -h "<item-id-or-session-id>" ~/.stapler-squad/logs/staplersquad.log ~/.stapler-squad/logs/*.log.gz 2>/dev/null
+```
+
+This is the fastest way to answer "why did this triage/review fail" — it
+shows the start line, the raw LLM output on a parse failure (also durably
+saved under `~/.stapler-squad/headless-failures/`, and linked from the
+backlog item detail page's failure notice once `end_reason` is set — see
+`classifyHeadlessCallError` and the parse-failure branch in
+`server/services/backlog_service_trigger_triage.go`), and any
+`reconcileOrphanedTriageItems`/`AutoRespawnTriage` follow-up lines for the
+same item, all in one pass — no need to correlate timestamps by hand.
 
 ## Log levels: global and per-package
 
@@ -155,3 +228,44 @@ OpenTelemetry metric instead — see `docs/how-to/enable-opentelemetry.md`. The
 `onBatchFlush` case above is the template: `recordBatchFlushFramesCoalesced`
 already exports this as a metric, so the log line was pure duplication once
 downgraded off the default-visible path.
+
+## Diagnosing parked triage items (`end_reason = 'other'`)
+
+`classifyHeadlessCallError` buckets every headless triage/review failure it
+can't recognize as `other`. For those, the Go error text is persisted (first
+500 runes of `err.Error()`) in `item_sessions.error_detail`, so you no longer
+need the log to have survived rotation. It holds only the Go error chain —
+raw subprocess output is in the `failure_capture_path` file instead. The same
+text appears in the stuck-state context (`triage session … ended (other:
+<error_detail>) …`), the item's Sessions panel failure notice, and
+`ItemSession.error_detail` (proto field 27).
+
+Find `other` failures and group by shared cause (a common prefix across many
+items in one batch points at infrastructure, not the items). `<config-dir>` is
+where your instance keeps state — see `docs/reference/state-isolation.md`:
+
+```bash
+sqlite3 <config-dir>/sessions.db \
+  "SELECT error_detail, COUNT(*) FROM item_sessions
+   WHERE end_reason='other' AND error_detail != ''
+   GROUP BY substr(error_detail,1,60) ORDER BY COUNT(*) DESC;"
+```
+
+Find items parked at the retry cap (the same rows the per-item "Auto-triage
+paused" notification refers to):
+
+```bash
+sqlite3 <config-dir>/sessions.db \
+  "SELECT item_id, remediation_attempts, context FROM backlog_stuck_states
+   WHERE reason='orphaned_triage' AND resolved_at IS NULL AND remediation_attempts >= 5;"
+```
+
+When 3 or more items park within 10 minutes, a "Multiple auto-triage retries
+exhausted" notification fires in addition to the per-item ones — treat it as a
+signal to look for a shared cause before resetting anything.
+
+Once the cause is fixed, reset the batch with the `BulkResetStuckRemediation`
+RPC (`reason = STUCK_REASON_ORPHANED_TRIAGE`, `only_parked` defaults to true),
+or reset one item with `ResetStuckRemediation`. Rows with an `error_detail`
+from before this field existed are empty; only failures after it shipped are
+recoverable this way.

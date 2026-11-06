@@ -7,6 +7,8 @@ import (
 	"context"
 	"os"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 )
 
 // TymuxManager is the interface satisfied by the concrete tymux gRPC session
@@ -25,6 +27,33 @@ type TymuxManager interface {
 	RestoreWithWorkDir(workDir string) error
 	Close() error
 	IsAlive() bool
+
+	// SetCommand records the program the next Start() call should spawn in
+	// the pane -- tymux's equivalent of TmuxManager's baked-in-program
+	// SetSession(). Call it before Start().
+	SetCommand(command launchcmd.LaunchCommand)
+
+	// SetSessionLabel records a per-Instance label that Start() folds into the
+	// tymuxd session name so Instances sharing one directory get distinct
+	// sessions. Call before Start()/RestoreWithWorkDir(); empty keeps Name == dir.
+	SetSessionLabel(label string)
+
+	// SetStoredSessionID hands RestoreWithWorkDir the daemon session id persisted
+	// with the Instance record, so restore is immune to label (title) changes.
+	// Empty means an old record: fall back to label, then legacy Name == dir.
+	SetStoredSessionID(id string)
+
+	// PersistedSessionID is the daemon session id to save with the Instance
+	// record: the live id, else a loaded-but-not-yet-restored id, and "" once the
+	// session was closed.
+	PersistedSessionID() string
+
+	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
+	// passes to tymuxd. Later entries for the same key replace earlier ones;
+	// entries without '=' are ignored. The command's own env still wins.
+	// tymuxd persists session env in plaintext records: pass only
+	// non-secret values (DISPLAY, CDP URLs).
+	AppendEnv(env ...string)
 
 	// Identification
 	GetSessionIdentifier() string
@@ -45,6 +74,12 @@ type TymuxManager interface {
 	// Terminal state
 	CapturePaneContent() (string, error)
 	CapturePaneContentRaw() (string, error)
+	// CapturePaneRedraw returns the byte stream that makes a fresh terminal show this pane
+	// exactly as it is now — cells plus modes, title, alt screen, scroll region and cursor
+	// (RenderSnapshotRedraw) — and whether the pane is on its alternate screen. ok is false
+	// (data empty) when the daemon is older than v1.9.0 and sent no terminal state, so a redraw
+	// would only be a grid paint; callers then keep their text path.
+	CapturePaneRedraw(ctx context.Context) (data string, altScreen bool, ok bool, err error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	CaptureViewport(lines int) (string, error)
 	GetCursorPosition() (x, y int, err error)

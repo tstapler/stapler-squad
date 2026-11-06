@@ -163,11 +163,7 @@ func remoteCapturePaneContains(t *testing.T, srv *remoteSessionTestSSHServer, se
 	}
 	defer sess.Close()
 
-	cmd := "tmux capture-pane -p -t " + sessionName
-	if serverSocket != "" {
-		cmd = "tmux -L " + serverSocket + " capture-pane -p -t " + sessionName
-	}
-	out, err := sess.CombinedOutput(cmd)
+	out, err := sess.CombinedOutput(remoteTmuxCommand(serverSocket, "capture-pane", "-p", "-t", sessionName))
 	if err != nil {
 		return false
 	}
@@ -427,8 +423,10 @@ func TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream(t *
 			return false
 		}
 		_ = stream2.CloseRequest()
-		time.Sleep(300 * time.Millisecond) // let the write land before checking the pane
-		return remoteCapturePaneContains(t, srv, sessionName, fix.svc.testTmuxServerSocket, markerAfterRecovery)
+		// The write lands asynchronously; poll the pane rather than guessing a delay.
+		return wait.WaitForCondition(func() bool {
+			return remoteCapturePaneContains(t, srv, sessionName, fix.svc.testTmuxServerSocket, markerAfterRecovery)
+		}, wait.WaitConfig{Timeout: 3 * time.Second, PollInterval: 50 * time.Millisecond, Description: "marker in remote pane"}) == nil
 	}, 20*time.Second, 500*time.Millisecond,
 		"a fresh StreamTerminal call after the connection was killed mid-stream must eventually reach the remote pane again (recovery)")
 

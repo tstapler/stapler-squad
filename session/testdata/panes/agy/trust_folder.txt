@@ -1,0 +1,14 @@
+Accessing workspace:
+
+/home/tstapler/.cache/ssq-e2e-tmp/nam/tmp/agy-proj
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                                                                                                                                      accept-edits · Gemini 4 Argon · medium
+

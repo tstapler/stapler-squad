@@ -355,3 +355,31 @@ export const twoColumn = style({
     },
   },
 });
+
+export const repoSuggestionChip = style({
+  display: "inline-flex",
+  alignItems: "center",
+  alignSelf: "flex-start",
+  gap: vars.space["1"],
+  marginTop: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.inputText,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: vars.radii.full,
+});
+
+export const repoSuggestionDismiss = style({
+  // 44px tap target on touch devices without growing the chip on desktop.
+  minWidth: "24px",
+  minHeight: "24px",
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+  "@media": {
+    "(pointer: coarse)": { minWidth: "44px", minHeight: "44px" },
+  },
+});

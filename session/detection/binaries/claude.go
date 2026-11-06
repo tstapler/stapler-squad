@@ -112,6 +112,24 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    18,
 			},
 			{
+				Name:        "gemini_requesting_permission",
+				Pattern:     `(?i)Requesting permission for:`,
+				Description: "Gemini requesting permission header",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_this_command",
+				Pattern:     `(?i)Run this command\?`,
+				Description: "Gemini command approval prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_run_command_option",
+				Pattern:     `(?i)Yes,\s*run\s*command`,
+				Description: "Gemini run command selection option",
+				Priority:    17,
+			},
+			{
 				Name:        "gemini_permission",
 				Pattern:     `(?i)Yes, allow once`,
 				Description: "Gemini permission prompt",
@@ -122,6 +140,24 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Pattern:     `(?i)Allow execution of:`,
 				Description: "Gemini tool execution permission prompt",
 				Priority:    19,
+			},
+			{
+				Name:        "gemini_needs_approval_for",
+				Pattern:     `(?i)needs\s+approval\s+for`,
+				Description: "Gemini subagent needs approval indicator",
+				Priority:    19,
+			},
+			{
+				Name:        "gemini_ctrl_k_approve",
+				Pattern:     `(?i)ctrl\+k\s+approve`,
+				Description: "Gemini ctrl+k approve shortcut prompt",
+				Priority:    18,
+			},
+			{
+				Name:        "gemini_agent_blocked",
+				Pattern:     `(?i)Blocked\s*·`,
+				Description: "Gemini agent blocked status indicator",
+				Priority:    18,
 			},
 			{
 				Name:        "opencode_permission",
@@ -327,9 +363,9 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 		Compacting: []dtypes.StatusPattern{
 			{
 				Name: "compacting_conversation",
-				// INFERRED, not verified against a live Claude Code capture — see Story 1.1.1
-				// in project_plans/context-compaction-detection/implementation/plan.md for
-				// provenance and the required follow-up verification item. Requires
+				// Verified against live captures of "✶ Compacting conversation… (18m 0s · ↑ 20.2k
+				// tokens)" (testdata/claude_compacting.txt); the live line carries a timer and
+				// token count, not "(esc to interrupt)". Requires
 				// "Compacting" capitalized at/near line start (optionally after a spinner
 				// glyph) so this does NOT match the unrelated "NN% until auto-compact"
 				// approaching-threshold indicator (lowercase "compact", mid-line) — see

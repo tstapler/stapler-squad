@@ -1,6 +1,7 @@
 name: E2E Feature Video Capture
 
-# Runs on PRs that touch feature-marked files.
+# Opt-in on PRs: add the `record-video` label (runs only if the PR touches feature-marked files).
+# Was automatic on every PR (6 checks, mostly skipped); non-gating.
 # Only records feature demo specs (not benchmarks or a11y).
 # Sharded across 2 runners for faster execution.
 # GIFs are bundled into a single self-contained HTML preview page (archive:false)
@@ -10,6 +11,7 @@ name: E2E Feature Video Capture
 on:
   pull_request:
     branches: [main]
+    types: [labeled]
 
 permissions:
   contents: read
@@ -20,7 +22,7 @@ permissions:
 # step — safe here because a superseded PR run's videos are stale too, same
 # reasoning ux-analysis.yml uses for its single-job workflow.
 concurrency:
-  group: e2e-video-${{ github.event.pull_request.number }}
+  group: e2e-video-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 # Feature specs recorded — excludes:
@@ -38,6 +40,7 @@ env:
 jobs:
   detect-feature-changes:
     name: Detect Feature Changes
+    if: github.event.label.name == 'record-video'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -57,7 +60,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           export CHANGED_FILES
           ./tools/ci/detect-feature-changes.sh origin/main
           EXIT_CODE=$?
@@ -137,17 +140,13 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: tests/e2e/pnpm-lock.yaml
 
       - name: Download generated files
         uses: actions/download-artifact@v4
@@ -166,18 +165,29 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
       - name: Install Playwright dependencies
         run: |
           cd tests/e2e
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
           npx playwright install chromium --with-deps
 
       - name: Run feature E2E specs (shard ${{ matrix.shard }}/2)
         env:
           RECORD_FEATURES: 'true'
           TEST_SERVER_URL: http://localhost:8543
+          # Without this, global-setup.ts's ensureBinary() ignores the binary
+          # this job already downloaded and falls through to `make
+          # stapler-squad`, which needs the asdf-managed go/buf/bun toolchain
+          # this job never installs (only actions/setup-go + setup-bun)
+          # — it fails on .asdf-install.stamp, so global-setup throws, 0 specs
+          # run, and "Upload videos" warns "No files were found" with no
+          # video-count check on it (continue-on-error: true), silently
+          # producing zero test-results and the "No video artifacts" PR
+          # comment. Pointing TEST_SERVER_BINARY at the already-built,
+          # already-chmod'd binary makes ensureBinary() skip the rebuild.
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
         run: |
           DEMO_DIR=$(mktemp -d)
           go run ./tests/demo/seed "$DEMO_DIR" 6

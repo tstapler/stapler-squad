@@ -1,0 +1,29 @@
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/ssq-reply-cap
+
+
+❯ Using the Edit tool, in /tmp/ssq-reply-outside/x.txt replace the line 'two'
+  with 'TWO'. Nothing else.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(/tmp/ssq-reply-outside/x.txt)
+
+────────────────────────────────────────────────────────────────────────────────
+ Edit file
+ ../ssq-reply-outside/x.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1  one
+ 2 -two
+ 2 +TWO
+ 3  three
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to x.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common file
+      commands) for this session; Yes, and always allow access to
+      /tmp/ssq-reply-outside for this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

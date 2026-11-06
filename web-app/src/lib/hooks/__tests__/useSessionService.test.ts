@@ -32,6 +32,8 @@ const mockWatchSessions = jest.fn();
 const mockListSessions = jest.fn();
 const mockCreateSession = jest.fn();
 const mockUpdateSession = jest.fn();
+const mockPinSession = jest.fn();
+const mockUnpinSession = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
@@ -39,6 +41,8 @@ jest.mock("@connectrpc/connect", () => ({
     listSessions: mockListSessions,
     createSession: mockCreateSession,
     updateSession: mockUpdateSession,
+    pinSession: mockPinSession,
+    unpinSession: mockUnpinSession,
   }),
 }));
 
@@ -482,5 +486,64 @@ describe("useSessionService — updateSession request body", () => {
     expect(mockUpdateSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "s1", note: "x" })
     );
+  });
+});
+
+describe("useSessionService — pin/unpin", () => {
+  beforeEach(() => {
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+    }));
+  });
+  afterEach(() => jest.clearAllMocks());
+
+  async function setup(session: Record<string, unknown>) {
+    const store = makeTestStore();
+    mockListSessions.mockResolvedValue({ sessions: [session] });
+    store.dispatch(upsertSession(session as unknown as Session));
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: true, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+    await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    return { store, result };
+  }
+  const pinnedOf = (store: ReturnType<typeof makeTestStore>, id: string) =>
+    (store.getState() as any).sessions.entities?.[id]?.pinned;
+
+  it("should optimistically set pinned=true before the RPC resolves", async () => {
+    let resolveRpc!: () => void;
+    mockPinSession.mockReturnValue(new Promise<void>((r) => { resolveRpc = r; }));
+    const { store, result } = await setup({ id: "s1", title: "one", pinned: false });
+
+    let done!: Promise<boolean>;
+    act(() => { done = result.current.pinSession("s1"); });
+    expect(pinnedOf(store, "s1")).toBe(true);
+
+    await act(async () => { resolveRpc(); await done; });
+    expect(pinnedOf(store, "s1")).toBe(true);
+    expect(mockPinSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }));
+  });
+
+  it("should roll back to the exact previous session when the pin RPC rejects", async () => {
+    mockPinSession.mockRejectedValue(new Error("boom"));
+    const { store, result } = await setup({ id: "s1", title: "one", pinned: false });
+
+    let ok = true;
+    await act(async () => { ok = await result.current.pinSession("s1"); });
+
+    expect(ok).toBe(false);
+    expect(pinnedOf(store, "s1")).toBe(false);
+  });
+
+  it("should roll back to pinned=true when the unpin RPC rejects", async () => {
+    mockUnpinSession.mockRejectedValue(new Error("boom"));
+    const { store, result } = await setup({ id: "s1", title: "one", pinned: true });
+
+    await act(async () => { await result.current.unpinSession("s1"); });
+
+    expect(pinnedOf(store, "s1")).toBe(true);
   });
 });

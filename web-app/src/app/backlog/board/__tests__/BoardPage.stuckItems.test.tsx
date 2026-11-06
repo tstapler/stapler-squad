@@ -14,7 +14,7 @@ import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb"
 import BacklogBoardPage from "../page";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -37,6 +37,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -63,6 +64,9 @@ function makeStuckItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogI
   } as StuckBacklogItem;
 }
 
+// Stable identity: the page effect depends on it, like the real memoized hook.
+const mockListForeignClaims = jest.fn().mockResolvedValue([]);
+
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
   return {
@@ -72,6 +76,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => {
       triggerTriage: jest.fn(),
       spawnSessionFromItem: jest.fn(),
       cancelTriage: jest.fn(),
+      listForeignClaims: mockListForeignClaims,
     }),
   };
 });

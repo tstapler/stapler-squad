@@ -1,0 +1,3 @@
+osc/link_at_row_end_then_plain_row -- OSC 8 (xterm ctlseqs): a link closed at the end of a row must not bleed into the next
+[3;1Hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]8;;https://example.com/end\link!!]8;;\
+plain text on the next row

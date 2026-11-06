@@ -189,6 +189,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		// instead of paying for them. See commit 13a90ec31 for the incident
 		// this fixes.
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
+		sdkmetric.WithView(longTailLatencyViews()...),
 	)
 	otel.SetMeterProvider(mp)
 
@@ -302,29 +303,4 @@ func StartLinkedBackgroundSpan(ctx context.Context, name string) (context.Contex
 		trace.WithNewRoot(),
 		trace.WithLinks(trace.LinkFromContext(ctx)),
 	)
-}
-
-// SpanFromContext returns the current span from context
-func SpanFromContext(ctx context.Context) trace.Span {
-	return trace.SpanFromContext(ctx)
-}
-
-// AddEvent adds an event to the current span
-func AddEvent(ctx context.Context, name string, attrs ...trace.EventOption) {
-	span := trace.SpanFromContext(ctx)
-	span.AddEvent(name, attrs...)
-}
-
-// RecordError records an error on the current span
-func RecordError(ctx context.Context, err error, opts ...trace.EventOption) {
-	span := trace.SpanFromContext(ctx)
-	span.RecordError(err, opts...)
-}
-
-// SetAttributes sets attributes on the current span
-func SetAttributes(ctx context.Context, attrs ...trace.EventOption) {
-	// Note: SetAttributes takes attribute.KeyValue, not trace.EventOption
-	// This is a convenience wrapper that should be called directly on span
-	span := trace.SpanFromContext(ctx)
-	_ = span // Caller should use span.SetAttributes directly
 }

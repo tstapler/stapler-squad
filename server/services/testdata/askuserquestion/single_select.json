@@ -1,0 +1,28 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "permission_mode": "auto",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which cache?",
+        "header": "Cache",
+        "options": [
+          {
+            "label": "Redis",
+            "description": "In-memory data store with rich data types and optional persistence"
+          },
+          {
+            "label": "Memcached",
+            "description": "Simple, multi-threaded in-memory key-value cache"
+          },
+          {
+            "label": "None",
+            "description": "Do not use a cache"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  }
+}

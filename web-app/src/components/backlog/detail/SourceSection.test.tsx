@@ -13,7 +13,7 @@ describe("SourceSection", () => {
       />
     );
 
-    const link = screen.getByRole("link", { name: /Issue #42/ });
+    const link = screen.getByRole("link", { name: "Issue acme/widget#42" });
     expect(link).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -32,7 +32,15 @@ describe("SourceSection", () => {
       />
     );
 
-    expect(screen.getByRole("link", { name: /Issue #42/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Issue acme/widget#42" })).toBeInTheDocument();
+  });
+
+  it("SourceSection_should_FallBackToBareId_When_ExternalUrlUnparseable", () => {
+    render(
+      <SourceSection externalUrl="https://example.com/tracker/42" externalId="42" labels={[]} defaultExpanded={true} />
+    );
+
+    expect(screen.getByRole("link", { name: "Issue #42" })).toBeInTheDocument();
   });
 
   it("SourceSection_should_BeCollapsed_When_DefaultExpandedFalse", () => {
@@ -47,7 +55,7 @@ describe("SourceSection", () => {
 
     const header = screen.getByTestId("collapsible-header-source");
     expect(header).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("link", { name: /Issue #42/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Issue acme\/widget#42/ })).not.toBeInTheDocument();
   });
 
   it("SourceSection_should_OmitIssueNumber_When_ExternalIdMissing", () => {
@@ -65,5 +73,29 @@ describe("SourceSection", () => {
     const link = screen.getByRole("link", { name: "Issue" });
     expect(link).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+});
+
+describe("SourceSection URL safety", () => {
+  it("renders no link for a javascript: externalUrl", () => {
+    const { container } = render(
+      <SourceSection externalUrl="javascript:alert(1)" externalId="42" labels={[]} defaultExpanded={true} />
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(screen.getByText("Issue #42")).toBeInTheDocument();
+  });
+});
+
+const base = { externalUrl: "https://github.com/o/r/issues/1", externalId: "1", labels: [], defaultExpanded: true };
+
+describe("SourceSection working host", () => {
+  it("shows the claiming host when set", () => {
+    render(<SourceSection {...base} claimingHostId="host_01K" />);
+    expect(screen.getByTestId("source-working-host")).toHaveTextContent("Working host: host_01K");
+  });
+
+  it("shows nothing when there is no claiming host", () => {
+    render(<SourceSection {...base} />);
+    expect(screen.queryByTestId("source-working-host")).toBeNull();
   });
 });

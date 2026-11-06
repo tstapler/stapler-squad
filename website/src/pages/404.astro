@@ -1,0 +1,18 @@
+---
+// Custom 404 (Task 4.4.2a): built with Starlight's own <StarlightPage> wrapper
+// so the error page gets the site's real header/nav/search/branding (Page.astro)
+// instead of a hand-built lookalike that could drift from the real chrome, or
+// GitHub Pages' generic default 404 HTML.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+
+const base = import.meta.env.BASE_URL;
+---
+
+<StarlightPage frontmatter={{ title: 'Page not found', template: 'doc' }} hasSidebar={false}>
+	<p>The page you're looking for doesn't exist or has moved.</p>
+	<p>
+		<a href={`${base}/`}>Go to the docs home</a>
+		{' · '}
+		<a href={`${base}/help/getting-started/`}>Getting started</a>
+	</p>
+</StarlightPage>

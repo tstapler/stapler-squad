@@ -1,11 +1,11 @@
 "use client";
 // +feature: backlog:list-page
 
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { AppLink } from "@/components/ui/AppLink";
@@ -16,24 +16,40 @@ import { VaguenessPromptModal } from "@/components/backlog/VaguenessPromptModal"
 import { BacklogTourModal } from "@/components/backlog/BacklogTourModal";
 import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
+import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { BacklogService, type StuckBacklogItem, type StuckReason } from "@/gen/session/v1/backlog_pb";
+import { AcSummary, ProvenanceBadge, VerdictBadge } from "@/components/backlog/BacklogItemCard";
+import { BlockerChip } from "@/components/backlog/BlockerChip";
+import { ClaimChip } from "@/components/backlog/ClaimChip";
+import { DependencyChip } from "@/components/backlog/DependencyChip";
+import { DuplicatePendingBadge } from "@/components/backlog/DuplicatePendingBadge";
+import { TriageLoadingIndicator } from "@/components/backlog/TriageLoadingIndicator";
+import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { groupStuckItemsByItemId, summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import {
   useBacklogService,
   type BacklogItem,
   type BacklogItemStatus,
   type BacklogItemInput,
+  type ClaimedElsewhere,
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
-import { useAppDispatch } from "@/lib/store";
+import { useAppDispatch, useAppSelector } from "@/lib/store";
+import { toggleSelection, selectAll, clearSelection, selectionAfterBulk } from "@/lib/store/backlogBulkSelectionSlice";
+import { BacklogBulkActions } from "@/components/backlog/BacklogBulkActions";
+import {
+  runBulk, formatBulkFeedback, runBulkChunked, runBulkSpawnChunked, formatSpawnBulkFeedback, formatTriageFeedback,
+  isBulkTriageEligible, isBulkAutoImplementEligible, runGuarded,
+} from "@/lib/backlog/bulkActions";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
 import { ALL_STATUSES, BACKLOG_FILTER_FIELDS, filterBacklogItems } from "@/lib/hooks/useBacklogFilters";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
+import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./backlog.css";
 
 // ---------------------------------------------------------------------------
@@ -50,6 +66,7 @@ interface BacklogViewState {
   search: string;
   statusFilter: BacklogItemStatus[];
   priorityFilter: number[];
+  sourceFilter: string[];
   showArchived: boolean;
   sortCol: SortColumn;
   sortAsc: boolean;
@@ -130,18 +147,29 @@ function formatDateShort(iso?: string): string {
 // (used by the Kanban board) already has. Extracted into its own component,
 // mirroring BacklogItemCard's exact flash-tracking hook, since a plain row
 // function has no hook of its own to track the previous liveVersion.
-function BacklogTableRow({
+const BacklogTableRow = memo(function BacklogTableRow({
   item,
   isActive,
   isExiting,
+  isSelected,
+  isSelectMode,
   onRowClick,
+  onToggleSelect,
+  stuckItem,
+  otherStuckReasons,
+  claim,
 }: {
   item: BacklogItem;
   isActive: boolean;
   isExiting: boolean;
+  isSelected: boolean;
+  isSelectMode: boolean;
   onRowClick: (itemId: string) => void;
+  onToggleSelect: (itemId: string) => void;
+  stuckItem?: StuckBacklogItem;
+  otherStuckReasons?: StuckReason[];
+  claim?: ClaimedElsewhere;
 }) {
-  const acDone = item.acCriteria.filter((c) => c.status === "done").length;
 
   const prevLiveVersionRef = useRef(item.liveVersion);
   const [justChanged, setJustChanged] = useState(false);
@@ -169,18 +197,48 @@ function BacklogTableRow({
       data-exiting={isExiting ? "true" : undefined}
       onClick={() => {
         if (isExiting) return;
+        if (isSelectMode) {
+          onToggleSelect(item.id);
+          return;
+        }
         onRowClick(item.id);
       }}
       onKeyDown={(e) => {
-        if (isExiting) return;
+        if (isExiting || e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onRowClick(item.id);
+          if (isSelectMode) onToggleSelect(item.id);
+          else onRowClick(item.id);
         }
       }}
     >
+      <td className={`${styles.tableCell} ${styles.checkboxCell}`} onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className={`${styles.rowCheckbox} ${isSelectMode ? styles.rowCheckboxVisible : ""}`}
+          checked={isSelected}
+          onChange={() => onToggleSelect(item.id)}
+          aria-label={`Select ${item.title}`}
+          data-testid="backlog-row-checkbox"
+        />
+      </td>
       <td className={`${styles.tableCell} ${styles.titleCell}`}>
         {item.title}
+        <div className={styles.rowWidgets} data-testid="backlog-row-widgets">
+          {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
+          <VerdictBadge item={item} />
+          {item.externalUrl && item.externalId && (
+            <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} pluginId={item.pluginId} />
+          )}
+          {claim && <ClaimChip claim={claim} />}
+          {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
+          {item.blockedBy && item.blockedBy.length > 0 && (
+            <DependencyChip deps={item.blockedBy} onItemClick={onRowClick} />
+          )}
+          {item.triageStatus === "running" && (
+            <TriageLoadingIndicator elapsedSeconds={0} context="list" onCancel={() => {}} compact />
+          )}
+        </div>
       </td>
       <td className={styles.tableCell}>
         <span
@@ -195,15 +253,14 @@ function BacklogTableRow({
         <span
           className={styles.priorityBadge}
           data-testid="priority-badge"
+          // eslint-disable-next-line no-restricted-syntax -- priority label fallback, not a detected status
           aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
         >
           {PRIORITY_LABELS[item.priority] ?? "P?"}
         </span>
       </td>
       <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
-        {item.acCriteria.length > 0
-          ? `${acDone}/${item.acCriteria.length}`
-          : "—"}
+        {item.acCriteria.length > 0 ? <AcSummary item={item} /> : "—"}
       </td>
       <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
         {formatDateShort(item.updatedAt)}
@@ -213,7 +270,7 @@ function BacklogTableRow({
       </td>
     </tr>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Main page
@@ -222,7 +279,25 @@ function BacklogTableRow({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage, spawnSessionFromItem, archiveBacklogItem, deleteBacklogItem, listForeignClaims } = useBacklogService();
+  // One call each for the whole list (never per row), mirroring the board page.
+  const { items: stuckItems } = useStuckBacklogItems();
+  const stuckItemsById = useMemo(() => groupStuckItemsByItemId(stuckItems), [stuckItems]);
+  const [foreignClaims, setForeignClaims] = useState<ClaimedElsewhere[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listForeignClaims().then((claims) => {
+      if (!cancelled) setForeignClaims(claims);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [listForeignClaims]);
+  const claimsByUrl = useMemo(
+    () => new Map(foreignClaims.map((c) => [c.externalUrl, c])),
+    [foreignClaims]
+  );
+  const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
@@ -238,7 +313,7 @@ function BacklogPageInner() {
   // chip changes. The hook already returns domain-shaped BacklogItem[]
   // (mapped internally, see useWatchBacklogItems.ts's file-header note 3),
   // so no further proto->domain mapping is needed here.
-  const { items, connectionState } = useWatchBacklogItems();
+  const { items, connectionState } = useBacklogStream();
   // Only the very first connect (before any items have ever loaded) shows a
   // loading state — a reconnect must keep showing last-known data, not blank
   // or spinner out (design/ux.md Surface 1 "Error / edge cases").
@@ -251,6 +326,7 @@ function BacklogPageInner() {
     search,
     statusFilter,
     priorityFilter,
+    sourceFilter,
     // showArchived: archived items are excluded client-side by default (Epic
     // 5.1 — see filteredItems below); enabling this reveals them from the
     // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
@@ -263,6 +339,7 @@ function BacklogPageInner() {
     search: setSearch,
     statusFilter: setStatusFilter,
     priorityFilter: setPriorityFilter,
+    sourceFilter: setSourceFilter,
     showArchived: setShowArchived,
     sortCol: setSortCol,
     sortAsc: setSortAsc,
@@ -298,6 +375,9 @@ function BacklogPageInner() {
   const [githubImporting, setGithubImporting] = useState(false);
   const [githubImportError, setGithubImportError] = useState<string | null>(null);
   const [githubImportProgress, setGithubImportProgress] = useState<{ done: number; total: number } | null>(null);
+  // Issues another host already claimed (cross_host_claim_dedup) — a third
+  // import outcome, distinct from "already imported" and "failed".
+  const [claimedElsewhere, setClaimedElsewhere] = useState<ClaimedElsewhereEntry[]>([]);
 
   // First-visit walkthrough
   const { showTour, setTourComplete, hideTour, resetTour } = useBacklogTour();
@@ -317,10 +397,7 @@ function BacklogPageInner() {
   // re-adding a full listBacklogItems fetch-on-every-mutation path.
   const rawClientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     rawClientRef.current = createClient(BacklogService, transport);
   }, []);
 
@@ -341,8 +418,8 @@ function BacklogPageInner() {
   // mirroring what the server-side listBacklogItems filter used to do before
   // this page moved to the shared live stream (design/ux.md Surface 1).
   const filteredItems = useMemo(
-    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, showArchived }),
-    [items, search, statusFilter, priorityFilter, showArchived],
+    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, sourceFilter, showArchived }),
+    [items, search, statusFilter, priorityFilter, sourceFilter, showArchived],
   );
 
   // Epic 6.3 (backlog-event-driven-updates): when an item's fields change
@@ -429,8 +506,9 @@ function BacklogPageInner() {
 
   // Clear any in-flight exit timers on unmount.
   useEffect(() => {
+    const timers = exitTimersRef.current; // same Map for the component's lifetime
     return () => {
-      for (const timer of exitTimersRef.current.values()) clearTimeout(timer);
+      for (const timer of timers.values()) clearTimeout(timer);
     };
   }, []);
 
@@ -444,7 +522,7 @@ function BacklogPageInner() {
   }, [filteredItems, exitingItems]);
 
   // Sort items client-side
-  const sortedItems = [...visibleItems].sort((a, b) => {
+  const sortedItems = useMemo(() => [...visibleItems].sort((a, b) => {
     let cmp = 0;
     if (sortCol === "title") {
       cmp = a.title.localeCompare(b.title);
@@ -458,11 +536,14 @@ function BacklogPageInner() {
       cmp = compareByRepoPath(a, b);
     }
     return sortAsc ? cmp : -cmp;
-  });
+  }), [visibleItems, sortCol, sortAsc]);
 
   // Grouping is applied after sorting so items within each group keep the
   // currently selected sort order (mirrors SessionList's sort-then-group).
-  const groups = groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null;
+  const groups = useMemo(
+    () => (groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null),
+    [groupBy, sortedItems],
+  );
 
   const handleSortClick = (col: SortColumn) => {
     if (sortCol === col) {
@@ -480,11 +561,14 @@ function BacklogPageInner() {
     }
   };
 
-  const handleRowClick = (itemId: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("item", itemId);
-    router.push(`/backlog?${params.toString()}`);
-  };
+  const handleRowClick = useCallback(
+    (itemId: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("item", itemId);
+      router.push(`/backlog?${params.toString()}`);
+    },
+    [searchParams, router],
+  );
 
   const handleDetailClose = () => {
     const params = new URLSearchParams(searchParams.toString());
@@ -523,7 +607,9 @@ function BacklogPageInner() {
       setGithubImporting(true);
       try {
         const result = await importGitHubIssue(githubIssueUrl.trim());
-        if (result) {
+        if (result?.alreadyClaimedElsewhere) {
+          setGithubImportError("Another host already claimed this issue.");
+        } else if (result) {
           setShowForm(false);
           setGithubIssueUrl("");
           await hydrateItemIntoStore(result.item.id);
@@ -548,13 +634,16 @@ function BacklogPageInner() {
       setGithubImporting(true);
       setGithubImportProgress({ done: 0, total: issues.length });
       const createdIds: string[] = [];
+      const claimed: ClaimedElsewhereEntry[] = [];
       let failures = 0;
       let duplicates = 0;
       try {
         for (const issue of issues) {
-          const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+          const url = issue.url || `https://${issue.host || "github.com"}/${owner}/${repo}/issues/${issue.number}`;
           const result = await importGitHubIssue(url.trim());
-          if (result) {
+          if (result?.alreadyClaimedElsewhere) {
+            claimed.push({ issueUrl: url.trim(), claim: result.alreadyClaimedElsewhere });
+          } else if (result) {
             await hydrateItemIntoStore(result.item.id);
             createdIds.push(result.item.id);
             if (result.alreadyExisted) duplicates++;
@@ -567,6 +656,7 @@ function BacklogPageInner() {
         setGithubImporting(false);
         setGithubImportProgress(null);
       }
+      setClaimedElsewhere(claimed);
       if (failures > 0) {
         // Leave the modal open (don't setShowForm(false) below) so this error
         // is actually visible — closing the form first would unmount it
@@ -588,6 +678,9 @@ function BacklogPageInner() {
         );
         return;
       }
+      // Leave the modal open so the claimed-elsewhere notice (Copy link /
+      // Import anyway) stays reachable.
+      if (claimed.length > 0) return;
       setShowForm(false);
       // Only navigate to the item detail when a single issue was imported —
       // with multiple, there's no single item to land on.
@@ -600,21 +693,185 @@ function BacklogPageInner() {
     [importGitHubIssue, hydrateItemIntoStore, router, searchParams]
   );
 
+  const handleImportAnyway = useCallback(
+    async (entry: ClaimedElsewhereEntry, reason: string) => {
+      const result = await importGitHubIssue(entry.issueUrl, { overrideReason: reason });
+      if (!result || result.alreadyClaimedElsewhere) {
+        throw new Error("Import failed. Check the reason and try again.");
+      }
+      await hydrateItemIntoStore(result.item.id);
+      const remaining = claimedElsewhere.filter((e) => e.issueUrl !== entry.issueUrl);
+      setClaimedElsewhere(remaining);
+      if (remaining.length === 0) {
+        setShowForm(false);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("item", result.item.id);
+        router.push(`/backlog?${params.toString()}`);
+      }
+    },
+    [importGitHubIssue, hydrateItemIntoStore, claimedElsewhere, router, searchParams]
+  );
+
   const sortIndicator = (col: SortColumn) => {
     if (sortCol !== col) return null;
     return sortAsc ? " ↑" : " ↓";
   };
 
+  // Bulk selection (backlogBulkSelectionSlice) and fan-out actions.
+  const selectedIds = useAppSelector((st) => st.backlogBulkSelection.selectedIds);
+  const selectMode = useAppSelector((st) => st.backlogBulkSelection.selectMode);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  // Selection can outlive filter changes or live removals; act only on rows still visible.
+  const visibleSelectedIds = useMemo(() => {
+    const visible = new Set(sortedItems.map((i) => i.id));
+    return selectedIds.filter((id) => visible.has(id));
+  }, [selectedIds, sortedItems]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleToggleSelect = useCallback((id: string) => dispatch(toggleSelection(id)), [dispatch]);
+
+  const showBulkFeedback = useCallback((msg: string) => {
+    if (!mountedRef.current) return;
+    setBulkFeedback(msg);
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setBulkFeedback(null), 4000);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      dispatch(clearSelection());
+    };
+  }, [dispatch]);
+
+  const doneItemIds = useMemo(
+    () => filteredItems.filter((i) => i.status === "done").map((i) => i.id),
+    [filteredItems]
+  );
+
+  const runBulkAction = useCallback(
+    async (verb: string, ids: string[], action: (id: string) => Promise<unknown>) => {
+      if (ids.length === 0 || busyRef.current) return;
+      busyRef.current = true;
+      setBulkBusy(true);
+      try {
+        const result = await runBulk(ids, action);
+        showBulkFeedback(formatBulkFeedback(verb, result));
+        return result;
+      } finally {
+        busyRef.current = false;
+        if (mountedRef.current) setBulkBusy(false);
+      }
+    },
+    [showBulkFeedback]
+  );
+
+  const handleArchiveDone = useCallback(
+    () => runBulkAction("Archived", doneItemIds, archiveBacklogItem),
+    [runBulkAction, doneItemIds, archiveBacklogItem]
+  );
+
+  const handleArchiveSelected = useCallback(async () => {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && it.status !== "archived";
+    });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing to archive");
+      dispatch(clearSelection());
+      return;
+    }
+    const result = await runBulkAction("Archived", ids, archiveBacklogItem);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length === 0) dispatch(clearSelection());
+    else dispatch(selectAll(result.failed));
+  }, [items, visibleSelectedIds, runBulkAction, showBulkFeedback, archiveBacklogItem, dispatch]);
+
+  const setBulkBusyIfMounted = useCallback((busy: boolean) => {
+    if (busy || mountedRef.current) setBulkBusy(busy);
+  }, []);
+
+  const handleTriageSelected = useCallback(async () => {
+    if (busyRef.current) return;
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const eligible = visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkTriageEligible(it);
+    });
+    const skipped = visibleSelectedIds.length - eligible.length;
+    if (eligible.length === 0) {
+      showBulkFeedback(formatTriageFeedback({ succeeded: [], failed: [] }, skipped));
+      return;
+    }
+    await runGuarded(busyRef, setBulkBusyIfMounted, async () => {
+      const result = await runBulkChunked(eligible, (id) => triggerTriage(id));
+      if (!mountedRef.current) return;
+      showBulkFeedback(formatTriageFeedback(result, skipped));
+      dispatch(selectionAfterBulk(result.failed));
+    });
+  }, [items, visibleSelectedIds, triggerTriage, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
+
+  const autoImplementEligibleIds = useMemo(() => {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    return visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkAutoImplementEligible(it);
+    });
+  }, [items, visibleSelectedIds]);
+
+  // frozenIds is the snapshot taken when the confirmation dialog opened, not the live selection.
+  const handleAutoImplementSelected = useCallback(async (frozenIds: string[]) => {
+    // The frozen set is the maximum; drop items that stopped being eligible since the dialog opened.
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = frozenIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkAutoImplementEligible(it);
+    });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing eligible for auto-implement");
+      return;
+    }
+    await runGuarded(busyRef, setBulkBusyIfMounted, async () => {
+      const result = await runBulkSpawnChunked(ids, (id) => spawnSessionFromItem(id, { autonomous: true }));
+      if (!mountedRef.current) return;
+      const dropped = frozenIds.length - ids.length;
+      showBulkFeedback(formatSpawnBulkFeedback(result) + (dropped > 0 ? `, ${dropped} no longer eligible` : ""));
+      dispatch(selectionAfterBulk(result.failed));
+    });
+  }, [items, spawnSessionFromItem, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const result = await runBulkAction("Deleted", visibleSelectedIds, deleteBacklogItem);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length > 0) dispatch(selectAll(result.failed));
+    else dispatch(clearSelection());
+  }, [visibleSelectedIds, runBulkAction, deleteBacklogItem, dispatch]);
+
   const renderItemRow = (item: BacklogItem) => {
     const isActive = selectedItemId === item.id;
     const isExiting = exitingItems.has(item.id);
+    const stuckGroup = stuckItemsById.get(item.id);
+    const stuckSummary = stuckGroup ? summarizeStuckItemGroup(stuckGroup) : undefined;
     return (
       <BacklogTableRow
         key={item.id}
         item={item}
         isActive={isActive}
         isExiting={isExiting}
+        isSelected={selectedSet.has(item.id)}
+        isSelectMode={selectMode}
         onRowClick={handleRowClick}
+        onToggleSelect={handleToggleSelect}
+        stuckItem={stuckSummary?.primary}
+        otherStuckReasons={stuckSummary?.otherReasons}
+        claim={item.externalUrl ? claimsByUrl.get(item.externalUrl) : undefined}
       />
     );
   };
@@ -633,6 +890,18 @@ function BacklogPageInner() {
             data-testid="backlog-tour-button"
           >
             ?
+          </button>
+          <button
+            className={styles.newItemButton}
+            onClick={() => {
+              track({ name: "backlog_ai_intake", category: "user_action", component: "BacklogPage" });
+              openOmnibar("backlog: ");
+            }}
+            aria-label="Create backlog item via AI intake"
+            data-testid="backlog-ai-intake-button"
+            style={{ marginRight: "8px", background: "var(--accent, #6366f1)" }}
+          >
+            ✨ AI Intake
           </button>
           <button
             className={styles.newItemButton}
@@ -672,12 +941,30 @@ function BacklogPageInner() {
         onStatusFilterChange={setStatusFilter}
         priorityFilter={priorityFilter}
         onPriorityFilterChange={setPriorityFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
         showArchived={showArchived}
         onShowArchivedChange={setShowArchived}
         onResetView={resetViewState}
         showSortGroupControls={true}
         groupBy={groupBy}
         onGroupByChange={setGroupBy}
+        doneCount={doneItemIds.length}
+        onArchiveDone={handleArchiveDone}
+        archiveDoneBusy={bulkBusy}
+      />
+      <BacklogBulkActions
+        selectedCount={visibleSelectedIds.length}
+        totalCount={sortedItems.length}
+        busy={bulkBusy}
+        feedback={bulkFeedback}
+        onArchiveSelected={handleArchiveSelected}
+        onDeleteSelected={handleDeleteSelected}
+        onTriageSelected={handleTriageSelected}
+        onAutoImplementSelected={handleAutoImplementSelected}
+        autoImplementEligibleIds={autoImplementEligibleIds}
+        onSelectAll={() => dispatch(selectAll(sortedItems.map((i) => i.id)))}
+        onClear={() => dispatch(clearSelection())}
       />
 
       {/* Content */}
@@ -695,6 +982,9 @@ function BacklogPageInner() {
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>
                 <tr>
+                  <th scope="col" className={styles.tableHeaderCell}>
+                    <span className={styles.srOnly}>Select</span>
+                  </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
@@ -776,7 +1066,7 @@ function BacklogPageInner() {
                   <tbody key={group.groupKey}>
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className={styles.groupHeaderCell}
                         data-testid="backlog-group-header"
                       >
@@ -815,6 +1105,7 @@ function BacklogPageInner() {
                 key={selectedItemId}
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
+                onItemClick={handleRowClick}
               />
             </aside>
           </>
@@ -882,10 +1173,11 @@ function BacklogPageInner() {
               <>
                 <GitHubIssuePicker
                   onSelect={handlePickerSelect}
-                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
+                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); setClaimedElsewhere([]); }}
                   importing={githubImporting}
                   importProgress={githubImportProgress}
                 />
+                <ClaimedElsewhereNotice entries={claimedElsewhere} onImportAnyway={handleImportAnyway} />
                 {githubImportError && (
                   <p style={{ fontSize: "12px", color: "var(--error)", margin: "8px 0 0" }}>
                     {githubImportError}

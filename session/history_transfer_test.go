@@ -28,7 +28,7 @@ func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) 
 		old, new_ string
 	}{
 		{"opencode_to_bash", "opencode", "bash"},
-		{"claude_to_gemini", "claude", "gemini"},
+		{"claude_to_bash", "claude", "bash"},
 	}
 
 	for _, tt := range tests {
@@ -235,6 +235,98 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	}
 	if stepType != 14 {
 		t.Errorf("expected step_type 14 for USER_INPUT, got %d", stepType)
+	}
+}
+
+func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempHome)
+	defer os.Setenv("HOME", origHome)
+
+	uuid := "550e8400-e29b-41d4-a716-446655440001"
+	workspace := "/home/test/opencode_project"
+
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	err := os.MkdirAll(claudeProjectDir, 0700)
+	if err != nil {
+		t.Fatalf("failed to create claude projects dir: %v", err)
+	}
+
+	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
+	f, err := os.Create(claudeLogPath)
+	if err != nil {
+		t.Fatalf("failed to create claude log file: %v", err)
+	}
+
+	mockClaudeTurns := []map[string]interface{}{
+		{
+			"type":      "user",
+			"timestamp": "2026-06-25T20:00:00Z",
+			"message": map[string]interface{}{
+				"role":    "user",
+				"content": "hello opencode port",
+			},
+		},
+		{
+			"type":      "assistant",
+			"timestamp": "2026-06-25T20:01:00Z",
+			"message": map[string]interface{}{
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": "ported response",
+					},
+				},
+			},
+		},
+	}
+
+	for _, turn := range mockClaudeTurns {
+		data, err := json.Marshal(turn)
+		if err != nil {
+			t.Fatalf("failed to marshal turn: %v", err)
+		}
+		f.Write(data)
+		f.Write([]byte("\n"))
+	}
+	f.Close()
+
+	inst := &Instance{
+		Title: "test-opencode-port",
+		Path:  workspace,
+		claudeExtension: claudeExtension{
+			claudeSession: &ClaudeSessionData{
+				ConversationUUID: uuid,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	err = PortSessionHistory(ctx, "claude", "opencode", inst)
+	if err != nil {
+		t.Fatalf("PortSessionHistory failed: %v", err)
+	}
+
+	dbPath := filepath.Join(tempHome, ".local", "share", "opencode", "opencode.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Fatalf("opencode db file does not exist")
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open opencode DB: %v", err)
+	}
+	defer db.Close()
+
+	var msgCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM message WHERE session_id = ?", uuid).Scan(&msgCount)
+	if err != nil {
+		t.Fatalf("failed to query opencode messages: %v", err)
+	}
+	if msgCount != 2 {
+		t.Errorf("expected 2 messages, got %d", msgCount)
 	}
 }
 

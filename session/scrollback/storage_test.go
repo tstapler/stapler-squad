@@ -1,6 +1,7 @@
 package scrollback
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -67,14 +68,20 @@ func TestFileScrollbackStorage_Read_RejectsSessionIDEscapingBasePath(t *testing.
 	require.Error(t, err, "Read must reject a sessionID that escapes basePath")
 }
 
-// TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure covers
-// the fix where a failed compressor/temp-file Close() during Truncate now
-// aborts before the os.Rename that would otherwise silently replace the
-// original file with truncated/corrupt data. It targets the zstd encoder
-// specifically because klauspost/compress's zstd Writer buffers all Write()
-// calls client-side and only flushes on Close(), so every Encode() call
-// during Truncate succeeds and only the final Close() can observe the FIFO
-// failure below (unlike compress/gzip, which flushes per-Write).
+// failingWriteCloser creates the real temp file (so leak checks are meaningful) but
+// fails every Write, standing in for a full disk or broken pipe.
+type failingWriteCloser struct{ f *os.File }
+
+func (w failingWriteCloser) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+func (w failingWriteCloser) Close() error              { return w.f.Close() }
+
+// TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure covers the fix where
+// a failed compressor Close() during Truncate aborts before the os.Rename that would
+// otherwise replace the original file with truncated/corrupt data. It targets zstd
+// because klauspost/compress's zstd Writer buffers all Write() calls and only flushes on
+// Close(), so every Encode() succeeds and only the final Close() observes the write
+// failure. The failure is injected through openTempFile; an earlier version raced a
+// FIFO reader's close() against Truncate's write, which lost under whole-package load.
 func TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure(t *testing.T) {
 	basePath := t.TempDir()
 	storage := NewFileScrollbackStorage(basePath, "zstd", 3)
@@ -96,79 +103,27 @@ func TestFileScrollbackStorage_Truncate_AbortsOnCompressorCloseFailure(t *testin
 	require.NoError(t, err)
 	require.NotEmpty(t, originalContent)
 
-	// keepBytes must stay strictly between two failure zones: >= the real
-	// compressed size makes Truncate's stat.Size() <= keepBytes early-return
-	// fire before ever opening tempPath (hanging the FIFO reader below with
-	// no writer); too small makes keepCount compute to 0, so the encode loop
-	// never calls Encode() and Close() has nothing buffered to flush (no
-	// EPIPE). Halving the real compressed size stays clear of both.
-	keepBytes := int64(len(originalContent)) / 2
-	require.Greater(t, keepBytes, int64(0), "fixture must compress to more than 2 bytes for this test to be meaningful")
-
-	// Whether a write to an already-closed FIFO read end surfaces as EPIPE
-	// is a genuine OS-level race (the write can land in the kernel's pipe
-	// buffer before the close is processed) -- retry a bounded number of
-	// times rather than treating one spurious success as a failure.
-	const maxAttempts = 8
-	tempPath := filePath + ".tmp"
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		require.NoError(t, syscall.Mkfifo(tempPath, 0600), "must be able to create a FIFO at the temp path")
-
-		readerDone := make(chan struct{})
-		go func() {
-			defer close(readerDone)
-			f, ferr := os.OpenFile(tempPath, os.O_RDONLY, 0) // #nosec G304 -- test-controlled fixed path under t.TempDir()
-			if ferr != nil {
-				return
-			}
-			_ = f.Close()
-		}()
-		err = storage.Truncate(sessionID, keepBytes)
-
-		// A bounded wait here, not an unconditional <-readerDone: if
-		// Truncate took the stat.Size() <= keepBytes early-return path
-		// above (i.e. keepBytes was miscalculated to be >= the real
-		// compressed size), it returns immediately without ever opening
-		// tempPath, and the reader goroutine's blocking open(O_RDONLY) --
-		// which only unblocks once a writer opens the other end -- would
-		// otherwise hang forever with no writer ever showing up. Failing
-		// fast here with a clear message beats hanging until Go's
-		// whole-package test timeout (10 minutes) kills the run with a
-		// much less legible stack dump.
-		select {
-		case <-readerDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("FIFO reader never unblocked -- Truncate likely took its stat.Size() <= keepBytes early-return path without ever opening tempPath (keepBytes may be too large relative to the fixture's actual compressed size)")
+	storage.openTempFile = func(path string) (io.WriteCloser, error) {
+		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if openErr != nil {
+			return nil, openErr
 		}
-
-		if err != nil {
-			break // the race landed the way this test needs; proceed to the assertions below.
-		}
-		if attempt == maxAttempts {
-			t.Fatalf("write never lost the race to the reader's close() across %d attempts -- Truncate succeeded every time instead of hitting the zstd writer's Close() failure this test exercises", maxAttempts)
-		}
-		// Truncate succeeded (the write raced ahead of the close): reset
-		// the fixture's on-disk state and retry. A successful Truncate
-		// renames tempPath -- which is a FIFO, not a regular file -- onto
-		// filePath, so filePath itself is now a FIFO with no reader.
-		// storage.Write opens filePath with O_WRONLY (no O_TRUNC), which
-		// would block forever against that orphaned FIFO; remove it first
-		// so Write's O_CREATE produces a fresh regular file instead.
-		require.NoError(t, os.Remove(filePath))
-		require.NoError(t, storage.Write(sessionID, entries))
+		return failingWriteCloser{f}, nil
 	}
 
+	// Halving the real compressed size keeps keepBytes below the stat.Size() early
+	// return and above the keepCount == 0 case (no Encode, nothing for Close to flush).
+	keepBytes := int64(len(originalContent)) / 2
+	require.Greater(t, keepBytes, int64(0))
+
+	err = storage.Truncate(sessionID, keepBytes)
 	require.Error(t, err, "Truncate must return an error when the zstd writer's Close() fails")
 	assert.Contains(t, err.Error(), "failed to close zstd writer")
 
-	// (a) original file left untouched -- no corrupt/truncated data was
-	// renamed over it.
 	afterContent, readErr := os.ReadFile(filePath)
 	require.NoError(t, readErr)
 	assert.Equal(t, originalContent, afterContent, "original scrollback file must be unchanged after a failed Truncate")
 
-	// (b) the temp file (FIFO) does not leak -- the deferred os.Remove(tempPath)
-	// must still run on this error path.
-	_, statErr := os.Stat(tempPath)
+	_, statErr := os.Stat(filePath + ".tmp")
 	assert.True(t, os.IsNotExist(statErr), "temp path should have been removed even though Truncate failed")
 }

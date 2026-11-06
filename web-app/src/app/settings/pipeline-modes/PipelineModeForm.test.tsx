@@ -47,6 +47,7 @@ function makeMode(overrides: Partial<PipelineMode> = {}): PipelineMode {
     reviewPromptTemplate: "",
     initialPromptTemplate: "",
     contentHash: "hash",
+    stageExecutors: {},
     ...overrides,
   };
 }
@@ -176,5 +177,114 @@ describe("PipelineModeForm", () => {
     await waitFor(() => expect(mockUpdatePipelineMode).toHaveBeenCalledWith(existing.id, expect.objectContaining({ name: "Renamed" })));
     expect(mockCreatePipelineMode).not.toHaveBeenCalled();
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it("PipelineModeForm_should_SubmitStageExecutorsMap_When_TriageModelFieldSetAndProgramLeftBlank", async () => {
+    const created = makeMode({ id: "mode-new", slug: "cheap-triage", name: "Cheap Triage" });
+    mockCreatePipelineMode.mockResolvedValue(created);
+    const onSaved = jest.fn();
+
+    render(<PipelineModeForm mode={null} onSaved={onSaved} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("pipeline-mode-slug"), { target: { value: "cheap-triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-name"), { target: { value: "Cheap Triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-stage-triage-model"), {
+      target: { value: "claude-haiku-4-5" },
+    });
+
+    fireEvent.click(screen.getByTestId("pipeline-mode-submit"));
+
+    await waitFor(() => expect(mockCreatePipelineMode).toHaveBeenCalledTimes(1));
+    expect(mockCreatePipelineMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stageExecutors: expect.objectContaining({
+          triage: { program: "", model: "claude-haiku-4-5" },
+        }),
+      })
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(created));
+  });
+
+  it("PipelineModeForm_should_ShowInlineErrorNamingProgramAndStage_When_ServerRejectsAiderForTriage", async () => {
+    mockCreatePipelineMode.mockRejectedValue(
+      new ConnectError(
+        "Aider can't run the triage stage headlessly. Choose Claude or Gemini for Triage.",
+        Code.InvalidArgument
+      )
+    );
+    const onSaved = jest.fn();
+
+    render(<PipelineModeForm mode={null} onSaved={onSaved} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("pipeline-mode-slug"), { target: { value: "cheap-triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-name"), { target: { value: "Cheap Triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-stage-triage-program"), { target: { value: "aider" } });
+    fireEvent.click(screen.getByTestId("pipeline-mode-submit"));
+
+    await waitFor(() => {
+      const rowError = screen.getByTestId("pipeline-mode-stage-triage-error");
+      expect(rowError).toHaveTextContent(/aider/i);
+      expect(rowError).toHaveTextContent(/triage/i);
+    });
+    // Not a generic top-of-form toast for a row-matched error.
+    expect(screen.queryByTestId("pipeline-mode-error")).not.toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+    // Other in-progress field values are preserved.
+    expect((screen.getByTestId("pipeline-mode-name") as HTMLInputElement).value).toBe("Cheap Triage");
+  });
+
+  it("PipelineModeForm_should_ShowUnverifiedModelOverride_When_ServerRejectsUnrecognizedModel", async () => {
+    mockCreatePipelineMode.mockRejectedValue(
+      new ConnectError(
+        "'claude-opus-9000' isn't a recognized model for the review stage. Set force_unknown_model to override.",
+        Code.InvalidArgument
+      )
+    );
+
+    render(<PipelineModeForm mode={null} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("pipeline-mode-slug"), { target: { value: "cheap-triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-name"), { target: { value: "Cheap Triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-stage-review-model"), {
+      target: { value: "claude-opus-9000" },
+    });
+    fireEvent.click(screen.getByTestId("pipeline-mode-submit"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-mode-stage-review-error")).toHaveTextContent(/claude-opus-9000/);
+    });
+    expect(screen.getByTestId("pipeline-mode-force-unknown-model")).toBeInTheDocument();
+  });
+
+  it("PipelineModeForm_should_ResubmitWithForceUnknownModelTrue_When_OverrideCheckedAfterRejection", async () => {
+    mockCreatePipelineMode.mockRejectedValueOnce(
+      new ConnectError(
+        "'claude-opus-9000' isn't a recognized model for the review stage. Set force_unknown_model to override.",
+        Code.InvalidArgument
+      )
+    );
+    const created = makeMode({ id: "mode-new" });
+    mockCreatePipelineMode.mockResolvedValueOnce(created);
+    const onSaved = jest.fn();
+
+    render(<PipelineModeForm mode={null} onSaved={onSaved} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("pipeline-mode-slug"), { target: { value: "cheap-triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-name"), { target: { value: "Cheap Triage" } });
+    fireEvent.change(screen.getByTestId("pipeline-mode-stage-review-model"), {
+      target: { value: "claude-opus-9000" },
+    });
+    fireEvent.click(screen.getByTestId("pipeline-mode-submit"));
+    await waitFor(() => expect(screen.getByTestId("pipeline-mode-force-unknown-model")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("pipeline-mode-force-unknown-model"));
+    fireEvent.click(screen.getByTestId("pipeline-mode-submit"));
+
+    await waitFor(() => expect(mockCreatePipelineMode).toHaveBeenCalledTimes(2));
+    expect(mockCreatePipelineMode).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ forceUnknownModel: true })
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(created));
   });
 });

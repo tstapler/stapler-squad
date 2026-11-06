@@ -27,6 +27,12 @@ func StaticFileServer(fileSystem fs.FS, indexFile string) http.Handler {
 		fileInfo, err := fs.Stat(fileSystem, fsPath)
 
 		if err != nil {
+			// A missing hashed asset must 404: answering with HTML makes a stale tab
+			// parse index.html as JavaScript and hides the real failure.
+			if strings.HasPrefix(cleanPath, "/_next/") {
+				http.NotFound(w, r)
+				return
+			}
 			// File doesn't exist - serve root index.html for SPA routing
 			indexContent, err := fs.ReadFile(fileSystem, indexFile)
 			if err != nil {

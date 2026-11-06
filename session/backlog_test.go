@@ -20,6 +20,7 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 	}{
 		{"work session is tmux-backed", SessionRoleWork, true},
 		{"review session is tmux-backed", SessionRoleReview, true},
+		{"diagnose session is tmux-backed", SessionRoleDiagnose, true},
 		{"triage session is headless, not tmux-backed", SessionRoleTriage, false},
 		{"unknown role is not tmux-backed", "bogus", false},
 		{"empty role is not tmux-backed", "", false},
@@ -51,9 +52,12 @@ func TestIsTmuxBackedSessionRole_should_ReturnFalse_When_RoleIsJulesWork(t *test
 }
 
 // TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated
-// enumerates all four declared session role constants and asserts an exact expected
-// truth value for each, so a future role addition to the const block cannot silently
-// default into (or out of) the tmux-cleanup path without this table also growing.
+// enumerates all five declared, ItemSession-persisted session role constants
+// (SessionRoleExternal is excluded — it's a synthetic Insights-only label never
+// written to ItemSession.session_role, see its doc comment) and asserts an exact
+// expected truth value for each, so a future role addition to the const block
+// cannot silently default into (or out of) the tmux-cleanup path without this
+// table also growing.
 func TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated(t *testing.T) {
 	t.Parallel()
 	declaredRoles := map[string]bool{
@@ -61,9 +65,10 @@ func TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumera
 		SessionRoleTriage:    false,
 		SessionRoleReview:    true,
 		SessionRoleJulesWork: false,
+		SessionRoleDiagnose:  true,
 	}
-	if len(declaredRoles) != 4 {
-		t.Fatalf("expected exactly 4 declared session role constants, got %d", len(declaredRoles))
+	if len(declaredRoles) != 5 {
+		t.Fatalf("expected exactly 5 declared session role constants, got %d", len(declaredRoles))
 	}
 	for role, want := range declaredRoles {
 		role, want := role, want

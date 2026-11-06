@@ -10,6 +10,15 @@ export type ConnectionState = "connected" | "stale" | "disconnected";
 
 interface SessionsExtraState {
   loading: boolean;
+  /**
+   * True once setSessions has fired at least once (first WatchSessions/listSessions
+   * snapshot received), and never reset afterward. Distinct from `connectionState`,
+   * which can flap back to "disconnected" on a stream reconnect — this flag lets a
+   * consumer tell "no sessions yet because we haven't loaded" apart from "no sessions
+   * because there truly are none," which matters for callers like the notifications
+   * page that decide whether an absent id means "not loaded yet" vs. "confirmed gone."
+   */
+  hasLoadedOnce: boolean;
   error: string | null;
   /**
    * ConnectRPC error code (from the `Code` enum in @connectrpc/connect) for the most recent
@@ -36,6 +45,7 @@ interface SessionsExtraState {
 
 const initialState = sessionsAdapter.getInitialState<SessionsExtraState>({
   loading: false,
+  hasLoadedOnce: false,
   error: null,
   detectedStatusMap: {},
   connectionState: "disconnected",
@@ -47,6 +57,7 @@ const sessionsSlice = createSlice({
   initialState,
   reducers: {
     setSessions(state, action: PayloadAction<Session[]>) {
+      state.hasLoadedOnce = true;
       const filtered = action.payload.filter(s => !state.deletedIds[s.id]);
       // Preserve existing entity references when a session's data is unchanged
       // (same updatedAt) so React.memo on SessionRowWrapper can skip re-rendering
@@ -164,6 +175,7 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
 export const selectSessionIds = adapterSelectors.selectIds;
 export const selectSessionsTotal = adapterSelectors.selectTotal;
 export const selectSessionsLoading = (state: RootState) => state.sessions.loading;
+export const selectSessionsHasLoadedOnce = (state: RootState) => state.sessions.hasLoadedOnce;
 export const selectSessionsError = (state: RootState) => state.sessions.error;
 export const selectSessionsErrorCode = (state: RootState) => state.sessions.errorCode;
 export const selectDetectedStatusMap = (state: RootState) => state.sessions.detectedStatusMap;

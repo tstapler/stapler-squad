@@ -32,13 +32,13 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	require.Equal(t, string(BacklogStatusIdea), createdItem.Status)
 
 	// 2. Transition to "ready"
-	readyItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
+	readyItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReady), readyItem.Status)
 
 	// 3. Approve plan and transition to "in_progress"
 	readyItem.PlanApproved = true
-	inProgressItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredByUser)
+	inProgressItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusInProgress), inProgressItem.Status)
 
@@ -277,7 +277,7 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Archive a freshly-created item (no prior transitions/events) straight from "idea".
-	_, err = storage.ArchiveBacklogItem(ctx, createdItem.ID, nil, TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, createdItem.ID, nil, TriggeredByUser, "")
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -309,9 +309,9 @@ func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)

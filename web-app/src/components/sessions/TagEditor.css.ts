@@ -21,6 +21,7 @@ export const overlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   animation: `${fadeIn} 0.2s ease`,
 });
@@ -79,7 +80,7 @@ export const input = style({
   background: vars.color.inputBackground,
   color: vars.color.textPrimary,
   fontSize: "14px",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:focus": {
       outline: "none",
@@ -101,7 +102,7 @@ export const addButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,
@@ -155,7 +156,7 @@ export const tagItem = style({
   background: vars.color.surfaceMuted,
   border: `1px solid ${vars.color.borderMuted}`,
   borderRadius: "6px",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -168,6 +169,53 @@ export const tagText = style({
   fontSize: "14px",
   color: vars.color.textPrimary,
   fontWeight: 500,
+});
+
+/** Unclassified row (ux.md Surface 2): dashed border, muted — no remove button rendered. */
+export const tagItemUnclassified = style({
+  border: `1px dashed ${vars.color.borderMuted}`,
+  background: "transparent",
+});
+
+export const unclassifiedCaption = style({
+  fontSize: "12px",
+  color: vars.color.textTertiary,
+  fontStyle: "italic",
+});
+
+/** Expanded row shown while a rule-provenance tag's removal is pending confirmation (Surface 3). */
+export const tagItemConfirming = style({
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: "8px",
+  width: "100%",
+});
+
+export const confirmCaption = style({
+  fontSize: "13px",
+  color: vars.color.textSecondary,
+});
+
+export const keepButton = style({
+  padding: "4px 12px",
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: "6px",
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
+});
+
+export const removeAnywayButton = style({
+  padding: "4px 12px",
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "6px",
+  fontSize: "13px",
+  fontWeight: 600,
+  cursor: "pointer",
 });
 
 export const removeButton = style({
@@ -184,7 +232,7 @@ export const removeButton = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.error,
@@ -213,7 +261,7 @@ export const cancelButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -231,7 +279,7 @@ export const saveButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,

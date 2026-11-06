@@ -1,0 +1,25 @@
+{
+  "_comment": "Redacted, real-shaped list_sessions replay fixture (owners/branches/titles anonymized). Synthetic: not exported from a live instance; extend with real remote shapes when one is available.",
+  "ghe_hosts": ["ghe.example"],
+  "prs": [
+    {"host": "github.com", "owner": "org-a", "repo": "service-api", "number": 101, "head_ref": "fix/ci-flake"},
+    {"host": "github.com", "owner": "org-a", "repo": "service-api", "number": 102, "head_ref": "feat/new-endpoint"},
+    {"host": "github.com", "owner": "org-a", "repo": "web-ui", "number": 7, "head_ref": "chore/deps"},
+    {"host": "github.com", "owner": "me", "repo": "dotfiles", "number": 55, "head_ref": "wip/shell"},
+    {"host": "github.com", "owner": "org-a", "repo": "web-ui", "number": 8, "head_ref": "renamed-upstream"},
+    {"host": "ghe.example", "owner": "corp", "repo": "platform", "number": 9, "head_ref": "fix/timeout"},
+    {"host": "ghe.example", "owner": "corp", "repo": "platform", "number": 10, "head_ref": "feat/x"}
+  ],
+  "sessions": [
+    {"id": "s01", "title": "session-01", "branch": "fix/ci-flake", "remote": "https://github.com/org-a/service-api"},
+    {"id": "s02", "title": "session-02", "branch": "fix/ci-flake", "remote": "git@github.com:org-a/service-api.git"},
+    {"id": "s03", "title": "session-03", "branch": "feat/new-endpoint", "remote": "https://github.com/org-a/service-api.git"},
+    {"id": "s04", "title": "session-04", "branch": "chore/deps", "remote": "https://github.com/org-a/web-ui"},
+    {"id": "s05", "title": "session-05", "branch": "wip/shell", "remote": "git@github.com:me/dotfiles.git"},
+    {"id": "s06", "title": "session-06", "branch": "fix/timeout", "remote": "https://ghe.example/corp/platform"},
+    {"id": "s07", "title": "session-07", "branch": "scratch", "remote": "https://github.com/org-a/web-ui", "pr_number": 8},
+    {"id": "s08", "title": "session-08", "branch": "scratch", "remote": "git@ghe.example:corp/platform.git", "pr_number": 10},
+    {"id": "s09", "title": "session-09", "branch": "no-pr-yet", "remote": "https://github.com/org-a/service-api"},
+    {"id": "s10", "title": "session-10", "branch": "", "remote": "https://github.com/org-a/service-api"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "terminal:file-drop",
+  "type": "frontend",
+  "description": "Drag-and-drop OS files onto the live session terminal to upload and insert their paths",
+  "component": "TerminalOutput",
+  "filePath": "web-app/src/components/sessions/TerminalOutput.tsx",
+  "tested": true,
+  "testIds": ["terminal-drop-zone", "drop-zone-overlay"],
+  "lastModified": "2026-10-18T00:00:00Z"
+}

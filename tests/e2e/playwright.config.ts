@@ -1,4 +1,29 @@
-import { defineConfig, devices } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { defineConfig, devices, webkit } from '@playwright/test';
+import { baseUrl, pinWorkerEnv, serverSlot } from './helpers/base-url';
+import { themeFixturePath } from './helpers/theme-fixtures';
+
+/**
+ * WebKit (iPhone) project for mobile-webkit.spec.ts. Report-only by construction: when the
+ * browser build is not installed (npx playwright install webkit) the project is left out and the
+ * reason is printed, so a missing WebKit never fails the suite (plan Story 7.8b).
+ */
+pinWorkerEnv();
+
+function webkitMobileProjects() {
+  let installed = false;
+  try {
+    installed = fs.existsSync(webkit.executablePath());
+  } catch {
+    installed = false;
+  }
+  if (!installed) {
+    console.warn('[playwright.config] webkit-mobile skipped: WebKit is not installed (npx playwright install webkit)');
+    return [];
+  }
+  return [{ name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: '**/mobile-webkit.spec.ts' }];
+}
 
 /**
  * Playwright configuration for terminal flickering tests
@@ -6,10 +31,66 @@ import { defineConfig, devices } from '@playwright/test';
  * Set TEST_SERVER_URL env var to override the target (e.g. for CI with a pre-started server).
  */
 
+// Files viewer mobile specs (and the lazy-doc/transport spikes) run in these projects as well as `chromium`.
+// Task 0.1.4b decision: WebKit ran green in the Playwright Noble image but is not yet proven on the CI runner, so
+// `mobile-chromium` (Pixel-class, 390x844, touch) is the gating mobile project and `mobile-webkit` is informational,
+// opt-in with PW_WEBKIT=1 (CI needs `npx playwright install webkit --with-deps` first).
+// Story 1.3.5c: the chord spec also runs on desktop Firefox and WebKit, informational only (real accelerator
+// delivery is the owner's manual check, Story 2.5.2). CI installs the browsers with `npx playwright install
+// firefox webkit --with-deps` and runs these two projects with `continue-on-error`; Chromium stays gating.
+// Run by playwright.dev-mode.config.ts against a live dev server (HMR overlay edits real source files);
+// under this config's production-build server they can only fail.
+const DEV_SERVER_SPECS = '**/dev-mode-hmr.spec.ts';
+// Records marketing clips; run only via scripts/record-website-demos.sh (its own config).
+const WEBSITE_DEMO_SPECS = '**/website-demos.spec.ts';
+const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
+// terminal-stress specs assert absolute in-browser throughput (frames/s, frame time, heap growth), which sibling
+// workers starve of CPU. CI runs them in their own one-worker pass: E2E_SKIP_STRESS=1 drops them from the
+// parallel pass, E2E_STRESS_ONLY=1 selects only them (see scripts/run-ci-shard.sh).
+// The server pool is shared across projects, so one project proves it; a skip elsewhere would read as a gap to the baseline gate.
+const POOL_ISOLATION_SPEC = '**/worker-server-isolation.spec.ts';
+const STRESS_SPECS = '**/terminal-stress/*.spec.ts';
+const SKIP_STRESS = process.env.E2E_SKIP_STRESS === '1';
+const STRESS_ONLY = process.env.E2E_STRESS_ONLY === '1';
+const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
+
+/**
+ * Frontend-responsiveness perf project (Story 1.1.3). Registered only when explicitly selected
+ * (`--project=perf` or PW_PERF=1): Playwright runs every registered project when none is named, and a
+ * 5-run, 4x-throttled, 20-session scenario cannot share a worker with other specs (global 30 s timeout,
+ * polluted timings).
+ */
+function perfProjects() {
+  const selected = process.env.PW_PERF === '1' || /--project[= ]perf(\s|$)/.test(process.argv.join(' '));
+  if (!selected) return [];
+  return [
+    {
+      name: 'perf',
+      testMatch: '**/perf/**/*.spec.ts',
+      timeout: 600000,
+      retries: 0,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1600, height: 900 },
+        // 4x CPU throttle on a 20-session fixture blows past the global 10 s / 15 s action and navigation budgets.
+        actionTimeout: 90000,
+        navigationTimeout: 180000,
+        launchOptions: { args: ['--use-gl=swiftshader', '--disable-gpu-sandbox'] },
+      },
+    },
+  ];
+}
+
 export default defineConfig({
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
   testDir: './',
+  // Playwright's default testMatch picks up ANY *.test.ts too, which would sweep in the
+  // Jest-only unit tests under tests/e2e/baseline/ (describe/test as ts-jest globals, not
+  // imported from @playwright/test -- Playwright fails loading them outright). Every real e2e
+  // spec in this directory is named *.spec.ts (confirmed: no running suite needs the default
+  // pattern), so this is a narrowing, not a behavior change for any spec that currently runs.
+  testMatch: '**/*.spec.ts',
 
   // Test timeout (individual test)
   timeout: 30000,
@@ -19,26 +100,46 @@ export default defineConfig({
     timeout: 5000,
   },
 
-  // Run tests sequentially
-  fullyParallel: false,
+  // --shard balances by individual test, not whole file; workers:1 below is unchanged.
+  fullyParallel: true,
 
   // Retry failed tests once
   retries: 1,
 
-  // Number of parallel workers
-  workers: 1,
+  // Number of parallel workers; global-setup starts one isolated server per worker slot.
+  workers: Math.max(1, Number(process.env.E2E_WORKERS) || 1),
 
   // Reporter configuration
   reporter: [
     ['list'], // Console output
     ['html', { outputFolder: './playwright-report' }],
     ['allure-playwright', { outputFolder: 'allure-results' }],
+    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-bun (build.yml)
+    // and the local baseline/expected-diff procedures (Stories 0.1, 7.11, 8.1) all read this.
+    ['json', { outputFile: process.env.PLAYWRIGHT_JSON_REPORT_PATH || './playwright-report/report.json' }],
   ],
 
   // Global test setup
   use: {
-    // Base URL for tests — dynamically assigned by global-setup; override with TEST_SERVER_URL
-    baseURL: process.env.TEST_SERVER_URL || 'http://localhost:8544',
+    // Base URL for tests — this worker's server (see helpers/base-url.ts); override with TEST_SERVER_URL
+    baseURL: baseUrl(),
+
+    // Both first-visit tours (app-wide + backlog) open a modal that aria-hides the page and intercepts
+    // pointer events, which fails every spec that forgets to dismiss them. Specs that exercise a tour
+    // clear the flag themselves (onboarding-hook-install.spec.ts); visual-* projects keep their own
+    // theme storageState below.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: new URL(baseUrl()).origin,
+          localStorage: [
+            { name: 'stapler-squad:onboarded', value: 'true' },
+            { name: 'stapler-squad:backlog-onboarded', value: 'true' },
+          ],
+        },
+      ],
+    },
 
     // Browser trace on failure
     trace: 'on-first-retry',
@@ -69,7 +170,7 @@ export default defineConfig({
       name: 'visual-matrix',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/matrix-theme.json',
+        storageState: themeFixturePath('matrix', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -78,7 +179,7 @@ export default defineConfig({
       name: 'visual-cyberpunk77',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/cyberpunk77-theme.json',
+        storageState: themeFixturePath('cyberpunk77', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -87,7 +188,7 @@ export default defineConfig({
       name: 'visual-wh40k',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/wh40k-theme.json',
+        storageState: themeFixturePath('wh40k', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -96,13 +197,15 @@ export default defineConfig({
       name: 'visual-clean',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/clean-theme.json',
+        storageState: themeFixturePath('clean', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
     },
     {
       name: 'chromium',
+      ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -111,6 +214,30 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: 'desktop-firefox',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'desktop-webkit',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'mobile-chromium',
+      testMatch: MOBILE_SPECS,
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
+    },
+    ...(process.env.PW_WEBKIT === '1'
+      ? [
+          {
+            name: 'mobile-webkit',
+            testMatch: MOBILE_SPECS,
+            use: { ...devices['iPhone 14'] },
+          },
+        ]
+      : []),
     {
       // DOM-renderer project: disables WebGL entirely so xterm.js falls back to
       // its built-in DOM renderer.  Text content appears in real .xterm-rows > div
@@ -123,6 +250,8 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
+      ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', POOL_ISOLATION_SPEC, DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -130,5 +259,7 @@ export default defineConfig({
         },
       },
     },
+    ...perfProjects(),
+    ...webkitMobileProjects(),
   ],
 });

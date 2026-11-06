@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -66,7 +67,50 @@ var (
 	// ErrDisableWouldStrandLiveItems is wrapped by
 	// ValidateDisableTransition's Task 2.6.1e live-item-aware check.
 	ErrDisableWouldStrandLiveItems = errors.New("disabling this transition would strand live items with no legal outgoing transition")
+	// ErrDisableSystemRequiredEdge is returned when an edit would disable or
+	// delete an edge that automation or a system caller depends on
+	// (ADR-007 Decision 4); the operator cannot remove it, only edit its gates.
+	ErrDisableSystemRequiredEdge = errors.New("transition is system-required")
 )
+
+// ValidateDisableSystemRequiredEdge rejects removing a system-required edge,
+// including every X->archived edge. Callers apply it to disables and deletes.
+func ValidateDisableSystemRequiredEdge(from, to string) error {
+	if !IsSystemRequired(BacklogStatus(from), BacklogStatus(to)) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s->%s. Automation relies on this transition; edit its gates instead of disabling it",
+		ErrDisableSystemRequiredEdge, from, to)
+}
+
+// BuiltInStatuses returns a copy of the built-in stage statuses in pipeline order.
+func BuiltInStatuses() []BacklogStatus {
+	return append([]BacklogStatus(nil), builtInStageOrder...)
+}
+
+// StrandedStatuses returns, sorted, every status that has live items but no
+// allowed outgoing edge once candidateEdges (enabled edges only) are unioned
+// with the non-archive system-required edges, which is the enforced graph.
+func StrandedStatuses(candidateEdges []TransitionDefinition, liveCountByStatus map[string]int) []string {
+	hasOut := make(map[string]bool, len(candidateEdges))
+	for _, t := range candidateEdges {
+		if t.Enabled {
+			hasOut[t.FromSlug] = true
+		}
+	}
+	var stranded []string
+	for status, n := range liveCountByStatus {
+		if n == 0 || status == string(BacklogStatusArchived) || hasOut[status] {
+			continue
+		}
+		if len(systemRequiredTargets(BacklogStatus(status))) > 0 {
+			continue
+		}
+		stranded = append(stranded, status)
+	}
+	sort.Strings(stranded)
+	return stranded
+}
 
 // buildAdjacency builds a directed adjacency map from stages to their
 // enabled outgoing transitions (Task 2.6.1b1). Disabled edges are excluded —

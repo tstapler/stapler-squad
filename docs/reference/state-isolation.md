@@ -40,6 +40,19 @@ STAPLER_SQUAD_INSTANCE=shared ./stapler-squad
 go test ./...
 ```
 
+## What is and is not isolated
+
+| Resource | Isolated by `STAPLER_SQUAD_INSTANCE` / `--test-dir` | Isolated by `STAPLER_SQUAD_TMUX_SOCKET` |
+|---|---|---|
+| Config, DB, sessions, logs | Yes | No |
+| tmux server (sessions, control-mode clients, leaked-client sweeper) | **No** — shares the default tmux server | Yes — all managed tmux commands use `tmux -L <name>` |
+
+`--test-mode` only isolates the data directory, not tmux. A production binary started without `STAPLER_SQUAD_TMUX_SOCKET` therefore targets the default tmux server, including the live service's sessions. The variable takes a socket name (`[A-Za-z0-9._-]`, 1–64 chars, not starting with `-`); precedence in `tmux.ResolveSocket` is explicit socket argument > `STAPLER_SQUAD_TMUX_SOCKET` > the `go test` private socket > default. Startup refuses an invalid value and logs `Using private tmux socket` for a valid one. Clean up with `tmux -L <name> kill-server`.
+
+Startup orphan reconciliation is already skipped for isolated instances (`config.IsIsolatedInstance`, `server/dependencies.go`).
+
+Three external-session paths still use the default socket by design, because they attach to user-created sessions outside any private server: the control-mode attach in `session/external_tmux_streamer.go` (~line 202), the `capture-pane` in the same file (~line 476), and the `capture-pane` in `session/instance_tmux.go` (~line 821). Each is marked `//nolint:tmuxsocketscope`.
+
 ## Instance Identification in Logs
 
 ```

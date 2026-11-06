@@ -2,7 +2,7 @@
  * Prints features introduced in a specific version.
  *
  * Usage:
- *   cd tools/docs-gen && npx ts-node --project tsconfig.json changelog.ts 1.0.0
+ *   cd tools/docs-gen && bunx ts-node --project tsconfig.json changelog.ts 1.0.0
  *
  * Or via Makefile:
  *   make changelog-since VERSION=1.0.0

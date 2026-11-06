@@ -76,15 +76,17 @@ func (s *BacklogService) GetBacklogItem(
 				is.EndedAt == nil &&
 				strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
-				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now)
+				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping on a read-side stale-triage sweep; the next sweep retries
 				is.EndedAt = &now
 			}
 		}
 		item.ItemSessions = isSessions
 	}
 
-	p := backlogItemToProto(item, s.buildCostLookup())
+	p := backlogItemToProto(item, s.engine, s.buildCostLookup())
+	s.attachDependencies(ctx, p)
 	enrichItemSessionsWorktreeData(ctx, s.storage, p)
+	s.checkWorkStageBudget(item.ID, item.CostBudgetThresholdUsd, p.TotalEstimatedCostUsd)
 
 	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
 		Item: p,
@@ -104,19 +106,49 @@ func (s *BacklogService) GetBacklogItem(
 // component's watch subscription received always overwrote the enriched
 // worktreePath with an empty one.
 func enrichItemSessionsWorktreeData(ctx context.Context, storage *session.Storage, p *sessionv1.BacklogItem) {
-	if storage == nil || p == nil {
+	enrichItemsSessionsWorktreeData(ctx, storage, []*sessionv1.BacklogItem{p})
+}
+
+// enrichItemsSessionsWorktreeData is enrichItemSessionsWorktreeData for many
+// items, resolving every distinct session's worktree in one batched query
+// instead of one query per item session.
+func enrichItemsSessionsWorktreeData(ctx context.Context, storage *session.Storage, items []*sessionv1.BacklogItem) {
+	if storage == nil {
 		return
 	}
-	for _, is := range p.ItemSessions {
-		if is.SessionUuid == "" {
+	var uuids []string
+	seen := make(map[string]struct{})
+	for _, p := range items {
+		if p == nil {
 			continue
 		}
-		wt, wtErr := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
-		if wtErr == nil && wt.BranchName != "" {
-			is.WorktreeBranch = wt.BranchName
+		for _, is := range p.ItemSessions {
+			if _, dup := seen[is.SessionUuid]; is.SessionUuid == "" || dup {
+				continue
+			}
+			seen[is.SessionUuid] = struct{}{}
+			uuids = append(uuids, is.SessionUuid)
 		}
-		if wtErr == nil && wt.WorktreePath != "" {
-			is.WorktreePath = wt.WorktreePath
+	}
+	if len(uuids) == 0 {
+		return
+	}
+	worktrees, err := storage.GetWorktreeDataBySessionUUIDs(ctx, uuids)
+	if err != nil {
+		return
+	}
+	for _, p := range items {
+		if p == nil {
+			continue
+		}
+		for _, is := range p.ItemSessions {
+			wt := worktrees[is.SessionUuid]
+			if wt.BranchName != "" {
+				is.WorktreeBranch = wt.BranchName
+			}
+			if wt.WorktreePath != "" {
+				is.WorktreePath = wt.WorktreePath
+			}
 		}
 	}
 }
@@ -137,6 +169,7 @@ func (s *BacklogService) ListBacklogItems(
 		SortBy:          req.Msg.SortBy,
 		ExcludeDone:     !req.Msg.IncludeTerminal,
 		ExcludeArchived: !req.Msg.IncludeArchived,
+		SourcePluginIDs: req.Msg.SourcePluginFilter,
 	}
 	if len(req.Msg.Status) > 0 {
 		filter.Statuses = req.Msg.Status
@@ -159,8 +192,10 @@ func (s *BacklogService) ListBacklogItems(
 	protoItems := make([]*sessionv1.BacklogItem, len(summaries))
 	costFor := s.buildCostLookup()
 	for i := range summaries {
-		protoItems[i] = backlogItemSummaryToProto(&summaries[i], costFor)
+		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
+		annotateDuplicatePending(protoItems[i], summaries[i].ItemSessions)
 	}
+	s.attachUnresolvedBlockers(ctx, protoItems)
 
 	return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{
 		Items: protoItems,
@@ -218,7 +253,7 @@ func (s *BacklogService) SuggestNextItem(
 
 	top := &items[0]
 	return connect.NewResponse(&sessionv1.SuggestNextItemResponse{
-		Item: backlogItemToProto(top, s.buildCostLookup()),
+		Item: backlogItemToProto(top, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -260,16 +295,34 @@ func (s *BacklogService) SearchGitHubRepos(ctx context.Context, req *connect.Req
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.SearchUserRepos(ctx, gh.AccountRef{}, req.Msg.Query, limit)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", err))
+
+	hosts := append([]string{""}, s.EnterpriseHosts()...)
+	var results []gh.RepoResult
+	var lastErr error
+	for _, host := range hosts {
+		hostResults, err := gh.SearchUserRepos(ctx, gh.AccountRef{Host: host}, req.Msg.Query, limit)
+		if err != nil {
+			// A single host's account may not be authenticated; keep searching
+			// the rest and only fail outright if every host errors.
+			lastErr = err
+			continue
+		}
+		results = append(results, hostResults...)
 	}
+	if results == nil && lastErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", lastErr))
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
 	entries := make([]*sessionv1.GitHubRepoEntry, 0, len(results))
 	for _, r := range results {
 		entries = append(entries, &sessionv1.GitHubRepoEntry{
 			Owner:       r.Owner,
 			Repo:        r.Repo,
 			Description: r.Description,
+			Host:        r.Host,
 		})
 	}
 	return connect.NewResponse(&sessionv1.SearchGitHubReposResponse{Repos: entries}), nil
@@ -292,11 +345,11 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	if limit <= 0 {
 		limit = 30
 	}
-	repo, err := gh.NewRepoRef(req.Msg.Owner, req.Msg.Repo)
+	repo, err := gh.NewRepoRefWithHost(req.Msg.Owner, req.Msg.Repo, req.Msg.Host)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{}, repo, req.Msg.State, req.Msg.Search, limit)
+	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{Host: req.Msg.Host}, repo, req.Msg.State, req.Msg.Search, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list issues: %w", err))
 	}
@@ -313,6 +366,7 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 			Url:    r.URL,
 			Labels: r.Labels,
 			IsPr:   r.IsPR,
+			Host:   req.Msg.Host,
 		}
 		if !r.CreatedAt.IsZero() {
 			entry.CreatedAt = timestamppb.New(r.CreatedAt)
@@ -538,4 +592,17 @@ func (s *BacklogService) GetSessionBacklogIndex(
 	return connect.NewResponse(&sessionv1.GetSessionBacklogIndexResponse{
 		Entries: protoEntries,
 	}), nil
+}
+
+// annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
+// item from the item sessions ListBacklogItemSummaries already batch-loaded, so
+// no per-item query is needed. Only review items can be pending.
+func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []session.ItemSessionSummary) {
+	if p.Status != string(session.BacklogStatusReview) {
+		return
+	}
+	if ref := session.PendingDuplicateRef(sessions); ref != "" {
+		p.DuplicatePending = true
+		p.DuplicateRef = ref
+	}
 }

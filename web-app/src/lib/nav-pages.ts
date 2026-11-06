@@ -16,6 +16,8 @@ import {
   FolderOpen,
   ToggleLeft,
   Import,
+  FileText,
+  Gauge,
 } from "lucide-react";
 import { routes } from "./routes";
 
@@ -66,15 +68,15 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.logs,    label: "Logs",    icon: ScrollText,  headerNav: false, group: "settings" },
   { href: routes.errors,  label: "Errors",  icon: AlertTriangle, headerNav: false, group: "settings" },
   { href: routes.help,    label: "Help",    icon: HelpCircle,  headerNav: false, group: "settings" },
+  { href: routes.changelog, label: "Changelog", icon: FileText, headerNav: false, featureFlag: "changelog", group: "settings" },
   { href: routes.escapeAnalytics, label: "Escape Analytics", icon: BarChart2, headerNav: false, group: "insights" },
   { href: routes.files,           label: "Files",            icon: FolderOpen,   headerNav: false, group: "settings" },
   { href: routes.settingsFeatures, label: "Feature Flags",   icon: ToggleLeft,   headerNav: false, group: "settings" },
+  { href: routes.settingsBacklogQuota, label: "Backlog Quota", icon: Gauge, headerNav: false, featureFlag: "backlog", group: "settings" },
   { href: routes.sessionsImport,  label: "Import",           icon: Import,       headerNav: false, group: "work" },
 ];
 
 export const MOBILE_NAV_PAGES = NAV_PAGES.filter((p) => p.mobileNav !== false);
-/** Items shown in the always-visible header nav row on wide desktop (≥1100px). */
-export const HEADER_NAV_PAGES = NAV_PAGES.filter((p) => p.headerNav !== false);
 /** Items rendered in the BottomNav primary bar (excluding Notifications which is custom-rendered). */
 export const BOTTOM_NAV_PRIMARY = NAV_PAGES.filter(
   (p) => p.bottomNavPrimary && p.mobileNav !== false && p.href !== routes.notifications

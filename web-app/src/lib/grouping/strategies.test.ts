@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { SessionSchema, SessionStatus } from "@/gen/session/v1/types_pb";
-import { groupSessions, GroupingStrategy, GroupingStrategyLabels } from "./strategies";
+import { groupSessions, groupWithPinned, PINNED_GROUP_KEY, GroupingStrategy, GroupingStrategyLabels } from "./strategies";
 
 describe("groupSessions", () => {
   const mockSessions = [
@@ -228,5 +228,28 @@ describe("groupSessions", () => {
       // group, so they sort alphabetically: "Not Stale" < "Stale".
       expect(result.map((g) => g.groupKey)).toEqual(["Not Stale", "Stale"]);
     });
+  });
+});
+
+describe("groupWithPinned", () => {
+  const mk = (title: string, category: string, pinned: boolean) =>
+    create(SessionSchema, { title, category, pinned, status: SessionStatus.RUNNING });
+  const group = (rest: ReturnType<typeof mk>[]) => groupSessions(rest, GroupingStrategy.Category);
+
+  it("returns the normal grouping unchanged when nothing is pinned", () => {
+    const result = groupWithPinned([mk("a", "Work", false)], group);
+    expect(result.map((g) => g.groupKey)).toEqual(["Work"]);
+  });
+
+  it("puts pinned sessions in a leading Pinned group and removes them from their own group", () => {
+    const result = groupWithPinned([mk("a", "Work", true), mk("b", "Home", false)], group);
+    expect(result[0].groupKey).toBe(PINNED_GROUP_KEY);
+    expect(result[0].sessions.map((s) => s.title)).toEqual(["a"]);
+    expect(result.slice(1).flatMap((g) => g.sessions.map((s) => s.title))).toEqual(["b"]);
+  });
+
+  it("drops a group left empty after its only session was pinned", () => {
+    const result = groupWithPinned([mk("a", "Work", true), mk("b", "Home", false)], group);
+    expect(result.map((g) => g.groupKey)).not.toContain("Work");
   });
 });

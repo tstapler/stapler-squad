@@ -22,6 +22,47 @@ func TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown(t *te
 	}
 }
 
+// TestRequestScope_IsValid_should_ReturnTrue_When_ValueIsBacklogItem confirms
+// the known RequestScope constants validate as true before ever reaching the
+// database (CreateGuidanceRequest's fail-fast validation).
+func TestRequestScope_IsValid_should_ReturnTrue_When_ValueIsBacklogItem(t *testing.T) {
+	t.Parallel()
+	for _, s := range []RequestScope{RequestScopeBacklogItem, RequestScopeSession, RequestScopeStandalone} {
+		if !s.IsValid() {
+			t.Errorf("RequestScope(%q).IsValid() = false, want true", s)
+		}
+	}
+}
+
+// TestRequestScope_IsValid_should_ReturnFalse_When_ValueIsUnknown confirms an
+// arbitrary unknown scope string is rejected.
+func TestRequestScope_IsValid_should_ReturnFalse_When_ValueIsUnknown(t *testing.T) {
+	t.Parallel()
+	if RequestScope("carrier-pigeon").IsValid() {
+		t.Errorf(`RequestScope("carrier-pigeon").IsValid() = true, want false`)
+	}
+}
+
+// TestQuestionType_IsValid_should_ReturnTrue_When_ValueIsKnown mirrors
+// RequestScope's coverage for the sibling QuestionType enum.
+func TestQuestionType_IsValid_should_ReturnTrue_When_ValueIsKnown(t *testing.T) {
+	t.Parallel()
+	for _, qt := range []QuestionType{QuestionTypeYesNo, QuestionTypeMultipleChoice, QuestionTypeShortAnswer} {
+		if !qt.IsValid() {
+			t.Errorf("QuestionType(%q).IsValid() = false, want true", qt)
+		}
+	}
+}
+
+// TestQuestionType_IsValid_should_ReturnFalse_When_ValueIsUnknown confirms an
+// arbitrary unknown question type string is rejected.
+func TestQuestionType_IsValid_should_ReturnFalse_When_ValueIsUnknown(t *testing.T) {
+	t.Parallel()
+	if QuestionType("essay").IsValid() {
+		t.Errorf(`QuestionType("essay").IsValid() = true, want false`)
+	}
+}
+
 // TestStuckReasonReworkBlockedStale_should_beValid_When_Checked confirms the
 // new reason (review-gate-stale-session-rework) round-trips through IsValid
 // exactly like the other 11 established reasons.
@@ -32,15 +73,32 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain20Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain26Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch. Bumped
-// from 19 to 20 by Epic 2.4's StuckReasonGateTimeout addition.
-func TestAllStuckReasons_should_contain20Entries_When_Enumerated(t *testing.T) {
+// from 20 to 21 by session-worktree-reconciliation's StuckReasonWorktreeInconsistent
+// addition (Architecture-A2), to 22 by cross-host-claim-dedup's
+// StuckReasonBlockedByClaim, to 23 by StuckReasonRepeatedNoopDispatch, to 24 by
+// StuckReasonMergedPRUnverified, to 25 by StuckReasonVerdictUndelivered, and to 26 by StuckReasonTransitionDenied.
+func TestAllStuckReasons_should_contain26Entries_When_Enumerated(t *testing.T) {
 	t.Parallel()
-	if len(AllStuckReasons) != 20 {
-		t.Errorf("len(AllStuckReasons) = %d, want 20", len(AllStuckReasons))
+	if len(AllStuckReasons) != 26 {
+		t.Errorf("len(AllStuckReasons) = %d, want 26", len(AllStuckReasons))
+	}
+}
+
+func TestStuckReasonBlockedByClaim_should_beValidAndListed_When_Checked(t *testing.T) {
+	t.Parallel()
+	if !StuckReasonBlockedByClaim.IsValid() {
+		t.Errorf("StuckReasonBlockedByClaim.IsValid() = false, want true")
+	}
+	found := false
+	for _, r := range AllStuckReasons {
+		found = found || r == StuckReasonBlockedByClaim
+	}
+	if !found {
+		t.Errorf("StuckReasonBlockedByClaim missing from AllStuckReasons")
 	}
 }
 
@@ -175,6 +233,60 @@ func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *t
 				Status:                tc.from,
 				HasUnresolvedBlockers: tc.blocked,
 				SkipPlanning:          true, // isolate the blocker guard from the plan guard
+			}
+			err := TransitionGuard(item, BacklogStatusInProgress)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("TransitionGuard(%+v, in_progress) = %v, want %v", item, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestTransitionGuard_should_RejectQueuedToInProgress_When_PlanArtifactsPathIsStale
+// is the defense-in-depth half of the fix for backlog item
+// 1cfae441-8953-41e6-803d-959062119d4f: even once TriggerTriage only ever
+// persists a plan_artifacts_path that existed at the time triage completed
+// (the primary fix, in server/services/backlog_service_trigger_triage.go), a
+// path that was valid then can still be deleted later — e.g. its triage
+// worktree reaped by CleanupTerminalItem after the item went terminal and was
+// then reopened. This package does no I/O itself (see its doc comment), so
+// TransitionGuard trusts the caller-supplied PlanArtifactsPathMissing bool
+// rather than os.Stat-ing PlanArtifactsPath directly — mirroring how
+// HasUnresolvedBlockers above is also computed by the caller, not here.
+func TestTransitionGuard_should_RejectQueuedToInProgress_When_PlanArtifactsPathIsStale(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		from    BacklogStatus
+		missing bool
+		wantErr error
+	}{
+		{
+			name:    "ready to in_progress blocked by stale plan path",
+			from:    BacklogStatusReady,
+			missing: true,
+			wantErr: ErrPlanArtifactsMissing,
+		},
+		{
+			name:    "queued to in_progress blocked by stale plan path",
+			from:    BacklogStatusQueued,
+			missing: true,
+			wantErr: ErrPlanArtifactsMissing,
+		},
+		{
+			name:    "queued to in_progress allowed when plan path still exists",
+			from:    BacklogStatusQueued,
+			missing: false,
+			wantErr: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := BacklogItemTransitionInput{
+				Status:                   tc.from,
+				PlanApproved:             true,
+				PlanArtifactsPath:        "/some/path/that/once/existed",
+				PlanArtifactsPathMissing: tc.missing,
 			}
 			err := TransitionGuard(item, BacklogStatusInProgress)
 			if !errors.Is(err, tc.wantErr) {

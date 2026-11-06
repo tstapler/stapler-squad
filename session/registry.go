@@ -32,6 +32,7 @@ var ErrSessionAlreadyRegistered = errors.New("session: already registered")
 type registryEntry struct {
 	instance *LiveInstance
 	refcount int
+	retained bool
 }
 
 // Registry owns the sessionID → live-actor mapping plus refcounts.
@@ -131,6 +132,41 @@ func (r *Registry) Register(instance *LiveInstance) (ReleaseFunc, error) {
 	return r.makeRelease(sessionID), nil
 }
 
+// Retain preserves the canonical instance until ForceRelease or Shutdown, even when
+// no poller or Acquire holder remains. Repeated calls do not add references.
+// If this ID already has an actor, that actor wins over the supplied instance.
+func (r *Registry) Retain(inst *Instance) *LiveInstance {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := inst.GetStableID()
+	if e, ok := r.entries[id]; ok {
+		e.retained = true
+		return e.instance
+	}
+	live := inst.liveInstance.Load()
+	if live == nil {
+		live = NewLiveInstance(inst)
+	}
+	r.entries[id] = &registryEntry{instance: live, retained: true}
+	return live
+}
+
+// Lookup returns an already-owned instance by stable ID or legacy title, without
+// constructing a replacement or acquiring a reference. It may be nil.
+func (r *Registry) Lookup(id string) *LiveInstance {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[id]; ok {
+		return e.instance
+	}
+	for _, e := range r.entries {
+		if e.instance.MatchesID(id) {
+			return e.instance
+		}
+	}
+	return nil
+}
+
 // makeRelease returns an idempotent ReleaseFunc for one Acquire/Register call.
 // A double-call on this closure is a no-op (sync.Once); two independent Acquires
 // each get their own independently-firing closure.
@@ -139,8 +175,9 @@ func (r *Registry) makeRelease(sessionID string) ReleaseFunc {
 	return func() { once.Do(func() { r.release(sessionID) }) }
 }
 
-// release decrements the refcount for sessionID. When it reaches zero, the entry is
-// removed from the map and the actor is stopped. decrement+zero-check+map-delete share
+// release decrements the refcount for sessionID. When it reaches zero on an
+// unretained entry, the entry is removed and its actor stopped. The zero-check
+// and map-delete share
 // one critical section with Acquire's check-then-increment (pitfalls-registry.md §3
 // Design A) so mutual exclusion is automatic: a concurrent Acquire either sees the
 // entry and increments (this release's zero-check then skips teardown) or this release
@@ -155,7 +192,7 @@ func (r *Registry) release(sessionID string) {
 		return
 	}
 	e.refcount--
-	if e.refcount > 0 {
+	if e.refcount > 0 || e.retained {
 		r.mu.Unlock()
 		return
 	}

@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 // VCSPreference represents the user's preferred VCS
@@ -127,12 +128,8 @@ func gitAvailable(repoPath string) bool {
 	// Check if the path is inside a git repository
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
-	cmd := safeexec.CommandContext(detectCtx, "git", "-C", repoPath, "rev-parse", "--git-dir")
-	if err := cmd.Run(); err == nil {
-		return true
-	}
-
-	return false
+	_, err := gitprovider.Backend().GitDir(detectCtx, backend.Local{Root: backend.RepoRoot(repoPath)})
+	return err == nil
 }
 
 // IsColocated checks if the repository is a JJ+Git colocated repository

@@ -1,0 +1,42 @@
+$ ./s6 -mode stock -maint repack -dur 60s
+mode=stock maint=repack dur=1m0s maint_runs=58 reads=97706 ErrObjectNotFound=0 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+$ ./s6 -mode fresh -maint repack -dur 60s
+mode=fresh maint=repack dur=1m0s maint_runs=61 reads=9335 ErrObjectNotFound=15 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+  err x15: object not found
+$ ./s6 -mode fresh-retry -maint repack -dur 60s
+mode=fresh-retry maint=repack dur=1m0s maint_runs=47 reads=6642 ErrObjectNotFound=0 otherErr=0 retried_reads=16 final_failures_after_retry=0 max_attempts=3 retry_latency_p50=208.329792ms p99=1.053296208s max=1.341221333s
+$ ./s6 -mode reindex-retry -maint repack -dur 60s
+panic: assignment to entry in nil map
+
+goroutine 129 [running]:
+github.com/go-git/go-git/v5/storage/filesystem.(*ObjectStorage).loadIdxFile(0x3f902af5a018, {0xb6, 0x9a, 0x83, 0x77, 0xab, 0x52, 0x27, 0xe4, 0x72, ...})
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/storage/filesystem/object.go:97 +0x16c
+github.com/go-git/go-git/v5/storage/filesystem.(*ObjectStorage).requireIndex(0x3f902af5a018)
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/storage/filesystem/object.go:65 +0xe4
+github.com/go-git/go-git/v5/storage/filesystem.(*ObjectStorage).getFromPackfile(0x3f902af5a018, {0x1c, 0xdc, 0xdf, 0x8f, 0x55, 0x27, 0x29, 0x32, 0xef, ...}, ...)
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/storage/filesystem/object.go:467 +0x3c
+github.com/go-git/go-git/v5/storage/filesystem.(*ObjectStorage).EncodedObject(0x3f902af5a018, 0x1, {0x1c, 0xdc, 0xdf, 0x8f, 0x55, 0x27, 0x29, 0x32, ...})
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/storage/filesystem/object.go:348 +0x128
+github.com/go-git/go-git/v5/plumbing/object.GetCommit({0x10389c0e8, 0x3f902af5a000}, {0x1c, 0xdc, 0xdf, 0x8f, 0x55, 0x27, 0x29, 0x32, ...})
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/plumbing/object/commit.go:125 +0x40
+github.com/go-git/go-git/v5.(*Repository).CommitObject(...)
+	/Users/tstapler/.asdf/installs/golang/1.26.5/packages/pkg/mod/github.com/go-git/go-git/v5@v5.19.2/repository.go:1436
+main.read(0x0?, {0x1c, 0xdc, 0xdf, 0x8f, 0x55, 0x27, 0x29, 0x32, 0xef, ...})
+	/tmp/s6/main.go:56 +0x64
+main.main.func2()
+	/tmp/s6/main.go:163 +0x72c
+created by main.main in goroutine 1
+	/tmp/s6/main.go:130 +0x324
+$ ./s6 -mode reindex-retry-locked -maint repack -dur 60s
+mode=reindex-retry-locked maint=repack dur=1m0s maint_runs=192 reads=115861 ErrObjectNotFound=0 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+$ ./s6 -mode stock -maint gc -dur 20s
+mode=stock maint=gc dur=20s maint_runs=31 reads=150628 ErrObjectNotFound=265 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+  err x265: object not found
+$ ./s6 -mode fresh-retry -maint gc -dur 20s
+mode=fresh-retry maint=gc dur=20s maint_runs=52 reads=8601 ErrObjectNotFound=0 otherErr=0 retried_reads=16 final_failures_after_retry=0 max_attempts=3 retry_latency_p50=9.962958ms p99=114.523625ms max=153.28225ms
+$ ./s6 -mode stock -maint packrefs -dur 20s
+mode=stock maint=packrefs dur=20s maint_runs=33 reads=110711 ErrObjectNotFound=16 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+  err x16: object not found
+$ ./s6 -mode fresh-retry -maint packrefs -dur 20s
+mode=fresh-retry maint=packrefs dur=20s maint_runs=53 reads=13496 ErrObjectNotFound=0 otherErr=0 retried_reads=0 final_failures_after_retry=0 max_attempts=0 retry_latency_p50=0s p99=0s max=0s
+DONE

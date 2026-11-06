@@ -67,9 +67,3 @@ export const errorState = style({
   borderRadius: vars.radii.md,
   fontSize: vars.fontSize.sm,
 });
-
-export const programWarning = style({
-  color: vars.color.warning,
-  fontSize: vars.fontSize.sm,
-  marginTop: vars.space["1"],
-});

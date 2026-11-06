@@ -1,12 +1,13 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
@@ -19,6 +20,7 @@ import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
 import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
+import { fanOutSession, fanoutComparisonPath } from "@/lib/hooks/useFanoutService";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -43,7 +45,14 @@ const OmnibarContext = createContext<OmnibarContextValue | null>(null);
 export function useOmnibar(): OmnibarContextValue {
   const context = useContext(OmnibarContext);
   if (!context) {
-    throw new Error("useOmnibar must be used within an OmnibarProvider");
+    return {
+      isOpen: false,
+      open: () => {},
+      openInCreationMode: () => {},
+      openOmnibar: () => {},
+      close: () => {},
+      toggle: () => {},
+    };
   }
   return context;
 }
@@ -62,8 +71,8 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
-  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
+  const { showActionToast } = useNotifications();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
   const workflowEntries = useMemo<WorkflowEntry[]>(
@@ -211,7 +220,9 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       }
 
       // Also support 'n' key when not in an input
-      if (e.key === "n" && !isInputElement(e.target as Element)) {
+      // A diff pane owns bare 'n' (next change) while focused.
+      const inDiffPane = (e.target as Element | null)?.closest?.('[data-context="diff"]') != null;
+      if (e.key === "n" && !isInputElement(e.target as Element) && !inDiffPane) {
         e.preventDefault();
         open();
       }
@@ -255,6 +266,28 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         ? sessionTypeMap[data.sessionType]
         : undefined;
 
+      if (data.fanoutCount && data.fanoutCount >= 2) {
+        // Server validates 2-5 and rejects anything else with InvalidArgument.
+        const { groupId } = await fanOutSession(
+          {
+            title: data.title,
+            path: data.path,
+            branch: data.branch,
+            program: data.program,
+            category: data.category,
+            autoYes: data.autoYes,
+            autoApprove: data.autoApprove ?? false,
+            sessionType: effectiveSessionType,
+            initialPrompt: data.initialPrompt,
+            permissionMode: data.permissionMode ?? "",
+            extraArgs: data.extraArgs ?? [],
+          },
+          data.fanoutCount,
+        );
+        router.push(fanoutComparisonPath(groupId));
+        return;
+      }
+
       // createSession throws on error, so no null check needed
       const session = await createSession({
         title: data.title,
@@ -293,34 +326,33 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // then navigates to the newly created session so the user can see it running.
   const handleRunWorkflow = useCallback(
     async (slug: string, arg: string) => {
+      const toastKey = `run-workflow:${slug}`;
       const wf = workflows.find((w) => w.slug === slug);
       if (!wf) {
+        // Slug matched at detection time but is gone from the (possibly stale) local
+        // workflow list by the time Enter is pressed -- surface it rather than
+        // swallowing the input silently. Root cause (list going stale) is tracked
+        // separately via the in-flight WatchWorkflows streaming RPC.
         console.error("Unknown workflow slug:", slug);
+        showActionToast(`Workflow '@${slug}' not found — try reloading`, "error", toastKey);
         return;
       }
       try {
+        // runWorkflowRPC (useSessionService.runWorkflow) never throws -- it catches
+        // internally and returns null on failure -- so a falsy sessionId is the
+        // actual failure signal, not just an absent-navigation no-op.
         const sessionId = await runWorkflowRPC({ id: wf.id, arg });
         if (sessionId) {
           router.push(`/?session=${sessionId}`);
+        } else {
+          showActionToast(`Failed to run workflow '@${slug}' — try again`, "error", toastKey);
         }
       } catch (err) {
         console.error("Failed to run workflow:", err);
+        showActionToast(getErrorMessage(err, `Failed to run workflow '@${slug}'`), "error", toastKey);
       }
     },
-    [runWorkflowRPC, workflows, router]
-  );
-
-  // Handle chat_backlog_item: create a backlog item from a free-text message with no
-  // structured form fields — title/description both come from the raw message, and the
-  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
-  const handleCreateBacklogItemFromChat = useCallback(
-    async (text: string) => {
-      const result = await createBacklogItemFromChat(text);
-      if (result) {
-        router.push(`/backlog?item=${result.item.id}`);
-      }
-    },
-    [createBacklogItemFromChat, router]
+    [runWorkflowRPC, workflows, router, showActionToast]
   );
 
   const value: OmnibarContextValue = {
@@ -342,7 +374,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
-        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}

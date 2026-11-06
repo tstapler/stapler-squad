@@ -120,7 +120,7 @@ export const mockReactVirtuoso = () => ({
 export const makeSession = (
   id: string,
   title: string,
-  opts: { category?: string; archivedAt?: Timestamp } = {}
+  opts: { category?: string; archivedAt?: Timestamp; hidden?: boolean } = {}
 ): Partial<Session> => ({
   id,
   title,
@@ -131,4 +131,5 @@ export const makeSession = (
   branch: "",
   program: "claude",
   archivedAt: opts.archivedAt,
+  hidden: opts.hidden ?? false,
 });

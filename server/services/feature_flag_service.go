@@ -2,13 +2,18 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/conditional"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -32,6 +37,47 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // workspacePeersBlockFor below so the flag name can't drift between where it's declared and
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
+const backlogFlagName = "backlog"
+
+// BacklogFlagEnabled reports the live state of the backlog flag, read per request.
+func BacklogFlagEnabled() bool {
+	return config.LoadConfig().GetFeatureFlag(backlogFlagName)
+}
+
+// programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
+// Default on; read per request via ProgramCLIFlagProbeEnabled.
+const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
+
+// ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
+// config on every call so a Settings toggle applies with no restart.
+func ProgramCLIFlagProbeEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(
+		programCLIFlagProbeFlagName, featureFlagDefault(programCLIFlagProbeFlagName))
+}
+
+// ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
+const ProgramCLIFlagProbeGatedMethod = "ProbeProgram"
+
+// githubPriorityAdmissionFlagName gates github.rateLimitTransport.RoundTrip's
+// AdmitOrigin rejection branch (github/http_client.go). github cannot import
+// this package (server/services already imports github, so the reverse would
+// be a cycle), so github/http_client.go duplicates this same string literal
+// under its own constant of the same name rather than importing it — mirrors
+// session/instance_tmux.go's terminalResyncExecGateFastLaneFlagName
+// precedent. Keep both constants' values in sync if this flag is ever
+// renamed.
+const githubPriorityAdmissionFlagName = "github:priority-admission-control"
+
+// githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
+// GetPRInfoGraphQL instead of the gh-CLI shell-out (github/client.go). github
+// cannot import this package (server/services already imports github, so the
+// reverse would be a cycle), so github/client.go duplicates this same string
+// literal under its own constant of the same name rather than importing it —
+// mirrors githubPriorityAdmissionFlagName's precedent above. Keep both
+// constants' values in sync if this flag is ever renamed.
+const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
 
 // handoffSummaryFlagName is the generic-registry name for the
 // restart-with-handoff-summary feature, so the frontend can discover
@@ -105,6 +151,15 @@ const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
 const terminalResyncStaggerFlagName = "terminal:resync-stagger"
 const terminalResyncBatchingFlagName = "terminal:resync-batching"
 
+const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
+
+// terminalAppScrollForwardingClaudeFlagName mirrors
+// config.FeatureAppScrollForwardingClaude so knownFeatureFlags below doesn't
+// duplicate the literal -- see config/config.go for the flag's full
+// documentation and
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
@@ -117,6 +172,39 @@ func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
 }
 
+// Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by the
+// Files*Enabled helpers below, which take no session argument.
+const (
+	filesEditingFlagName    = "files:editing"
+	filesViewerV2FlagName   = "files:viewer-v2"
+	filesMergePhoneFlagName = "files:merge-phone"
+	filesRangeReadFlagName  = "files:range-read"
+	filesDeltaWriteFlagName = "files:delta-write"
+	filesEditLargeFlagName  = "files:edit-large"
+)
+
+func filesFlagEnabled(name string) bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+}
+
+// FilesEditingEnabled reports whether file editing (WriteFile) is allowed. Default: off.
+func FilesEditingEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditingFlagName) }
+
+// FilesViewerV2Enabled reports whether the revamped Files viewer is on. Default: on.
+func FilesViewerV2Enabled(_ context.Context) bool { return filesFlagEnabled(filesViewerV2FlagName) }
+
+// FilesMergePhoneEnabled reports whether the phone merge UI is on. Default: on.
+func FilesMergePhoneEnabled(_ context.Context) bool { return filesFlagEnabled(filesMergePhoneFlagName) }
+
+// FilesRangeReadEnabled reports whether ranged large-file reads are on (ADR-036). Default: off.
+func FilesRangeReadEnabled(_ context.Context) bool { return filesFlagEnabled(filesRangeReadFlagName) }
+
+// FilesDeltaWriteEnabled reports whether delta writes are on (ADR-036). Default: off.
+func FilesDeltaWriteEnabled(_ context.Context) bool { return filesFlagEnabled(filesDeltaWriteFlagName) }
+
+// FilesEditLargeEnabled reports whether large-file editing is on (ADR-036). Default: off.
+func FilesEditLargeEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditLargeFlagName) }
+
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
 // defaultValue is what GetFeatureFlags (below) reports, and what the flag's real call
@@ -128,7 +216,27 @@ var knownFeatureFlags = []struct {
 	name         string
 	description  string
 	defaultValue bool
+	// scopes lists the per-scope overrides the flag accepts (nil: global only).
+	scopes []string
 }{
+	{
+		name:         programCLIFlagProbeFlagName,
+		description:  "Check that a program exists on the server and read its --help flags (Program Config and session creation). Turn off to disable the ProbeProgram RPC immediately. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        githubIssueProgressCommentsFlagName,
+		description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
+	},
+	{
+		name:         ChangelogFlagName,
+		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        UpdateCheckFlagName,
+		description: "Update check: poll GitHub Releases (ETag-conditional, at most every 6 hours) and show a badge when a newer release exists. Contacts api.github.com, so it is opt-in. Never runs on source builds. Requires the changelog flag. Default: off.",
+	},
 	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
@@ -150,12 +258,28 @@ var knownFeatureFlags = []struct {
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
 	{
+		name:        "backlog-triage-results-panel",
+		description: "Show a formatted 'Triage Results' panel (priority, tasks with estimates, suggestions, raw-JSON toggle) on the backlog item detail view. Default: off.",
+	},
+	{
+		name:        "backlog-review-results-panel",
+		description: "Show a formatted 'Review Results' panel (overall outcome, per-criterion rows with evidence, raw-JSON toggle) on the backlog item detail view. Default: off.",
+	},
+	{
 		name:        blockApprovalOnCIFailureFlagName,
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        completionReviewerFlagName,
+		description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
+	},
+	{
+		name:        crossHostClaimDedupFlagName,
+		description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{
 		name:        handoffSummaryFlagName,
@@ -191,9 +315,238 @@ var knownFeatureFlags = []struct {
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
 	{
+		name:        githubPriorityAdmissionFlagName,
+		description: "Priority-aware admission control for outbound GitHub API calls: background pollers/sync back off once a resource's (core/search/graphql) remaining quota drops below a reserved headroom, so interactive GitHub actions (merge, comment, refresh) keep succeeding. Protects this stapler-squad instance's own interactive GitHub calls only — does not coordinate with other machines sharing the same GitHub token. Default: off.",
+	},
+	{
+		name:        githubGraphQLMigrationFlagName,
+		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
+	},
+	{
+		name:         config.TCCEnrichmentConsentFlag,
+		description:  "Explain protected-root metadata access and require app consent before background worktree enrichment on macOS. Does not gate other filesystem access or represent OS grants. Default: on on Darwin, no-op elsewhere. Restart required.",
+		defaultValue: config.DefaultTCCEnrichmentConsent,
+	},
+	{
+		name:        worktreeChangeDetectionFlagName,
+		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
+	},
+	{
+		name:        terminalAppScrollForwardingClaudeFlagName,
+		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
+	},
+	{
 		name:        piSupportFlagName,
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
+	{
+		name:         session.FeatureFlagDriverPaneActivityGate,
+		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
+		defaultValue: config.DriverPaneActivityGateDefault,
+	},
+	{
+		name:         "request_coalescing",
+		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        "unary_over_ws",
+		description: "Send unary RPCs over the already-open WebSocket instead of separate HTTP requests, avoiding the browser's per-origin connection cap. Kill switch: turn off to fall back to HTTP fetch. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "unary_over_ws_remote",
+		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "terminal_ws_pool",
+		description: "Carry terminal streams over a small shared pool of multiplexed WebSockets (/api/ws/terminal-mux) instead of one WebSocket per terminal, so a page with many terminals opens a few sockets instead of one each. Kill switch: turn off to restore one WebSocket per terminal. Pool size: server STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE (default 2) or per-browser localStorage ssq:terminal-pool-size. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "batch_unary",
+		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "ghostty_renderer",
+		description: "Render terminals with ghostty-web (Ghostty's VT parser compiled to WASM, drawn on a canvas) instead of xterm.js, for better VT conformance (synchronized output, REP, DECALN, Kitty keyboard). Kill switch: turn off to fall back to xterm.js. Read by the web client; applies on next page load, no rebuild. Default: off.",
+	},
+	{
+		name:        "window_keep_alive",
+		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:         config.TriageGuidanceHaltFeatureFlag,
+		defaultValue: config.TriageGuidanceHaltDefault,
+		description:  "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
+	},
+	{
+		name:         config.DiagnoseNudgeFeatureFlag,
+		defaultValue: config.DiagnoseNudgeDefault,
+		description:  "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session, and the autonomous stall path to type its in-process nudge (also needs autonomous_stall_nudge_enabled). Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+	},
+	{
+		name:         config.AutonomousStallNudgeFeatureFlag,
+		defaultValue: config.AutonomousStallNudgeDefault,
+		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
+	},
+	{
+		name:         config.EscapeEventsDBMigrateFeatureFlag,
+		defaultValue: config.EscapeEventsDBMigrateDefault,
+		description:  "Copy existing escape_events rows from analytics.db into the dedicated db/escape_events.db in small background batches after startup (resumable; the old table is left in place). Turn off to skip the copy: the new database then starts empty. Read once at startup. Default: on.",
+	},
+	{
+		name:         config.HiddenSessionGateFeatureFlag,
+		defaultValue: config.HiddenSessionGateDefault,
+		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Turning it off (globally or per kind) is the rollback: hidden sessions then deliver everything and the gate only counts what it would have suppressed (see the status line). Can be enabled only while the stats writer runs, so the evidence is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: on.",
+		scopes:       gateFlagScopes(),
+	},
+	{
+		name:         terminalWriteLeaseFlagName,
+		description:  "Per-session terminal write lease: the driver's prompt and answer keys, steers, nudges, MCP writes and rate-limit recovery take turns writing to a session's terminal instead of interleaving. Turn off only to restore the pre-lease behavior if the lease misbehaves (every write then proceeds unserialized). Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         hiddenSessionReplyFlagName,
+		description:  "Hidden-session Reply: answer a background session's single-select question from the toast, tray or read-only view by writing one option digit to its terminal. The kill switch for the Reply path only; it does not affect the write guards. Every reply is audited before it is written. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         backgroundActivityFeedFlagName,
+		description:  "Background tab activity feed: show what each background session actually did (finished, stopped, waiting) instead of the history-only selector. Turn off to restore the legacy selector with no data impact. Turning it back on after an explicit off is audit-fsynced and refused while the audit sink is down. Applies at once; global only. Default: on.",
+		defaultValue: backgroundActivityFeedDefault,
+	},
+	{
+		name:        notificationInlineActionsFlagName,
+		description: "Inline notification actions: approve, deny, answer and decide from the notification row. Server-checked on every invocation; off reduces actions to Open session and keeps the legacy approve/deny path. Scopes: channel:remote, channel:remote:tierB, action:<kind>. Applies at once. Default: off.",
+		scopes:      notificationInlineActionScopes(),
+	},
+	{
+		name:        askUserQuestionStructuredFlagName,
+		description: "Structured AskUserQuestion: render, answer and hook-reply stages for durable question rows. A stage's new writes are refused when it resolves off; existing rows stay visible. Scopes: stage:render, stage:answer, stage:hook_reply (each also needs the stage before it). Applies at once. Default: off.",
+		scopes:      askUserQuestionStructuredScopes(),
+	},
+	{
+		name:        agentWakeTriggersFlagName,
+		description: "Agent wake triggers: the dispatcher and the schedule_wake, list_wakes, cancel_wake and request_help tools. Off stops the dispatcher and the tools return flag_off; rows are kept. Scopes: trigger:<type>, tool:<name>; a scoped true runs the dispatcher for that type only. Applies at once. Default: off.",
+		scopes:      agentWakeTriggerScopes(),
+	},
+	{
+		name:         hiddenSessionReadonlyGuardsFlagName,
+		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         config.WorkflowEngineShadowFeatureFlag,
+		description:  "Workflow engine shadow: compare the configured stage graph and gates against today's answer on every status transition and count the differences (see /actuator/workflow-engine). Changes nothing about what is allowed. Applies within about a second. Default: on.",
+		defaultValue: config.WorkflowEngineShadowDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceFeatureFlag,
+		description:  "Workflow engine enforce (operator class): the configured stage graph and operator gates decide status transitions instead of the built-in rules. Turn on only after make workflow-engine-soak-status reads READY. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceAgentFeatureFlag,
+		description:  "Workflow engine enforce (agent class): the configured stage graph and operator gates decide status transitions requested by agent tools (request_review, report_blocked, resume_work, report_duplicate, report_pr_created, and the generic transition tool) instead of today's checks. A denial is reported as a transition_denied stuck item. Turn on only after the agent class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceAgentDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceSystemFeatureFlag,
+		description:  "Workflow engine enforce (system class): the configured stage graph and operator gates decide status transitions made by the server itself (queue claim, triage completion, lifecycle sweeps, PR merge and archive, dispatch) instead of today's unchecked writes. A denial is reported once as a transition_denied stuck item, the held automation waits quietly, and the sweep finishes the transition once the gate is satisfied. Turn on only after the system class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceSystemDefault,
+	},
+	{
+		name:        filesEditingFlagName,
+		description: "Files editing: allow saving edits from the Files tab (WriteFile). Enforced server-side; hidden-session and archived-session guards still apply. Applies at once; global only. Default: off.",
+	},
+	{
+		name:         filesViewerV2FlagName,
+		description:  "Files viewer v2: the revamped Files tab layout and content search. Turn off to fall back to the legacy layout at the next mount. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:         filesMergePhoneFlagName,
+		description:  "Files phone merge: the conflict-merge UI on phone-sized screens. Turn off to fall back to keep-mine/keep-theirs only. Applies at once; global only. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        filesRangeReadFlagName,
+		description: "Files ranged reads: serve large files in byte ranges (ADR-036). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        filesDeltaWriteFlagName,
+		description: "Files delta writes: save large-file edits as patches (ADR-036). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        filesEditLargeFlagName,
+		description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionDetectionFlagName,
+		description: "Attention prose-question detection: treat a turn that ends in a plain-prose question as needing you (an Asked a question item). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        sessionEventLogFlagName,
+		description: "Session event log: record per-session attention events (turn ends, state changes) for the timeline. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionAckBypassFixFlagName,
+		description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionIdleClockOutputFlagName,
+		description: "Attention idle clock from output: measure idleness and waiting-for-agent time from the last meaningful output instead of any touch. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionLLMTiebreakFlagName,
+		description: "Attention prose-question LLM tiebreak: ask a model to settle borderline prose-question detections. Needs prose-question detection on. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionInboxConsolidationFlagName,
+		description: "Attention inbox consolidation: show the unified Attention list in place of the separate review queue views. Applies at once; global only. Default: off.",
+	},
+}
+
+// workflowEngineModeTTL is how long a resolved engine mode is reused, so the
+// transition hot path never reads config per call.
+const workflowEngineModeTTL = time.Second
+
+// WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
+// flags with their registered defaults (never the plain GetFeatureFlag, which
+// returns false for an unset flag and would silently turn shadow off).
+func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
+	return session.ModeFromFlags(
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+	)
+}
+
+// NewWorkflowEngineModeSource is the production mode reader: live config,
+// cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+}
+
+// NewWorkflowEngineClassModeSource is the production per-class mode reader:
+// each class resolves its own enforce flag and the shared shadow flag from live
+// config, cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock session.Clock) *session.FlagClassModeSource {
+	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
+}
+
+// WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
+// shadow flag's status line, counted from the ledger's repro ring (the last 200
+// divergences), so a busy day can read as a floor rather than an exact count.
+func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now func() time.Time) func() string {
+	return func() string {
+		cutoff := now().Add(-24 * time.Hour)
+		n := 0
+		for _, r := range snapshot().Repro {
+			if r.At.After(cutoff) {
+				n++
+			}
+		}
+		return fmt.Sprintf("Shadow: %d divergences/24h", n)
+	}
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
@@ -219,10 +572,23 @@ type FeatureFlagService struct {
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
 
-	// statusDetailProviders maps feature flag names to a function returning an
-	// optional human-readable status line (e.g. why the flag is currently off).
-	// Wired via SetStatusDetailProvider. Absent name -> "".
-	statusDetailProviders map[string]func() string
+	// statusDetailSlots maps feature flag names to the ordered contributions to
+	// their status line (e.g. why the flag is currently off). SetStatusDetailProvider
+	// owns one named slot per flag; AddStatusDetailSource appends independent
+	// ones. GetFeatureFlags joins the non-empty results with "; ".
+	statusDetailSlots map[string][]statusDetailSlot
+
+	// enableGuards maps flag names to a precondition checked only when the flag
+	// is being enabled; a non-empty return refuses the flip with FailedPrecondition.
+	enableGuards map[string]func() string
+
+	// observer is told after every persisted change so a cache can reload at once.
+	observer deliverygate.FlagObserver
+
+	// audit and auditPolicies record flag_change lines for flags with a policy.
+	audit         *AuditSink
+	auditPolicies map[string]FlagAuditPolicy
+	flagSeq       int64 // persisted order of flips; incremented only under updateMu
 
 	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
 	// concurrent toggles of the same flag can't race: without this, a slow caller's
@@ -252,10 +618,112 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 // named feature flag. GetFeatureFlags calls fn on every request and populates
 // FeatureFlag.StatusDetail with its result (empty string when fn returns "").
 func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
-	if f.statusDetailProviders == nil {
-		f.statusDetailProviders = make(map[string]func() string)
+	f.setStatusDetailSlot(name, providerSlotKey, ignoreConfig(fn))
+}
+
+// providerSlotKey names the slot SetStatusDetailProvider owns; a second call
+// replaces it in place so the setter keeps its replace-by-name meaning.
+const providerSlotKey = "provider"
+
+type statusDetailSlot struct {
+	key string
+	fn  func(*config.Config) string
+}
+
+// ignoreConfig adapts a config-free source to the cfg-taking slot signature.
+func ignoreConfig(fn func() string) func(*config.Config) string {
+	return func(*config.Config) string { return fn() }
+}
+
+func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func(*config.Config) string) {
+	if f.statusDetailSlots == nil {
+		f.statusDetailSlots = make(map[string][]statusDetailSlot)
 	}
-	f.statusDetailProviders[name] = fn
+	slots := f.statusDetailSlots[name]
+	for i := range slots {
+		if key != "" && slots[i].key == key {
+			slots[i].fn = fn
+			return
+		}
+	}
+	f.statusDetailSlots[name] = append(slots, statusDetailSlot{key: key, fn: fn})
+}
+
+// AddStatusDetailSource appends an independent contribution to name's status
+// line. Several sources (stats writer, explicit global false, per-kind false)
+// each speak for the same flag without replacing one another.
+func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string) {
+	f.setStatusDetailSlot(name, "", ignoreConfig(fn))
+}
+
+// AddConfigStatusDetailSource is AddStatusDetailSource for a source that reads
+// config.json: it is handed the one snapshot GetFeatureFlags loaded, so listing
+// flags parses the file once however many sources are wired.
+func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*config.Config) string) {
+	f.setStatusDetailSlot(name, "", fn)
+}
+
+func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
+	parts := autonomyFlagStatusDetail(name, cfg)
+	for _, s := range f.statusDetailSlots[name] {
+		if d := s.fn(cfg); d != "" {
+			parts = append(parts, d)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
+// On does nothing ("inactive: requires <flag>", parsed by the Features page) and
+// whether its value is the registry default or was set explicitly.
+func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
+		return nil
+	}
+	var parts []string
+	if name == config.AutonomousStallNudgeFeatureFlag &&
+		config.EffectiveAutonomousStallNudgeEnabled(cfg) && !config.EffectiveDiagnoseNudgeEnabled(cfg) {
+		parts = append(parts, "inactive: requires "+config.DiagnoseNudgeFeatureFlag)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "On"
+		}
+		return "Off"
+	}
+	if value, explicit := cfg.FeatureFlags[name]; explicit {
+		parts = append(parts, "Set explicitly: "+onOff(value))
+	} else {
+		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+	}
+	return parts
+}
+
+// SetEnableGuard installs a precondition for enabling name. It is checked only
+// on the way on: disabling and clearing are never refused by it.
+func (f *FeatureFlagService) SetEnableGuard(name string, guard func() string) {
+	if f.enableGuards == nil {
+		f.enableGuards = make(map[string]func() string)
+	}
+	f.enableGuards[name] = guard
+}
+
+// SetFlagObserver wires the cache notified after every persisted change.
+func (f *FeatureFlagService) SetFlagObserver(o deliverygate.FlagObserver) { f.observer = o }
+
+// SetAudit wires the audit sink and the per-flag audit policy.
+func (f *FeatureFlagService) SetAudit(sink *AuditSink, policies map[string]FlagAuditPolicy) {
+	f.audit, f.auditPolicies = sink, policies
+}
+
+// MergeAuditPolicies adds per-flag audit policies to those SetAudit installed.
+func (f *FeatureFlagService) MergeAuditPolicies(policies map[string]FlagAuditPolicy) {
+	if f.auditPolicies == nil {
+		f.auditPolicies = make(map[string]FlagAuditPolicy, len(policies))
+	}
+	for k, v := range policies {
+		f.auditPolicies[k] = v
+	}
 }
 
 // +api: feature-flags:list
@@ -273,37 +741,43 @@ func (f *FeatureFlagService) GetFeatureFlags(
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()
 		}
-		var statusDetail string
-		if provider, ok := f.statusDetailProviders[kf.name]; ok {
-			statusDetail = provider()
-		}
 		flags = append(flags, &sessionv1.FeatureFlag{
 			Name:         kf.name,
 			Enabled:      enabled,
 			Description:  kf.description,
-			StatusDetail: statusDetail,
+			StatusDetail: f.statusDetailFor(kf.name, cfg),
+			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
 
-	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+	full := &sessionv1.GetFeatureFlagsResponse{Flags: flags}
+	etag, notModified := conditional.Check("GetFeatureFlags", conditional.Validator(req.Msg.GetIfNoneMatch()), full)
+	if notModified {
+		return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Etag: string(etag), NotModified: true}), nil
+	}
+	full.Etag = string(etag)
+	return connect.NewResponse(full), nil
 }
 
 // +api: feature-flags:update
-// UpdateFeatureFlag enables or disables a named feature flag and persists the change.
+// UpdateFeatureFlag applies one validated mutation to a named feature flag and
+// persists it: a global set (the legacy shape), a per-scope set, a scope clear
+// or a reset of the explicit global value to the registry default.
 func (f *FeatureFlagService) UpdateFeatureFlag(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
 ) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
 	name := req.Msg.GetName()
-	enabled := req.Msg.GetEnabled()
 
 	// Validate that the flag name is known.
 	known := false
 	var description string
+	var scopes []string
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
 			known = true
 			description = kf.description
+			scopes = kf.scopes
 			break
 		}
 	}
@@ -317,6 +791,34 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 				return names
 			}()))
 	}
+	op, err := parseFlagOp(req.Msg, scopes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only the way on is guarded: disabling and resetting the global value are
+	// never refused. Clearing a scope is guarded only when it turns the kind on.
+	if op.enabling() || clearTurnsKindOn(op) {
+		if guard, ok := f.enableGuards[name]; ok {
+			if reason := guard(); reason != "" {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("cannot enable %q: %s", name, reason))
+			}
+		}
+	}
+
+	// The loosening flip's durable `requested` line is appended before the
+	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
+	// deferred `result` line is registered before the lock, so it runs after
+	// the unlock.
+	endAuditSpan := flagSpan(ctx, op, flagPhaseAudit)
+	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	endAuditSpan()
+	if err != nil {
+		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
+	}
+	defer audit.finish()
 
 	// Serialize the whole persist-toggle-rollback sequence: without this, two concurrent
 	// UpdateFeatureFlag calls for the same name could interleave such that a slower
@@ -325,56 +827,127 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	f.updateMu.Lock()
 	defer f.updateMu.Unlock()
 
-	// Persist to config. SetFeatureFlag handles its own map initialisation and
-	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
-	// sequence that would race under concurrent UpdateFeatureFlag calls.
+	if op.scope != "" {
+		err = f.persistScoped(ctx, op, audit)
+	} else {
+		err = f.persistAndApply(ctx, op, audit)
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := config.LoadConfig()
-	previousEnabled := cfg.GetFeatureFlag(name)
-	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
+	enabled := cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	if op.scope == "" && op.isSet() {
+		enabled = op.enabled // the controller-backed state, as before this change
 	}
-
-	// Toggle the in-process controller if one is wired. If the controller fails to apply the
-	// new state, roll back the just-persisted disk flag so disk config and in-memory state can
-	// never diverge — a failed toggle must not leave the two disagreeing about whether the
-	// feature is on, since GetFeatureFlags/RPC-gating interceptors read from different sources.
-	if ctrl, ok := f.featureControllers[name]; ok {
-		var ctrlErr error
-		verb := "disable"
-		if enabled {
-			verb = "enable"
-			ctrlErr = ctrl.Enable(ctx)
-		} else {
-			ctrlErr = ctrl.Disable()
-		}
-		if ctrlErr != nil {
-			log.Error("feature controller toggle failed, rolling back persisted flag",
-				"feature", name, "enabled", enabled, "err", ctrlErr)
-			if rollbackErr := cfg.SetFeatureFlag(name, previousEnabled); rollbackErr != nil {
-				log.Error("failed to roll back feature flag after controller error",
-					"feature", name, "err", rollbackErr)
-				return nil, connect.NewError(connect.CodeInternal,
-					fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
-						verb, name, ctrlErr, rollbackErr))
-			}
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
-		}
-	}
-
-	log.Info("feature flag updated", "feature", name, "enabled", enabled)
-
-	var statusDetail string
-	if provider, ok := f.statusDetailProviders[name]; ok {
-		statusDetail = provider()
-	}
-
+	log.Info("feature flag updated", "feature", name, "enabled", enabled, "scope", op.auditScope(), "mutation", op.mutationName())
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
-			StatusDetail: statusDetail,
+			StatusDetail: f.statusDetailFor(name, cfg),
+			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
+}
+
+// persistAndApply persists the global value (a set, or the deletion of the
+// explicit key for RESET_GLOBAL), toggles the controller and rolls back on its
+// failure. The caller holds updateMu. It records the true previous value (an
+// absent key is the registered default, not an explicit false) and, when the key
+// was absent, rolls back by deleting it so a default-on flag never ends a failed
+// flip as an explicit false.
+func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
+	name, enabled := op.name, op.enabled
+	var previous, hadKey bool
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
+	err := config.UpdateConfig(func(cfg *config.Config) error {
+		previous, hadKey = cfg.GetFeatureFlagOverride(name)
+		if !hadKey {
+			previous = featureFlagDefault(name)
+		}
+		// In-memory mutators: UpdateConfig saves once, so the saving setters
+		// here would fsync config.json twice per flip.
+		if op.isSet() {
+			cfg.ApplyFeatureFlag(name, enabled)
+		} else {
+			cfg.RemoveFeatureFlag(name)
+		}
+		return nil
+	})
+	endPersistSpan()
+	if audit.active() {
+		f.flagSeq++
+		audit.seq, audit.previous = f.flagSeq, previous
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
+	}
+	ctrl, ok := f.featureControllers[name]
+	if !ok {
+		f.finishApplied(op, audit)
+		return nil
+	}
+	defer flagSpan(ctx, op, flagPhaseApply)()
+	// A failed toggle must not leave disk config and in-memory state disagreeing
+	// about whether the feature is on: GetFeatureFlags and RPC-gating
+	// interceptors read from different sources.
+	verb, ctrlErr := "disable", error(nil)
+	if enabled {
+		verb, ctrlErr = "enable", ctrl.Enable(ctx)
+	} else {
+		ctrlErr = ctrl.Disable()
+	}
+	if ctrlErr == nil {
+		f.finishApplied(op, audit)
+		return nil
+	}
+	log.Error("feature controller toggle failed, rolling back persisted flag",
+		"feature", name, "enabled", enabled, "err", ctrlErr)
+	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
+		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
+		if audit.active() {
+			audit.outcome = flagOutcomeControllerFailed
+		}
+		return connect.NewError(connect.CodeInternal,
+			fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
+				verb, name, ctrlErr, rollbackErr))
+	}
+	if audit.active() {
+		audit.outcome = flagOutcomeRolledBack
+	}
+	f.notifyObserver(name)
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
+}
+
+func rollbackFlag(name string, previous, hadKey bool) error {
+	return config.UpdateConfig(func(cfg *config.Config) error {
+		if hadKey {
+			cfg.ApplyFeatureFlag(name, previous)
+		} else {
+			cfg.RemoveFeatureFlag(name)
+		}
+		return nil
+	})
+}
+
+// finishApplied records the applied outcome and tells the observer which scope
+// and mutation changed, so history can tell a clear or reset from a set false.
+func (f *FeatureFlagService) finishApplied(op flagOp, audit *flagAudit) {
+	if audit.active() {
+		audit.outcome = flagOutcomeApplied
+	}
+	if mo, ok := f.observer.(deliverygate.FlagMutationObserver); ok {
+		mo.OnFlagMutation(op.name, op.auditScope(), op.mutationName())
+		return
+	}
+	f.notifyObserver(op.name)
+}
+
+func (f *FeatureFlagService) notifyObserver(name string) {
+	if f.observer != nil {
+		f.observer.OnFlagChanged(name)
+	}
 }

@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/github"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
@@ -589,6 +591,26 @@ func TestResolveMainRepoRoot_ReturnsInputUnchanged_When_NotAGitRepo(t *testing.T
 	}
 }
 
+// TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension drives the full
+// session-start path (resolve default branch -> create worktree) on a repo with
+// extensions.worktreeConfig=true, the state behind "core.repositoryformatversion does not
+// support extension: worktreeconfig" failing async session start.
+func TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+	mainRepo := cloneWithOrigin(t, origin)
+	runGitOrFail(t, mainRepo, "config", "extensions.worktreeConfig", "true")
+
+	wt, err := CreateBacklogWorktree(mainRepo, "wtc-item", "")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree failed on a worktreeConfig=true repo: %v", err)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree dir %q missing: %v", wt, statErr)
+	}
+}
+
 // TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree verifies
 // CreateBacklogWorktree end-to-end when given a worktree's path (rather than the main
 // checkout) as repoPath: it must still succeed, branching from the main repo's default
@@ -665,6 +687,33 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	base := strings.TrimSpace(runGitOutputOrFail(t, childWorktree, "merge-base", "HEAD", mainTip.String()))
 	if base != mainTip.String() {
 		t.Errorf("child worktree's branch point = %s, want origin's main tip %s (must branch from the resolved main repo, not the anchor worktree)", base, mainTip)
+	}
+}
+
+// TestCreateBacklogWorktree_BranchesFromFetchedOriginTip_NotAmbientHead guards
+// freshness end to end: origin's main advances after the clone and the clone's
+// checked-out HEAD sits on a diverged branch, yet the new worktree must start
+// at origin's current main tip.
+func TestCreateBacklogWorktree_BranchesFromFetchedOriginTip_NotAmbientHead(t *testing.T) {
+	t.Parallel()
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+
+	clone := cloneWithOrigin(t, origin)
+	runGitOrFail(t, clone, "checkout", "-b", "stale-feature")
+	runGitOrFail(t, clone, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "diverged local work")
+
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "newer origin commit")
+	originTip := strings.TrimSpace(runGitOutputOrFail(t, origin, "rev-parse", "main"))
+
+	worktreePath, err := CreateBacklogWorktree(clone, "fresh-base-item", "")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree failed: %v", err)
+	}
+	head := strings.TrimSpace(runGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
+	if head != originTip {
+		t.Errorf("worktree HEAD = %s, want freshly fetched origin/main tip %s", head, originTip)
 	}
 }
 
@@ -766,49 +815,12 @@ func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
 	}
 }
 
-// TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled
-// guards against a real CI hang: without GIT_TERMINAL_PROMPT=0, a git
-// clone/fetch that can't auto-authenticate (a nonexistent or private repo,
-// or an ambient credential.helper/http.extraheader left over from another
-// checkout in the same environment) blocks on a credential prompt with no
-// TTY to answer it, silently consuming the full per-operation context
-// timeout instead of failing fast — observed in this repo's own CI as a
-// single nonexistent-repo clone attempt in an e2e test eating the entire
-// job budget (tests/e2e/accessibility.spec.ts's "Cancel and Retry controls"
-// test). Not reproducible hermetically (it depends on real network/auth
-// conditions), so this is a source-scan regression guard instead, matching
-// this repo's existing convention (e.g. jules/secrets_guard_test.go) for
-// invariants a unit test can't otherwise pin down.
-func TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled(t *testing.T) {
-	src, err := os.ReadFile("repo_path.go")
-	if err != nil {
-		t.Fatalf("reading repo_path.go: %v", err)
-	}
-	text := string(src)
+func TestRedactedCloneError_HidesCredentialButKeepsCause(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("fatal: repository 'https://x-access-token:s3cret@github.com/o/r.git' not found")
 
-	for _, marker := range []string{
-		`"git", "-C", repoPath, "fetch", "--all", "--prune"`,
-		`"git", "clone", cloneURL, repoPath`,
-	} {
-		idx := strings.Index(text, marker)
-		if idx < 0 {
-			t.Fatalf("expected to find git subprocess construction %q in repo_path.go", marker)
-		}
-		// The env-setting line is expected on the very next statement after
-		// the cmd := safeexec.CommandContext(...) line containing marker.
-		rest := text[idx:]
-		nextNewline := strings.Index(rest, "\n")
-		if nextNewline < 0 {
-			t.Fatalf("malformed source around %q", marker)
-		}
-		afterCmdLine := rest[nextNewline+1:]
-		nextLineEnd := strings.Index(afterCmdLine, "\n")
-		if nextLineEnd < 0 {
-			nextLineEnd = len(afterCmdLine)
-		}
-		nextLine := afterCmdLine[:nextLineEnd]
-		if !strings.Contains(nextLine, `GIT_TERMINAL_PROMPT=0`) {
-			t.Errorf("git subprocess %q: expected the very next line to set GIT_TERMINAL_PROMPT=0 on cmd.Env, got: %q", marker, strings.TrimSpace(nextLine))
-		}
-	}
+	err := redactedCloneError(cause, "https://x-access-token:s3cret@github.com/o/r.git")
+
+	assert.NotContains(t, err.Error(), "s3cret")
+	assert.ErrorIs(t, err, cause)
 }

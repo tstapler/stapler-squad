@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 )
 
 // SQLiteAnalyticsProvider records analytics events to a dedicated SQLite database
@@ -55,4 +56,38 @@ func (p *SQLiteAnalyticsProvider) Record(ctx context.Context, event Event) error
 
 	_, err := q.Save(ctx)
 	return err
+}
+
+// RecordBatch inserts events in one statement and transaction. A duplicate
+// event ID is skipped rather than failing the batch (browsers retry sends).
+func (p *SQLiteAnalyticsProvider) RecordBatch(ctx context.Context, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	builders := make([]*ent.AnalyticsEventCreate, 0, len(events))
+	for _, event := range events {
+		id := event.ID
+		if id == "" {
+			id = uuid.New().String()
+		}
+		q := p.client.AnalyticsEvent.Create().
+			SetID(id).
+			SetEventName(event.EventName).
+			SetEventCategory(event.EventCategory).
+			SetNillableDurationMs(event.DurationMs)
+		if event.SessionID != "" {
+			q = q.SetSessionID(event.SessionID)
+		}
+		if event.Page != "" {
+			q = q.SetPage(event.Page)
+		}
+		if event.Component != "" {
+			q = q.SetComponent(event.Component)
+		}
+		if len(event.Labels) > 0 {
+			q = q.SetLabels(event.Labels)
+		}
+		builders = append(builders, q)
+	}
+	return p.client.AnalyticsEvent.CreateBulk(builders...).OnConflictColumns(analyticsevent.FieldID).DoNothing().Exec(ctx)
 }

@@ -1,14 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createPortal } from "react-dom";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import Fuse from "fuse.js";
 import {
   detect,
   InputType,
   INPUT_TYPE_INFO,
-  DetectionResult,
+  type DetectionResult,
 } from "@/lib/omnibar";
 import {
   useModeReducer,
@@ -28,7 +27,7 @@ import {
 } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
-import { Session, SessionType } from "@/gen/session/v1/types_pb";
+import { type Session, SessionType } from "@/gen/session/v1/types_pb";
 import {
   PathCompletionDropdown,
   type CompletionEntry,
@@ -69,11 +68,21 @@ import {
   pathIndicatorInvalid,
   pathIndicatorLoading,
   createButton,
+  button as buttonClass,
+  buttonSecondary,
+  shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
+import { lazyComponent } from "@/lib/lazy";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
+import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
+import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
+import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
+import { PathConfirmDialog } from "./PathConfirmDialog";
 import {
   addRecentShellCommand,
   getRecentShellCommands,
@@ -92,6 +101,31 @@ const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 const EMPTY_REMOTES: RemoteOption[] = [];
 
+// Lazy-load the backlog chat-compose/intent-review subtree. The app shell renders
+// <Omnibar> on every route (src/app/Providers.tsx), so a static import of either
+// component here would put their shared dependency, BacklogItemForm.tsx — and
+// through it react-markdown/remark-gfm — in the Initial JS chunk, even though these
+// views only render once the user actually drafts a backlog item from the omnibar.
+const backlogComposeLoading = () => (
+  <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
+    Loading…
+  </div>
+);
+const BacklogItemIntentReview = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogItemIntentReview").then((m) => ({
+      default: m.BacklogItemIntentReview,
+    })),
+  { loading: backlogComposeLoading },
+);
+const BacklogComposeWidget = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogComposeWidget").then((m) => ({
+      default: m.BacklogComposeWidget,
+    })),
+  { loading: backlogComposeLoading },
+);
+
 interface OmnibarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -99,8 +133,6 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
-  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
-  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
@@ -116,6 +148,7 @@ interface OmnibarProps {
    * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
    * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
    * rendered, today's local-only behavior unchanged). */
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing: OmnibarProps already exceeded 12 props
   remotes?: RemoteOption[];
 }
 
@@ -143,6 +176,9 @@ export interface OmnibarFormState {
   // initialize a new git repository. Only applies to directory / new_worktree.
   createIfMissing: boolean;
   firstPrompt: string;
+  // Parallel fan-out: run the same prompt across this many isolated worktree sessions (1 = off,
+  // 2-5 = fan out; server caps at 5). Only meaningful for new_worktree sessions.
+  fanoutCount: number;
   // Autonomous mode: an orthogonal flag that composes with sessionType (any type
   // except one_off) rather than a session type of its own — see OmnibarCreationPanel's
   // "Autonomous mode" checkbox.
@@ -176,6 +212,7 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   newProjectSessionType: "new_worktree",
   createIfMissing: false,
   firstPrompt: "",
+  fanoutCount: 1,
   autonomousMode: false,
   autoApprove: false,
   extraArgs: [],
@@ -227,6 +264,8 @@ export interface OmnibarSessionData {
   // per ADR-001 (remote-as-orthogonal-flag). Undefined runs locally — see
   // OmnibarFormState.remoteName's doc comment.
   remoteName?: string;
+  // Parallel fan-out: when >= 2, the context layer calls FanOutSession instead of CreateSession.
+  fanoutCount?: number;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -261,7 +300,6 @@ export function Omnibar({
   onNavigateToSession,
   onNavigateToSessionInNewPane,
   onRunWorkflow,
-  onCreateBacklogItemFromChat,
   initialMode,
   initialInput,
   initialTitle,
@@ -273,6 +311,82 @@ export function Omnibar({
 }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
+  const { createBacklogItemFromChat, parseBacklogItemIntent, getBacklogItem, updateBacklogItem } = useBacklogService();
+  const { trackItem } = useBacklogCreationNotifier();
+  const { addNotification } = useNotificationCommands();
+  const knownRepoPaths = useSessionRepoPaths();
+
+  // Fire-and-forget: best-effort title/description/AC enrichment for items triage
+  // did not pick up. Skips if the user edited the item while the LLM call ran.
+  const enrichBacklogItemInBackground = useCallback(
+    async (item: BacklogItem, text: string) => {
+      const draft = await parseBacklogItemIntent(text, knownRepoPaths);
+      if (!draft) return;
+      const current = await getBacklogItem(item.id);
+      if (
+        !current ||
+        current.title !== item.title ||
+        current.description !== item.description ||
+        current.acCriteria.length !== item.acCriteria.length
+      ) {
+        return;
+      }
+      const updated = await updateBacklogItem(item.id, {
+        title: draft.title || item.title,
+        description: draft.description || item.description,
+        ...(draft.acceptanceCriteria.length > 0 && {
+          acCriteria: draft.acceptanceCriteria.map((acText, index) => ({ index, text: acText, status: "pending" as const })),
+        }),
+      });
+      if (!updated) return;
+      addNotification({
+        sessionId: "",
+        sessionName: "",
+        title: "Backlog item enriched",
+        message: updated.title,
+        notificationType: "info",
+        onView: () => router.push(`/backlog?item=${item.id}`),
+      });
+    },
+    [parseBacklogItemIntent, getBacklogItem, updateBacklogItem, knownRepoPaths, addNotification, router]
+  );
+
+  const createBacklogItemInBackground = useCallback(
+    async (text: string, repoPath: string) => {
+      let result: Awaited<ReturnType<typeof createBacklogItemFromChat>> = null;
+      try {
+        result = await createBacklogItemFromChat(text, undefined, repoPath);
+      } catch {
+        // fall through to the failure notification
+      }
+      if (!result) {
+        addNotification({
+          sessionId: "",
+          sessionName: "",
+          title: "Failed to create backlog item",
+          message: `Your text was not saved: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+          notificationType: "error",
+        });
+        return;
+      }
+      const { item, triageTriggered } = result;
+      trackItem(item.id, item.title);
+      addNotification({
+        sessionId: "",
+        sessionName: "",
+        title: triageTriggered
+          ? "Backlog item created — triage underway"
+          : "Backlog item created — triage could not start",
+        message: triageTriggered
+          ? item.title
+          : `${item.title}\n${repoPath ? "Check the repo path and re-run triage from the item." : "Add a repo path to enable automatic triage."}`,
+        notificationType: "info",
+        onView: () => router.push(`/backlog?item=${item.id}`),
+      });
+      if (!triageTriggered) enrichBacklogItemInBackground(item, text).catch(() => {});
+    },
+    [createBacklogItemFromChat, trackItem, addNotification, router, enrichBacklogItemInBackground]
+  );
 
   // Input state
   const [input, setInput] = useState("");
@@ -320,6 +434,15 @@ export function Omnibar({
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-null while reviewing an LLM-parsed backlog item draft (the
+  // "backlog: <message>" trigger) — holds the raw text passed to
+  // BacklogItemIntentReview. Replaces the entire omnibar body with the
+  // review UI until the user confirms or cancels; see the early return
+  // near this component's bottom.
+  const [backlogReviewText, setBacklogReviewText] = useState<string | null>(null);
+  // Dedicated multi-line compose mode opened by the "Create backlog item" button;
+  // seeded from the current input so typed text is never discarded.
+  const [backlogComposeText, setBacklogComposeText] = useState<string | null>(null);
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -679,6 +802,7 @@ export function Omnibar({
   const totalResultCount = getResultListItemCount(
     displayedSessionResults.length,
     displayedRepoEntries.length,
+    true,
   );
 
   // Accept a completion entry: fill the input and continue for further completion.
@@ -920,6 +1044,8 @@ export function Omnibar({
         atSuggestIndex: -1,
       });
       setError(null);
+      setBacklogReviewText(null);
+      setBacklogComposeText(null);
       // Defense-in-depth: handleSubmit's own finally blocks already reset this on
       // success/failure, but this instance never unmounts across open/close cycles, so
       // also clear it here in case onClose() didn't synchronously flip isOpen after a
@@ -989,10 +1115,11 @@ export function Omnibar({
 
   const handleCloneSession = useCallback(
     (session: Session) => {
-      // Pre-fill the input with the source session's path and switch to creation mode
-      if (session.path) {
-        setInput(session.path);
-        dispatchMode({ kind: "select_repo", path: session.path });
+      // Pre-fill the input with the source session's repo (not its worktree, which
+      // is unique to that session) and switch to creation mode.
+      if (session.repoRoot) {
+        setInput(session.repoRoot);
+        dispatchMode({ kind: "select_repo", path: session.repoRoot });
         setResultHighlightIndex(-1);
         setDropdownDismissed(false);
         inputRef.current?.focus();
@@ -1012,6 +1139,13 @@ export function Omnibar({
     [dispatchMode, setDropdownDismissed, setResultHighlightIndex],
   );
 
+  // Seeds compose mode from the typed input, minus a leading "backlog:" trigger,
+  // so the prefix never ends up in the created item.
+  const openBacklogCompose = useCallback(() => {
+    setBacklogComposeText(input.trim().replace(/^backlog:\s*/i, ""));
+    setResultHighlightIndex(-1);
+  }, [input, setResultHighlightIndex]);
+
   const dispatchHighlightedResultAction = useCallback(
     (index: number) => {
       if (index < displayedSessionResults.length) {
@@ -1020,9 +1154,11 @@ export function Omnibar({
         const repoIndex = index - displayedSessionResults.length;
         if (repoIndex < displayedRepoEntries.length) {
           handleRepoSelect(displayedRepoEntries[repoIndex].path);
-        } else {
+        } else if (repoIndex === displayedRepoEntries.length) {
           dispatchMode({ kind: "open_creation_direct" });
           setResultHighlightIndex(-1);
+        } else {
+          openBacklogCompose();
         }
       }
     },
@@ -1033,6 +1169,7 @@ export function Omnibar({
       handleRepoSelect,
       dispatchMode,
       setResultHighlightIndex,
+      openBacklogCompose,
     ],
   );
 
@@ -1053,8 +1190,10 @@ export function Omnibar({
           setAliasSuggestIndex((i) => Math.max(i - 1, -1));
           return;
         }
-        if (e.key === "Tab" || (e.key === "Enter" && aliasSuggestIndex >= 0)) {
+        if (e.key === "Tab" || e.key === "Enter") {
           e.preventDefault();
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's fallback so a bare Enter accepts the best match.
           const idx = aliasSuggestIndex >= 0 ? aliasSuggestIndex : 0;
           if (filteredAliases[idx]) {
             setInput(completeAlias(filteredAliases[idx]));
@@ -1089,23 +1228,15 @@ export function Omnibar({
           setUIField("atSuggestIndex", Math.max(atSuggestIndex - 1, -1));
           return;
         }
-        if (e.key === "Tab") {
-          e.preventDefault();
+        if (e.key === "Tab" || e.key === "Enter") {
+          // Default to the top suggestion when nothing has been arrow-key-highlighted,
+          // matching Tab's existing fallback so a bare Enter accepts the best match.
           const idx = atSuggestIndex >= 0 ? atSuggestIndex : 0;
           if (atSuggestions[idx]) {
+            e.preventDefault();
             setInput(completeAtCommand(atSuggestions[idx]));
             setUIField("atSuggestIndex", -1);
           }
-          return;
-        }
-        if (
-          e.key === "Enter" &&
-          atSuggestIndex >= 0 &&
-          atSuggestions[atSuggestIndex]
-        ) {
-          e.preventDefault();
-          setInput(completeAtCommand(atSuggestions[atSuggestIndex]));
-          setUIField("atSuggestIndex", -1);
           return;
         }
         if (e.key === "Escape") {
@@ -1221,8 +1352,10 @@ export function Omnibar({
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         // Cmd+Enter (Mac) / Ctrl+Enter (Linux/Windows) to submit.
         handleSubmitRef.current();
-      } else if (e.key === "Enter" && !isDiscoveryMode) {
-        // Plain Enter in creation mode submits when the form is ready.
+      } else if (e.key === "Enter") {
+        // Plain Enter submits when the form is ready (creation mode), or fires a
+        // fire-and-forget detection like @workflow invocation (discovery mode) —
+        // reached here only when no result/dropdown entry consumed Enter above.
         // handleSubmit guards on canSubmit internally, so this is a no-op when the form is incomplete.
         handleSubmitRef.current();
       }
@@ -1259,18 +1392,27 @@ export function Omnibar({
     ],
   );
 
+  // Leaving compose mode (cancel/Escape) remounts the input; put focus back on it.
+  const wasComposingRef = useRef(false);
+  useEffect(() => {
+    const composing = backlogComposeText !== null;
+    if (wasComposingRef.current && !composing && isOpen) inputRef.current?.focus();
+    wasComposingRef.current = composing;
+  }, [backlogComposeText, isOpen]);
+
   // Global keyboard handler
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // Cmd+K or Ctrl+K to open (handled by parent)
-      if (isOpen && e.key === "Escape") {
+      // Compose mode handles its own Escape (returns to the input, keeping the draft).
+      if (isOpen && e.key === "Escape" && backlogComposeText === null) {
         onClose();
       }
     };
 
     document.addEventListener("keydown", handleGlobalKeyDown);
     return () => document.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, backlogComposeText]);
 
   // Get type info for display
   const typeInfo = useMemo(() => {
@@ -1322,6 +1464,14 @@ export function Omnibar({
       return true;
     // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
     if (detection?.type === InputType.ChatBacklogItem) return true;
+    // fanout N: <prompt> only prefills the variants count + first prompt; always submittable.
+    if (detection?.type === InputType.FanOut) return true;
+    // Workflow invocation (@slug [arg]) is fire-and-forget, no sessionName/path needed.
+    if (
+      detection?.type === InputType.Workflow &&
+      detection.metadata?.workflowFound
+    )
+      return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1404,23 +1554,27 @@ export function Omnibar({
       return;
     }
 
-    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
-    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    // Chat backlog item creation (backlog: <message>) — opens the LLM-parsed
+    // review UI instead of creating immediately; see backlogReviewText's
+    // early-return render branch below. isSubmittingRef is cleared here (not
+    // in a finally block) since control doesn't return to this function once
+    // the review UI takes over.
     if (detection?.type === InputType.ChatBacklogItem) {
-      const message = detection.parsedValue;
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        await onCreateBacklogItemFromChat?.(message);
-        onClose();
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to create backlog item",
-        );
-      } finally {
-        setIsSubmitting(false);
-        isSubmittingRef.current = false;
-      }
+      isSubmittingRef.current = false;
+      setBacklogComposeText(null);
+      setBacklogReviewText(detection.parsedValue);
+      return;
+    }
+
+    // fanout N: <prompt> — prefill the variants input and first prompt, then let the user
+    // pick the repo path and submit through the normal creation flow.
+    if (detection?.type === InputType.FanOut) {
+      const count = Number(detection.metadata?.fanoutCount ?? 2);
+      setFormField("fanoutCount", count);
+      setFormField("firstPrompt", detection.parsedValue);
+      setFormField("sessionType", "new_worktree");
+      setInput("");
+      isSubmittingRef.current = false;
       return;
     }
 
@@ -1602,6 +1756,10 @@ export function Omnibar({
             pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
           extraArgs: extraArgsForSubmit,
+          fanoutCount:
+            sessionType === "new_worktree" && formState.fanoutCount >= 2
+              ? formState.fanoutCount
+              : undefined,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
@@ -1650,6 +1808,7 @@ export function Omnibar({
       setIsSubmitting(false);
       isSubmittingRef.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; adding formState.fanoutCount/setFormField would change re-render/callback-identity behavior, unverified here
   }, [
     canSubmit,
     isSubmitting,
@@ -1674,7 +1833,6 @@ export function Omnibar({
     onCreateSession,
     onClose,
     onRunWorkflow,
-    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
     formState.extraArgs,
@@ -1689,6 +1847,64 @@ export function Omnibar({
   }, [handleSubmit]);
 
   if (!isOpen) return null;
+
+  // Reviewing an LLM-parsed backlog item draft (backlog: <message>) replaces
+  // the entire omnibar body — a different UI mode from session creation, not
+  // another branch of the input/results form below.
+  if (backlogReviewText !== null) {
+    return (
+      <div
+        className={overlay}
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="omnibar-title"
+        data-testid="omnibar"
+      >
+        <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
+          <BacklogItemIntentReview
+            initialText={backlogReviewText}
+            onDone={(item: BacklogItem) => {
+              setBacklogReviewText(null);
+              onClose();
+              router.push(`/backlog?item=${item.id}`);
+            }}
+            onCancel={() => setBacklogReviewText(null)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Compose mode: dedicated textarea; Create closes the omnibar and creates the
+  // item in the background, with triage progress reported via notifications.
+  if (backlogComposeText !== null) {
+    return (
+      <div
+        className={overlay}
+        // Backdrop clicks are ignored: the draft lives in the widget and only Cancel/Escape preserve it.
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backlog-compose-title"
+        data-testid="omnibar"
+      >
+        <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
+          <BacklogComposeWidget
+            initialText={backlogComposeText}
+            onSubmit={(text, repoPath) => {
+              setBacklogComposeText(null);
+              onClose();
+              void createBacklogItemInBackground(text, repoPath);
+            }}
+            onCancel={(draft) => {
+              setInput(draft);
+              setBacklogComposeText(null);
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const isMac = (() => {
     try {
@@ -1857,6 +2073,30 @@ export function Omnibar({
               </div>
             );
           })()}
+        {detection?.type === InputType.Workflow &&
+          !!detection.metadata?.workflowFound &&
+          (() => {
+            const { workflow, workflowArg } = detection.metadata as {
+              workflow?: WorkflowEntry;
+              workflowArg?: string;
+            };
+            return (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="workflow-resolution-chip"
+              >
+                <span>
+                  Workflow: @{workflow?.slug}
+                  {workflow?.name ? ` (${workflow.name})` : ""}
+                </span>
+                {workflow?.description ? (
+                  <span> · {workflow.description}</span>
+                ) : null}
+                <span> · arg: {workflowArg ? workflowArg : "(none)"}</span>
+              </div>
+            );
+          })()}
         {detection?.type === InputType.AliasNotFound &&
           (() => {
             const m = detection.metadata as Record<string, unknown> | undefined;
@@ -1932,6 +2172,7 @@ export function Omnibar({
                         key={cmd}
                         type="button"
                         data-testid="spawn-shell-recent-command"
+                        // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
                         onClick={() => {
                           setInput(`>shell -- ${cmd}`);
                           inputRef.current?.focus();
@@ -1975,6 +2216,7 @@ export function Omnibar({
               dispatchMode({ kind: "open_creation_direct" });
               setResultHighlightIndex(-1);
             }}
+            onCreateBacklog={openBacklogCompose}
           />
         )}
 
@@ -2017,6 +2259,7 @@ export function Omnibar({
             setFormField={setFormField}
             onSubmit={handleSubmit}
             onCancel={onClose}
+            onCreateBacklog={openBacklogCompose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
             worktreesError={worktreesError}
@@ -2058,123 +2301,35 @@ export function Omnibar({
         )}
 
         {/* R2: Confirmation dialog for Directory mode with non-existent path */}
-        {showPathConfirmation && pendingSessionData && createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="path-confirm-title"
-            style={{
-              position: "fixed",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "rgba(0,0,0,0.5)",
-              zIndex: 10,
-              borderRadius: "inherit",
+        {showPathConfirmation && pendingSessionData && (
+          <PathConfirmDialog
+            path={pendingSessionData.path}
+            onCancel={() => {
+              setShowPathConfirmation(false);
+              setPendingSessionData(null);
             }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                background: "var(--card-background)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "8px",
-                padding: "24px",
-                maxWidth: "420px",
-                width: "100%",
-                margin: "16px",
-              }}
-            >
-              <div
-                id="path-confirm-title"
-                style={{
-                  fontWeight: 600,
-                  fontSize: "1rem",
-                  marginBottom: "8px",
-                }}
-              >
-                Create directory?
-              </div>
-              <div
-                style={{
-                  fontSize: "0.875rem",
-                  color: "var(--text-secondary)",
-                  marginBottom: "16px",
-                }}
-              >
-                The path{" "}
-                <code style={{ fontFamily: "monospace", padding: "0 4px" }}>
-                  {pendingSessionData.path}
-                </code>{" "}
-                does not exist. Create it and initialize a git repository?
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "8px",
-                  justifyContent: "flex-end",
-                }}
-              >
-                <button
-                  type="button"
-                  style={{
-                    padding: "6px 14px",
-                    fontSize: "0.875rem",
-                    borderRadius: "6px",
-                    border: "1px solid var(--border-color)",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                  }}
-                  onClick={() => {
-                    setShowPathConfirmation(false);
-                    setPendingSessionData(null);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  style={{
-                    padding: "6px 14px",
-                    fontSize: "0.875rem",
-                    borderRadius: "6px",
-                    border: "none",
-                    background: "var(--primary)",
-                    color: "var(--primary-text)",
-                    cursor: "pointer",
-                  }}
-                  onClick={async () => {
-                    setShowPathConfirmation(false);
-                    const retryData = {
-                      ...pendingSessionData,
-                      createIfMissing: true,
-                    };
-                    setPendingSessionData(null);
-                    setIsSubmitting(true);
-                    setError(null);
-                    try {
-                      await onCreateSession(retryData);
-                      onClose();
-                    } catch (err) {
-                      const message =
-                        err instanceof Error
-                          ? err.message
-                          : "Failed to create session";
-                      setError(message);
-                    } finally {
-                      setIsSubmitting(false);
-                      isSubmittingRef.current = false;
-                    }
-                  }}
-                >
-                  Create &amp; Open
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
+            onConfirm={async () => {
+              setShowPathConfirmation(false);
+              const retryData = {
+                ...pendingSessionData,
+                createIfMissing: true,
+              };
+              setPendingSessionData(null);
+              setIsSubmitting(true);
+              setError(null);
+              try {
+                await onCreateSession(retryData);
+                onClose();
+              } catch (err) {
+                const message =
+                  err instanceof Error ? err.message : "Failed to create session";
+                setError(message);
+              } finally {
+                setIsSubmitting(false);
+                isSubmittingRef.current = false;
+              }
+            }}
+          />
         )}
 
         {/* Keyboard Shortcuts */}
@@ -2194,6 +2349,7 @@ export function Omnibar({
             <button
               type="button"
               className={createButton}
+              // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
               onClick={handleSubmit}
               disabled={!canSubmit || isSubmitting}
             >
@@ -2208,6 +2364,10 @@ export function Omnibar({
               <span className={shortcut}>
                 <span className={shortcutKey}>↵</span> Jump
               </span>
+              <OmnibarBacklogButton
+                onClick={openBacklogCompose}
+                className={`${buttonClass} ${buttonSecondary} ${shortcutsBacklogButton}`}
+              />
             </>
           )}
           {!isDiscoveryMode && isDropdownVisible && (

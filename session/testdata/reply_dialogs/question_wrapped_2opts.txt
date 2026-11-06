@@ -1,0 +1,38 @@
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/ssq-reply-cap
+
+
+❯ Call the MCP tool mcp__echo__echo with text 'hi'. Nothing else.
+
+  Called echo (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Baked for 0s · done 10:58 AM
+
+❯ Use the AskUserQuestion tool exactly once with one question (multiSelect
+  false): 'Which of the following database migration strategies should the team
+  adopt for the large production cluster, given the downtime budget and the
+  rollback requirements discussed earlier?' header 'Migration', two options
+  'Blue green cutover' and 'Rolling in-place upgrade', each with a short
+  description. Nothing else.
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Migration
+
+│ Which of the following database migration strategies should the team adopt for
+│ the large production cluster, given the downtime budget and the rollback
+│ requirements discussed earlier?
+
+❯ 1. Blue green cutover
+     Run a full parallel cluster, sync data, and switch traffic over at once.
+     Fast, easy rollback by switching back, but needs double the capacity during
+     the migration.
+  2. Rolling in-place upgrade
+     Upgrade nodes one at a time within the existing cluster. No extra capacity
+     needed, but rollback is harder and the cluster runs mixed versions during
+     the upgrade.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

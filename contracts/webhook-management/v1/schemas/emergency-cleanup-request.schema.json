@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "POST /registrations/{instance_id}/emergency-cleanup request. Works after the creation-time capability revision was revoked; compat is checked only for exact equality with the persisted tuple. Any provenance or scope failure is a bounded NOT_FOUND.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "expected_version", "compat", "action"],
+  "properties": {
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{8,128}$" },
+    "expected_version": { "type": "integer", "minimum": 1 },
+    "compat": { "$ref": "reconcile-request.schema.json#/properties/compat" },
+    "action": { "enum": ["disable", "delete"] }
+  }
+}

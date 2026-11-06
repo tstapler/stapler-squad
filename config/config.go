@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ func NewConfigWithExecutor(exec CommandExecutor) *Config {
 			exec = newTimeoutCommandExecutor(5 * time.Second)
 		}
 	}
-	return &Config{executor: exec}
+	return &Config{executor: exec, UnfinishedCaches: DefaultUnfinishedCaches()}
 }
 
 // NewConfig creates a Config with the default timeout executor.
@@ -192,6 +193,31 @@ func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
 	return result.Dir, nil
 }
 
+// UnfinishedCaches are the rollback-unit flags of the unfinished-work scanner
+// (project_plans/unfinished-scanner-dsa-perf ADR-008). Each unit can be turned
+// off in config.json without a deploy; dependents are normalized by
+// unfinished.EffectiveFlags.
+type UnfinishedCaches struct {
+	// SharedCommitState enables the per-repository shared commit state (graph,
+	// reach, ahead/behind memos, shared HEAD tree maps).
+	SharedCommitState bool `json:"shared_commit_state"`
+	// DiffCounter enables the Myers diff counter and per-file diff memo.
+	DiffCounter bool `json:"diff_counter"`
+	// ScanSkip enables scan skipping (ref snapshot, scan signature, index cache,
+	// untracked pruning, single stat pass).
+	ScanSkip bool `json:"scan_skip"`
+	// WatchWorktreeGitdirs enables Tier A linked-worktree gitdir watching.
+	WatchWorktreeGitdirs bool `json:"watch_worktree_gitdirs"`
+}
+
+// DefaultUnfinishedCaches returns the shipped rollback-unit defaults. A unit is
+// on here only after its own manual A/B passed (baseline.md "S2 A/B"); its
+// config.json key stays the off-switch, and LoadConfigFromPath seeds this value
+// before unmarshalling so an absent key keeps the default.
+func DefaultUnfinishedCaches() UnfinishedCaches {
+	return UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true, WatchWorktreeGitdirs: true}
+}
+
 // Config represents the application configuration
 type Config struct {
 	// executor is the command executor used for shell command discovery.
@@ -210,8 +236,13 @@ type Config struct {
 	// serialized since the field is unexported; read via SlackSigningSecretOverride().
 	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
-	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
+	// Must be loopback (localhost, 127.0.0.1, ::1); startup rejects anything else.
+	// Default: "localhost:8543". Remote access uses the separate HTTPS listener.
 	ListenAddress string `json:"listen_address"`
+	// GitBackendCohorts maps a git backend cohort name (refs, diffstatus, localwrite,
+	// network, worktree) to a mode (cli, gogit, shadow). Raw on purpose: validation and
+	// defaulting happen in session/gitwiring.ParseCohortMap. Absent key means cli.
+	GitBackendCohorts GitBackendCohortsConfig `json:"git_backend_cohorts,omitempty"`
 	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
 	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
 	// Required when remote access is enabled.
@@ -219,6 +250,12 @@ type Config struct {
 	// PasskeyEnabled controls whether passkey authentication is enforced.
 	// Automatically set to true when non-localhost listen address is used.
 	PasskeyEnabled bool `json:"passkey_enabled"`
+	// RequireLocalAuth makes the :8543 listener demand credentials (a passkey
+	// session cookie or the local API token) instead of trusting loopback
+	// RemoteAddr. Off by default: a same-box reverse proxy or other local
+	// process otherwise reaches every route. Non-browser clients read the token
+	// from <config dir>/auth/local-api-token.
+	RequireLocalAuth bool `json:"require_local_auth,omitempty"`
 	// DefaultProgram is the default program to run in new instances
 	DefaultProgram string `json:"default_program"`
 	// AutoYes is a flag to automatically accept all prompts.
@@ -227,6 +264,11 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// HeadlessTriageMaxTurns / HeadlessTriageMaxSubagents cap one sdd-mode headless
+	// triage call's assistant turns / subagent launches (ADR-029). 0 = use the
+	// default; negative = no limit. Read via the *OrDefault accessors.
+	HeadlessTriageMaxTurns     int `json:"headless_triage_max_turns,omitempty"`
+	HeadlessTriageMaxSubagents int `json:"headless_triage_max_subagents,omitempty"`
 	// DetectNewSessions is a flag to enable detection of new sessions from other windows
 	DetectNewSessions bool `json:"detect_new_sessions"`
 	// SessionDetectionInterval is the interval (ms) at which the daemon checks for new sessions
@@ -276,6 +318,10 @@ type Config struct {
 	// Empty string (the default) disables continuous profiling.
 	// Example: "http://localhost:4040"
 	PyroscopeServerAddress string `json:"pyroscope_server_address,omitempty"`
+	// UnfinishedCaches holds the rollback-unit flags for the unfinished-work
+	// scanner's shared caches. Read once at startup (restart-only); defaults come
+	// from DefaultUnfinishedCaches. See session/unfinished/flags.go for dependencies.
+	UnfinishedCaches UnfinishedCaches `json:"unfinished_caches"`
 	// NewProjectBaseDir is the base directory where new project directories are created.
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
@@ -295,10 +341,43 @@ type Config struct {
 	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
-	// default (20). Individual items can also override this via
+	// default (DefaultMaxAutoReworkIterations). Individual items can also override this via
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
+	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
+	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
+	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
+	// DiagnoseNudgeMaxAttempts caps how many times the Diagnose & Nudge feature
+	// (BacklogStuckState.DiagnoseNudgeCount) will nudge the same stuck item before
+	// further automatic nudging stops and the dispatched agent's action space is
+	// narrowed to file-a-bug/post-a-note only. 0 = use the default (3); values
+	// above diagnoseNudgeMaxAttemptsHardCeiling are clamped to it.
+	DiagnoseNudgeMaxAttempts int `json:"diagnose_nudge_max_attempts,omitempty"`
+	// NoopDispatchThreshold is how many consecutive work sessions on one PASS-verdict
+	// item may end with no new commits before it is flagged repeated_noop_dispatch and
+	// further dispatch is blocked. 0 = use the default (3).
+	NoopDispatchThreshold int `json:"noop_dispatch_threshold,omitempty"`
+	// HeadlessTriageMaxCostUSD aborts a headless triage call whose estimated spend
+	// exceeds this many USD, independent of elapsed time. 0 = use the default ($25);
+	// negative disables the ceiling.
+	HeadlessTriageMaxCostUSD float64 `json:"headless_triage_max_cost_usd,omitempty"`
+	// MaxConcurrentTriage caps simultaneous headless triage calls; extra runs queue.
+	// 0 = default (8), clamped to [1, MaxConcurrentTriageCeiling].
+	MaxConcurrentTriage int `json:"max_concurrent_triage,omitempty"`
+
+	// WakeLimits overrides the defaults of the plan's "Wake limits" table for
+	// agent wake triggers; zero values keep the defaults and every value is
+	// clamped to the ceilings compiled into server/wakes.
+	WakeLimits WakeLimitsConfig `json:"wake_limits,omitempty"`
+	// InboxPRWatch configures the PR-watch inbox consumer (flag "inbox_pr_watch");
+	// resolve with InboxPRWatchSettings.
+	InboxPRWatch InboxPRWatchConfig `json:"inbox_pr_watch,omitempty"`
+	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
+	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
+	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
 	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
@@ -327,15 +406,34 @@ type Config struct {
 	// Keys are machine names (e.g. "backlog"); values are booleans.
 	// Absent key == disabled (false is the safe default for all flags).
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+	// TCCEnrichmentConsent records app consent by opaque protected-root ID, not OS grants.
+	TCCEnrichmentConsent map[string]bool `json:"tcc_enrichment_consent,omitempty"`
+	// TCCEnrichmentDenied records roots whose probe hit EPERM, until the user re-checks.
+	TCCEnrichmentDenied map[string]bool `json:"tcc_enrichment_denied,omitempty"`
+	// FeatureFlagScopes holds per-scope overrides of a scopable flag, keyed by
+	// flag name then scope ("kind:review"). A scope key is explicit when present;
+	// deleting it returns the scope to the flag's global value. Today only
+	// hidden_session_gate is scopable (see FeatureFlagService).
+	FeatureFlagScopes map[string]map[string]bool `json:"feature_flag_scopes,omitempty"`
+	// LLMBackends selects which backend serves headless (non-interactive) LLM
+	// calls: a global default plus per-feature overrides. Edited live through the
+	// LLM backend settings RPC; no environment variables.
+	LLMBackends LLMBackendsConfig `json:"llm_backends,omitempty"`
 	// Hibernation holds configuration for the session hibernation feature.
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// ContextHealth holds the thresholds for the per-session ContextHealth signal.
+	ContextHealth ContextHealthConfig `json:"context_health,omitempty"`
 	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
 	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
+	// QuotaConfiguredAt is stamped when the quota settings page (UpdateQuotaConfig)
+	// saves. LoadConfig persists defaults into Quota, so the stored object alone
+	// cannot tell "never configured" from "configured with default values".
+	QuotaConfiguredAt *time.Time `json:"quota_configured_at,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
@@ -363,6 +461,11 @@ type Config struct {
 	// OS keychain (see jules.KeyringTokenSource) — this struct only holds the
 	// opt-in flag, per-repo egress acknowledgements, and spend guard caps.
 	Jules JulesConfig `json:"jules,omitempty"`
+	// TaggingClassifier holds the LLM model hierarchy for session-tag
+	// classification (primary model plus ordered fallbacks).
+	TaggingClassifier TaggingClassifierConfig `json:"tagging_classifier,omitempty"`
+	// BackgroundModels pins model/effort for unattended LLM work (see background_models.go).
+	BackgroundModels BackgroundModelsConfig `json:"background_models,omitempty"`
 
 	// Escape analytics configuration
 
@@ -377,6 +480,7 @@ type Config struct {
 	// Default: 1.0.
 	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
 	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// A session may briefly hold up to 10% more between trims; each trim returns it to this cap.
 	// Default: 10000.
 	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
 	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
@@ -424,9 +528,10 @@ type Config struct {
 	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
 	// that, since it means "new sessions honor the reverted default while
 	// existing tymux-backed sessions stay pinned to tymux for their
-	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
-	// refuses to let the *global* tymux default resolve to true until this
-	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	// lifetime". nil means "never completed". Purely a historical record now
+	// — the global default no longer gates on it (see EffectiveTymuxEnabled;
+	// SetTymuxGlobalOverride sets the "tymux" feature flag unconditionally).
+	// Set via RecordTymuxRollbackRehearsalCompleted.
 	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
 	// TymuxSessionOverrides forces the tymux-bundled-integration project's
 	// process-manager backend for specific named tmux sessions, regardless of
@@ -437,24 +542,6 @@ type Config struct {
 	// comment above); consulted by ResolveSessionBackend
 	// (session/backend_resolution.go).
 	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
-	// NativeWorktreeSessionOverrides forces the go-git-worktree-and-merge
-	// project's native (go-git) worktree implementation for specific named
-	// tmux sessions, regardless of the global native_git_worktree feature
-	// flag default (ADR-002; Phase 4, Epic 4.1). Keys are tmux session names
-	// — GitWorktree already carries a sessionName field to key off of — an
-	// absent key means "no override, use the global default". Mirrors
-	// StreamHubSessionOverrides's shape exactly; consulted by
-	// session/git.useNativeWorktree.
-	NativeWorktreeSessionOverrides map[string]bool `json:"native_worktree_session_overrides,omitempty"`
-	// NativeMergeWorktreeOverrides forces the native (go-git) merge
-	// implementation for specific worktree paths, regardless of the global
-	// native_git_merge feature flag default (ADR-002; Phase 4, Epic 4.1).
-	// Keyed by worktreePath rather than sessionName: MergeMainIntoWorktree
-	// has no session-name parameter to key off of without a signature
-	// change or a new session/git reverse lookup, both rejected in ADR-002's
-	// Alternatives Considered. An absent key means "no override, use the
-	// global default". Consulted by session/git.useNativeMerge.
-	NativeMergeWorktreeOverrides map[string]bool `json:"native_merge_worktree_overrides,omitempty"`
 }
 
 // StreamHubFeatureFlag is the config.FeatureFlags key backing
@@ -469,38 +556,145 @@ const StreamHubFeatureFlag = "stream_hub"
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
 
-// NativeWorktreeFeatureFlag is the config.FeatureFlags key backing
-// EffectiveNativeWorktreeEnabled — the global native (go-git) worktree
-// implementation default. Defaults to off (ADR-002): this is
-// corruption-blast-radius code touching every session's git state, not a
-// transparent perf optimization, so rollout is opt-in.
-const NativeWorktreeFeatureFlag = "native_git_worktree"
+// EscapeEventsDBMigrateFeatureFlag gates the background copy of escape_events rows
+// from analytics.db into db/escape_events.db. Off leaves the new database empty
+// and the old table untouched (nothing reads it).
+const EscapeEventsDBMigrateFeatureFlag = "escape_events_db_migrate"
 
-// NativeMergeFeatureFlag is the config.FeatureFlags key backing
-// EffectiveNativeMergeEnabled — the global native (go-git) merge
-// implementation default. Defaults to off, same rationale as
-// NativeWorktreeFeatureFlag (ADR-002).
-const NativeMergeFeatureFlag = "native_git_merge"
+// EscapeEventsDBMigrateDefault is the registry default for the flag above.
+const EscapeEventsDBMigrateDefault = true
 
-// EffectiveNativeWorktreeEnabled reports whether the global native-worktree
-// default is active. session/git.useNativeWorktree checks a session
-// override first and falls back to this for the global default (ADR-002).
-func EffectiveNativeWorktreeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(NativeWorktreeFeatureFlag, false)
+// EscapeEventsDBMigrateEnabled reports whether the escape_events copy should run.
+func (c *Config) EscapeEventsDBMigrateEnabled() bool {
+	return c.GetFeatureFlagWithDefault(EscapeEventsDBMigrateFeatureFlag, EscapeEventsDBMigrateDefault)
 }
 
-// EffectiveNativeMergeEnabled reports whether the global native-merge
-// default is active. session/git.useNativeMerge checks a worktree-path
-// override first and falls back to this for the global default (ADR-002).
-func EffectiveNativeMergeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(NativeMergeFeatureFlag, false)
+// HiddenSessionGateFeatureFlag is the config.FeatureFlags key backing the
+// hidden-session delivery gate (server/deliverygate). On by default; setting it
+// false (globally or per hidden-session kind) is the live rollback: hidden
+// sessions then deliver everything and the gate only counts what it would drop.
+const HiddenSessionGateFeatureFlag = "hidden_session_gate"
+
+// HiddenSessionGateDefault is the registry default, shared by the flag service
+// and the gate's FlagCache so flipping it cannot leave them disagreeing.
+const HiddenSessionGateDefault = true
+
+// DriverPaneActivityGateDefault is the registry default of the session driver's
+// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// flag service and the driver's reader so they cannot disagree.
+const DriverPaneActivityGateDefault = true
+
+// TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
+// and asks via a durable GuidanceRequest instead of guessing on a genuinely
+// ambiguous item (durable-guidance-request AC2). Defaults to off: no rollback
+// rehearsal has vouched for this as the global default yet, same posture as
+// TymuxFeatureFlag.
+const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
+
+// TriageGuidanceHaltDefault is the registry default, shared by the flag service
+// and EffectiveTriageGuidanceHaltEnabled.
+const TriageGuidanceHaltDefault = false
+
+// EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
+// halt and create a GuidanceRequest on ambiguity rather than guess. Callers
+// must read this fresh at the exact halt-decision instant, not cache it at
+// pass start — triage is a long-running background call, not a
+// request/response RPC, so staleness at the decision point is the risk that
+// matters (mirrors EffectiveTymuxEnabled's live-read contract).
+func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, TriageGuidanceHaltDefault)
+}
+
+// DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
+// EffectiveDiagnoseNudgeEnabled — the kill switch for autonomous
+// diagnose_nudge_session writes (Diagnose & Nudge, backlog item 68964304).
+// Shipped with no way to disable short of a code change/redeploy; this flag
+// closes that gap. Defaults to off, same posture as TymuxFeatureFlag/
+// TriageGuidanceHaltFeatureFlag: no rollback rehearsal has vouched for
+// autonomous nudging as the default yet.
+const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
+
+// DiagnoseNudgeDefault is the registry default, shared by the flag service and
+// EffectiveDiagnoseNudgeEnabled.
+const DiagnoseNudgeDefault = false
+
+// EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
+// agent may actually perform a nudge write. Callers must read this fresh at
+// the exact write instant (diagnose_nudge_session's MCP handler), not cache
+// it at dispatch start — an in-flight diagnostic session that already
+// decided to nudge before the flag flips off must still be blocked at the
+// write call site.
+func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, DiagnoseNudgeDefault)
+}
+
+// AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
+// stall path may type into an idle work session instead of respawning it.
+// It is AND-ed with DiagnoseNudgeFeatureFlag, which stays the kill switch for
+// every autonomous pane write.
+const AutonomousStallNudgeFeatureFlag = "autonomous_stall_nudge_enabled"
+
+// AutonomousStallNudgeDefault is the shipped default: off until soaked.
+const AutonomousStallNudgeDefault = false
+
+// EffectiveAutonomousStallNudgeEnabled reports whether the stall path may nudge.
+// Read it at the decision instant, never cached.
+func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
+}
+
+// WorkflowEngineShadowFeatureFlag and the per-class enforce flags select the
+// backlog workflow engine mode (session.ModeFromFlags): shadow compares the
+// configured engine against today's answer without changing anything; an
+// enforce flag makes the configured graph and gates decide for its caller
+// class (operator, agent, system). All are live-settable.
+const (
+	WorkflowEngineShadowFeatureFlag        = "backlog:workflow-engine-shadow"
+	WorkflowEngineEnforceFeatureFlag       = "backlog:workflow-engine-enforce"
+	WorkflowEngineEnforceAgentFeatureFlag  = "backlog:workflow-engine-enforce-agent"
+	WorkflowEngineEnforceSystemFeatureFlag = "backlog:workflow-engine-enforce-system"
+
+	// WorkflowEngineShadowDefault is on so the soak accrues evidence from the first boot.
+	WorkflowEngineShadowDefault = true
+	// WorkflowEngineEnforceDefault is off until the soak verdict is READY.
+	WorkflowEngineEnforceDefault = false
+	// WorkflowEngineEnforceAgentDefault is off until the agent class's soak is acknowledged.
+	WorkflowEngineEnforceAgentDefault = false
+	// WorkflowEngineEnforceSystemDefault is off until the system class's soak is
+	// acknowledged and the Story 1.5.8 recovery guards are on the deployed binary.
+	WorkflowEngineEnforceSystemDefault = false
+)
+
+// EffectiveWorkflowEngineShadow reports whether shadow comparison is on. Read
+// with the registered default: a plain GetFeatureFlag returns false when unset
+// and would silently switch shadow off.
+func EffectiveWorkflowEngineShadow(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineShadowFeatureFlag, WorkflowEngineShadowDefault)
+}
+
+// EffectiveWorkflowEngineEnforce reports whether the configured engine decides.
+func EffectiveWorkflowEngineEnforce(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceFeatureFlag, WorkflowEngineEnforceDefault)
+}
+
+// EffectiveWorkflowEngineEnforceAgent reports whether the configured engine
+// decides for agent (MCP tool) callers.
+func EffectiveWorkflowEngineEnforceAgent(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceAgentFeatureFlag, WorkflowEngineEnforceAgentDefault)
+}
+
+// EffectiveWorkflowEngineEnforceSystem reports whether the configured engine
+// decides for system (lifecycle, triage and dispatch) callers.
+func EffectiveWorkflowEngineEnforceSystem(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceSystemFeatureFlag, WorkflowEngineEnforceSystemDefault)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
-// backend default is active. Read once at process startup
-// (main.go's resolveStartupBackend) — deliberately not live-settable, so
-// switching the default backend for every new session stays a conscious
-// operator action rather than a live UI toggle.
+// backend default is active. Resolved fresh on every call (session.getSelectedBackend)
+// via SetTymuxGlobalOverride — live-settable, no process restart required.
+// main.go's own startup-time read of this (via ResolveSessionBackend) is only
+// for tymuxNeeded's supervision decision, not a cache of this value.
 func EffectiveTymuxEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
@@ -509,8 +703,9 @@ func EffectiveTymuxEnabled(cfg *Config) bool {
 // TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
 // called exactly once, after manually verifying a tymux rollback rehearsal
 // (new sessions honor the reverted default while existing tymux-backed
-// sessions stay pinned) passed against a real disposable session. Unblocks
-// ResolveGlobalTymuxDefault from refusing to enable the global default.
+// sessions stay pinned) passed against a real disposable session.
+// TymuxRollbackRehearsalCompletedAt's own doc comment covers why this is a
+// historical record only, not an enforced gate.
 func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	now := time.Now()
 	c.TymuxRollbackRehearsalCompletedAt = &now
@@ -645,121 +840,6 @@ func (c *Config) GetTymuxGlobalOverride() (value bool, ok bool) {
 	return c.GetFeatureFlagOverride(TymuxFeatureFlag)
 }
 
-// GetNativeWorktreeSessionOverride reports whether sessionName has a
-// per-session NativeWorktreeSessionOverrides entry recorded, and if so, what
-// it forces. Mirrors GetStreamHubSessionOverride's nil-safe shape: a nil
-// Config or nil map reports (false, false) — no override.
-func (c *Config) GetNativeWorktreeSessionOverride(sessionName string) (forceNative bool, ok bool) {
-	if c == nil || c.NativeWorktreeSessionOverrides == nil {
-		return false, false
-	}
-	forceNative, ok = c.NativeWorktreeSessionOverrides[sessionName]
-	return forceNative, ok
-}
-
-// SetNativeWorktreeSessionOverride sets or clears sessionName's per-session
-// native-worktree override and persists the config to disk. forceNative
-// follows this file's tri-state *bool convention (see
-// SetStreamHubSessionOverride): nil removes any override for sessionName
-// (falling back to the global default), a non-nil false explicitly pins the
-// session to the legacy implementation regardless of the global default,
-// and a non-nil true forces the native implementation.
-//
-// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
-// against a concurrent writer — a pre-existing pattern shared with
-// StreamHub/Tymux overrides; needs a shared fix across all three, not a
-// one-off here.
-func (c *Config) SetNativeWorktreeSessionOverride(sessionName string, forceNative *bool) error {
-	if forceNative == nil {
-		if c.NativeWorktreeSessionOverrides != nil {
-			delete(c.NativeWorktreeSessionOverrides, sessionName)
-		}
-		return SaveConfig(c)
-	}
-	if c.NativeWorktreeSessionOverrides == nil {
-		c.NativeWorktreeSessionOverrides = make(map[string]bool)
-	}
-	c.NativeWorktreeSessionOverrides[sessionName] = *forceNative
-	return SaveConfig(c)
-}
-
-// SetNativeWorktreeGlobalOverride sets or clears the "native_git_worktree"
-// feature flag and persists the config to disk. forceNative follows this
-// file's tri-state *bool convention: nil clears the flag (reverting to
-// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
-// for every session resolved from now on. Mirrors SetStreamHubGlobalOverride
-// exactly.
-func (c *Config) SetNativeWorktreeGlobalOverride(forceNative *bool) error {
-	if forceNative == nil {
-		return c.DeleteFeatureFlag(NativeWorktreeFeatureFlag)
-	}
-	return c.SetFeatureFlag(NativeWorktreeFeatureFlag, *forceNative)
-}
-
-// GetNativeWorktreeGlobalOverride reports the explicitly-persisted
-// "native_git_worktree" feature flag value, if any. Mirrors
-// GetStreamHubGlobalOverride's (value, ok) shape.
-func (c *Config) GetNativeWorktreeGlobalOverride() (value bool, ok bool) {
-	return c.GetFeatureFlagOverride(NativeWorktreeFeatureFlag)
-}
-
-// GetNativeMergeWorktreeOverride reports whether worktreePath has a
-// per-worktree NativeMergeWorktreeOverrides entry recorded, and if so, what
-// it forces. Keyed by worktreePath, not sessionName, per ADR-002. Mirrors
-// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
-// reports (false, false) — no override.
-func (c *Config) GetNativeMergeWorktreeOverride(worktreePath string) (forceNative bool, ok bool) {
-	if c == nil || c.NativeMergeWorktreeOverrides == nil {
-		return false, false
-	}
-	forceNative, ok = c.NativeMergeWorktreeOverrides[worktreePath]
-	return forceNative, ok
-}
-
-// SetNativeMergeWorktreeOverride sets or clears worktreePath's per-worktree
-// native-merge override and persists the config to disk. forceNative
-// follows this file's tri-state *bool convention: nil removes any override
-// for worktreePath (falling back to the global default), a non-nil false
-// explicitly pins that worktree to the legacy implementation regardless of
-// the global default, and a non-nil true forces the native implementation.
-//
-// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
-// against a concurrent writer — see SetNativeWorktreeSessionOverride's
-// identical note.
-func (c *Config) SetNativeMergeWorktreeOverride(worktreePath string, forceNative *bool) error {
-	if forceNative == nil {
-		if c.NativeMergeWorktreeOverrides != nil {
-			delete(c.NativeMergeWorktreeOverrides, worktreePath)
-		}
-		return SaveConfig(c)
-	}
-	if c.NativeMergeWorktreeOverrides == nil {
-		c.NativeMergeWorktreeOverrides = make(map[string]bool)
-	}
-	c.NativeMergeWorktreeOverrides[worktreePath] = *forceNative
-	return SaveConfig(c)
-}
-
-// SetNativeMergeGlobalOverride sets or clears the "native_git_merge" feature
-// flag and persists the config to disk. forceNative follows this file's
-// tri-state *bool convention: nil clears the flag (reverting to
-// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
-// for every merge resolved from now on. Mirrors SetStreamHubGlobalOverride
-// exactly.
-func (c *Config) SetNativeMergeGlobalOverride(forceNative *bool) error {
-	if forceNative == nil {
-		return c.DeleteFeatureFlag(NativeMergeFeatureFlag)
-	}
-	return c.SetFeatureFlag(NativeMergeFeatureFlag, *forceNative)
-}
-
-// GetNativeMergeGlobalOverride reports the explicitly-persisted
-// "native_git_merge" feature flag value, if any. Mirrors
-// GetStreamHubGlobalOverride's (value, ok) shape.
-func (c *Config) GetNativeMergeGlobalOverride() (value bool, ok bool) {
-	return c.GetFeatureFlagOverride(NativeMergeFeatureFlag)
-}
-
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
 func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 	if c == nil {
@@ -836,10 +916,10 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDetectionInterval = 5000
 	cfg.StateRefreshInterval = 3000
 	cfg.LogsEnabled = true
-	cfg.LogsDir = ""    // Empty string means use default location
-	cfg.LogMaxSize = 10 // 10MB
-	cfg.LogMaxFiles = 5 // Keep 5 rotated files
-	cfg.LogMaxAge = 30  // 30 days
+	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogMaxSize = DefaultLogMaxSizeMB
+	cfg.LogMaxFiles = DefaultLogMaxFiles
+	cfg.LogMaxAge = DefaultLogMaxAgeDays
 	cfg.LogCompress = true
 	cfg.UseSessionLogs = true
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
@@ -857,6 +937,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.ContextHealth = ContextHealthConfig{}.ContextHealthConfigOrDefault()
 	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
 	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
@@ -867,6 +948,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	cfg.SessionDefaults.Programs = []ProgramConfig{}
 	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
 	// after JSON decode (for fields absent from an existing config.json);
 	// DefaultConfig must mirror them so the two code paths are equivalent.
@@ -960,6 +1042,42 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "triage-artifacts"), nil
 }
 
+// Defaults sit between a normal sdd triage call and the #882 incident (1,094
+// turns, 262 subagent completions); re-tune from the logged per-call counters.
+const (
+	DefaultHeadlessTriageMaxTurns     = 600
+	DefaultHeadlessTriageMaxSubagents = 120
+)
+
+// HeadlessTriageMaxTurnsOrDefault resolves the sdd triage turn ceiling: the
+// default when unset, 0 (disabled in headless.CallOptions) when configured < 0.
+func (c *Config) HeadlessTriageMaxTurnsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxTurns, DefaultHeadlessTriageMaxTurns)
+}
+
+// HeadlessTriageMaxSubagentsOrDefault resolves the sdd triage subagent ceiling
+// (launches, not completions) with the same semantics as the turn ceiling.
+func (c *Config) HeadlessTriageMaxSubagentsOrDefault() int {
+	if c == nil {
+		return 0
+	}
+	return ceilingOrDefault(c.HeadlessTriageMaxSubagents, DefaultHeadlessTriageMaxSubagents)
+}
+
+func ceilingOrDefault(configured, def int) int {
+	switch {
+	case configured < 0:
+		return 0
+	case configured == 0:
+		return def
+	default:
+		return configured
+	}
+}
+
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
 // session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
@@ -978,6 +1096,9 @@ func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
 	return filepath.Join(configDir, "headless-failures"), nil
 }
 
+// BacklogAttachmentDirName is the attachments directory's name under GetConfigDir().
+const BacklogAttachmentDirName = "backlog-attachments"
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
@@ -989,7 +1110,7 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
-	return filepath.Join(configDir, "backlog-attachments"), nil
+	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
@@ -1036,19 +1157,143 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
-// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
-// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
-// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
-// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
-// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
-// for otherwise-recoverable items. Genuinely stuck items still get caught — just
-// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
-// that need to go further still.
+// HeadlessTriageMaxCostUSDDefault is the cost ceiling for one headless triage call
+// when unconfigured: well above a normal multi-subagent triage, well below the
+// $106.69 runaway that motivated it.
+const HeadlessTriageMaxCostUSDDefault = 25.0
+
+// HeadlessTriageMaxCostUSDOrDefault returns the triage cost ceiling in USD, or 0
+// when it is disabled (negative config value). Falls back to the default if unset or c is nil.
+func (c *Config) HeadlessTriageMaxCostUSDOrDefault() float64 {
+	switch {
+	case c == nil || c.HeadlessTriageMaxCostUSD == 0:
+		return HeadlessTriageMaxCostUSDDefault
+	case c.HeadlessTriageMaxCostUSD < 0:
+		return 0
+	}
+	return c.HeadlessTriageMaxCostUSD
+}
+
+const (
+	DefaultMaxConcurrentTriage = 8
+	MaxConcurrentTriageCeiling = 64
+	// DefaultHeadlessTriageModel is a cheaper tier than the account default; triage
+	// output is structured planning, not deep code generation.
+	DefaultHeadlessTriageModel = "family:sonnet"
+	// HeadlessTriageModelAccountDefault opts out of the model pin.
+	HeadlessTriageModelAccountDefault = "none"
+)
+
+// WakeLimitsConfig is the operator-settable half of the Wake limits table.
+// Zero means "use the default"; server/wakes clamps each value to its hard
+// ceiling, so config can lower a limit or raise it only up to that ceiling.
+type WakeLimitsConfig struct {
+	MinCronIntervalMinutes int `json:"min_cron_interval_minutes,omitempty"`
+	PendingPerOwner        int `json:"pending_per_owner,omitempty"`
+	MaxFiresCron           int `json:"max_fires_cron,omitempty"`
+	ExpiresHorizonHours    int `json:"expires_horizon_hours,omitempty"`
+	Generation             int `json:"generation,omitempty"`
+	FiresPerOwnerHour      int `json:"fires_per_owner_hour,omitempty"`
+	FiresGlobalHour        int `json:"fires_global_hour,omitempty"`
+	PeerOpenPerAsker       int `json:"peer_open_per_asker,omitempty"`
+	PayloadChars           int `json:"payload_chars,omitempty"`
+	DebounceSeconds        int `json:"debounce_seconds,omitempty"`
+	BusyHoldMinutes        int `json:"busy_hold_minutes,omitempty"`
+	ReviveLockSeconds      int `json:"revive_lock_seconds,omitempty"`
+}
+
+// MaxConcurrentTriageOrDefault returns the triage concurrency cap, nil-safe.
+func (c *Config) MaxConcurrentTriageOrDefault() int {
+	switch {
+	case c == nil || c.MaxConcurrentTriage <= 0:
+		return DefaultMaxConcurrentTriage
+	case c.MaxConcurrentTriage > MaxConcurrentTriageCeiling:
+		return MaxConcurrentTriageCeiling
+	}
+	return c.MaxConcurrentTriage
+}
+
+// HeadlessTriageModelOrDefault returns the configured triage model ("" when the
+// operator opted out via "none"), nil-safe.
+func (c *Config) HeadlessTriageModelOrDefault() string {
+	switch {
+	case c == nil || c.HeadlessTriageModel == "":
+		return DefaultHeadlessTriageModel
+	case c.HeadlessTriageModel == HeadlessTriageModelAccountDefault:
+		return ""
+	}
+	return c.HeadlessTriageModel
+}
+
+// NoopDispatchThresholdOrDefault returns the configured no-op dispatch threshold, or 3
+// if unset or c is nil.
+func (c *Config) NoopDispatchThresholdOrDefault() int {
+	if c == nil || c.NoopDispatchThreshold <= 0 {
+		return 3
+	}
+	return c.NoopDispatchThreshold
+}
+
+// DefaultMaxAutoReworkIterations is the rework cap applied when unset. It is
+// served to the settings form via GetSessionDefaults, so the UI shows the value
+// the server enforces. 20 never fired on live data (max 9 work sessions on any
+// item, mostly zero-commit) while costing real spend; per-item ReworkCapOverride
+// covers items that need more.
+const DefaultMaxAutoReworkIterations = 5
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or
+// DefaultMaxAutoReworkIterations if not set (zero value) or c is nil
+// (BacklogService's cfg is nil in some test setups).
 func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 	if c == nil || c.MaxAutoReworkIterations <= 0 {
-		return 20
+		return DefaultMaxAutoReworkIterations
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).
+// 30 is ~1.8x the highest turn count seen in live driver logs (17); 60 was a
+// generous ceiling that let non-converging runs burn billed turns.
+// autonomousMaxTurnsHardCeiling guards against a
+// runaway config value burning billed turns on a non-converging run.
+const (
+	autonomousMaxTurnsDefault     = 30
+	autonomousMaxTurnsHardCeiling = 200
+)
+
+// AutonomousMaxTurnsOrDefault returns the configured autonomous-driver turn cap,
+// clamped to [1, autonomousMaxTurnsHardCeiling]. Falls back to the default (30)
+// if unset (<=0) or c is nil.
+func (c *Config) AutonomousMaxTurnsOrDefault() int {
+	if c == nil || c.AutonomousMaxTurns <= 0 {
+		return autonomousMaxTurnsDefault
+	}
+	if c.AutonomousMaxTurns > autonomousMaxTurnsHardCeiling {
+		return autonomousMaxTurnsHardCeiling
+	}
+	return c.AutonomousMaxTurns
+}
+
+// diagnoseNudgeMaxAttemptsDefault is used when the config value is unset (0 or
+// negative). diagnoseNudgeMaxAttemptsHardCeiling guards against a runaway
+// config value letting the Diagnose & Nudge feature nudge a stuck session
+// indefinitely.
+const (
+	diagnoseNudgeMaxAttemptsDefault     = 3
+	diagnoseNudgeMaxAttemptsHardCeiling = 10
+)
+
+// DiagnoseNudgeMaxAttemptsOrDefault returns the configured Diagnose & Nudge
+// attempt cap, clamped to [1, diagnoseNudgeMaxAttemptsHardCeiling]. Falls back
+// to the default (3) if unset (<=0) or c is nil.
+func (c *Config) DiagnoseNudgeMaxAttemptsOrDefault() int {
+	if c == nil || c.DiagnoseNudgeMaxAttempts <= 0 {
+		return diagnoseNudgeMaxAttemptsDefault
+	}
+	if c.DiagnoseNudgeMaxAttempts > diagnoseNudgeMaxAttemptsHardCeiling {
+		return diagnoseNudgeMaxAttemptsHardCeiling
+	}
+	return c.DiagnoseNudgeMaxAttempts
 }
 
 // maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
@@ -1115,6 +1360,41 @@ func (c *Config) MaxJulesSessionsPerDayOrDefault() int {
 		return maxJulesSessionsPerDayHardCeiling
 	}
 	return c.Jules.MaxJulesSessionsPerDay
+}
+
+// taggingClassifierModelDefault is the primary classification model when
+// TaggingClassifierConfig.Model is unset.
+const taggingClassifierModelDefault = "haiku"
+
+// TaggingClassifierModelOrDefault returns the configured primary classification model,
+// falling back to "haiku" when unset or c is nil. Whitespace is trimmed; an empty result
+// also falls back to the default (an all-spaces model name would otherwise reach --model).
+func (c *Config) TaggingClassifierModelOrDefault() string {
+	if c == nil {
+		return taggingClassifierModelDefault
+	}
+	if model := strings.TrimSpace(c.TaggingClassifier.Model); model != "" {
+		return model
+	}
+	return taggingClassifierModelDefault
+}
+
+// TaggingClassifierFallbacks returns the configured fallback model hierarchy with blanks
+// dropped, or nil when none is configured. Never returns a slice containing the primary —
+// a fallback equal to the primary is silently dropped (retrying the identical model twice
+// in a row only doubles cost without new information).
+func (c *Config) TaggingClassifierFallbacks() []string {
+	if c == nil {
+		return nil
+	}
+	primary := c.TaggingClassifierModelOrDefault()
+	var out []string
+	for _, m := range c.TaggingClassifier.FallbackModels {
+		if m = strings.TrimSpace(m); m != "" && m != primary {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
@@ -1235,7 +1515,7 @@ func (c *Config) GetAvailablePrograms() []string {
 		shell = "/bin/bash"
 	}
 
-	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini", "agy", "aider"}
 
 	for _, candidate := range candidates {
 		var shellCmd string
@@ -1367,7 +1647,15 @@ func saveConfig(config *Config, paths ...string) error {
 // Callers must hold saveConfigLockFor(configPath) — factored out so
 // loadConfigWithDefaultFallback can share the same critical section as
 // saveConfig without re-entering (and deadlocking on) the same mutex.
-func saveConfigLocked(config *Config, configPath string) error {
+func saveConfigLocked(config *Config, configPath string) (saveErr error) {
+	start := time.Now()
+	var fsyncTook time.Duration
+	// Only successful saves are recorded: a failure before the fsync would add a 0ms sample.
+	defer func() {
+		if saveErr == nil {
+			recordSave(time.Since(start), fsyncTook)
+		}
+	}()
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -1390,6 +1678,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	// so the renamed config.json keeps its historical permissions.
 	chmodErr := tmpFile.Chmod(0644)
 	_, writeErr := tmpFile.Write(data)
+	// Sync before rename so a power loss cannot leave a zero-length config.json.
+	syncStart := time.Now()
+	syncErr := syncFile(tmpFile)
+	fsyncTook = time.Since(syncStart)
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1398,6 +1690,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	if writeErr != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync temp config: %w", syncErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1415,9 +1711,81 @@ func SaveConfig(config *Config) error {
 	return saveConfig(config)
 }
 
+// updateConfigMu holds one *sync.Mutex per config path. It is the OUTER lock of
+// UpdateConfig and must stay distinct from saveConfigMu: saveConfig takes that
+// one itself and sync.Mutex is not reentrant.
+var updateConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex
+
+// UpdateConfig is an atomic read-modify-write of config.json: it holds a per-path
+// lock across LoadConfig, fn and the save, so two UpdateConfig callers cannot lose
+// each other's change. Callers that still do an unlocked LoadConfig+SaveConfig can
+// race with it; migrate them here. fn may call setters that save on their own.
+func UpdateConfig(fn func(*Config) error) error {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+	configPath := filepath.Join(configDir, ConfigFileName)
+
+	lock, _ := updateConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Only a missing file starts from defaults; an unreadable or half-written one
+	// must not be overwritten with defaults plus this one change.
+	cfg, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("refusing to update unreadable config %s: %w", configPath, err)
+		}
+		cfg = DefaultConfig()
+	}
+	if err := fn(cfg); err != nil {
+		return err
+	}
+	return saveConfig(cfg, configPath)
+}
+
+// QuotaIsConfigured reports whether the operator has set quota values: the page
+// stamped QuotaConfiguredAt, or a hand edit made Quota differ from the defaults.
+func (c *Config) QuotaIsConfigured() bool {
+	if c.QuotaConfiguredAt != nil {
+		return true
+	}
+	return !reflect.DeepEqual(c.Quota, QuotaConfig{}.QuotaConfigOrDefault())
+}
+
+// GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is
+// tolerant so one malformed entry cannot fail the whole config load (which would reset
+// every other setting to defaults): non-string values keep their key with the raw JSON text
+// as the value, which session/gitwiring.ParseCohortMap rejects with a WARN naming the key,
+// and a null or non-object value decodes to an empty map.
+type GitBackendCohortsConfig map[string]string
+
+// UnmarshalJSON implements json.Unmarshaler; it never returns an error.
+func (g *GitBackendCohortsConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw) == 0 {
+		*g = nil
+		return nil
+	}
+	out := make(GitBackendCohortsConfig, len(raw))
+	for k, v := range raw {
+		var str string
+		if err := json.Unmarshal(v, &str); err != nil {
+			str = string(v)
+		}
+		out[k] = str
+	}
+	*g = out
+	return nil
+}
+
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	countConfigRead(path)
 	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
 	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)
@@ -1425,10 +1793,12 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		return nil, err
 	}
 
-	var cfg Config
+	cfg := Config{UnfinishedCaches: DefaultUnfinishedCaches()}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+
+	upgradeLegacyLogRotation(&cfg)
 
 	// Apply zero-value defaults for newly-added fields.
 	if cfg.KeyCategories == nil {
@@ -1448,6 +1818,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	}
 	if cfg.SessionDefaults.Aliases == nil {
 		cfg.SessionDefaults.Aliases = []AliasConfig{}
+	}
+	if cfg.SessionDefaults.Programs == nil {
+		cfg.SessionDefaults.Programs = []ProgramConfig{}
 	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
@@ -1494,6 +1867,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.ContextHealth = cfg.ContextHealth.ContextHealthConfigOrDefault()
 	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
 	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
@@ -1646,6 +2020,20 @@ func (c *Config) SlackSigningSecretOverride() string {
 // See project_plans/pi-support/implementation/plan.md, Epic 2.1.
 const FeaturePiSupport = "pi-support"
 
+// FeatureAppScrollForwardingClaude gates forwarding Claude Code's own PageUp
+// scroll keybinding into its fullscreen conversation view (instead of relying
+// solely on tmux-native scrollback capture) for eligible Claude Code sessions
+// -- eligibility itself is AppScrollGate's job, this flag is the independent
+// kill switch on top of it. Off by default, live-settable, never an env var
+// (Risk Control's "Feature flags" bullet). See
+// project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
+// Scoped per-adapter deliberately: the future pi/agy equivalents
+// (":pi"/":agy") are separate flag keys, not covered by this one.
+const FeatureAppScrollForwardingClaude = "terminal:app-scrollback-forwarding:claude"
+
+// FeatureWebhookManagement gates the webhook-registration management API.
+const FeatureWebhookManagement = "webhook_management"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1657,7 +2045,14 @@ const FeaturePiSupport = "pi-support"
 //	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
+//	"inbox_pr_watch" (FeatureInboxPRWatch) — PR-watch inbox consumer: polls the gh-signal
+//	  inbox and steers idle ad-hoc PR sessions on new PR activity. Off by default.
+//	"webhook_management" (FeatureWebhookManagement) — registers the credential-authenticated
+//	  webhook-registration API under /api/integrations/webhooks/v1/. Off by default, and its
+//	  reconcile refuses to create endpoints unless "webhook_triggers" is also on.
 //	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
+//	"terminal:app-scrollback-forwarding:claude" (FeatureAppScrollForwardingClaude) —
+//	  app-scrollback forwarding for Claude Code sessions, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
@@ -1688,19 +2083,30 @@ func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool 
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
 func (c *Config) SetFeatureFlag(name string, value bool) error {
+	c.ApplyFeatureFlag(name, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlag sets the named flag in memory only. Use it inside
+// UpdateConfig, which saves once itself; SetFeatureFlag there would fsync twice.
+func (c *Config) ApplyFeatureFlag(name string, value bool) {
 	if c.FeatureFlags == nil {
 		c.FeatureFlags = make(map[string]bool)
 	}
 	c.FeatureFlags[name] = value
-	return SaveConfig(c)
 }
 
 // DeleteFeatureFlag removes the named flag entirely — a reader using
 // GetFeatureFlagWithDefault falls back to its default again — and persists
 // the config to disk.
 func (c *Config) DeleteFeatureFlag(name string) error {
-	delete(c.FeatureFlags, name)
+	c.RemoveFeatureFlag(name)
 	return SaveConfig(c)
+}
+
+// RemoveFeatureFlag deletes the named flag in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlag(name string) {
+	delete(c.FeatureFlags, name)
 }
 
 // GetFeatureFlagOverride reports the explicitly-persisted value of the named
@@ -1714,6 +2120,73 @@ func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
 	}
 	value, ok = c.FeatureFlags[name]
 	return value, ok
+}
+
+// GetFeatureFlagScopedOverride reports the explicitly-persisted value of name at
+// scope: (value, true) when that scope key exists, (false, false) otherwise.
+func (c *Config) GetFeatureFlagScopedOverride(name, scope string) (value bool, ok bool) {
+	if c == nil {
+		return false, false
+	}
+	value, ok = c.FeatureFlagScopes[name][scope]
+	return value, ok
+}
+
+// GetFeatureFlagScoped resolves name at scope: the scope's explicit value wins,
+// then the explicit global value, then defaultValue.
+func (c *Config) GetFeatureFlagScoped(name, scope string, defaultValue bool) bool {
+	if v, ok := c.GetFeatureFlagScopedOverride(name, scope); ok {
+		return v
+	}
+	return c.GetFeatureFlagWithDefault(name, defaultValue)
+}
+
+// FeatureFlagScopeOverrides returns a copy of every explicit scope value of name.
+func (c *Config) FeatureFlagScopeOverrides(name string) map[string]bool {
+	if c == nil || len(c.FeatureFlagScopes[name]) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(c.FeatureFlagScopes[name]))
+	for k, v := range c.FeatureFlagScopes[name] {
+		out[k] = v
+	}
+	return out
+}
+
+// SetFeatureFlagScope persists an explicit value of name at scope.
+func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
+	c.ApplyFeatureFlagScope(name, scope, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlagScope sets name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) ApplyFeatureFlagScope(name, scope string, value bool) {
+	if c.FeatureFlagScopes == nil {
+		c.FeatureFlagScopes = make(map[string]map[string]bool)
+	}
+	if c.FeatureFlagScopes[name] == nil {
+		c.FeatureFlagScopes[name] = make(map[string]bool)
+	}
+	c.FeatureFlagScopes[name][scope] = value
+}
+
+// DeleteFeatureFlagScope removes the explicit value of name at scope (inherit)
+// and persists. An emptied flag entry, and then an emptied map, is dropped so
+// the file returns to its previous-version shape.
+func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
+	c.RemoveFeatureFlagScope(name, scope)
+	return SaveConfig(c)
+}
+
+// RemoveFeatureFlagScope deletes name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlagScope(name, scope string) {
+	delete(c.FeatureFlagScopes[name], scope)
+	if len(c.FeatureFlagScopes[name]) == 0 {
+		delete(c.FeatureFlagScopes, name)
+	}
+	if len(c.FeatureFlagScopes) == 0 {
+		c.FeatureFlagScopes = nil
+	}
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature

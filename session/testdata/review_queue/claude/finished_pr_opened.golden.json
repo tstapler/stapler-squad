@@ -1,0 +1,22 @@
+{
+  "label": "finished",
+  "source": "captured",
+  "detected_status": "Success",
+  "label_matched": true,
+  "no_controller": {
+    "action": "add",
+    "reason": "task_complete",
+    "priority": "Low",
+    "context": "Claude turn complete — '\u003cPastTenseVerb\u003e for \u003cduration\u003e' format",
+    "claude_status": "Success",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "add",
+    "reason": "task_complete",
+    "priority": "Low",
+    "context": "Claude turn complete — '\u003cPastTenseVerb\u003e for \u003cduration\u003e' format",
+    "claude_status": "Success",
+    "clean_worktree": false
+  }
+}

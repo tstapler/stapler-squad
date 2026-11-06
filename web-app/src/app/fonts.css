@@ -1,0 +1,75 @@
+/* Vendored fonts (SIL OFL, licences next to each file under ./fonts) for the Bun build, replacing next/font/local.
+   The build copies the .woff2 files under ./fonts to /_next/static/media/ and adds a content hash to each name; Bun would
+   otherwise inline them as data: URIs, so the URLs are kept external on purpose. */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/_next/static/media/jetbrains-mono-variable-normal.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/_next/static/media/jetbrains-mono-variable-italic.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rajdhani";
+  src: url("/_next/static/media/rajdhani-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rajdhani";
+  src: url("/_next/static/media/rajdhani-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rajdhani";
+  src: url("/_next/static/media/rajdhani-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rajdhani";
+  src: url("/_next/static/media/rajdhani-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cinzel";
+  src: url("/_next/static/media/cinzel-variable.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/_next/static/media/inter-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+
+:root {
+  --font-jetbrains-mono: "JetBrains Mono", "Fira Code", Monaco, ui-monospace, monospace;
+  --font-rajdhani: "Rajdhani", system-ui, sans-serif;
+  --font-cinzel: "Cinzel", Georgia, serif;
+  --font-inter: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}

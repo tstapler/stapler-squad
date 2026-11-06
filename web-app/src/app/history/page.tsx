@@ -3,19 +3,19 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
+import type { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import {
   HistorySearchResults, HistoryFilterBar, VirtualHistoryList,
   HistoryDetailPanel, HistoryMessagesModal, ForkModal,
 } from "@/components/history";
 import type { ForkParams } from "@/components/history";
-import { useHistoryFullTextSearch, SearchResultItem } from "@/lib/hooks/useHistoryFullTextSearch";
+import type { SearchResultItem } from "@/lib/hooks/useHistoryFullTextSearch";
+import { useHistoryFullTextSearch } from "@/lib/hooks/useHistoryFullTextSearch";
 import { useHistoryFilters, GroupingStrategyLabels } from "@/lib/hooks/useHistoryFilters";
 import { useHistoryGrouping } from "@/lib/hooks/useHistoryGrouping";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -66,7 +66,7 @@ function HistoryBrowserPageInner() {
 
   // Initialize ConnectRPC client and load data
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 
@@ -314,7 +314,7 @@ function HistoryBrowserPageInner() {
       </div>
 
       {error && (
-        <div className={styles.errorBanner}>
+        <div className={styles.errorBanner} role="alert">
           <div className={styles.errorContent}>
             <span className={styles.errorIcon}>⚠️</span>
             <div>

@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 )
 
@@ -62,39 +61,6 @@ func CreateEnvelope(flags byte, data []byte) []byte {
 	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(data)))
 	copy(envelope[5:], data)
 	return envelope
-}
-
-// ReadEnvelope reads a single envelope from an io.Reader.
-func ReadEnvelope(r io.Reader) (*Envelope, error) {
-	// Read header (5 bytes)
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, fmt.Errorf("failed to read envelope header: %w", err)
-	}
-
-	flags := header[0]
-	length := binary.BigEndian.Uint32(header[1:5])
-
-	// Read data
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, fmt.Errorf("failed to read envelope data: %w", err)
-	}
-
-	return &Envelope{
-		Flags:  flags,
-		Length: length,
-		Data:   data,
-	}, nil
-}
-
-// WriteEnvelope writes an envelope to an io.Writer.
-func WriteEnvelope(w io.Writer, flags byte, data []byte) error {
-	envelope := CreateEnvelope(flags, data)
-	if _, err := w.Write(envelope); err != nil {
-		return fmt.Errorf("failed to write envelope: %w", err)
-	}
-	return nil
 }
 
 // IsEndStream checks if the envelope has the EndStream flag set.

@@ -100,3 +100,20 @@ type SessionController interface {
 	// for this subscriber when Unsubscribe is called.
 	UnsubscribeControlModeUpdates(id string)
 }
+
+// FullStateSnapshot is a snapshot that already restores terminal state: replaying Data into a
+// fresh terminal reproduces the pane's cells, input/mouse modes, title, scroll region and cursor.
+// It is complete as-is — callers must not add the erase+home prefix, CRLF normalization or cursor
+// sync that prepareSnapshotContent/withCursorSync apply to a text capture.
+type FullStateSnapshot struct {
+	Data string
+	// AltScreen reports whether the pane is on its alternate screen, for TerminalOutput.alt_screen_active.
+	AltScreen bool
+}
+
+// FullStateSnapshotter is an optional SessionController capability. ok is false when the session's
+// backend can only produce a text capture (tmux), in which case the caller builds the legacy
+// snapshot from CapturePaneContentRawContext. A controller without the method is treated the same.
+type FullStateSnapshotter interface {
+	CapturePaneRedraw(ctx context.Context) (snap FullStateSnapshot, ok bool, err error)
+}

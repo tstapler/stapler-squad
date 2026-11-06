@@ -51,18 +51,13 @@ func TestSSHClientPool_GetOrDial_SharesOneClientAcrossCallers(t *testing.T) {
 	}
 }
 
-// TestSSHClientPool_GetOrDial_HitIgnoresAddrAndHostKeyCallback documents,
-// at the pool layer (independent of any particular caller like
-// RemoteService), the name-only-keying hazard behind backlog item
-// 09e91e3e-e13d-4166-a5f2-447242447f77: a Peek hit for an already-pooled
-// name returns the existing client without dialing target.Addr or invoking
-// the caller's HostKeyCallback at all -- even when Addr points somewhere
-// else entirely. Deliberately points the second call at an unreachable
-// address with a HostKeyCallback that fails the test if invoked, so any
-// regression that makes GetOrDial start consulting Addr/HostKeyCallback on
-// a hit would fail this test immediately and fast, without needing a
-// second real SSH server or the timing-sensitive live-connection setup
-// RemoteService's integration-level regression test requires.
+// TestSSHClientPool_GetOrDial_HitIgnoresAddrAndHostKeyCallback pins the
+// pool-layer half of backlog item 09e91e3e-e13d-4166-a5f2-447242447f77: a
+// Peek hit for an already-pooled name returns the existing client without
+// dialing Addr or invoking HostKeyCallback at all, even when Addr points
+// elsewhere. The second call targets an unreachable address with a
+// HostKeyCallback that fails the test if invoked, so a regression here
+// fails fast without needing a real second SSH server.
 func TestSSHClientPool_GetOrDial_HitIgnoresAddrAndHostKeyCallback(t *testing.T) {
 	srv := startTestSSHServer(t)
 	cfg := newTestClientConfig(t, srv.HostKey)

@@ -113,39 +113,19 @@ export function priorityColor(priority: UIPriority): string {
 }
 
 /**
- * Notification types that represent something the user must actively decide on
- * (approve/deny a tool-use request, answer a question, or triage a failure) —
- * the single source of truth for "needs a decision" membership. `"info"`'s
- * allow-list below is defined as this set's literal complement so a type can
- * never fall into neither bucket (see Epic 3.1.1's regression: a second,
- * independently-maintained exclusion list let "task_complete" fall through
- * both).
- */
-const ACTIONABLE_TYPES = new Set<UIType>([
-  "approval_needed",
-  "question",
-  "error",
-  "task_failed",
-  "warning",
-]);
-
-export function isActionableNotification(type: UIType): boolean {
-  return ACTIONABLE_TYPES.has(type);
-}
-
-/**
  * Returns the unread notification IDs that are safe for a bulk "mark read"
- * action to touch — i.e. everything except an unread actionable item, which
- * must only leave "needs a decision" by being resolved. Shared by
+ * action to touch: everything except a pending decision, which must only leave
+ * "needs a decision" by being resolved. "Pending decision" is the server-sent
+ * `isPendingDecision`, the same field the toast stack pins on. Shared by
  * NotificationsPage's "Mark activity read" and NotificationPanel's bulk-read
  * button so the scoping rule is defined once (Task 3.1.2e / 3.1.5a).
  */
 export function computeScopedMarkReadIds(
-  notifications: Array<{ id: string; isRead: boolean; notificationType?: UIType }>
+  notifications: Array<{ id: string; isRead: boolean; isPendingDecision?: boolean }>
 ): string[] {
   return notifications
-    .filter((n) => !n.isRead && !isActionableNotification(n.notificationType))
-    .map((n) => n.id);
+    .filter((n) => !n.isRead && !n.isPendingDecision)
+    .map((n) => n.id)
 }
 
 /**
@@ -155,10 +135,19 @@ export function capBadgeCount(n: number): string {
   return n > 99 ? "99+" : String(n);
 }
 
+function isApprovalCategory(t: UIType): boolean {
+  return t === "approval_needed" || t === "question";
+}
+
+function isErrorCategory(t: UIType): boolean {
+  return t === "error" || t === "task_failed" || t === "warning";
+}
+
 /**
  * Returns the set of UI notification types that belong to a given filter category.
- * The "error" pill covers task_failed and warning; "info" is the allow-list
- * complement of ACTIONABLE_TYPES so a new UI type always lands somewhere.
+ * The "error" pill covers task_failed and warning; "info" is the complement of the
+ * approval and error pills so a new UI type always lands somewhere. These are
+ * display filters only; whether something is a pending decision is the server field.
  */
 export function notificationTypeFilter(
   category: "all" | "approval_needed" | "error" | "task_complete" | "info",
@@ -166,13 +155,13 @@ export function notificationTypeFilter(
 ): UIType[] {
   switch (category) {
     case "approval_needed":
-      return types.filter((t) => t === "approval_needed" || t === "question");
+      return types.filter(isApprovalCategory);
     case "error":
-      return types.filter((t) => t === "error" || t === "task_failed" || t === "warning");
+      return types.filter(isErrorCategory);
     case "task_complete":
       return types.filter((t) => t === "task_complete");
     case "info":
-      return types.filter((t) => !isActionableNotification(t));
+      return types.filter((t) => !isApprovalCategory(t) && !isErrorCategory(t));
     default:
       return types;
   }

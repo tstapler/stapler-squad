@@ -8,6 +8,11 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// stopJoinTimeout bounds how long PTYConsumer.Stop() waits for pollLoop to exit.
+// A var (not const) so tests can shrink it to exercise the timeout branch
+// without a real 10s wait.
+var stopJoinTimeout = 10 * time.Second
+
 type BufferReader interface {
 	GetRecentOutput(n int) []byte
 }
@@ -90,7 +95,9 @@ type PTYConsumer struct {
 	running      bool
 	cancelFn     context.CancelFunc
 	notifyCh     chan struct{}
-	done         chan struct{}
+	// doneCh is the current generation's pollLoop-exited signal (see Start()).
+	// Read by Stop() under pc.mu, then waited on outside the lock.
+	doneCh chan struct{}
 }
 
 func NewPTYConsumer(buffer BufferReader, manager *Manager) *PTYConsumer {
@@ -123,8 +130,14 @@ func (pc *PTYConsumer) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	pc.cancelFn = cancel
 	pc.running = true
-	pc.done = make(chan struct{})
-	go pc.pollLoop(ctx, pc.done)
+	// done is local to this generation, not read back from a struct field
+	// later: a shared sync.WaitGroup would panic ("reused before previous
+	// Wait has returned") if a new Start() Add()s while a prior Stop()'s
+	// Wait() is still in flight. A fresh channel per generation has no such
+	// reuse hazard.
+	done := make(chan struct{})
+	pc.doneCh = done
+	go pc.pollLoop(ctx, done)
 }
 
 func (pc *PTYConsumer) Stop() {
@@ -138,14 +151,22 @@ func (pc *PTYConsumer) Stop() {
 	pc.running = false
 	cancelFn := pc.cancelFn
 	pc.cancelFn = nil
-	done := pc.done
+	done := pc.doneCh
+	// Unlock explicitly (not via defer) before cancelling/waiting: both must
+	// run after the lock is released, or a future pollLoop change that takes
+	// pc.mu would deadlock against this call.
 	pc.mu.Unlock()
 
 	if cancelFn != nil {
 		cancelFn()
 	}
-	if done != nil {
-		<-done
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(stopJoinTimeout):
+		log.Error("PTYConsumer.Stop: pollLoop did not exit within timeout", "timeout", stopJoinTimeout)
 	}
 }
 

@@ -41,6 +41,18 @@ receiver.
 - `safeexec.sigkill_escalations` (counter) — increments once per confirmed SIGKILL escalation in `CommandContextPG` (i.e. the process group ignored SIGTERM within `sigkillGrace`); not incremented on ESRCH/already-exited
 - `cgroup_memory_*` (gauges/counters, Linux only, `telemetry/cgroup_linux.go`) — reads the running process's own cgroup v2 memory files fresh every collection: `cgroup_memory_current_bytes`/`_high_bytes`/`_max_bytes` (`memory.current`/`.high`/`.max`), `cgroup_memory_events_{high,max,oom,oom_kill}_total` (`memory.events`, kernel-cumulative), `cgroup_memory_pressure_{some,full}_avg10` (`memory.pressure` PSI, % stalled over the last 10s). Added 2026-08-25 to get dashboard visibility into `MemoryHigh`/`MemoryMax` throttling (see `scripts/install-service.sh`'s cgroup cap comment) while investigating live-instance terminal type-ahead reports — correlate these against symptom reports before deciding whether to change the caps.
 - `http.server.connections_open` / `http.server.connections_hijacked_total` and `rpc.server_streams.open` — see "Connection concurrency metrics" below.
+- `vcs.status.requests` (counter, `outcome` = `cache_hit`/`stale_hit`/`computed`/`coalesced`/`error`/`canceled`), `vcs.status.compute.duration` (ms histogram, `result` = `ok`/`error`/`canceled`/`timeout`), `vcs.status.queue_wait.duration` (ms histogram) and `vcs.status.in_flight` (up/down counter) — `GetVCSStatus` cache, coalescing and git cost (`server/services/vcs_status_flight.go`). Spans `vcs.status.request` > `vcs.status.compute` > `vcs.status.queue_wait` / `vcs.status.git_status` / `vcs.status.shipped_commits`; a caller that leaves records a `caller_canceled` span event and a Connect `canceled` error in `rpc_server_duration_milliseconds_count{rpc_connect_rpc_error_code}`. Dashboard `ssq-vcs-status` (dotfiles `stapler-scripts/observability`). Per-stage cost: `vcs.status.stage.duration` (ms histogram; `stage` = `git_status`/`shipped_commits`/`diff_stat`, `result` = `ok`/`error`/`canceled`/`timeout`/`budget_exceeded`) and `vcs.status.range_cache` (counter; `stage`, `result` = `hit`/`miss`/`negative_hit`) for the (workdir, base SHA, head SHA) cache in `server/services/vcs_range_cache.go`; sibling spans `vcs.status.shipped_commits` and `vcs.status.diff_stat` both carry `vcs.head_sha`. Dashboard `ssq-vcs-status-stages` (`docs/observability/grafana/dashboards/vcs-status-stages.json`).
+- `session_backend_operation_duration_ms` (histogram, `backend`/`operation` labels — `session/backend_observability.go`) — latency of `ProcessManager.Start`/`RestoreWithWorkDir`/`Attach`, labeled `backend="tmux"`/`"tymux"` so the two can be compared directly; `session.backend.tymux_daemon_ready` is a tymux-only nested span isolating daemon cold-start latency from the rest of `Start`. Added to close BUG-108 (no way to tell whether tymux performs acceptably against tmux before making it a default). It also carries `send_keys`/`write_stdin`/`capture_pane`/`resize` series for both backends. The remaining tymux metrics (`tymux_attach_*`, `tymux_daemon_*`, `session_backend_info`) and the `ssq-tymux-backend` dashboard are listed in `docs/observability/README.md`.
+
+## Database observability
+
+The ent/SQLite client is instrumented by default (`session/dbobs`). The pool is capped at one connection, so every query serializes; pool wait is the contention signal.
+
+- **Slow-query log:** queries at or above `STAPLER_SQUAD_SLOW_QUERY_MS` (default `100`; `0` disables) log `slow database query` at WARN with `duration_ms`, `pool_wait_ms` and a normalized statement. Bind values and literals are never logged.
+- **Stats:** `GET /actuator/db` returns `sql.DBStats` (`wait_count`, `wait_duration_ms`, `in_use`, `open_connections`) plus query, slow and error counters; `/actuator/metrics` embeds the same under `db`. The same values export as OTel gauges `db.pool.*` / `db.slow_queries_total` and histogram `db.query.duration` (ms).
+- **Who issues a query:** the slow-query WARN carries `caller` (up to three application frames, e.g. `session.EntRepository.Update<-session.Storage.saveInstancesToRepo<-...`), and each pool in `/actuator/db` lists `top_statements` ranked by total time with per-(statement, caller) count, max and pool wait. Statements are normalized (`IN (?, ...?)`), the table holds 512 keys per pool, and `dropped_statement_keys` counts pairs it refused. Use it to find write amplification on the single writer connection.
+- **Spans:** when a `TracerProvider` is configured, each query under an RPC span is a `db.<VERB>` child span (`db.statement` normalized, `db.pool_wait_ms`). Queries with no parent span are not traced.
+- `pool_wait_ms` is the delta of the pool-wide `WaitDuration`, so under concurrency it can include queue time caused by other callers; treat it as a hint.
 
 ## Connection concurrency metrics
 
@@ -66,6 +78,24 @@ regression early instead of requiring another round of manual Tempo queries:
 | `http.server.connections_hijacked_total` | Observable counter | — | Same file. Cumulative count of connections hijacked off net/http's tracking — in this server, exclusively WebSocket upgrades (`StateHijacked` is `net/http`'s terminal state for a hijacked connection, so this is the only place to count them). |
 | `rpc.server_streams.open` | Observable gauge | `method` (`WatchSessions`, `WatchReviewQueue`, `WatchBacklogItems`, `WatchInsights`, `WatchUnfinishedWork`, `StreamTerminal`) | `server/services/watch_stream_metrics.go`'s `TrackOpenStream`, called at the top of each Watch* handler's body and around the terminal stream's `HandleWebSocket` call, with a `defer`/paired call decrementing on stream close. |
 
+### Listener, descriptor and request-flow metrics
+
+Added to see saturation before and around the HTTP layer (dashboard `ssq-http-rpc-connections`, row "Listener and OS saturation").
+
+| Metric | Labels | Meaning and threshold |
+|---|---|---|
+| `http.server.accepted_total` | `listener` (`main`, `remote`) | Connections accepted (`server/listener_metrics.go`). A rate spike with flat request rate means connections are not being reused. |
+| `http.server.accept_errors_total` | `listener`, `kind` (`closed`, `timeout`, `fd_exhausted`, `other`) | Any `fd_exhausted` is saturation: page on it. `closed` is normal at shutdown. |
+| `http.server.tls_handshake_errors_total` | `listener` | Parsed from net/http's `ErrorLog`. On `remote`, a steady rate means a client that does not trust the certificate. |
+| `process.open_fds`, `process.fd_limit` | none | Warn above 80% of the soft limit. macOS counts by probing up to 32768 descriptors; Linux reads `/proc/self/fd`. |
+| `os.tcp.somaxconn` | none | Kernel cap on a listen backlog (macOS `kern.ipc.somaxconn`, 128 by default). |
+| `os.tcp.listen_overflows_total`, `os.tcp.listen_drops_total` | none | Linux only (`/proc/net/netstat` `ListenOverflows`/`ListenDrops`). Any sustained increase means the accept loop falls behind the backlog. On macOS the counters are in the unstable binary `net.inet.tcp.stats` struct, so they are not exported: use `netstat -s -p tcp \| grep -i listen`. |
+| `rpc.server.stream_age_seconds` | `method` | Histogram of how long a stream or terminal WebSocket stayed open, observed at close. Many closes under 15s is a reconnect storm. Open count is `rpc.server_streams.open`. |
+| `rpc.server.pre_handler_seconds` | `class` (`unary`, `stream`) | Request reaching the process to RPC handler start. Healthy is under 1ms; seconds means it waited in-process before any handler ran. Time the request spent in the kernel backlog or in a browser queue is not included. |
+| `rpc.server.client_aborted_total` | `rpc.method` | Unary calls whose context was canceled and that returned an error: the server view of client timeouts and navigations. |
+
+Not exported, with reasons: ReadTimeout/IdleTimeout closes (net/http reports neither). A WebSocket does not hit `ReadTimeout`: `TestWebSocketSurvivesServerReadTimeout` (`server/ws_readtimeout_test.go`) upgrades under a 150ms `ReadTimeout` and the socket outlives it, because both net/http's `Hijack` and gorilla's `Upgrade` clear the connection deadlines (the test uses a plain upgrader, not the app's real handler chain). So StreamTerminal sockets closing at about 15s are not explained by the server's 15s `ReadTimeout`; look at the stream-age histogram and the client for the closer. Per-VNC/CDP endpoint gauges are not added: those paths do not go through `TrackOpenStream`.
+
 Graph `rpc.server_streams.open` summed by `method` to answer "how many
 long-lived streams does one browser tab hold open right now" directly. A
 sustained `http.server.connections_open` at or near 6 alongside high
@@ -85,10 +115,9 @@ unary RPC has nowhere left to go.
 
 ## Browser tracing (web-app)
 
-`web-app/next.config.ts` sets `output: "export"` — the Next.js app is a fully
-static bundle embedded into the Go binary (`server/web/dist`), so there is no
-Next.js/Node server to run [Next.js's own `instrumentation.ts`
-guide](https://nextjs.org/docs/app/guides/open-telemetry) in. Instead, the
+The web app is a fully static bundle embedded into the Go binary
+(`server/web/dist`), so there is no Node server to run server-side
+instrumentation in. Instead, the
 browser runs the OpenTelemetry **Web** SDK directly
 (`web-app/src/lib/telemetry/otel-init.ts`), instrumenting page loads and
 `fetch` calls (including the app's own ConnectRPC traffic), and exports spans
@@ -98,14 +127,14 @@ keeping the collector off the public network.
 Disabled by default, gated the same way as the server:
 
 ```bash
-# Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
-# time (static export, no server-side env reads), so this must be set before
-# `make web-build` / `pnpm run build`, not at runtime like the server's vars.
+# Enable browser tracing. NEXT_PUBLIC_* vars (the name is a leftover convention) are inlined by
+# web-app/build/build.ts at build time (static bundle, no server-side env reads), so this must be
+# set before `make web-build` / `bun run build`, not at runtime like the server's vars.
 NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 
 # Override the export endpoint (default: same-origin "/api/otel/v1/traces",
 # proxied by the Go server — see below). Only needed for local dev, where
-# `next dev` runs on a different origin (:3001) than the Go server (:8543).
+# `bun run dev` runs on a different origin (:3001) than the Go server (:8543).
 NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8543/api/otel/v1/traces NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 ```
 

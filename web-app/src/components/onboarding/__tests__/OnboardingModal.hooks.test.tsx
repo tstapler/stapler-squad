@@ -12,6 +12,7 @@ jest.mock("@connectrpc/connect", () => ({
   })),
 }));
 
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
 }));

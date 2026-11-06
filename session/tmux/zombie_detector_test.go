@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined proves
@@ -44,12 +46,8 @@ func TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined(t *testin
 
 	// Allow the runtime a brief window to reclaim the exited goroutine's stack
 	// bookkeeping before sampling NumGoroutine again.
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		runtime.Gosched()
-		time.Sleep(time.Millisecond)
-	}
-	if got := runtime.NumGoroutine(); got > before {
-		t.Fatalf("goroutine count did not return to baseline after wg join (before=%d after=%d) — goroutine did not fully exit", before, got)
-	}
+		return runtime.NumGoroutine() <= before
+	}, 2*time.Second, time.Millisecond, "goroutine count did not return to baseline after wg join (before=%d) — goroutine did not fully exit", before)
 }

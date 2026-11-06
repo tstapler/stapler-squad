@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -67,6 +69,18 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
 	case domain.StuckReasonSteerFailed:
 		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
+	case domain.StuckReasonBlockedByClaim:
+		return sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM
+	case domain.StuckReasonWorktreeInconsistent:
+		return sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT
+	case domain.StuckReasonRepeatedNoopDispatch:
+		return sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH
+	case domain.StuckReasonMergedPRUnverified:
+		return sessionv1.StuckReason_STUCK_REASON_MERGED_PR_UNVERIFIED
+	case domain.StuckReasonVerdictUndelivered:
+		return sessionv1.StuckReason_STUCK_REASON_VERDICT_UNDELIVERED
+	case domain.StuckReasonTransitionDenied:
+		return sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -116,15 +130,99 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonBounceCapExhausted
 	case sessionv1.StuckReason_STUCK_REASON_STEER_FAILED:
 		return domain.StuckReasonSteerFailed
+	case sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_CLAIM:
+		return domain.StuckReasonBlockedByClaim
+	case sessionv1.StuckReason_STUCK_REASON_WORKTREE_INCONSISTENT:
+		return domain.StuckReasonWorktreeInconsistent
+	case sessionv1.StuckReason_STUCK_REASON_REPEATED_NOOP_DISPATCH:
+		return domain.StuckReasonRepeatedNoopDispatch
+	case sessionv1.StuckReason_STUCK_REASON_MERGED_PR_UNVERIFIED:
+		return domain.StuckReasonMergedPRUnverified
+	case sessionv1.StuckReason_STUCK_REASON_VERDICT_UNDELIVERED:
+		return domain.StuckReasonVerdictUndelivered
+	case sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED:
+		return domain.StuckReasonTransitionDenied
 	default:
 		return ""
 	}
 }
 
+// RepoSettingsLookup fetches a repo's merge settings; github.RepoSettings
+// satisfies it.
+type RepoSettingsLookup func(ctx context.Context, ref githubpkg.RepoRef) githubpkg.RepoSettingsResult
+
+func toProtoAutoMergeStatus(s githubpkg.RepoSettingsStatus) sessionv1.AutoMergeLookupStatus {
+	switch s {
+	case githubpkg.RepoSettingsOK:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK
+	case githubpkg.RepoSettingsRateLimited:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_RATE_LIMITED
+	case githubpkg.RepoSettingsNoPermission:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_NO_PERMISSION
+	case githubpkg.RepoSettingsNotFound:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_NOT_FOUND
+	case githubpkg.RepoSettingsError:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_ERROR
+	default:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED
+	}
+}
+
+// populateAutoMerge fills the auto-merge fields on items from the repo each
+// item's PR URL names, fetching settings once per repo. Items with no
+// parseable GitHub PR URL stay UNSPECIFIED and trigger no lookup. refresh
+// bypasses the lookup cache (still once per repo per call).
+func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*sessionv1.StuckBacklogItem, refresh bool) {
+	if s.repoSettings == nil {
+		return
+	}
+	if refresh {
+		ctx = githubpkg.WithRepoSettingsRefresh(ctx)
+	}
+	lookup := s.repoSettings
+	if !refresh && s.repoSettingsFast != nil {
+		lookup = s.repoSettingsFast
+	}
+	hosts := s.EnterpriseHosts()
+	byRepo := make(map[githubpkg.RepoRef]githubpkg.RepoSettingsResult)
+	for _, item := range items {
+		if item.PrUrl == "" {
+			continue
+		}
+		parsed, err := githubpkg.ParseGitHubRefWithHosts(item.PrUrl, hosts)
+		if err != nil {
+			continue
+		}
+		ref, err := githubpkg.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
+		if err != nil {
+			continue
+		}
+		res, ok := byRepo[ref]
+		if !ok {
+			res = lookup(ctx, ref)
+			byRepo[ref] = res
+		}
+		applyAutoMerge(item, res)
+	}
+}
+
+func applyAutoMerge(item *sessionv1.StuckBacklogItem, res githubpkg.RepoSettingsResult) {
+	item.AutoMergeLookupStatus = toProtoAutoMergeStatus(res.Status)
+	if res.Status == githubpkg.RepoSettingsUnspecified {
+		return
+	}
+	if !res.CheckedAt.IsZero() {
+		item.AutoMergeCheckedAt = timestamppb.New(res.CheckedAt)
+	}
+	if allowed, ok := res.AutoMerge(); ok {
+		item.AllowAutoMerge = &allowed
+	}
+}
+
 // stuckBacklogItemToProto maps an OpenStuckStateData projection (already
 // filtered to open + un-snoozed by FindOpenStuckStates) to its proto
-// representation. allow_auto_merge is intentionally left unset here — Phase 4
-// (Story 4.1.4) owns fetching and populating the per-repo, TTL-cached value.
+// representation. allow_auto_merge is left unset here; ListStuckBacklogItems populates it via
+// populateAutoMerge so one lookup serves every item of a repo.
 func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
 	item := &sessionv1.StuckBacklogItem{
 		ItemId:          row.ItemID,
@@ -142,10 +240,16 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 		PrUrl:               row.PrURL,
 		Context:             row.Context,
 		RemediationAttempts: row.RemediationAttempts,
+		DiagnoseNudgeCount:  row.DiagnoseNudgeCount,
 		PlanArtifactsPath:   row.PlanArtifactsPath,
 	}
 	if row.NextRemediationAt != nil {
 		item.NextRemediationAt = timestamppb.New(*row.NextRemediationAt)
+	}
+	if row.Reason == domain.StuckReasonTransitionDenied {
+		if d, ok := domain.ParseTransitionDeniedContext(row.Context); ok {
+			item.DeniedCaller, item.DeniedFrom, item.DeniedTo, item.DeniedReason = d.Caller, d.From, d.To, d.Reason
+		}
 	}
 	return item
 }
@@ -156,7 +260,7 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 // +api: backlog:list-stuck
 func (s *BacklogService) ListStuckBacklogItems(
 	ctx context.Context,
-	_ *connect.Request[sessionv1.ListStuckBacklogItemsRequest],
+	req *connect.Request[sessionv1.ListStuckBacklogItemsRequest],
 ) (*connect.Response[sessionv1.ListStuckBacklogItemsResponse], error) {
 	if s.storage == nil {
 		return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{}), nil
@@ -167,10 +271,32 @@ func (s *BacklogService) ListStuckBacklogItems(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list stuck backlog items: %w", err))
 	}
 
+	// Review-status items need their sessions for the duplicate-pending hint;
+	// fetch them for every such item in one batch instead of per row.
+	var reviewIDs []string
+	for _, row := range rows {
+		if row.ItemStatus == session.BacklogStatusReview {
+			reviewIDs = append(reviewIDs, row.ItemID)
+		}
+	}
+	var sessionsByItem map[string][]session.ItemSessionSummary
+	if len(reviewIDs) > 0 {
+		var sessErr error
+		if sessionsByItem, sessErr = s.storage.ListItemSessionsForItems(ctx, reviewIDs); sessErr != nil {
+			log.Warn("stuck report: batched item-session lookup failed; duplicate hints omitted", "err", sessErr)
+		}
+	}
+
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
+		if ref := session.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+			items[i].DuplicatePending = true
+			items[i].DuplicateRef = ref
+		}
 	}
+
+	s.populateAutoMerge(ctx, items, req.Msg.GetRefreshAutoMerge())
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
 }
@@ -295,7 +421,7 @@ func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		derivePriority(false, false), // urgent, important — a bulk-reset confirmation, purely informational
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),
@@ -319,7 +445,10 @@ func pluralSuffix(n int) string {
 // AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner/
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
-// connect.CodeUnimplemented until a future phase adds it here.
+// connect.CodeUnimplemented until a future phase adds it here (except
+// multiple_reasons, which TriggerRemediationNow rejects earlier with
+// CodeFailedPrecondition). The web-app mirrors this set as REMEDIABLE_STUCK_REASONS
+// (web-app/src/components/backlog-stuck/stuckReason.ts); keep the two in sync.
 //
 // Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
 // and domain.StuckReasonSteerFailed both fall through to the default case, so
@@ -360,7 +489,9 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 // dispatcher-triggered one, so it counts toward the same 5-attempt cap. The
 // wrapped action's own circuit breaker (IsRepeatedFailure/
 // IsRepeatedNoVerdictFailure inside AutoReopenAfterFailedReview, for example)
-// still applies — this RPC does not bypass it.
+// still applies — this RPC does not bypass it. multiple_reasons is an aggregate
+// with no action of its own: it returns CodeFailedPrecondition naming the
+// item's open constituent reasons.
 // +api: backlog:trigger-remediation-now
 func (s *BacklogService) TriggerRemediationNow(
 	ctx context.Context,
@@ -377,9 +508,18 @@ func (s *BacklogService) TriggerRemediationNow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
 	}
 
+	if reason == domain.StuckReasonMultipleReasons {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, s.multipleReasonsRemediationError(ctx, req.Msg.ItemId))
+	}
+
 	action := s.remediationActionByReason(reason)
 	if action == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no automated remediation action is available for reason %q yet", reason))
+	}
+
+	// Checked before the attempt is recorded, so a held item spends none.
+	if holdErr := s.transitionDenialHoldError(ctx, req.Msg.ItemId); holdErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, holdErr)
 	}
 
 	justParked, err := s.storage.RecordManualRemediationAttempt(ctx, req.Msg.ItemId, reason)
@@ -403,4 +543,25 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil
+}
+
+// multipleReasonsRemediationError explains that multiple_reasons is an aggregate
+// escalation row with no action of its own, naming the item's open constituent
+// reasons so the caller can retry each one individually.
+func (s *BacklogService) multipleReasonsRemediationError(ctx context.Context, itemID string) error {
+	rows, err := s.storage.FindOpenStuckStates(ctx)
+	if err != nil {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually (could not list them: %w)", err)
+	}
+	var names []string
+	for _, row := range rows {
+		if row.ItemID != itemID || row.Reason == domain.StuckReasonMultipleReasons {
+			continue
+		}
+		names = append(names, string(row.Reason))
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own, and no constituent reasons are open")
+	}
+	return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually: [%s]", strings.Join(names, ", "))
 }

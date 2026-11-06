@@ -186,6 +186,46 @@ func FindAlias(cfg *Config, name string) *AliasConfig {
 	return nil
 }
 
+// FindProgramConfig returns the ProgramConfig with the given ID (case-insensitive), or nil if not found.
+func FindProgramConfig(cfg *Config, id string) *ProgramConfig {
+	if cfg == nil {
+		return nil
+	}
+	for i := range cfg.SessionDefaults.Programs {
+		if strings.EqualFold(cfg.SessionDefaults.Programs[i].ID, id) {
+			return &cfg.SessionDefaults.Programs[i]
+		}
+	}
+	return nil
+}
+
+// ResolvedProgram holds the resolved executable command, CLI flags, and environment variables for a program ID.
+type ResolvedProgram struct {
+	Command  string
+	CLIFlags string
+	EnvVars  map[string]string
+	IsCustom bool
+}
+
+// ResolveProgramConfig resolves a program ID or command string against custom program definitions in cfg.
+func ResolveProgramConfig(cfg *Config, program string) ResolvedProgram {
+	if prog := FindProgramConfig(cfg, program); prog != nil {
+		env := ExpandEnvVars(prog.Env)
+		return ResolvedProgram{
+			Command:  prog.Command,
+			CLIFlags: prog.CLIFlags,
+			EnvVars:  env,
+			IsCustom: true,
+		}
+	}
+	return ResolvedProgram{
+		Command:  program,
+		CLIFlags: "",
+		EnvVars:  nil,
+		IsCustom: false,
+	}
+}
+
 // GetAliasesByGroup groups all aliases by their Group field.
 // Aliases without a Group are stored under the empty-string key "".
 func GetAliasesByGroup(cfg *Config) map[string][]AliasConfig {

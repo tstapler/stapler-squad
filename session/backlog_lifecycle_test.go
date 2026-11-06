@@ -21,17 +21,21 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
+	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-// waitWithTimeout waits for the done channel to be closed or fails the test after 2 seconds.
+// waitWithTimeout waits for the done channel to be closed. The bound is a
+// hang detector, not a latency assertion: a 2s wall clock flaked when the
+// package's parallel tests starved sqlite-backed goroutines of CPU.
 func waitWithTimeout(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for goroutine to complete")
 	}
 }
@@ -288,7 +292,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t 
 
 	select {
 	case <-dequeuer.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via onSessionExited")
 	}
 }
@@ -312,7 +316,7 @@ func TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue(t *testing.T) {
 
 	select {
 	case <-dequeuer.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via ReconcileStuck")
 	}
 }
@@ -724,18 +728,18 @@ type fakePRPendingChecker struct {
 	onIsPRMerged func()
 }
 
-func (f *fakePRPendingChecker) IsPRMerged(prNumber int) (bool, error) {
+func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
 	return f.merged, f.mergedErr
 }
 
-func (f *fakePRPendingChecker) GetPRStatus(prNumber int) (*git.PRStatus, error) {
+func (f *fakePRPendingChecker) GetPRStatus(ctx context.Context, prNumber int) (*git.PRStatus, error) {
 	return f.status, f.statusErr
 }
 
-func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
+func (f *fakePRPendingChecker) ClosePR(ctx context.Context, prNumber int, comment string) error {
 	f.closeCalled = true
 	f.closedPR = prNumber
 	f.closeComment = comment
@@ -1119,6 +1123,10 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	listener.reconcileStuckReviewItems(ctx, er)
 	assert.Equal(t, []string{"Review item needs attention"}, notifier.titles())
 	require.Len(t, notifier.calls, 1)
+	// Push-gate classification table: important but not urgent — automation isn't
+	// actively retrying, but it isn't a drop-everything alert either.
+	assert.False(t, notifier.calls[0].Urgent, "Review item needs attention must not be urgent")
+	assert.True(t, notifier.calls[0].Important, "Review item needs attention must be important")
 	// The message body must interpolate the item's title, not just fire a generic
 	// notification — this is the actionable content an operator needs to triage
 	// the stuck item without digging further.
@@ -1173,7 +1181,7 @@ func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
 	select {
 	case id := <-respawner.calls:
 		assert.Equal(t, item.ID, id)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timed out waiting for AutoRespawnReview to be dispatched")
 	}
 
@@ -1327,46 +1335,11 @@ func overridePRPendingChecker(t *testing.T, listener *BacklogLifecycleListener, 
 	listener.SetPRPendingCheckerFactory(func(repoPath string) prPendingChecker { return checker })
 }
 
-// testInfoLogMu serializes access to the package-global log.InfoLog var
-// across every test in this file that redirects it. log.InfoLog is a single
-// shared variable, so two t.Parallel() tests (including sibling subtests of
-// the same parent, which run concurrently with each other) that both swap it
-// out and restore it race on the same memory: one test's restore can stomp
-// another's redirect mid-run. Locking for the duration of each test (release
-// happens in the same t.Cleanup that restores the original logger) serializes
-// only the tests that touch log.InfoLog, without affecting the parallelism of
-// any other test in the package.
-var testInfoLogMu sync.Mutex
-
 // redirectInfoLog redirects log.InfoLog's output to a returned buffer for
-// the duration of the test and restores the original on cleanup. It mutates
-// the existing *log.Logger in place (SetOutput/SetPrefix/SetFlags) rather
-// than reassigning the log.InfoLog variable itself: reassignment is a data
-// race against any concurrently running goroutine that reads log.InfoLog
-// directly (e.g. production code calling log.InfoLog().Printf), even though
-// testInfoLogMu serializes the writers here — a mutex around only the write
-// side cannot protect an unsynchronized reader elsewhere in the program.
-// The returned buffer is a *syncBuffer (not *bytes.Buffer) so a leaked
-// goroutine from an already-finished sibling test still writing to the
-// shared logger can't race a later buf.String() read.
-func redirectInfoLog(t *testing.T) *syncBuffer {
+// the duration of the test and restores the original on cleanup.
+func redirectInfoLog(t *testing.T) *log.SyncBuffer {
 	t.Helper()
-	testInfoLogMu.Lock()
-	buf := &syncBuffer{}
-	logger := log.InfoLog()
-	origOutput := logger.Writer()
-	origPrefix := logger.Prefix()
-	origFlags := logger.Flags()
-	logger.SetOutput(buf)
-	logger.SetPrefix("INFO: ")
-	logger.SetFlags(0)
-	t.Cleanup(func() {
-		logger.SetOutput(origOutput)
-		logger.SetPrefix(origPrefix)
-		logger.SetFlags(origFlags)
-		testInfoLogMu.Unlock()
-	})
-	return buf
+	return log.RedirectLogger(t, log.InfoLog(), "INFO: ")
 }
 
 // TestReconcilePRPending_SpawnsFixSession_WhenHasConflictsTrue_Alone verifies
@@ -1532,6 +1505,238 @@ func TestReconcilePRPending_RespawnsFixSession_When_BackoffElapses(t *testing.T)
 	assert.Equal(t, 2, fakeSpawner.callCount, "once the backoff window has elapsed, the next tick must retry")
 }
 
+// parkPRNeedsFixRow drives itemID's pr_needs_fix row to the parked state (fast
+// backoff exhausted, cold retry a week out) after the first tick created it.
+func parkPRNeedsFixRow(t *testing.T, storage *Storage, itemID string) {
+	t.Helper()
+	coldAt := time.Now().Add(remediationColdRetryInterval)
+	_, err := storage.RecordRemediationAttempt(context.Background(), itemID, domain.StuckReasonPRNeedsFix, MaxRemediationAttempts, &coldAt)
+	require.NoError(t, err)
+}
+
+// conflictTestClock steps a listener's hourly conflict throttle without real time.
+type conflictTestClock struct{ now time.Time }
+
+func newConflictTestClock(l *BacklogLifecycleListener) *conflictTestClock {
+	c := &conflictTestClock{now: time.Now()}
+	l.conflictRetryClock = func() time.Time { return c.now }
+	return c
+}
+
+func (c *conflictTestClock) Add(d time.Duration) { c.now = c.now.Add(d) }
+
+// conflictOnlyListener wires a listener whose PR has only a merge conflict, a fake fix
+// spawner, a stepping clock and a recording notifier.
+func conflictOnlyListener(t *testing.T, storage *Storage, prNumber int) (*BacklogLifecycleListener, *fakePRFixSpawner, *autoRemediatingNotifier, *conflictTestClock, *fakePRPendingChecker, *BacklogItemData) {
+	t.Helper()
+	item := newPRPendingTestItem(t, storage, prNumber)
+	listener := NewBacklogLifecycleListener(storage)
+	clock := newConflictTestClock(listener)
+	checker := &fakePRPendingChecker{status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"}}
+	overridePRPendingChecker(t, listener, checker)
+	spawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(spawner)
+	n := &autoRemediatingNotifier{}
+	listener.SetNotifier(n)
+	return listener, spawner, n, clock, checker, item
+}
+
+// With ReworkCapOverride == 0 the rework cap never closes, so the hourly retry must bound
+// itself: conflictRetryMaxAttempts sessions, then stand down with one notice.
+func TestReconcilePRPending_ConflictOnly_StopsAfterMaxAttempts_WithOneNotice(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9311)
+
+	for i := 1; i <= conflictRetryMaxAttempts; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		require.Equal(t, i, spawner.callCount, "hourly grant %d must spawn", i)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no dead-end notice while the override is still retrying")
+
+	for i := 0; i < 3; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, conflictRetryMaxAttempts, spawner.callCount, "no session past the max")
+	paused := 0
+	for _, title := range n.titles() {
+		if title == "Auto-rework paused" {
+			paused++
+		}
+	}
+	assert.Equal(t, 1, paused, "exactly one exhaustion notice")
+}
+
+// While the override is retrying, the attempt that parks the pr_needs_fix row must not
+// announce a dead end the next hour contradicts.
+func TestReconcilePRPending_ConflictOnly_ParkingRowDoesNotAnnounceDeadEnd(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, n, clock, _, item := conflictOnlyListener(t, storage, 9312)
+
+	for attempt := int32(1); attempt <= MaxRemediationAttempts; attempt++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		backdateNextRemediationAt(t, storage.repo, item.ID, domain.StuckReasonPRNeedsFix, time.Now().Add(-time.Second))
+		clock.Add(conflictRetryInterval)
+	}
+	assert.NotContains(t, n.titles(), "Auto-rework paused")
+}
+
+// An open rework_cap row means a human decision is pending: the override stands down.
+func TestReconcilePRPending_ConflictOnly_StandsDownWhenReworkCapOpen(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9313)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	require.Equal(t, 1, spawner.callCount)
+	parkPRNeedsFixRow(t, storage, item.ID)
+	applied, err := storage.repo.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusPRPending, "cap hit")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	clock.Add(conflictRetryInterval + time.Second)
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 1, spawner.callCount, "no hourly respawn once the rework cap row is open")
+}
+
+// A fix attempt that fails to start must not spend the attempt budget.
+func TestReconcilePRPending_ConflictOnly_FailedSpawnIsRefunded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9315)
+	spawner.err = errors.New("spawn failed")
+
+	for i := 0; i < conflictRetryMaxAttempts+3; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, conflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no \"survived N sessions\" notice when no session ran")
+}
+
+// Reset (attempt counter back to 0) re-arms the hourly override after exhaustion.
+func TestReconcilePRPending_ConflictOnly_ResetReArmsExhaustedOverride(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9316)
+
+	for i := 0; i < conflictRetryMaxAttempts+1; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	require.Equal(t, conflictRetryMaxAttempts, spawner.callCount, "setup: exhausted")
+
+	applied, err := storage.ResetStuckRemediation(ctx, item.ID, domain.StuckReasonPRNeedsFix)
+	require.NoError(t, err)
+	require.True(t, applied)
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Greater(t, spawner.callCount, conflictRetryMaxAttempts, "Reset must let the hourly override try again")
+}
+
+// A merged PR drops the item's ledger entry.
+func TestReconcilePRPending_ConflictLedgerClearedWhenPRMerges(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, _, _, checker, item := conflictOnlyListener(t, storage, 9317)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	require.NotNil(t, listener.conflictRetries.items[item.ID])
+	listener.conflictRetries.mu.Unlock()
+
+	checker.merged = true
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	defer listener.conflictRetries.mu.Unlock()
+	assert.Nil(t, listener.conflictRetries.items[item.ID], "merged PR must not leave a ledger entry")
+}
+
+// A transient UNKNOWN mergeable state must not reset the throttle; a known-clean PR must.
+func TestReconcilePRPending_ConflictThrottle_ResetsOnlyOnKnownCleanPR(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, _, _, checker, item := conflictOnlyListener(t, storage, 9314)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	granted := func() int {
+		listener.conflictRetries.mu.Lock()
+		defer listener.conflictRetries.mu.Unlock()
+		if s := listener.conflictRetries.items[item.ID]; s != nil {
+			return s.grants
+		}
+		return 0
+	}
+	require.Equal(t, 1, granted())
+
+	checker.status = &git.PRStatus{Mergeable: "UNKNOWN"}
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 1, granted(), "UNKNOWN is no signal: the throttle must survive it")
+
+	checker.status = &git.PRStatus{Mergeable: "MERGEABLE"}
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 0, granted(), "a known-clean PR resets the throttle")
+}
+
+// A conflict-only PR must keep getting fix sessions (hourly) after its
+// pr_needs_fix row parks; a CI-failing PR in the same state must not.
+func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		status    *git.PRStatus
+		wantCalls int
+	}{
+		{"conflict only", &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"}, 2},
+		{"ci failing", &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n"}, 1},
+		{"conflict plus blocking review", &git.PRStatus{HasConflicts: true, HasBlockingReviews: true, FeedbackText: "## Changes requested\n"}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+			item := newPRPendingTestItem(t, storage, 9301)
+
+			listener := NewBacklogLifecycleListener(storage)
+			clock := newConflictTestClock(listener)
+			overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: tc.status})
+			fakeSpawner := &fakePRFixSpawner{}
+			listener.SetPRFixSpawner(fakeSpawner)
+
+			listener.ReconcilePRPending(ctx, storage.repo)
+			require.Equal(t, 1, fakeSpawner.callCount)
+			parkPRNeedsFixRow(t, storage, item.ID)
+
+			// Step the clock past the hourly conflict throttle.
+			clock.Add(conflictRetryInterval + time.Second)
+			listener.ReconcilePRPending(ctx, storage.repo)
+			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount)
+
+			// Inside the hourly window the conflict path is throttled too.
+			listener.ReconcilePRPending(ctx, storage.repo)
+			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount, "throttle must hold within conflictRetryInterval")
+		})
+	}
+}
+
 // TestRemediatePRFixWithBackoffGate_ThreadsHasActiveWorkSessionResult_IntoKnownSessionCall
 // is the TOCTOU-fix regression test (PR #645 Gate 2 review finding #1):
 // remediatePRFixWithBackoffGate must call AutoReopenForPRFixWithKnownSession
@@ -1615,7 +1820,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -1632,7 +1837,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	// Put the item back at pr_pending with the same closed PR reference, as if
 	// a fresh push landed the same closed PR number again — the realistic
 	// repeat-tick scenario this gate protects against.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.ReconcilePRPending(ctx, er)
@@ -1985,7 +2190,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2026,7 +2231,7 @@ func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t 
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2402,8 +2607,10 @@ func (f *fakePRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) 
 	f.createdBody = opts.Body
 	return f.createURL, f.createNumber, f.createErr
 }
-func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
-func (f *fakePRCreator) RequestCopilotReview(prNumber int) error {
+func (f *fakePRCreator) EnablePRAutoMerge(ctx context.Context, prNumber int) error {
+	return f.autoMergeErr
+}
+func (f *fakePRCreator) RequestCopilotReview(ctx context.Context, prNumber int) error {
 	f.copilotReviewCalled = true
 	return f.copilotReviewErr
 }
@@ -2436,25 +2643,35 @@ func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessio
 	return f.prURL, f.err
 }
 
-// fakeNotifierCall records a single Notify invocation's title, message body,
-// and notification type/priority, so tests can assert on interpolated
-// message content (e.g. that a verdict/outcome actually reached the
-// message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity, not
-// just which notification fired.
+// fakeNotifierCall records a single Notify/NotifySession invocation's title, message
+// body, notification type, and urgent/important axes, so tests can assert on
+// interpolated message content (e.g. that a verdict/outcome actually reached
+// the message) and on differentiated ERROR/URGENT vs WARNING/HIGH severity,
+// not just which notification fired. Method/RecipientID (added for
+// session/worktree_consistency_sweep.go's Architecture-A1 regression guard) record which
+// Notifier method fired and the itemID (Notify) or sessionID (NotifySession) it was
+// called with.
 type fakeNotifierCall struct {
+	Method           string // "Notify" or "NotifySession"
+	RecipientID      string // itemID (Notify) or sessionID (NotifySession)
 	Title            string
 	Message          string
 	NotificationType int32
-	Priority         int32
+	Urgent           bool
+	Important        bool
 }
 
 // fakeNotifier is a test double implementing Notifier, recording every call.
 type fakeNotifier struct {
-	calls []fakeNotifierCall // one per Notify call, in order
+	calls []fakeNotifierCall // one per Notify/NotifySession call, in order
 }
 
-func (f *fakeNotifier) Notify(itemID, title, message string, notificationType, priority int32) {
-	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message, NotificationType: notificationType, Priority: priority})
+func (f *fakeNotifier) Notify(itemID, title, message string, notificationType int32, urgent, important bool) {
+	f.calls = append(f.calls, fakeNotifierCall{Method: "Notify", RecipientID: itemID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
+}
+
+func (f *fakeNotifier) NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool) {
+	f.calls = append(f.calls, fakeNotifierCall{Method: "NotifySession", RecipientID: sessionID, Title: title, Message: message, NotificationType: notificationType, Urgent: urgent, Important: important})
 }
 
 // titles returns just the Title of every recorded call, in order — for tests (the
@@ -2530,6 +2747,15 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.titles(), "PR creation failed")
+	for _, c := range notifier.calls {
+		if c.Title != "PR creation failed" {
+			continue
+		}
+		// Push-gate classification table: urgent and important — a genuine failure
+		// needing manual retry/investigation.
+		assert.True(t, c.Urgent, "PR creation failed must be urgent")
+		assert.True(t, c.Important, "PR creation failed must be important")
+	}
 }
 
 // TestPushAndCreatePR_RepeatedPushFailure_DedupsToast verifies the fix for a
@@ -2780,7 +3006,7 @@ func TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotRevie
 // a headless pool is wired and DraftPRDescription succeeds, pushAndCreatePR's
 // drafted-body path (not just buildFallbackPRBody's fallback path) still
 // appends the "Backlog item: <link>" deep link the reviewer needs — see the
-// `strings.TrimRight(drafted, "\n") + "\n\nBacklog item: " + backlogItemLink(...)`
+// `appendBacklogFooter`
 // composition in pushAndCreatePR. Drives a real headless.Pool against a
 // FakeRunner (session/headless/fake_runner.go) so DraftPRDescription's own
 // non-empty-diff precondition is exercised for real, using a small on-disk
@@ -2825,6 +3051,8 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetHeadlessPool(pool)
+	listener.SetDashboardBaseURLFn(func() string { return "https://ssq.example.com" })
+	listener.SetHostRefFn(func() (HostID, string) { return testHostID, "onyx.lan" })
 	fakeCreator := &fakePRCreator{
 		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
 		createNumber: 321,
@@ -2841,7 +3069,8 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 		"the agent-drafted body content must be used, not the fallback body")
 	assert.Contains(t, fakeCreator.createdBody, wantLink,
 		"the drafted-body path must still append the backlog item deep link")
-	assert.True(t, strings.HasSuffix(fakeCreator.createdBody, wantLink+"\n"),
+	assert.Contains(t, fakeCreator.createdBody, testHostID.String(), "the footer must name the creating host")
+	assert.Less(t, strings.Index(fakeCreator.createdBody, "This change adds"), strings.Index(fakeCreator.createdBody, wantLink),
 		"the backlog link must be appended after the drafted body, not embedded mid-content")
 }
 
@@ -3153,7 +3382,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 	// Simulate the race: something else moves the item off "review" while
 	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
 	// are still in flight, before its resolveToPRPending call runs.
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3193,7 +3422,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
@@ -3832,7 +4061,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	select {
 	case gotItemID := <-reopener.called:
 		assert.Equal(t, item.ID, gotItemID)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 	assert.False(t, fakeCreator.pushCalled, "a FAIL verdict must never push/create a PR")
@@ -3860,10 +4089,14 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 	assert.Contains(t, notifier.titles(), "Review session ended without a verdict")
+	require.Len(t, notifier.calls, 1)
+	// Push-gate classification table: urgent and important.
+	assert.True(t, notifier.calls[0].Urgent, "Review session ended without a verdict must be urgent")
+	assert.True(t, notifier.calls[0].Important, "Review session ended without a verdict must be important")
 }
 
 // TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSweepTicks
@@ -3911,7 +4144,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
 	}
 	assert.Equal(t, []string{"Review session ended without a verdict"}, notifier.titles(),
@@ -3983,7 +4216,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -3995,7 +4228,8 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	require.Len(t, notifier.calls, 1)
 	assert.Equal(t, int32(7), notifier.calls[0].NotificationType, "must use NOTIFICATION_TYPE_ERROR, not the generic WARNING")
-	assert.Equal(t, int32(4), notifier.calls[0].Priority, "must use NOTIFICATION_PRIORITY_URGENT, not the generic HIGH")
+	assert.True(t, notifier.calls[0].Urgent, "bounce-cap-exhausted must be urgent")
+	assert.True(t, notifier.calls[0].Important, "bounce-cap-exhausted must be important, so it derives to NOTIFICATION_PRIORITY_URGENT")
 }
 
 // TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetParked
@@ -4033,7 +4267,7 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -4085,7 +4319,7 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 
 	select {
 	case <-reopener.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
@@ -4126,7 +4360,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	select {
 	case gotItemID := <-reopener.called:
 		assert.Equal(t, reviewIS.BacklogItemID, gotItemID)
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called via onSessionExited routing")
 	}
 }
@@ -4197,7 +4431,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(BacklogStatusReview)
-	}, 2*time.Second, 20*time.Millisecond)
+	}, 10*time.Second, 20*time.Millisecond)
 
 	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
 	require.NoError(t, err)
@@ -4255,24 +4489,147 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	}()
 	waitWithTimeout(t, done)
 
+	// The spawner's call count is bumped before spawnReviewGate inserts the
+	// review ItemSession, so wait on the row itself, not the count.
+	var reviewEntry *ItemSessionSummary
 	wait.RequireEventually(t, func() bool {
-		return spawner.getCallCount() == 1
-	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
+		sessions, listErr := storage.ListItemSessions(ctx, createdItem.ID)
+		if listErr != nil {
+			return false
+		}
+		reviewEntry = nil
+		for i := range sessions {
+			if sessions[i].Role == SessionRoleReview {
+				reviewEntry = &sessions[i]
+			}
+		}
+		return reviewEntry != nil
+	}, 10*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
+	require.Equal(t, 1, spawner.getCallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
 
-	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
-	require.NoError(t, err)
-	var reviewEntry *ItemSessionSummary
-	for i := range sessions {
-		if sessions[i].Role == SessionRoleReview {
-			reviewEntry = &sessions[i]
-		}
-	}
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
+}
+
+// TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_RegardlessOfWiredEngine
+// is this Epic's follow-up zero-regression guard at the resolver level
+// (complementing the onSessionExited-level regression test above): even with
+// a *ConfiguredWorkflowEngine wired and a matching automated_review gate
+// configured on the exact in_progress->review edge, resolveReviewGateContext
+// must still resolve to builtInReviewGateContext, never that gate's own
+// fields — the built-in review status always short-circuits (see the
+// function's doc comment).
+func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_RegardlessOfWiredEngine(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusInProgress))).Only(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(BacklogStatusReview))).Only(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Query().
+		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	_, err = client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	gateContext, ok := listener.resolveReviewGateContext(BacklogStatusInProgress, BacklogStatusReview)
+	require.True(t, ok)
+	assert.Equal(t, builtInReviewGateContext, gateContext, "to==BacklogStatusReview must always resolve to the built-in literal, even when a configured gate also matches this edge")
+}
+
+// TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransition
+// covers Story 2.4.3's follow-up: a genuinely custom transition (to !=
+// BacklogStatusReview) with a configured automated_review gate resolves to
+// that gate's own GateID/RequiresDiff/PipelineMode, not the built-in default.
+func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransition(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("rgc-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("rgc-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	transition, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	gate, err := client.TransitionGate.Create().
+		SetTransitionID(transition.ID).
+		SetKind(string(GateKindAutomatedReview)).
+		SetStateful(true).
+		SetEnabled(true).
+		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	gateContext, ok := listener.resolveReviewGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	require.True(t, ok)
+	assert.Equal(t, gate.ID.String(), gateContext.GateID)
+	assert.False(t, gateContext.RequiresDiff)
+	assert.Equal(t, "sdd", gateContext.PipelineMode)
+	assert.Equal(t, BacklogStatus(toStage.Slug), gateContext.TargetTransition)
+}
+
+// TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCustomTransition
+// covers the negative case: a custom transition with no automated_review gate
+// attached must not spawn a review gate at all.
+func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCustomTransition(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	client := storage.GetEntClient()
+
+	fromStage, err := client.BacklogStage.Create().SetSlug("rgc-nogate-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	toStage, err := client.BacklogStage.Create().SetSlug("rgc-nogate-to").SetName("To").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+
+	stageRepo := NewEntStageConfigRepository(client)
+	gateRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetWorkflowEngine(engine)
+
+	_, ok := listener.resolveReviewGateContext(BacklogStatus(fromStage.Slug), BacklogStatus(toStage.Slug))
+	assert.False(t, ok)
 }
 
 // --- Story 3.3.1: CaptureShipSnapshot ---
@@ -4801,4 +5158,138 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 	gotRepoPath, err := filepath.EvalSymlinks(created.RepoPath)
 	require.NoError(t, err)
 	assert.Equal(t, wantMain, gotRepoPath, "RepoPath must be canonicalized to the main repo, not stored as the filing agent's worktree")
+}
+
+// fakeWorktreeCleaner is a test stub implementing WorktreeCleaner. It records
+// every item ID CleanupTerminalItem was called with, in order, so a test can
+// assert an internal (system-driven) terminal transition triggers cleanup
+// synchronously rather than depending solely on the 60s
+// reconcileTerminalItemSessions safety-net sweep.
+type fakeWorktreeCleaner struct {
+	mu           sync.Mutex
+	cleanedItems []string
+}
+
+func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanedItems = append(f.cleanedItems, itemID)
+}
+
+func (f *fakeWorktreeCleaner) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cleanedItems...)
+}
+
+// TestTransitionBouncingItemToDone_TriggersCleanup proves the internal
+// bounce-to-done path (an item whose linked PR is externally confirmed
+// merged, reconciled via reconcileBouncingItems/transitionBouncingItemToDone
+// rather than the manual TransitionBacklogItemStatus RPC) invokes the wired
+// WorktreeCleaner synchronously right after the done transition — so cleanup
+// does not depend solely on the 60s reconcileTerminalItemSessions sweep. See
+// WorktreeCleaner's doc comment (session/backlog_lifecycle_archive.go).
+func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, cleanup wiring",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged-cleanup", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/bouncing-merged-cleanup")
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status)
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"the internal bounce-to-done transition must trigger synchronous cleanup, not just the 60s sweep")
+}
+
+// TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails guards
+// against calling the cleaner on an item that never actually reached done —
+// cleanupTerminalItemSync must only fire after a confirmed successful
+// transition.
+func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item whose done transition fails",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	// Archive the item out from under the in-flight bounce reconciliation so
+	// the review->done precondition inside transitionBouncingItemToDone fails
+	// (item.Status captured before this call is stale).
+	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, TriggeredBySystem, "archived mid-reconcile")
+	require.NoError(t, err)
+
+	transErr := listener.transitionBouncingItemToDone(ctx, *item, "test summary")
+
+	require.Error(t, transErr)
+	assert.Empty(t, cleaner.calls(), "cleanup must never fire when the done transition itself failed")
+}
+
+// autoRemediatingNotifier records that the stamped path was taken.
+type autoRemediatingNotifier struct {
+	fakeNotifier
+	stamped []string
+}
+
+func (a *autoRemediatingNotifier) NotifyAutoRemediating(itemID, title, message string, notificationType int32, urgent, important bool) {
+	a.stamped = append(a.stamped, title)
+}
+
+func TestNotifyAutoRemediating_should_UseStampedPathWhenImplementedAndFallBackToNotifyOtherwise(t *testing.T) {
+	t.Parallel()
+	stamped := &autoRemediatingNotifier{}
+	l := &BacklogLifecycleListener{}
+	l.SetNotifier(stamped)
+	l.notifyAutoRemediating("item", "PR needs attention", "m", 8, false, true)
+	if len(stamped.stamped) != 1 || len(stamped.calls) != 0 {
+		t.Fatalf("stamped path: stamped=%v plain=%v", stamped.stamped, stamped.titles())
+	}
+
+	plain := &fakeNotifier{}
+	l2 := &BacklogLifecycleListener{}
+	l2.SetNotifier(plain)
+	l2.notifyAutoRemediating("item", "PR needs attention", "m", 8, false, true)
+	if len(plain.calls) != 1 || plain.calls[0].Method != "Notify" {
+		t.Fatalf("fallback should call Notify once, got %+v", plain.calls)
+	}
 }

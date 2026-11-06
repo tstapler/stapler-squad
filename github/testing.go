@@ -1,9 +1,11 @@
 package github
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-// ResetRateLimiterForTest swaps in a fresh DefaultRateLimiter for the
-// duration of t, restoring the original via t.Cleanup. Any test — in this
+// ResetRateLimiterForTest clears DefaultRateLimiter before t and again via t.Cleanup. Any test — in this
 // package or a consumer package (e.g. session's GitHub backlog plugins) —
 // that drives a request through HTTPClient() and can trigger a rate-limit
 // -setting response (403 with Retry-After, 403 with X-RateLimit-Remaining:
@@ -14,7 +16,29 @@ import "testing"
 // after it in that process.
 func ResetRateLimiterForTest(t testing.TB) {
 	t.Helper()
-	orig := DefaultRateLimiter
-	DefaultRateLimiter = &RateLimiter{}
-	t.Cleanup(func() { DefaultRateLimiter = orig })
+	// Clear the shared limiter in place rather than swapping the pointer: detached
+	// background goroutines (e.g. repo-settings lookups) read DefaultRateLimiter
+	// after the test returns, and a pointer write in Cleanup raced with them.
+	clear := func() {
+		DefaultRateLimiter.Reset()
+		DefaultRateLimiter.snapshot.Store(nil)
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+// ResetPriorityAdmissionFlagCacheForTest clears priorityAdmissionEnabled's
+// TTL cache so a consumer-package test that flips
+// githubPriorityAdmissionFlagName sees the change immediately. Exported
+// because _test.go files (where this package keeps its own copy) aren't
+// importable across packages.
+func ResetPriorityAdmissionFlagCacheForTest() {
+	ghPriorityAdmissionFlagCacheVal.Store(false)
+	ghPriorityAdmissionFlagCacheAt.Store(0)
+}
+
+// SeedPRsForTest installs prs as the cache's current snapshot so a
+// consumer-package test can drive Annotate without a live GitHub fetch.
+func (c *UserPRCache) SeedPRsForTest(prs []UserPR) {
+	c.snapshot.Store(&userPRSnapshot{prs: prs, capturedAt: time.Now()})
 }

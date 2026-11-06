@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { ImportService } from "@/gen/session/v1/import_pb";
 import type {
   ExternalSessionCandidateRef,
@@ -13,9 +13,7 @@ import type {
   ConfirmKillExternalSessionResponse,
   CancelPendingKillResponse,
 } from "@/gen/session/v1/import_pb";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
-import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { getApiBaseUrl } from "@/lib/config";
 
 interface UseImportSessionServiceOptions {
   baseUrl?: string;
@@ -48,17 +46,11 @@ export function useImportSessionService(
   options: UseImportSessionServiceOptions = {}
 ): UseImportSessionServiceReturn {
   const { baseUrl = getApiBaseUrl() } = options;
-  const analytics = useAnalytics();
   const clientRef = useRef<ReturnType<typeof createClient<typeof ImportService>> | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl,
-      interceptors: [createAuthInterceptor(), createRpcTimingInterceptor(analytics)],
-    });
+    const transport = getConnectTransport({ baseUrl });
     clientRef.current = createClient(ImportService, transport);
-    // analytics identity is stable (memoized in AnalyticsContextProvider); baseUrl is the only real dep
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
   const previewImport = useCallback(

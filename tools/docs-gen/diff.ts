@@ -3,7 +3,7 @@
  * Useful for CI PR comments to show what documentation would change.
  *
  * Usage:
- *   cd tools/docs-gen && npx ts-node --project tsconfig.json diff.ts
+ *   cd tools/docs-gen && bunx ts-node --project tsconfig.json diff.ts
  *
  * Or via Makefile:
  *   make docs-features-diff

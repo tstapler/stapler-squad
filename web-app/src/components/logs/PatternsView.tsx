@@ -113,5 +113,3 @@ export function PatternsView({ entries, maxExamplesPerPattern = 20 }: PatternsVi
     </div>
   );
 }
-
-export default PatternsView;

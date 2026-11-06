@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"time"
 
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
@@ -28,9 +30,11 @@ func (i *Instance) Hibernate(ctx context.Context) error {
 // Called from transitionToLocked when transitioning Active→Hibernated;
 // dispatches the I/O work to a goroutine so the actor is not blocked.
 func hibernateProcessLocked(s *instanceState, ctx context.Context) {
+	s.inst.hibernateTeardownWG.Add(1)
 	s.inst.hibernateWG.Add(1)
 	go func() {
 		defer s.inst.hibernateWG.Done()
+		defer s.inst.hibernateTeardownWG.Done()
 		s.inst.hibernateProcess(ctx)
 	}()
 }
@@ -101,6 +105,9 @@ func (i *Instance) scrollbackPath() string {
 // The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
+		if s.inst.ArchivedAt != nil || s.inst.Status != Hibernated {
+			return fmt.Errorf("session is not an unarchived hibernated session")
+		}
 		return transitionToLocked(s, ctx, Active)
 	})
 }
@@ -110,24 +117,22 @@ func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 // dispatches the re-launch work to a goroutine so the actor is not blocked.
 func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 	i := s.inst
+	i.terminalViewClosedAt.Store(time.Now().UnixNano())
 	i.started.Store(false)
 	i.hibernateWG.Add(1)
 	go func() {
 		defer i.hibernateWG.Done()
-		if err := i.Start(false); err != nil {
+		if err := i.resumeAfterTeardown(func() error {
+			return i.sendSyncErr(func(s *instanceState) error {
+				if s.inst.Status != Active || s.inst.ArchivedAt != nil {
+					return nil
+				}
+				return startLocked(s, false)
+			})
+		}); err != nil {
 			log.Error("hibernation resume: failed to start session",
 				"session", i.Title, "err", err.Error())
-			i.send(func(s *instanceState) {
-				// Hold i.mu across the write and buildSnapshot so this is ordered
-				// against the legacy direct-lock setters (MarkViewed & co.) that
-				// read every field via buildSnapshot under i.mu.Lock() from
-				// outside the actor. See runActor's doc comment in actor.go.
-				s.inst.mu.Lock()
-				s.inst.loadStatus(Hibernated)
-				snap := buildSnapshot(s.inst)
-				s.inst.mu.Unlock()
-				s.inst.snapshot.Store(snap)
-			})
+			i.send(rollbackFailedResume)
 			return
 		}
 		if i.controllerManager.GetStatusManager() != nil {
@@ -162,41 +167,24 @@ func JoinHibernation(i *Instance) {
 	}
 }
 
-// resumeFromHibernation re-launches the AI process and cleans up the checkpoint.
-// Called from the Hibernated → Active After hook in a goroutine (legacy path used
-// by state_machine.go transitionDefs After hooks — kept for StartWithCleanup path).
-// Must NOT hold stateMutex.
-func (i *Instance) resumeFromHibernation(ctx context.Context) {
-	// Re-launch via the cold-restore path. started is atomic.Bool (BUG-025
-	// follow-up) so this write is race-free without needing mu — it's also
-	// excluded from InstanceSnapshot, so no buildSnapshot() call is needed here.
-	i.started.Store(false)
-	if err := i.Start(false); err != nil {
-		log.Error("hibernation resume: failed to start session",
-			"session", i.Title, "err", err.Error())
-		// Roll back to Hibernated on failure
-		i.mu.Lock()
-		i.loadStatus(Hibernated)
-		i.snapshot.Store(buildSnapshot(i))
+func (i *Instance) resumeAfterTeardown(start func() error) error {
+	i.hibernateTeardownWG.Wait()
+	return start()
+}
+
+// rollbackFailedResume reverts Status to Hibernated after a failed resume,
+// but only if nothing else (e.g. a concurrent StopByUser) already moved the
+// instance on -- an unconditional revert would clobber that later status.
+func rollbackFailedResume(s *instanceState) {
+	i := s.inst
+	i.mu.Lock()
+	if i.Status != Active {
 		i.mu.Unlock()
 		return
 	}
-	// Start the controller and session driver
-	if i.controllerManager.GetStatusManager() != nil {
-		if err := i.StartController(); err != nil {
-			log.Warn("hibernation resume: failed to start controller",
-				"session", i.Title, "err", err)
-		}
-	}
-	StartSessionDriver(i, i.GetEffectiveRootDir())
-	// Clean up checkpoint files
-	cfg := appconfig.LoadConfig()
-	checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()
-	if err == nil && checkpointDir != "" {
-		writer := hibernation.NewWriter(checkpointDir)
-		if err := writer.Delete(i.UUID); err != nil {
-			log.Warn("hibernation resume: failed to delete checkpoint",
-				"session", i.Title, "err", err)
-		}
-	}
+	i.loadStatus(Hibernated)
+	i.touchUpdatedAt()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 }

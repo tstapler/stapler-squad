@@ -12,7 +12,7 @@ if (typeof performance.mark !== "function") {
   performance.mark = jest.fn();
 }
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => ({ get: () => null }),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));

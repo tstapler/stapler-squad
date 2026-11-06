@@ -2,8 +2,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -316,4 +320,11 @@ func TestRunWorkflow_should_ReturnInvalidArgument_When_IdMissing(t *testing.T) {
 	if success, _ := out["success"].(bool); success {
 		t.Fatalf("expected success=false when id is missing, got: %+v", out)
 	}
+}
+
+func TestWorkflowServiceErrResult_AlreadyExistsIsConflict(t *testing.T) {
+	res, err := workflowServiceErrResult(connect.NewError(connect.CodeAlreadyExists, errors.New("session with title 'x' already exists")))
+	require.NoError(t, err)
+	assert.Contains(t, fmt.Sprint(res.Content), ErrConflict)
+	assert.NotContains(t, fmt.Sprint(res.Content), ErrInternalError)
 }

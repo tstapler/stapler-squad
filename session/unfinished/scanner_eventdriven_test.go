@@ -318,9 +318,212 @@ func TestScanner_pruneMissingRepos_should_keepRepo_When_PathStillExists(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	go s.pruneMissingRepos(ctx)
 
-	time.Sleep(50 * time.Millisecond) // let a few ticks fire
+	// A few 10ms prune ticks fire during this window; the repo must stay tracked throughout.
+	require.Never(t, func() bool {
+		_, tracked := s.repoSet.Load(repoPath)
+		return !tracked
+	}, 50*time.Millisecond, 5*time.Millisecond, "an existing repo must survive prune ticks")
 	cancel()
+}
 
-	_, stillTracked := s.repoSet.Load(repoPath)
-	assert.True(t, stillTracked, "an existing repo must survive prune ticks")
+// ---- .git event filtering, scoping and debouncing --------------------------
+
+func TestClassifyGitEvent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		wantScope    gitEventScope
+		wantRelevant bool
+	}{
+		{"index.lock", gitEventRepoRoot, false},
+		{"HEAD.lock", gitEventRepoRoot, false},
+		{"config.lock", gitEventRepoRoot, false},
+		{"packed-refs.lock", gitEventRepoRoot, false},
+		{"next-index-72027.lock", gitEventRepoRoot, false},
+		{".watchman-cookie-host-1-2", gitEventRepoRoot, false},
+		{"index", gitEventRepoRoot, true},
+		{"config", gitEventRepoRoot, true},
+		{"MERGE_RR", gitEventRepoRoot, true},
+		{"HEAD", gitEventAllWorktrees, true},
+		{"COMMIT_EDITMSG", gitEventAllWorktrees, true},
+		{"FETCH_HEAD", gitEventAllWorktrees, true},
+		{"packed-refs", gitEventAllWorktrees, true},
+	}
+	for _, tt := range tests {
+		scope, relevant := classifyGitEvent(tt.name)
+		assert.Equal(t, tt.wantRelevant, relevant, tt.name)
+		if tt.wantRelevant {
+			assert.Equal(t, tt.wantScope, scope, tt.name)
+		}
+	}
+}
+
+func newScannerWithFreshWorktrees(repo string, worktrees ...string) *Scanner {
+	s := &Scanner{scanQueue: make(chan scanTask, 50)}
+	for _, wt := range worktrees {
+		s.cacheStore.Store(wt, &worktreeCache{ttl: time.Hour})
+		s.indexRepoWorktree(repo, wt)
+		c, _ := s.cacheStore.Load(wt)
+		c.(*worktreeCache).Set(ScanResult{WorktreePath: wt})
+	}
+	return s
+}
+
+func freshWorktrees(s *Scanner, worktrees ...string) []bool {
+	out := make([]bool, len(worktrees))
+	for i, wt := range worktrees {
+		c, _ := s.cacheStore.Load(wt)
+		_, out[i] = c.(*worktreeCache).Get()
+	}
+	return out
+}
+
+func TestScanner_scheduleGitEvent_should_scopeInvalidation_ByEventKind(t *testing.T) {
+	t.Parallel()
+	repo, linked := "/r/repo", "/r/linked"
+	s := newScannerWithFreshWorktrees(repo, repo, linked)
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+	assert.Equal(t, []bool{false, true}, freshWorktrees(s, repo, linked), "index-style event must leave linked worktrees cached")
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventAllWorktrees)
+	assert.Equal(t, []bool{false, false}, freshWorktrees(s, repo, linked), "HEAD/FETCH_HEAD-style event invalidates every worktree")
+}
+
+func TestScanner_scheduleGitEvent_should_coalesceBurst_When_DebounceSet(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.fsDebounce = time.Hour // never fires: assert only the coalescing state
+
+	for i := 0; i < 10; i++ {
+		s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+	}
+	s.scheduleGitEvent(context.Background(), repo, gitEventAllWorktrees)
+
+	assert.Equal(t, []bool{true}, freshWorktrees(s, repo), "nothing is invalidated before the debounce elapses")
+	assert.Empty(t, s.scanQueue)
+	s.fsMu.Lock()
+	widest, armed := s.fsPending[repo]
+	s.fsMu.Unlock()
+	require.True(t, armed)
+	assert.Equal(t, gitEventAllWorktrees, widest, "burst keeps the widest scope")
+}
+
+func TestScanner_scheduleGitEvent_should_flushOnce_When_DebounceElapses(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.fsDebounce = 5 * time.Millisecond
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+
+	err := wait.WaitForCondition(func() bool { return len(s.scanQueue) == 1 }, wait.FastWaitConfig())
+	require.NoError(t, err, "expected exactly one rescan after the debounce")
+	assert.Equal(t, []bool{false}, freshWorktrees(s, repo))
+	s.fsMu.Lock()
+	_, pending := s.fsPending[repo]
+	s.fsMu.Unlock()
+	assert.False(t, pending, "pending marker must clear so the next burst re-arms")
+}
+
+// ---- working-tree watcher (darwin FSEvents) ---------------------------------
+
+type fakeTreeWatcher struct{ added, removed []string }
+
+func (f *fakeTreeWatcher) Add(r string) error { f.added = append(f.added, r); return nil }
+func (f *fakeTreeWatcher) Remove(r string)    { f.removed = append(f.removed, r) }
+func (f *fakeTreeWatcher) Close()             {}
+
+func TestScanner_backstopInterval_should_stretchTwofold_When_TreeWatcherActive(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{tickInterval: time.Minute}
+	assert.Equal(t, time.Minute, s.backstopInterval())
+
+	s.treeWatch = &fakeTreeWatcher{}
+	assert.Equal(t, 2*time.Minute, s.backstopInterval())
+}
+
+func TestScanner_watchRepo_should_registerWithTreeWatcher_When_Present(t *testing.T) {
+	t.Parallel()
+	fw := &fakeTreeWatcher{}
+	s := &Scanner{scanQueue: make(chan scanTask, 50), treeWatch: fw}
+
+	s.watchRepo("/r/repo")
+	s.unwatchRepo("/r/repo")
+
+	assert.Equal(t, []string{"/r/repo"}, fw.added)
+	assert.Equal(t, []string{"/r/repo"}, fw.removed)
+}
+
+// A tree event must reach the scan queue via the debounce path alone, far
+// sooner than even the unstretched backstop tick, so lengthening the tick 2x
+// cannot add change-detection latency.
+func TestScanner_treeChange_should_enqueueBeforeBackstopTick_When_TreeWatcherActive(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.tickInterval = time.Hour
+	s.treeWatch = &fakeTreeWatcher{}
+	s.fsDebounce = 5 * time.Millisecond
+	require.Equal(t, 2*time.Hour, s.backstopInterval())
+
+	start := time.Now()
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot) // what the watcher callback does
+	err := wait.WaitForCondition(func() bool { return len(s.scanQueue) == 1 }, wait.FastWaitConfig())
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), time.Minute)
+}
+
+func TestScanner_startTreeWatch_should_watchReposAddedBeforeStart(t *testing.T) {
+	t.Parallel()
+	fw := &fakeTreeWatcher{}
+	s := &Scanner{scanQueue: make(chan scanTask, 50)}
+	s.repoSet.Store("/r/early", true)
+
+	s.installTreeWatcher(context.Background(), fw)
+
+	assert.Equal(t, []string{"/r/early"}, fw.added)
+	assert.Equal(t, 2*time.Minute, func() time.Duration { s.tickInterval = time.Minute; return s.backstopInterval() }())
+}
+
+// A tree event must mark DirtyGen synchronously, before the debounce flush, so a
+// scan_skip clean verdict cannot be served after it.
+func TestScanner_onTreeChange_should_forceFullWalkImmediately_When_DebounceStillPending(t *testing.T) {
+	t.Parallel()
+	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n"})
+	g, _ := dirtyGenReader()
+	g.ArmDirty(dir)
+	rescan(t, g, dir)
+	rescan(t, g, dir)
+	require.False(t, g.dirtyGenFor(dir).Peek().FullWalk, "precondition: armed and clean, caches trusted")
+
+	s := &Scanner{scanQueue: make(chan scanTask, 50), reader: g, fsDebounce: time.Hour}
+	s.onTreeChange(context.Background(), dir, gitEventRepoRoot)
+
+	assert.Empty(t, s.scanQueue, "the debounced flush has not fired")
+	dec := g.dirtyGenFor(dir).Peek()
+	assert.True(t, dec.FullWalk || dec.DirtyHint, "tree event invalidated the clean verdict before the debounce elapsed")
+
+	decodes := g.ScanSkipStats().IndexDecodes
+	rescan(t, g, dir)
+	assert.Greater(t, g.ScanSkipStats().IndexDecodes, decodes, "the next scan refreshed the index cache instead of trusting it")
+}
+
+func TestScanner_onTreeChange_should_overflowEveryWorktree_When_ScopeIsAll(t *testing.T) {
+	t.Parallel()
+	_, repo := trackedRepo(t, map[string]string{"a.txt": "a\n"})
+	_, linked := trackedRepo(t, map[string]string{"b.txt": "b\n"})
+	g, _ := dirtyGenReader()
+	g.ArmDirty(repo)
+	g.ArmDirty(linked)
+	rescan(t, g, repo)
+	rescan(t, g, linked)
+
+	s := &Scanner{scanQueue: make(chan scanTask, 50), reader: g, fsDebounce: time.Hour}
+	s.indexRepoWorktree(repo, linked)
+	s.onTreeChange(context.Background(), repo, gitEventAllWorktrees)
+
+	assert.True(t, g.dirtyGenFor(repo).Peek().FullWalk)
+	assert.True(t, g.dirtyGenFor(linked).Peek().FullWalk)
 }

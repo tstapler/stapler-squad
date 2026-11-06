@@ -1045,6 +1045,12 @@ func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
 	assert.Nil(t, paths)
 }
 
+func TestRunPreGateSecurityCheck_should_ReturnNil_When_DiffContainsNoThreatPatterns(t *testing.T) {
+	if err := RunPreGateSecurityCheck("+func main() { fmt.Println(\"hi\") }"); err != nil {
+		t.Fatalf("clean diff returned error: %v", err)
+	}
+}
+
 // TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD is a regression test
 // for backlog item e7664cbf: RecoverBaseCommitSHA used to compute
 // `git merge-base HEAD <branch>`, so its result depended on whatever branch a
@@ -1061,12 +1067,8 @@ func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T)
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
-	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
-	runGitOrFail(t, repoDir, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "README.md")
-	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	initConfiguredRepo(t, repoDir, "main")
+	commitFile(t, repoDir, "README.md", "base\n", "initial")
 	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// The session's own dedicated worktree, branched from main, with real committed work.
@@ -1171,4 +1173,29 @@ func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
 
 	got := readPlanFile(artifactsDir, repoPath)
 	assert.Equal(t, "legit plan content", got)
+}
+
+// A root commit has no parent, so the empty-baseSHA fallback (headRef~1..headRef) must fail
+// rather than silently diff something else; a two-commit history returns just the last commit.
+func TestGetGitDiffRef_EmptyBaseSHA_DiffsLastCommit(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\n"), 0o644))
+	runGit(t, repo, "add", "a.txt")
+	runGit(t, repo, "commit", "-m", "first")
+
+	_, _, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.Error(t, err, "root commit has no HEAD~1")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("two\n"), 0o644))
+	runGit(t, repo, "commit", "-am", "second")
+
+	diff, truncated, err := GetGitDiffRef(context.Background(), repo, "", "HEAD")
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.Contains(t, diff, "+two")
+	assert.Contains(t, diff, "-one")
 }

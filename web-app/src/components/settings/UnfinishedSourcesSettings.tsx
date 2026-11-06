@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useUnfinishedWorkConfig } from "@/lib/hooks/useUnfinishedWorkConfig";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import * as styles from "./UnfinishedSourcesSettings.css";
 
 /**
@@ -95,14 +96,12 @@ export function UnfinishedSourcesSettings() {
         </div>
 
         <div className={styles.addRow}>
-          <input
-            type="text"
-            className={styles.input}
-            placeholder="/Users/you/code"
+          <RepoPathInput
             value={newWatchDir}
-            onChange={(e) => setNewWatchDir(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddWatchDir()}
+            onChange={setNewWatchDir}
+            onEnter={handleAddWatchDir}
             aria-label="New watch directory path"
+            placeholder="/Users/you/code"
           />
           <button
             className={styles.addBtn}
@@ -141,14 +140,13 @@ export function UnfinishedSourcesSettings() {
         </div>
 
         <div className={styles.addRow}>
-          <input
-            type="text"
-            className={styles.input}
-            placeholder="/Users/you/my-project"
+          <RepoPathInput
             value={newPinnedRepo}
-            onChange={(e) => setNewPinnedRepo(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddPinnedRepo()}
+            onChange={setNewPinnedRepo}
+            onEnter={handleAddPinnedRepo}
             aria-label="New pinned repository path"
+            placeholder="/Users/you/my-project"
+            data-testid="pinned-repo-input"
           />
           <button
             className={styles.addBtn}

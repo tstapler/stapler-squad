@@ -24,6 +24,21 @@ func (h *StreamHub) NegotiatedSize() TerminalSize {
 	return h.negotiatedSize
 }
 
+// ResizeActivity returns the hub's current resize bookkeeping: resizing
+// reports whether applyNegotiatedSize is running right now, and generation
+// is a monotonically increasing counter incremented once per completed
+// applyNegotiatedSize call (success or failure). Callers with their own
+// independent pane-capture window that must not race a resize (Fix 5 --
+// session.Instance.ForwardScroll's captureViaRedrawQuiescence) sample this
+// before and after their capture: a changed generation, or resizing true at
+// either end, means a resize may have reflowed the pane mid-capture, and the
+// capture's result cannot be trusted.
+func (h *StreamHub) ResizeActivity() (generation uint64, resizing bool) {
+	h.resizeMu.Lock()
+	defer h.resizeMu.Unlock()
+	return h.resizeGeneration, h.resizing
+}
+
 // RequestResize records subscriber id's vote for size and re-runs
 // negotiation, but only if that subscriber was attached with
 // SubscriberCapability.CanResize == true (Task 1.3.1c) — a read-only sink's
@@ -42,7 +57,7 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	if !ok {
 		return
 	}
-	if !sub.capability.CanResize {
+	if !sub.currentCapability().CanResize {
 		log.Info("streamhub resize vote rejected: subscriber cannot resize",
 			"session", h.sessionName, "subscriber_id", string(id))
 		return
@@ -90,7 +105,7 @@ func (h *StreamHub) collectResizeVotes() []ResizeVote {
 
 	votes := make([]ResizeVote, 0, len(h.subscribers))
 	for id, sub := range h.subscribers {
-		if !sub.capability.CanResize {
+		if !sub.currentCapability().CanResize {
 			continue
 		}
 		if size, voted := sub.currentResizeVote(); voted {
@@ -118,4 +133,22 @@ func negotiateSize(votes []ResizeVote) TerminalSize {
 		}
 	}
 	return result
+}
+
+// UpgradeSubscriber replaces an attached subscriber's capability, so a viewer
+// that attached read-only can start voting on size once it is allowed to write.
+// It reports false for an unknown SubscriberID.
+func (h *StreamHub) UpgradeSubscriber(id SubscriberID, capability SubscriberCapability) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sub, ok := h.subscribers[id]
+	if !ok {
+		return false
+	}
+	capability.ManualFirstPaint = sub.capability.ManualFirstPaint // attach-time only
+	sub.upgraded.Store(&capability)
+	log.Info("streamhub subscriber capability upgraded",
+		"session", h.sessionName, "subscriber_id", string(id),
+		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
+	return true
 }

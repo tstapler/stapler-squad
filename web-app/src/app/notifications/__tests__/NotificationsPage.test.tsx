@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { NotificationsPage } from "../NotificationsPage";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -36,13 +36,15 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
   }),
 }));
 
-let mockLiveSessions: Pick<Session, "id">[] = [];
+let mockLiveSessions: Pick<Session, "id" | "title">[] = [];
+let mockHasLoadedSessionsOnce = true;
 jest.mock("@/lib/store", () => ({
-  // selectAllSessions (mocked below) ignores the state argument entirely.
+  // selectAllSessions/selectSessionsHasLoadedOnce (mocked below) ignore the state argument entirely.
   useAppSelector: (selector: unknown) => (selector as (s: unknown) => unknown)(undefined),
 }));
 jest.mock("@/lib/store/sessionsSlice", () => ({
   selectAllSessions: () => mockLiveSessions,
+  selectSessionsHasLoadedOnce: () => mockHasLoadedSessionsOnce,
 }));
 
 function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
@@ -66,6 +68,8 @@ let mockUnreadCountOverride: number | null = null;
 const mockLoadMoreHistory = jest.fn();
 const mockMarkAsRead = jest.fn();
 const mockClearHistory = jest.fn();
+const mockClearHistoryByIds = jest.fn();
+const mockShowActionToast = jest.fn();
 const mockRefreshHistory = jest.fn();
 jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
@@ -74,6 +78,8 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     removeFromHistory: jest.fn(),
     acknowledgeNotification: jest.fn(),
     clearHistory: mockClearHistory,
+    clearHistoryByIds: mockClearHistoryByIds,
+    showActionToast: mockShowActionToast,
     getUnreadCount: () => mockUnreadCountOverride ?? mockHistory.filter((n) => !n.isRead).length,
     historyLoading: false,
     historyHasMore: mockHistoryHasMore,
@@ -93,6 +99,7 @@ function expandRecentActivity() {
 describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
   beforeEach(() => {
     mockLiveSessions = [];
+    mockHasLoadedSessionsOnce = true;
     mockHistory = [];
   });
 
@@ -109,13 +116,42 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
 
   it("keeps the existing live-list route unaffected when the session is still live", () => {
     mockHistory = [makeNotification({ id: "notif-live", sessionId: "sess-live" })];
-    mockLiveSessions = [{ id: "sess-live" }];
+    mockLiveSessions = [{ id: "sess-live", title: "my-session" }];
 
     render(<NotificationsPage />);
     expandRecentActivity();
 
     const link = screen.getByRole("link", { name: "View Session" });
     expect(link).toHaveAttribute("href", "/?session=sess-live");
+  });
+
+  it("defaults to the live route before the sessions store has ever loaded, even though the id isn't in the (still-empty) live list", () => {
+    // Regression: a fresh page load whose WatchSessions snapshot hasn't landed yet must
+    // not be mistaken for "session confirmed gone" — that raced a real, active session
+    // into the summary route instead of the terminal view.
+    mockHistory = [makeNotification({ id: "notif-racing", sessionId: "sess-still-loading" })];
+    mockLiveSessions = [];
+    mockHasLoadedSessionsOnce = false;
+
+    render(<NotificationsPage />);
+    expandRecentActivity();
+
+    const link = screen.getByRole("link", { name: "View Session" });
+    expect(link).toHaveAttribute("href", "/?session=sess-still-loading");
+  });
+
+  it("routes live when the notification's sessionId is the session's title rather than its stable id", () => {
+    // Regression: reproduced live against a real "stapler-squad-perf" Active session whose
+    // SendNotification-recorded sessionId was the title, not GetStableID()'s UUID — the exact
+    // same title-vs-id split that page.tsx's findSessionById already tolerates for `/?session=`.
+    mockHistory = [makeNotification({ id: "notif-title-id", sessionId: "stapler-squad-perf" })];
+    mockLiveSessions = [{ id: "d5508540-5955-438c-9a6b-2c7ee7b5adee", title: "stapler-squad-perf" }];
+
+    render(<NotificationsPage />);
+    expandRecentActivity();
+
+    const link = screen.getByRole("link", { name: "View Session" });
+    expect(link).toHaveAttribute("href", "/?session=stapler-squad-perf");
   });
 });
 
@@ -277,6 +313,8 @@ function resetSharedMocks() {
   mockUnreadCountOverride = null;
   mockMarkAsRead.mockClear();
   mockClearHistory.mockClear();
+  mockClearHistoryByIds.mockReset();
+  mockShowActionToast.mockClear();
   mockRefreshHistory.mockClear();
 }
 
@@ -290,6 +328,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         sessionId: "sess-a1b2c3",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-1", sessionId: "sess-x", sessionName: "Complete 1", notificationType: "task_complete", isRead: true }),
@@ -330,6 +369,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-1", sessionName: "Complete 1", notificationType: "task_complete", isRead: true }),
@@ -351,6 +391,7 @@ describe("NotificationsPage — NeedsDecisionSection tiering (Task 3.1.2c/3.1.2d
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -372,6 +413,7 @@ describe("NotificationsPage — scoped bulk-read button (Task 3.1.2e/3.1.2f)", (
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
       makeNotification({ id: "notif-complete", sessionId: "sess-c", sessionName: "Complete", notificationType: "task_complete" }),
@@ -391,6 +433,7 @@ describe("NotificationsPage — scoped bulk-read button (Task 3.1.2e/3.1.2f)", (
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -418,6 +461,7 @@ describe("NotificationsPage — no ✕ control in NeedsDecisionSection (Task 3.1
         id: "notif-approval",
         sessionName: "Approval Session",
         notificationType: "approval_needed",
+        isPendingDecision: true,
         metadata: { approval_id: "appr-1" },
       }),
     ];
@@ -577,11 +621,40 @@ describe("NotificationsPage — 'Clear history' confirm gate (Task 3.1.5d)", () 
     (window.confirm as jest.Mock).mockRestore();
   });
 
-  it("calls clearHistory once the confirm dialog is accepted", () => {
+  it("sends the non-decision ids once the confirm dialog is accepted", () => {
+    mockClearHistoryByIds.mockResolvedValue({ deleted: 1, kept: [] });
+    mockHistory = [
+      makeNotification({ id: "notif-1", notificationType: "task_complete", isRead: true }),
+      makeNotification({ id: "notif-p", notificationType: "approval_needed", isPendingDecision: true, metadata: { approval_id: "a1" } }),
+    ];
     jest.spyOn(window, "confirm").mockReturnValue(true);
     render(<NotificationsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
-    expect(mockClearHistory).toHaveBeenCalled();
+    expect(mockClearHistoryByIds).toHaveBeenCalledWith(["notif-1"]);
+    (window.confirm as jest.Mock).mockRestore();
+  });
+
+  it("notifications_page_should_show_n_kept_line_when_clear_response_lists_kept_and_show_nothing_when_empty", async () => {
+    mockHistory = [
+      makeNotification({ id: "a", sessionId: "s1", notificationType: "task_complete", isRead: true }),
+      makeNotification({ id: "b", sessionId: "s2", notificationType: "task_complete", isRead: false }),
+    ];
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+
+    mockClearHistoryByIds.mockResolvedValueOnce({ deleted: 0, kept: ["a", "b"] });
+    const { unmount } = render(<NotificationsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    expect(await screen.findByTestId("notifications-kept-line")).toHaveTextContent("2 kept: still needs attention");
+    // The next user action clears the line.
+    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
+    expect(screen.queryByTestId("notifications-kept-line")).toBeNull();
+    unmount();
+
+    mockClearHistoryByIds.mockResolvedValueOnce({ deleted: 2, kept: [] });
+    render(<NotificationsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    await waitFor(() => expect(mockClearHistoryByIds).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("notifications-kept-line")).toBeNull();
     (window.confirm as jest.Mock).mockRestore();
   });
 

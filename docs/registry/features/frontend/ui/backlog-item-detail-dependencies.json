@@ -1,0 +1,16 @@
+{
+  "id": "backlog-item-detail-dependencies",
+  "type": "frontend",
+  "component": "DependenciesSection",
+  "path": "web-app/src/components/backlog/detail/DependenciesSection.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "DependenciesSection > renders nothing when the item has no dependencies",
+    "DependenciesSection > lists blockers with status and marks resolved ones",
+    "DependenciesSection > lists items this one blocks",
+    "BacklogItemCard — blocked-by label > shows 'blocked by <title>' while a blocker is unresolved",
+    "BacklogItemCard — blocked-by label > shows nothing once every blocker is resolved or when there are none"
+  ],
+  "lastModified": "2026-10-13T00:00:00Z"
+}

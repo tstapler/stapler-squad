@@ -1,0 +1,18 @@
+{
+  "id": "MergePRDirect",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "MergePRDirect",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_actions.go",
+  "tested": true,
+  "testIds": [
+    "TestMergePRDirect_should_DelegateAndRefresh_When_Succeeds",
+    "TestMergePRDirect_should_NotRefresh_When_MergeFails",
+    "TestMergePRDirect_should_RejectInvalidTarget",
+    "TestMergePRDirect_should_RejectUnknownMethod",
+    "TestPRActions_should_ReturnFailedPrecondition_When_AccountNotConnected"
+  ],
+  "lastModified": "2026-10-19T02:43:14.356791114-07:00"
+}

@@ -13,7 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
-const portOwnerLookupTimeout = 2 * time.Second
+// portOwnerLookupTimeout is a var so tests can widen it: spawning even a stub lsof can
+// exceed 2s while the full suite saturates the machine.
+var portOwnerLookupTimeout = 2 * time.Second
 
 func newRemoteBindError(addr string, bindErr error) error {
 	if !errors.Is(bindErr, syscall.EADDRINUSE) {

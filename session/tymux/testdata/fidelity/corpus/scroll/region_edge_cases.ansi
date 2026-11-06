@@ -1,0 +1,14 @@
+scroll/region_edge_cases -- esctest2 decstbm.py; xterm DECSTBM
+[1;1HL01[2;1HL02[3;1HL03[4;1HL04[5;1HL05[6;1HL06[7;1HL07[8;1HL08[9;1HL09[10;1HL10[11;1HL11[12;1HL12[13;1HL13[14;1HL14[15;1HL15[16;1HL16[17;1HL17[18;1HL18[19;1HL19[20;1HL20[21;1HL21[22;1HL22[23;1HL23[24;1HL24[1;3r[3;1H
+A
+B
+C[r[22;24r[24;1H
+X
+Y[r
+[2;23r[1;1H
+row1-moves-down-outside-region[24;1H
+row24-LF-stays-outside[r[10;12r[11;1H
+
+
+
+many[r

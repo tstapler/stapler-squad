@@ -1,0 +1,25 @@
+{
+ "suites": [
+  {
+   "title": "z1.spec.ts",
+   "file": "z1.spec.ts",
+   "specs": [
+    {
+     "file": "z1.spec.ts",
+     "title": "z1 test",
+     "tests": [
+      {
+       "projectName": "chromium",
+       "results": [
+        {
+         "retry": 0,
+         "status": "failed"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

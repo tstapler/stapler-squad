@@ -167,9 +167,9 @@ reports PASS, or you have deliberately accepted and documented any remaining CON
 Once sdd:6-verify is clean, call request_review with item_id={{item_id}} and a 2-3
 sentence summary of what was built, including the sdd:6-verify verdict.
 
-Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type="verdict_recorded")
-instead of polling - it blocks until the verdict lands (or times out) and returns the
-outcome directly, or returns immediately if a verdict is already recorded.
+Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup
+or /loop to wait: every wake re-reads your whole context. The app sends you a message with
+the verdict as soon as it is recorded.
 
 PASS leads to running /backlog/ship now to open the pull request yourself - it drives
 /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution.
@@ -267,15 +267,31 @@ skills normally do.
 Important: this is a single, non-interactive call with no later turn. Once you stop
 producing tool calls, this process exits immediately and whatever text you last wrote
 becomes the final result of the whole triage attempt - there is no follow-up message
-coming to resume you. sdd:3-plan dispatches subagents that may report they are running
-in the background. You must still wait for each one to actually finish and produce its
-real output before moving on - keep checking within this same call rather than ending
-your turn on the assumption a later message will notify you when it completes. Do not
-end your response with a status update describing work still in progress, such as
-saying a subagent is running in the background and you will wait for it - that
-sentence would become this entire call's output, with none of the research, plan, or
-validation actually written. Only stop once Step 3's JSON object below is the last
-thing you have written.
+coming to resume you. sdd:2-research, sdd:3-plan, and sdd:4-validate each dispatch
+several subagents in parallel that may report they are running in the background. You
+must still wait for each one to actually finish and produce its real output before
+moving on - keep checking within this same call rather than ending your turn on the
+assumption a later message will notify you when it completes. Do not end your response
+with a status update describing work still in progress, such as saying a subagent is
+running in the background and you will wait for it - that sentence would become this
+entire call's output, with none of the research, plan, or validation actually written.
+
+This item's four-phase SDD pipeline routinely dispatches dozens of subagents across its
+research/plan/validate phases. Waiting for each one is required, but checking on them
+one at a time is not: each subagent's completion already interrupts your wait
+automatically the instant it happens, so re-checking status after every individual
+notification burns a full turn re-reading this call's entire accumulated context for no
+new information. Wait for an entire phase's whole batch of dispatched subagents to
+report back before you re-check overall status, not for each one individually - this is
+the single biggest cost driver in this pipeline mode when it goes wrong.
+
+Budget: this call is hard-stopped by the host if it runs past a ceiling on total turns or
+subagents (several hundred turns / over a hundred subagents), and a stopped call loses
+everything. Keep each phase to one bounded wave of subagents, do not re-run a phase that
+already produced its artifact, and if you notice you are far past what four phases should
+need, stop researching and write Step 3's JSON from what you have.
+
+Only stop once Step 3's JSON object below is the last thing you have written.
 
 ### Step 3 - Output
 After requirements, research, plan, and validation are written, output ONLY a JSON
@@ -392,8 +408,9 @@ If your context is compacted or you lose track of your task, re-read
 criteria from /backlog/status and record completed criteria in your commit messages.
 
 NEVER end your session without calling /backlog/review - this is how the task is closed
-properly. After /backlog/review, stay in this session, wait, then run /backlog/status
-again to check for a verdict. PASS leads to running /backlog/ship yourself right away.
+properly. After /backlog/review, end your turn and stay idle in this session (do not exit,
+do NOT use ScheduleWakeup or /loop to wait). The app sends you the verdict as a message.
+PASS leads to running /backlog/ship yourself right away.
 FAIL or PARTIAL means fixing the noted gaps and running /backlog/review again - its
 request_review call reports which attempt you're on out of %d allowed in this session
 (tracked server-side, not something you need to count yourself) - before running

@@ -11,6 +11,5 @@ export type OmnibarAction =
   | { type: "auto_fix"; title: string; program?: string }
   | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string }
   | { type: "create_alias_session"; aliasName: string; branch?: string; label?: string; extraFlags?: string }
-  | { type: "chat_backlog_item"; text: string };
-
-export type OmnibarActionType = OmnibarAction["type"];
+  | { type: "chat_backlog_item"; text: string }
+  | { type: "fan_out"; path: string; count: number; prompt: string; title?: string; program?: string };

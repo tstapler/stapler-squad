@@ -1,6 +1,7 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
 import { vars } from "@/styles/theme-contract.css";
+import { markdownBody } from "@/styles/markdown-body.css";
 
 export const page = style({
   display: "flex",
@@ -350,6 +351,17 @@ export const viewerText = style({
   margin: 0,
   whiteSpace: "pre",
 });
+
+export const viewerMarkdown = style([
+  markdownBody,
+  {
+    flex: 1,
+    overflow: "auto",
+    padding: vars.space["4"],
+    background: vars.color.background,
+    maxWidth: "none",
+  },
+]);
 
 export const viewerHint = style({
   fontSize: vars.fontSize.xs,

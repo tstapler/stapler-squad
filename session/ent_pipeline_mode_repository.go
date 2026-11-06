@@ -45,6 +45,14 @@ func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCr
 		c.SetDescription(m.Description)
 	}
 
+	if len(m.StageExecutors) > 0 {
+		stageExecutorsJSON, err := SerializeStageExecutors(m.StageExecutors)
+		if err != nil {
+			return nil, fmt.Errorf("serialize stage executors: %w", err)
+		}
+		c.SetStageExecutorsJSON(stageExecutorsJSON)
+	}
+
 	pm, err := c.Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
@@ -94,6 +102,13 @@ func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m 
 	}
 	if m.InitialPromptTemplate != nil {
 		u.SetInitialPromptTemplate(*m.InitialPromptTemplate)
+	}
+	if m.StageExecutors != nil {
+		stageExecutorsJSON, err := SerializeStageExecutors(*m.StageExecutors)
+		if err != nil {
+			return nil, fmt.Errorf("serialize stage executors: %w", err)
+		}
+		u.SetStageExecutorsJSON(stageExecutorsJSON)
 	}
 
 	pm, err := u.Save(ctx)

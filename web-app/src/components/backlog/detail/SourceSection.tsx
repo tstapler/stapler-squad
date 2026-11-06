@@ -8,11 +8,15 @@
 // assumed exists (see BacklogItemCard.tsx for the same substitution).
 import { CircleDot } from "lucide-react";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { safeExternalHref } from "../externalRef";
+import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import * as styles from "./SourceSection.css";
 
 export interface SourceSectionProps {
   externalUrl: string;
   externalId?: string;
+  pluginId?: string;
+  claimingHostId?: string;
   labels: string[];
   defaultExpanded: boolean;
 }
@@ -29,20 +33,31 @@ export interface SourceSectionProps {
  * defensively: only shown when externalId is actually present, to avoid a
  * literal "Issue #undefined".
  */
-export function SourceSection({ externalUrl, externalId, labels, defaultExpanded }: SourceSectionProps) {
+export function SourceSection({ externalUrl, externalId, pluginId, claimingHostId, labels, defaultExpanded }: SourceSectionProps) {
+  const source = getSourceBadgeConfig(pluginId);
+  const refLabel = externalId ? buildExternalRefLabels(pluginId, externalUrl, externalId).fullRef : "";
+  const href = safeExternalHref(externalUrl);
+  const content = (
+    <>
+      <CircleDot aria-hidden="true" size={14} />
+      {refLabel ? `Issue ${refLabel}` : "Issue"}
+    </>
+  );
   return (
     <CollapsibleSection sectionKey="source" title="Source" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
-        <a
-          href={externalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={styles.link}
-          title="Open on GitHub"
-        >
-          <CircleDot aria-hidden="true" size={14} />
-          {externalId ? `Issue #${externalId}` : "Issue"}
-        </a>
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" className={styles.link} title={source.openLabel}>
+            {content}
+          </a>
+        ) : (
+          <span className={styles.link}>{content}</span>
+        )}
+        {claimingHostId && (
+          <span className={styles.hostRow} data-testid="source-working-host">
+            Working host: {claimingHostId}
+          </span>
+        )}
         {labels.length > 0 && (
           <div className={styles.labels}>
             {labels.map((label) => (

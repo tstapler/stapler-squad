@@ -5,12 +5,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import {
-  EscapeEventProto,
-  EscapeSequenceCount,
   GetEscapeAnalyticsSummaryRequestSchema,
   GetEscapeAnalyticsGlobalSummaryRequestSchema,
   QueryEscapeAnalyticsRequestSchema,
+} from "@/gen/session/v1/session_pb";
+import type {
+  EscapeEventProto,
+  EscapeSequenceCount,
   SessionEscapeSummary,
+  ProjectEscapeSummary,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
@@ -23,6 +26,9 @@ interface UseEscapeAnalyticsSummaryReturn {
   totalSequences: bigint;
   totalMangled: bigint;
   mangleRate: number;
+  correlationOutcomes: bigint;
+  correlationCoverage: number;
+  captureHealthy: boolean;
   loading: boolean;
   error: Error | null;
   refresh: () => Promise<void>;
@@ -36,6 +42,9 @@ export function useEscapeAnalyticsSummary(
   const [totalSequences, setTotalSequences] = useState<bigint>(0n);
   const [totalMangled, setTotalMangled] = useState<bigint>(0n);
   const [mangleRate, setMangleRate] = useState<number>(0);
+  const [correlationOutcomes, setCorrelationOutcomes] = useState<bigint>(0n);
+  const [correlationCoverage, setCorrelationCoverage] = useState(0);
+  const [captureHealthy, setCaptureHealthy] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -56,6 +65,9 @@ export function useEscapeAnalyticsSummary(
       setTotalSequences(resp.totalSequences ?? 0n);
       setTotalMangled(resp.totalMangled ?? 0n);
       setMangleRate(resp.mangleRate ?? 0);
+      setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+      setCorrelationCoverage(resp.correlationCoverage ?? 0);
+      setCaptureHealthy(resp.captureHealthy ?? false);
     } catch (err) {
       const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics summary");
       setError(e);
@@ -81,6 +93,9 @@ export function useEscapeAnalyticsSummary(
         setTotalSequences(resp.totalSequences ?? 0n);
         setTotalMangled(resp.totalMangled ?? 0n);
         setMangleRate(resp.mangleRate ?? 0);
+        setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+        setCorrelationCoverage(resp.correlationCoverage ?? 0);
+        setCaptureHealthy(resp.captureHealthy ?? false);
       } catch (err) {
         if (cancelled) return;
         const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics summary");
@@ -95,7 +110,7 @@ export function useEscapeAnalyticsSummary(
     return () => { cancelled = true; };
   }, [sessionId, enabled]);
 
-  return { histogram, totalSequences, totalMangled, mangleRate, loading, error, refresh: fetchSummary };
+  return { histogram, totalSequences, totalMangled, mangleRate, correlationOutcomes, correlationCoverage, captureHealthy, loading, error, refresh: fetchSummary };
 }
 
 // ── Global summary hook ───────────────────────────────────────────────────────
@@ -110,7 +125,12 @@ interface UseEscapeAnalyticsGlobalSummaryReturn {
   totalSequences: bigint;
   totalMangled: bigint;
   mangleRate: number;
+  correlationOutcomes: bigint;
+  correlationCoverage: number;
+  captureHealthy: boolean;
+  droppedEvents: bigint;
   perSession: SessionEscapeSummary[];
+  perProject: ProjectEscapeSummary[];
   loading: boolean;
   error: Error | null;
   refresh: () => Promise<void>;
@@ -127,6 +147,11 @@ export function useEscapeAnalyticsGlobalSummary(
   const [totalMangled, setTotalMangled] = useState<bigint>(0n);
   const [mangleRate, setMangleRate] = useState<number>(0);
   const [perSession, setPerSession] = useState<SessionEscapeSummary[]>([]);
+  const [perProject, setPerProject] = useState<ProjectEscapeSummary[]>([]);
+  const [correlationOutcomes, setCorrelationOutcomes] = useState<bigint>(0n);
+  const [correlationCoverage, setCorrelationCoverage] = useState(0);
+  const [captureHealthy, setCaptureHealthy] = useState(true);
+  const [droppedEvents, setDroppedEvents] = useState<bigint>(0n);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -157,6 +182,11 @@ export function useEscapeAnalyticsGlobalSummary(
       setTotalMangled(resp.totalMangled ?? 0n);
       setMangleRate(resp.mangleRate ?? 0);
       setPerSession(resp.perSession ?? []);
+      setPerProject(resp.perProject ?? []);
+      setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+      setCorrelationCoverage(resp.correlationCoverage ?? 0);
+      setCaptureHealthy(resp.captureHealthy ?? false);
+      setDroppedEvents(resp.droppedEvents ?? 0n);
     } catch (err) {
       const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics global summary");
       setError(e);
@@ -183,6 +213,11 @@ export function useEscapeAnalyticsGlobalSummary(
         setTotalMangled(resp.totalMangled ?? 0n);
         setMangleRate(resp.mangleRate ?? 0);
         setPerSession(resp.perSession ?? []);
+        setPerProject(resp.perProject ?? []);
+        setCorrelationOutcomes(resp.correlationOutcomes ?? 0n);
+        setCorrelationCoverage(resp.correlationCoverage ?? 0);
+        setCaptureHealthy(resp.captureHealthy ?? false);
+        setDroppedEvents(resp.droppedEvents ?? 0n);
       } catch (err) {
         if (cancelled) return;
         const e = err instanceof Error ? err : new Error("Failed to fetch escape analytics global summary");
@@ -202,7 +237,12 @@ export function useEscapeAnalyticsGlobalSummary(
     totalSequences,
     totalMangled,
     mangleRate,
+    correlationOutcomes,
+    correlationCoverage,
+    captureHealthy,
+    droppedEvents,
     perSession,
+    perProject,
     loading,
     error,
     refresh: fetchGlobalSummary,

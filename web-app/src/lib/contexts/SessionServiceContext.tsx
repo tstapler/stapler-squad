@@ -1,9 +1,9 @@
 "use client";
 
 import React, { createContext, useContext, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
-import {
+import { useRouter } from "@/lib/nav";
+import type { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import type {
   CreateSessionRequest,
   UpdateSessionRequest,
   RunOneShotResponse,
@@ -11,7 +11,7 @@ import {
   CreatePullRequestResponse,
   PromptHistoryEntry,
 } from "@/gen/session/v1/session_pb";
-import { CheckpointProto } from "@/gen/session/v1/types_pb";
+import type { CheckpointProto } from "@/gen/session/v1/types_pb";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useAuth } from "@/lib/contexts/AuthContext";
@@ -23,14 +23,16 @@ import type { ConnectionState } from "@/lib/store/sessionsSlice";
 export interface SessionServiceContextValue {
   sessions: Session[];
   loading: boolean;
+  /** True once a session list (possibly empty) has been applied. */
+  hasLoadedOnce?: boolean;
   error: Error | null;
   connectionState: ConnectionState;
   /** System-wide memory usage percentage (0–100). Zero when unavailable. */
   systemMemoryPct: number;
   /** Reconnect attempt counter from BackoffState. Zero when connected normally. */
   reconnectAttemptCount: number;
-  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
-  getSession: (id: string) => Promise<Session | null>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => Promise<void>;
+  getSession: (id: string, options?: { onFailure?: (err: unknown) => void }) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
@@ -40,7 +42,11 @@ export interface SessionServiceContextValue {
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
+  pinSession: (id: string) => Promise<boolean>;
+  unpinSession: (id: string) => Promise<boolean>;
   retrySession: (id: string) => Promise<boolean>;
+  archiveSession: (id: string) => Promise<boolean>;
+  unarchiveSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
@@ -77,8 +83,10 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
 
   // Navigate to the session detail when user clicks "View" on a toast.
   // Works from any page — redirects to /?session=<id> if not already on home.
-  const onViewSession = useCallback((sessionId: string) => {
-    router.push(`/?session=${encodeURIComponent(sessionId)}&tab=terminal`);
+  const onViewSession = useCallback((sessionId: string, notificationId?: string) => {
+    // notification=<id> lets a deleted-session card show the notification's own text (Story 5.3).
+    const notification = notificationId ? `&notification=${encodeURIComponent(notificationId)}` : "";
+    router.push(`/?session=${encodeURIComponent(sessionId)}&tab=terminal${notification}`);
   }, [router]);
 
   const handleNotification = useSessionNotifications({

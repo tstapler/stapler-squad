@@ -28,6 +28,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { MobilePaneTabStrip } from "./MobilePaneTabStrip";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { containsPaneId, hasVerticalSplit } from "@/lib/pane/paneUtils";
+import { useScrollRestore } from "@/lib/hooks/useScrollRestore";
 import {
   splitContainer,
   leafContainer,
@@ -96,6 +97,7 @@ interface PaneSplitRendererProps {
   state: PaneState;
   dispatch: React.Dispatch<PaneAction>;
   sessions: Session[];
+  windowActive?: boolean;
 }
 
 interface PaneNodeProps {
@@ -105,9 +107,11 @@ interface PaneNodeProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
-function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplits }: PaneNodeProps) {
+function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneNodeProps) {
   if (node.type === "leaf") {
     return (
       <PaneLeafComponent
@@ -117,6 +121,7 @@ function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplit
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     );
   }
@@ -140,14 +145,17 @@ interface PaneSplitProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
-function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneSplitProps) {
+function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneSplitProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // On mobile: vertical (side-by-side) splits collapse to the focused pane only.
-  // Horizontal (top/bottom) splits are fine on mobile — show both panes stacked.
-  if (isMobile && pane.direction === "vertical") {
+  // On narrow screens every split collapses to the focused pane, so each pane is a
+  // full-screen "page" that MobilePaneTabStrip switches between — a stacked 50/50
+  // split leaves two cramped terminals and there is no way to get one full-screen.
+  if (isMobile) {
     const focusedInFirst = containsPaneId(pane.first, state.focusedPaneId);
     const visibleNode = focusedInFirst ? pane.first : pane.second;
     return (
@@ -158,6 +166,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     );
   }
@@ -175,6 +184,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
       {/* Draggable resize is a desktop affordance — touch dragging a 6px divider is
           impractical, and mobile horizontal splits use a fixed 50/50 ratio instead. */}
@@ -194,6 +204,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     </div>
   );
@@ -206,13 +217,17 @@ interface PaneLeafProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
 function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: React.Dispatch<PaneAction> }) {
   const actions = useCockpitActions();
   const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
-  const { triggerPicker, triggerPickerForceNew } = usePaneContext();
+  const { triggerPicker, triggerPickerForceNew, backlogIndex } = usePaneContext();
   const { viewMode, setViewMode } = useSessionViewModeContext();
+  // Mobile swaps this pane for the terminal and remounts it on return; restore the scroll.
+  const scrollRef = useScrollRestore(`session-list-scroll-${pane.id}`);
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
   // `error` is useSessionServiceContext's single shared Redux field -- ANY
   // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
@@ -251,6 +266,9 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onNewWorkspaceSession: actions.onNewWorkspaceSession,
     onRenameSession: actions.onRenameSession,
     onRestartSession: actions.onRestartSession,
+    onRetryNowSession: actions.onRetryNowSession,
+    onArchiveSession: actions.onArchiveSession,
+    onUnarchiveSession: actions.onUnarchiveSession,
     onUpdateTags: actions.onUpdateTags,
     onNewSession: actions.onNewSession,
     onCreateCheckpoint: actions.onCreateCheckpoint,
@@ -258,13 +276,16 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     onForkFromCheckpoint: actions.onForkFromCheckpoint,
     onSetRateLimitEnabled: actions.onSetRateLimitEnabled,
     onToggleAutonomousMode: actions.onToggleAutonomousMode,
+    onTogglePinned: actions.onTogglePinned,
     onToggleAutoApprove: actions.onToggleAutoApprove,
     onSteerAutonomousSession: actions.onSteerAutonomousSession,
     onClearConversationState: actions.onClearConversationState,
     onHibernateSession: hibernateSession ? (id: string) => void hibernateSession(id) : undefined,
     onResumeHibernatedSession: resumeHibernatedSession ? (id: string) => void resumeHibernatedSession(id) : undefined,
     onFetchArchivedSessions: (includeArchived: boolean) => /* analytics-exempt */ void listSessions({ includeArchived }),
+    onFetchHiddenSessions: (includeHidden: boolean) => /* analytics-exempt */ void listSessions({ includeHidden }),
     storageKeyPrefix: `pane-${pane.id}.`,
+    backlogIndex,
   };
 
   return (
@@ -277,6 +298,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "list"}
           onClick={() => setViewMode("list")}
         >
+          {/* analytics-exempt */}
           List
         </button>
         <button
@@ -286,6 +308,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "board"}
           onClick={() => setViewMode("board")}
         >
+          {/* analytics-exempt */}
           Board
         </button>
       </div>
@@ -299,7 +322,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
       >
         {viewMode === "board" ? `Board view, showing ${sessions.length} sessions` : `List view, showing ${sessions.length} sessions`}
       </div>
-      <div className={sessionListScroll} data-testid="session-list-scroll">
+      <div ref={scrollRef} className={sessionListScroll} data-testid="session-list-scroll">
         {viewMode === "board" ? (
           <SessionBoard {...sharedProps} />
         ) : (
@@ -310,14 +333,15 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   );
 }
 
-function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneLeafProps) {
-  const { pickerPendingSession, cancelPicker } = usePaneContext();
+function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneLeafProps) {
+  const { pickerPendingSession, cancelPicker, backlogIndex } = usePaneContext();
   const isFocused = state.focusedPaneId === pane.id;
   const isZoomed = state.zoomedPaneId === pane.id;
   const pickerLetter = pickerPendingSession ? getPickerLetter(state.root, pane.id) : null;
   const session = pane.viewKind === "session-detail" && pane.sessionId
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
+  const sessionBacklogEntry = session ? backlogIndex.get(session.id) : undefined;
 
   const handleFocus = () => dispatch({ type: "FOCUS_PANE", paneId: pane.id });
   const handleClose = () => dispatch({ type: "CLOSE_PANE", paneId: pane.id });
@@ -385,6 +409,10 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
             onTabChange={handleTabChange}
             initialTab={pane.activeTab}
             embedded={true}
+            isActive={isFocused}
+            windowActive={windowActive}
+            backlogItemId={sessionBacklogEntry?.itemId}
+            backlogEntry={sessionBacklogEntry}
           />
         ) : (
           <div className={emptyPaneSlot}>
@@ -397,7 +425,8 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           className={pickerOverlay}
           onClick={(e) => {
             e.stopPropagation();
-            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession!.id });
+            if (!pickerPendingSession) return;
+            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession.id });
             dispatch({ type: "ASSIGN_TAB", paneId: pane.id, tab: "terminal" });
             cancelPicker();
           }}
@@ -405,6 +434,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           role="button"
           tabIndex={0}
         >
+          {/* analytics-exempt */}
           <span className={pickerLabel}>{pickerLetter}</span>
         </div>
       )}
@@ -416,7 +446,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
  * PaneSplitRenderer — root renderer for the pane tree.
  * Renders the full recursive pane layout.
  */
-export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRendererProps) {
+export function PaneSplitRenderer({ state, dispatch, sessions, windowActive = true }: PaneSplitRendererProps) {
   const { isMobile, isFoldable } = useViewport();
   // Collapse split panes for any viewport below 900px (mobile + foldable) — BottomNav is
   // visible there and single-pane + MobilePaneTabStrip gives a better UX than cramped splits.
@@ -432,6 +462,8 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
   // (e.g. notification toasts) can clear it without hard-coding the pixel value.
   const stripRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // The var is global: only the visible window may write it, or a hidden window's strip wins.
+    if (!windowActive) return;
     if (!showMobileTabStrip) {
       document.documentElement.style.setProperty("--mobile-pane-tab-strip-height", "0px");
       return;
@@ -448,7 +480,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
     ro.observe(el);
     update();
     return () => ro.disconnect();
-  }, [showMobileTabStrip]);
+  }, [showMobileTabStrip, windowActive]);
 
   return (
     <div
@@ -466,6 +498,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
             onClick={() => dispatch({ type: "RESET_LAYOUT" })}
             title="Reset to single pane"
           >
+            {/* analytics-exempt */}
             Reset layout
           </button>
         </div>
@@ -479,6 +512,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
           sessions={sessions}
           isMobile={isNarrow}
           hasSplits={hasMultiplePanes}
+          windowActive={windowActive}
         />
       </div>
 

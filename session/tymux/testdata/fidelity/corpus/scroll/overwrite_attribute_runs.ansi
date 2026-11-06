@@ -1,0 +1,4 @@
+scroll/overwrite_attribute_runs -- libvterm 60screen_ascii/64screen_pen (overw
+[1;31mAAAAAAAAAA[0m[1;4H[4mbbb[0m[1;12H[42mcc[0m
+[2;1H[7m0123456789[0m[2;3Hxx[2;7H[0myy
+[3;1H[38;5;196mred-run[3;5H[0m--[3;9H[38;5;21mblue

@@ -486,8 +486,11 @@ type fakePRInstanceStore struct {
 	saveCalls      int
 }
 
-func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)            { return nil, nil }
-func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error)      { return nil, nil }
+func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)       { return nil, nil }
+func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error) { return nil, nil }
+func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*session.InstanceData, error) {
+	return nil, session.ErrInstanceDataNotFound
+}
 func (f *fakePRInstanceStore) AddInstance(*session.Instance) error                    { return nil }
 func (f *fakePRInstanceStore) DeleteInstance(string) error                            { return nil }
 func (f *fakePRInstanceStore) UpdateInstanceLastUserResponse(string, time.Time) error { return nil }
@@ -638,7 +641,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "")
 	t.Setenv("GIT_AUTHOR_EMAIL", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", t.TempDir())
+	withFakeHome(t)
 
 	mock := &fakePRGitExecutor{}
 	wt := git.NewGitWorktreeFromStorageWithExecutor(dir, dir, "sess-commit-fail", "feature/commit-fail", "", git.WithCommandRunner(mock))

@@ -29,6 +29,9 @@ type ExternalSessionDiscovery struct {
 	// Context for lifecycle management
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// pollDone is closed when the polling goroutine launched by Start exits.
+	pollDone <-chan struct{}
 }
 
 // NewExternalSessionDiscovery creates a new external session discovery service.
@@ -71,7 +74,7 @@ func (e *ExternalSessionDiscovery) Start(interval time.Duration) {
 	}
 
 	// Start polling
-	e.discovery.StartPolling(e.ctx, interval)
+	e.pollDone = e.discovery.StartPolling(e.ctx, interval)
 
 	log.Info("external session discovery started", "interval", interval)
 }
@@ -82,6 +85,14 @@ func (e *ExternalSessionDiscovery) Stop() {
 		e.cancel()
 	}
 	log.Info("external session discovery stopped")
+}
+
+// Wait blocks until the polling goroutine has exited, after Stop. It returns
+// immediately if Start was never called.
+func (e *ExternalSessionDiscovery) Wait() {
+	if e.pollDone != nil {
+		<-e.pollDone
+	}
 }
 
 // GetSessions returns all currently discovered external sessions.
@@ -140,6 +151,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Program:      discovered.Metadata.Command,
 		Status:       Active,
 		InstanceType: InstanceTypeExternal,
+		Backend:      BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",
 		Tags:         []string{"external", "mux"},
 		CreatedAt:    now, // Initialize timestamps to avoid stale notifications

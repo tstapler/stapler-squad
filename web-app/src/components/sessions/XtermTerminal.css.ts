@@ -1,4 +1,5 @@
 import { style, globalStyle, keyframes } from "@vanilla-extract/css";
+import { MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT } from "@/lib/terminal/touchDrag";
 import { vars, zIndex } from "@/styles/theme.css";
 
 export const container = style({
@@ -19,7 +20,7 @@ export const scrollbackCopyButton = style({
   position: "absolute",
   top: vars.space["2"],
   right: vars.space["2"],
-  zIndex: zIndex.floatingTerminalUI,
+  zIndex: zIndex.terminalPaneChrome,
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   background: "rgba(0, 0, 0, 0.45)",
   color: "rgba(255, 255, 255, 0.75)",
@@ -54,10 +55,12 @@ export const terminal = style({
   boxSizing: "content-box",
   padding: 0,
   margin: 0,
-  // Prevent the browser from claiming touch events as window scroll.
-  // All touch handling is delegated to useTerminalGestures so the terminal
-  // scroll never leaks into the page scroll.
-  touchAction: "none",
+  // With gesture scrolling on, touch handling is delegated to useTerminalGestures,
+  // so the browser must not claim touches as window scroll. Off leaves the default.
+  selectors: {
+    '&[data-gesture-scroll="on"]': { touchAction: "none" },
+  },
+  overscrollBehavior: "contain",
 });
 
 // Global styles for xterm.js elements within the terminal container
@@ -179,7 +182,7 @@ export const scrollTrack = style({
   top: 0,
   bottom: 0,
   width: 8,
-  zIndex: zIndex.floatingTerminalUI,
+  zIndex: zIndex.terminalPaneChrome,
   // Track itself receives clicks (for jump-to-position); thumb overrides with its own handlers.
   pointerEvents: "auto",
   cursor: "pointer",
@@ -239,4 +242,38 @@ export const selectionHandle = style({
     transform: "translateX(-50%)",
     marginBottom: 1,
   },
+});
+
+// ---- Mobile selection magnifier ----
+// Bubble above the finger during a handle drag, showing the row text under it.
+// Shown/positioned by direct DOM mutation from the RAF-throttled drag handler.
+export const selectionMagnifier = style({
+  position: "fixed",
+  width: MAGNIFIER_WIDTH,
+  height: MAGNIFIER_HEIGHT,
+  zIndex: 1091,
+  pointerEvents: "none",
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  boxSizing: "border-box",
+  overflow: "hidden",
+  background: "rgba(24, 24, 28, 0.94)",
+  color: "rgba(255, 255, 255, 0.95)",
+  border: "1px solid rgba(255, 255, 255, 0.18)",
+  borderRadius: vars.radii.md,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  fontSize: vars.fontSize.xs,
+  lineHeight: 1.4,
+  whiteSpace: "pre",
+  boxShadow: "0 4px 16px rgba(0, 0, 0, 0.55)",
+});
+
+// The character under the active column.
+export const selectionMagnifierCursor = style({
+  textDecoration: "underline",
+  textDecorationColor: vars.color.primary,
+  textDecorationThickness: "2px",
+  textUnderlineOffset: "2px",
+  color: vars.color.primary,
 });

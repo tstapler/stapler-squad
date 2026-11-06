@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { recipe, type RecipeVariants } from "@vanilla-extract/recipes";
+import { recipe } from "@vanilla-extract/recipes";
 import { vars } from "@/styles/theme.css";
 
 // ── Card container ────────────────────────────────────────────────────────────
@@ -46,8 +46,6 @@ export const confidenceBadge = recipe({
     level: "medium",
   },
 });
-
-export type ConfidenceBadgeVariants = RecipeVariants<typeof confidenceBadge>;
 
 // ── Explanation block ─────────────────────────────────────────────────────────
 
@@ -227,7 +225,7 @@ export const discardButton = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,

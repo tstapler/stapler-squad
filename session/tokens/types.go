@@ -1,6 +1,10 @@
 package tokens
 
-import "time"
+import (
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/pricing"
+)
 
 // ParseResult holds aggregated token data extracted from one JSONL file.
 // Privacy: only tool names, skill names (short strings), and token counts.
@@ -20,6 +24,9 @@ type ParseResult struct {
 	TurnTimeline     []TurnStats // per-assistant-message stats for burn rate chart
 	ToolUsage        map[string]ToolTokenStats
 	SkillActivations []SkillActivation
+	// ContextHealth holds derived counts over the trailing assistant turns; no message content.
+	ContextHealth ContextHealthSignals
+	CompactEvents []CompactEvent // compaction boundaries in transcript order
 
 	ParsedAt    time.Time
 	FileModTime time.Time // used for cache invalidation
@@ -33,7 +40,33 @@ type TurnStats struct {
 	Output        int64
 	CacheCreation int64
 	CacheRead     int64
-	ToolNames     []string // tool_use block names in this message
+	ToolNames     []string      // tool_use block names in this message
+	Speed         pricing.Speed // billing speed from the transcript; empty = standard
+}
+
+// ContextTokens is the number of tokens occupying the context window on this
+// turn: everything sent as prompt, cached or not.
+func (t TurnStats) ContextTokens() int64 {
+	return t.Input + t.CacheRead + t.CacheCreation
+}
+
+// CompactEvent records one conversation compaction (/compact or auto-compact).
+type CompactEvent struct {
+	Timestamp time.Time
+	Trigger   string // "manual" or "auto"; empty when the transcript omits it
+	// TurnIndex is the number of timeline turns preceding the boundary, so
+	// TurnTimeline[TurnIndex] is the first post-compaction turn when present.
+	TurnIndex    int
+	TokensBefore int64
+	TokensAfter  int64
+}
+
+// TokensFreed is the context reduction achieved by the compaction, never negative.
+func (c CompactEvent) TokensFreed() int64 {
+	if c.TokensBefore > c.TokensAfter {
+		return c.TokensBefore - c.TokensAfter
+	}
+	return 0
 }
 
 // ToolTokenStats aggregates attribution for one tool name.
@@ -66,15 +99,8 @@ type TokenStoreReader interface {
 	Unsubscribe(ch <-chan *ParseResult)
 }
 
-// ModelPricing holds per-model token prices in USD per million tokens.
-type ModelPricing struct {
-	ModelFamily        string  // normalized key, e.g. "claude-sonnet-4"
-	InputPricePerMTok  float64 // USD per 1M input tokens
-	OutputPricePerMTok float64 // USD per 1M output tokens
-	CacheWritePerMTok  float64 // USD per 1M cache-write tokens
-	CacheReadPerMTok   float64 // USD per 1M cache-read tokens
-	EffectiveDate      string  // ISO date of last price update
-}
+// ModelPricing is the per-model price record; see package pricing.
+type ModelPricing = pricing.ModelPricing
 
 // PricingTable maps normalized model family names to pricing.
 // Hardcoded defaults; overridable via config JSON.

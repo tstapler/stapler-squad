@@ -1,0 +1,15 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Creating empty file /home/tstapler/.cache/ssq-e2e-tmp/nam/tmp/aider-proj/TODO.md
+Error: Read-only file /home/tstapler/.cache/ssq-e2e-tmp/nam/tmp/aider-proj/CONVENTIONS.md does not exist. Skipping.
+Aider v0.78.0
+Model: gpt-4o-mini with whole edit format
+Git repo: none
+Repo-map: disabled
+Added TODO.md to the chat.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+TODO.md
+> /run echo hi
+
+hi
+Add 0.0k tokens of command output to the chat? (Y)es/(N)o [Yes]:
+

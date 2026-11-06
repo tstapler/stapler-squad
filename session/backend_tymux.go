@@ -42,19 +42,30 @@ func NewTymuxBackend(mgr tymux.TymuxManager) *TymuxBackend {
 // reconciliation paths that need it directly.
 func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 
+// WireLaunch records the program tymuxd must spawn; without it tymuxd runs a bare $SHELL (BUG-113).
+func (b *TymuxBackend) WireLaunch(spec LaunchSpec) { b.mgr.SetCommand(spec.Command) }
+
+// AppendLaunchEnv forwards KEY=VALUE env to tymuxd's CreateSessionRequest.Env.
+// tymuxd persists it in plaintext session records, so never pass secrets.
+func (b *TymuxBackend) AppendLaunchEnv(env ...string) { b.mgr.AppendEnv(env...) }
+
 // --- Lifecycle ---
 
 // ensureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
 // shared by Start and RestoreWithWorkDir (both need the identical
 // daemon-check-before-delegate contract; see Start's doc comment for why it
-// lives here and not in NewProcessManager).
+// lives here and not in NewProcessManager). Wrapped in its own span/metric
+// (BUG-108) so a slow Start/RestoreWithWorkDir can be attributed to daemon
+// cold-start specifically, distinct from mgr.Start's own steady-state work.
 func (b *TymuxBackend) ensureDaemonReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), tymuxColdStartTimeout)
 	defer cancel()
-	if _, err := ensureDaemonRunningFn(ctx, tymux.ResolveDaemonConfig()); err != nil {
-		return fmt.Errorf("tymux backend requested but daemon unavailable: %w", err)
-	}
-	return nil
+	return withBackendOperationSpan(ctx, backendLabelTymux, "session.backend.tymux_daemon_ready", func() error {
+		if _, err := ensureDaemonRunningFn(ctx, tymux.ResolveDaemonConfig()); err != nil {
+			return fmt.Errorf("tymux backend requested but daemon unavailable: %w", err)
+		}
+		return nil
+	})
 }
 
 // Start calls tymux.EnsureDaemonRunning before delegating to the wrapped
@@ -67,19 +78,32 @@ func (b *TymuxBackend) ensureDaemonReady() error {
 // synchronous CreateSession RPC path — so the bounded wait here does not
 // regress RPC latency.
 func (b *TymuxBackend) Start(dir string) error {
-	if err := b.ensureDaemonReady(); err != nil {
-		return fmt.Errorf("start: %w", err)
-	}
-	return b.mgr.Start(dir)
+	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.start", func() error {
+		if err := b.ensureDaemonReady(); err != nil {
+			return fmt.Errorf("start: %w", err)
+		}
+		return b.mgr.Start(dir)
+	})
 }
 
 // RestoreWithWorkDir mirrors Start's daemon-check-before-delegate contract
 // for the restore path.
 func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
-	if err := b.ensureDaemonReady(); err != nil {
-		return fmt.Errorf("restore: %w", err)
+	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.restore", func() error {
+		if err := b.ensureDaemonReady(); err != nil {
+			return fmt.Errorf("restore: %w", err)
+		}
+		return b.mgr.RestoreWithWorkDir(w)
+	})
+}
+
+// AdoptForViewing never starts the daemon or restores a missing session.
+func (b *TymuxBackend) AdoptForViewing(ctx context.Context) error {
+	p, ok := b.mgr.(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		return fmt.Errorf("tymux manager cannot adopt a retained pane")
 	}
-	return b.mgr.RestoreWithWorkDir(w)
+	return p.AdoptForViewing(ctx)
 }
 
 func (b *TymuxBackend) Close() error  { return b.mgr.Close() }
@@ -94,6 +118,24 @@ func (b *TymuxBackend) HasLiveSessionNoCache() bool { return b.mgr.IsAlive() }
 
 func (b *TymuxBackend) HasSession() bool { return b.mgr.HasSession() }
 
+// DaemonSessionID implements DaemonSessionIDReporter.
+func (b *TymuxBackend) DaemonSessionID() string { return b.mgr.PersistedSessionID() }
+
+// StoredSessionLive implements StoredSessionProber when the manager can probe by id.
+func (b *TymuxBackend) StoredSessionLive() bool {
+	p, ok := b.mgr.(StoredSessionProber)
+	return ok && p.StoredSessionLive()
+}
+
+// ReleaseAdoptedSession implements AdoptedSessionReleaser when the manager can.
+func (b *TymuxBackend) ReleaseAdoptedSession() bool {
+	r, ok := b.mgr.(AdoptedSessionReleaser)
+	return ok && r.ReleaseAdoptedSession()
+}
+
+// SetSessionLabel implements SessionLabeler.
+func (b *TymuxBackend) SetSessionLabel(label string) { b.mgr.SetSessionLabel(label) }
+
 // GetSessionIdentifier implements ProcessManager by delegating to the underlying
 // TymuxManager's own identifier.
 func (b *TymuxBackend) GetSessionIdentifier() string { return b.mgr.GetSessionIdentifier() }
@@ -105,25 +147,45 @@ func (b *TymuxBackend) GetCurrentWorkingDirectory() (string, error) {
 
 // --- Terminal I/O ---
 
-func (b *TymuxBackend) GetPTY() (*os.File, error)          { return b.mgr.GetPTY() }
-func (b *TymuxBackend) SendKeys(keys string) (int, error)  { return b.mgr.SendKeys(keys) }
+func (b *TymuxBackend) GetPTY() (*os.File, error) { return b.mgr.GetPTY() }
+func (b *TymuxBackend) SendKeys(keys string) (int, error) {
+	return timeBackendOp(tymuxIOOps.sendKeys, func() (int, error) { return b.mgr.SendKeys(keys) })
+}
 func (b *TymuxBackend) TapEnter() error                    { return b.mgr.TapEnter() }
 func (b *TymuxBackend) SendPromptWithEnter(p string) error { return b.mgr.SendPromptWithEnter(p) }
 func (b *TymuxBackend) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	return b.mgr.SendInputViaControlMode(ctx, data)
+	return timeBackendOpErr(tymuxIOOps.writeStdin, func() error { return b.mgr.SendInputViaControlMode(ctx, data) })
 }
 
 // --- Terminal state ---
 
-func (b *TymuxBackend) CapturePaneContent() (string, error) { return b.mgr.CapturePaneContent() }
+func (b *TymuxBackend) CapturePaneContent() (string, error) {
+	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContent)
+}
 func (b *TymuxBackend) CapturePaneContentRaw() (string, error) {
-	return b.mgr.CapturePaneContentRaw()
+	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContentRaw)
 }
 func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string, error) {
-	return b.mgr.CapturePaneContentWithOptions(start, end)
+	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) {
+		return b.mgr.CapturePaneContentWithOptions(start, end)
+	})
+}
+
+// CapturePaneRedraw makes TymuxBackend a RedrawCapturer: the daemon's emulator holds the pane's
+// real terminal state, which a text capture would drop. Timed with the other capture_pane calls.
+func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
+	type redraw struct {
+		data          string
+		altScreen, ok bool
+	}
+	r, err := timeBackendOp(tymuxIOOps.capturePane, func() (redraw, error) {
+		data, altScreen, ok, err := b.mgr.CapturePaneRedraw(ctx)
+		return redraw{data, altScreen, ok}, err
+	})
+	return r.data, r.altScreen, r.ok, err
 }
 func (b *TymuxBackend) CaptureViewport(lines int) (string, error) {
-	return b.mgr.CaptureViewport(lines)
+	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })
 }
 func (b *TymuxBackend) GetCursorPosition() (x, y int, err error) {
 	return b.mgr.GetCursorPosition()
@@ -132,10 +194,10 @@ func (b *TymuxBackend) GetPaneDimensions() (width, height int, err error) {
 	return b.mgr.GetPaneDimensions()
 }
 func (b *TymuxBackend) SetWindowSize(cols, rows int) error {
-	return b.mgr.SetWindowSize(cols, rows)
+	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetWindowSize(cols, rows) })
 }
 func (b *TymuxBackend) SetDetachedSize(w, h int, title string) error {
-	return b.mgr.SetDetachedSize(w, h, title)
+	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetDetachedSize(w, h, title) })
 }
 func (b *TymuxBackend) RefreshClient() error { return b.mgr.RefreshClient() }
 
@@ -168,8 +230,17 @@ func (b *TymuxBackend) UnsubscribeFromControlModeUpdates(id string) {
 
 // --- Attach ---
 
-func (b *TymuxBackend) Attach() (chan struct{}, error) { return b.mgr.Attach() }
-func (b *TymuxBackend) DetachSafely() error            { return b.mgr.DetachSafely() }
+func (b *TymuxBackend) Attach() (chan struct{}, error) {
+	var ch chan struct{}
+	err := withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.attach", func() error {
+		var attachErr error
+		ch, attachErr = b.mgr.Attach()
+		return attachErr
+	})
+	return ch, err
+}
+
+func (b *TymuxBackend) DetachSafely() error { return b.mgr.DetachSafely() }
 
 // --- Exit notifications ---
 

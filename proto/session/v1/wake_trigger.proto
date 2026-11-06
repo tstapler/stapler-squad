@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// WakeTriggerService is the operator's view of durable wake triggers and
+// peer-help requests (project notification-actions-and-agent-messaging,
+// Stories 4.6, 4.10, 4.11). Agents schedule through MCP tools; this service
+// only lists, cancels and creates the operator's own reminders. Expected
+// business conditions are enum outcomes, never Connect errors.
+service WakeTriggerService {
+  // ListWakeTriggers lists live triggers (pending, claimed, needs_revive) and
+  // missed ones across every owner, with the kill-switch state.
+  rpc ListWakeTriggers(ListWakeTriggersRequest) returns (ListWakeTriggersResponse) {}
+
+  // CancelWakeTrigger cancels one trigger. A trigger that fired first is
+  // reported as ALREADY_FIRED with its fire time, not as an error.
+  rpc CancelWakeTrigger(CancelWakeTriggerRequest) returns (CancelWakeTriggerResponse) {}
+
+  // CreateOperatorReminder schedules a notify_operator trigger about a session.
+  rpc CreateOperatorReminder(CreateOperatorReminderRequest) returns (CreateOperatorReminderResponse) {}
+
+  // ListPeerHelpRequests lists open and recently ended agent-to-agent help
+  // requests with their derived state.
+  rpc ListPeerHelpRequests(ListPeerHelpRequestsRequest) returns (ListPeerHelpRequestsResponse) {}
+}
+
+message WakeTriggerInfo {
+  string id = 1;
+  string owner_session_uuid = 2;
+  // Empty when the owner session no longer exists.
+  string owner_title = 3;
+  bool owner_exists = 4;
+  bool owner_archived = 5;
+  // at | cron | backlog_event | pr_event | ci_event | session_state | guidance_answered
+  string trigger_type = 6;
+  // Plain-language condition ("when PR #901 checks pass"); empty for "at".
+  string condition = 7;
+  // steer_text | notify_operator
+  string action_kind = 8;
+  // pending | claimed | needs_revive | missed
+  string status = 9;
+  // Why a missed trigger ended (the WakeReason).
+  string end_reason = 10;
+  // First characters of the prompt text.
+  string message = 11;
+  // Unset for event triggers.
+  google.protobuf.Timestamp next_fire_at = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp delivered_at = 14;
+  google.protobuf.Timestamp ended_at = 15;
+  // True for a notify_operator trigger: the operator's own reminder.
+  bool operator_reminder = 16;
+  // IANA zone of a cron trigger.
+  string cron_timezone = 17;
+}
+
+message ListWakeTriggersRequest {}
+
+message ListWakeTriggersResponse {
+  repeated WakeTriggerInfo triggers = 1;
+  // False when agent_wake_triggers is off for every trigger type: the section
+  // shows the paused banner and nothing fires.
+  bool enabled = 2;
+}
+
+enum WakeCancelOutcome {
+  WAKE_CANCEL_OUTCOME_UNSPECIFIED = 0;
+  WAKE_CANCEL_OUTCOME_CANCELLED = 1;
+  // The trigger fired (delivered_at is set) before the cancel landed.
+  WAKE_CANCEL_OUTCOME_ALREADY_FIRED = 2;
+  // The trigger had ended another way (missed, skipped, already cancelled).
+  WAKE_CANCEL_OUTCOME_ALREADY_ENDED = 3;
+  WAKE_CANCEL_OUTCOME_NOT_FOUND = 4;
+}
+
+message CancelWakeTriggerRequest {
+  string id = 1;
+}
+
+message CancelWakeTriggerResponse {
+  WakeCancelOutcome outcome = 1;
+  google.protobuf.Timestamp delivered_at = 2;
+}
+
+enum ReminderOutcome {
+  REMINDER_OUTCOME_UNSPECIFIED = 0;
+  REMINDER_OUTCOME_CREATED = 1;
+  // The same reminder (session and time) already existed; nothing was added.
+  REMINDER_OUTCOME_DUPLICATE = 2;
+  REMINDER_OUTCOME_PAST_TIME = 3;
+  REMINDER_OUTCOME_CAP_EXCEEDED = 4;
+  // The dispatcher is not running in this process (flag off or another leader).
+  REMINDER_OUTCOME_UNAVAILABLE = 5;
+}
+
+message CreateOperatorReminderRequest {
+  // The session the reminder is about; it may be archived or stopped.
+  string session_uuid = 1;
+  google.protobuf.Timestamp fire_at = 2;
+  // Shown in the reminder notification.
+  string label = 3;
+}
+
+message CreateOperatorReminderResponse {
+  ReminderOutcome outcome = 1;
+  WakeTriggerInfo trigger = 2;
+}
+
+message PeerHelpInfo {
+  string id = 1;
+  string asker_session_uuid = 2;
+  string asker_title = 3;
+  string answerer_session_uuid = 4;
+  string answerer_title = 5;
+  string question = 6;
+  // waiting | answered | not_sent | cancelled
+  string state = 7;
+  // not_sent: why it cannot be delivered; waiting: why it is stalled; cancelled: who withdrew it.
+  string state_reason = 8;
+  string answer = 9;
+  // Session uuid of the answerer, or "operator".
+  string answered_by = 10;
+  // Set when the operator answered in the peer's place.
+  string on_behalf_of = 11;
+  // True once the operator was pulled in (10 minutes without a reply, or the peer ended).
+  bool escalated = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp answered_at = 14;
+}
+
+message ListPeerHelpRequestsRequest {}
+
+message ListPeerHelpRequestsResponse {
+  repeated PeerHelpInfo requests = 1;
+}

@@ -30,6 +30,10 @@ type RepoResult struct {
 	Repo        string
 	Description string
 	Private     bool
+	// Host is the GitHub host the result came from ("" means github.com),
+	// echoed from the account.Host passed to SearchUserRepos so callers can
+	// tell results from different accounts/hosts apart after merging.
+	Host string
 }
 
 // PRResult is the domain return type for GetPR — a lean existence check, not
@@ -62,6 +66,9 @@ type IssueResult struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	IsPR      bool
+	// Host is the GitHub host the result came from ("" means github.com),
+	// echoed from the account.Host passed to ListRepoIssues.
+	Host string
 }
 
 // ghRepoJSON matches the GitHub REST API /user/repos and /search/repositories item shape.
@@ -166,6 +173,7 @@ func SearchUserRepos(ctx context.Context, account AccountRef, query string, limi
 			Repo:        item.Name,
 			Description: item.Description,
 			Private:     item.Private,
+			Host:        account.Host,
 		})
 	}
 	return results, nil
@@ -251,6 +259,7 @@ func ListRepoIssues(ctx context.Context, account AccountRef, repo RepoRef, state
 			CreatedAt: createdAt,
 			UpdatedAt: updatedAt,
 			IsPR:      isPR,
+			Host:      account.Host,
 		})
 	}
 	return results, nil

@@ -14,25 +14,36 @@ Claude is asking so the user doesn't have to watch the raw terminal.
 
 ## Payload Structure
 
-Claude Code sends the following `tool_input` fields on the `PreToolUse` hook for `AskUserQuestion`:
+Claude Code (verified on 2.1.303, spike S1) sends `tool_input.questions[]` on the `PreToolUse` hook
+for `AskUserQuestion`; `tool_input` has no other key:
 
 ```json
 {
   "tool_name": "AskUserQuestion",
   "tool_input": {
-    "prompt": "Which database should I use?",
-    "options": ["PostgreSQL", "SQLite", "Skip for now"]
+    "questions": [
+      {
+        "question": "Which database should I use?",
+        "header": "Database",
+        "options": [
+          {"label": "PostgreSQL", "description": "..."},
+          {"label": "SQLite", "description": "..."}
+        ],
+        "multiSelect": false
+      }
+    ]
   },
   "session_id": "...",
   "cwd": "/path/to/project"
 }
 ```
 
-- `prompt` — the question text (always present)
-- `options` — array of string choices (present when Claude provides a menu; may be absent for
-  free-text questions)
+- `questions` — 1 to 4 questions; each carries `question`, `header`, `options` and `multiSelect`
+- `options` — objects with `label` and `description`, not plain strings
+- there is no top-level `prompt`
 
-Both fields are available in `payload.ToolInput` inside `broadcastQuestionNotification`.
+`ParseAskUserQuestion` (`server/services/askuserquestion_parser.go`) reads this shape; captured
+payloads live in `server/services/testdata/askuserquestion/`.
 
 ## Stories
 
@@ -41,10 +52,10 @@ Both fields are available in `payload.ToolInput` inside `broadcastQuestionNotifi
 **Status**: Ready  
 **Files**: `server/services/approval_handler.go`, notification event schema
 
-- Extract `tool_input["options"]` alongside `prompt` in `broadcastQuestionNotification`
+- Extract `tool_input.questions[0].options[].label` alongside `questions[0].question` in `broadcastQuestionNotification`
 - Add an `Options []string` field to the notification event metadata (passed via the `nil`
   metadata map currently sent to `events.NewNotificationEvent`)
-- Keep the existing toast title ("Claude has a question") and message (the prompt text)
+- Keep the existing toast title ("Claude has a question") and message (question 1 text)
 - No frontend changes in this story — just make the data available in the event
 
 ### Story 2: Session status reflects pending question
@@ -83,7 +94,7 @@ Render a `QuestionPanel` component in the session detail view when the session h
 - Options rendered as a numbered read-only list (not clickable — answer goes to terminal)
 - "Answer in terminal" link focuses/attaches to the session's terminal pane
 - Panel dismissed automatically when a new hook event arrives for the session
-- Falls back gracefully when `options` is absent (free-text question): show prompt only
+- Falls back gracefully when no options are parsed: show the question text only
 
 ## Implementation Notes
 
@@ -102,5 +113,5 @@ field so the `QuestionPanel` only appears for hook events.
 
 ### Options field availability
 
-`options` is included when Claude calls `AskUserQuestion` with explicit choices. For
-free-text questions (no choices), only `prompt` is present. The UI must handle both cases.
+Every real `AskUserQuestion` call carries `questions[].options` (spike S1); a payload that parses to no
+options still yields the question text, and the UI must handle both cases.

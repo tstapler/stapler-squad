@@ -469,10 +469,10 @@ case "$HOOK_TYPE" in
 
         case "$REASON" in
             max_tokens)
-                send_notification -s "$SESSION_ID" -t "Subagent: Context Limit" -m "A subagent stopped because the context window was full" -p medium --type task_failed -q
+                send_notification -s "$SESSION_ID" -t "Subagent: Context Limit" -m "A subagent stopped because the context window was full" -p medium --type task_failed -d delivery_class=routine -q
                 ;;
             error*|*fail*|*abort*)
-                send_notification -s "$SESSION_ID" -t "Subagent Failed" -m "$REASON" -p medium --type task_failed -q
+                send_notification -s "$SESSION_ID" -t "Subagent Failed" -m "$REASON" -p medium --type task_failed -d delivery_class=routine -q
                 ;;
             *)
                 send_notification -s "$SESSION_ID" -t "Subagent Complete" -m "$REASON" -p low --type task_complete -q
@@ -523,9 +523,11 @@ case "$HOOK_TYPE" in
         TOOL=$(json_get '.tool_name // .tool // "unknown"')
         ERROR=$(json_get '.tool_output.error // .error // ""')
 
-        # Only send notification if there was an error
+        # Only send notification if there was an error. delivery_class=routine: a failed
+        # tool call is per-tool noise, not a session failure (ADR-002), so a hidden
+        # session's delivery gate must not treat the corrected error type as a failure.
         if [[ -n "$ERROR" ]]; then
-            send_notification -s "$SESSION_ID" -t "Tool Error: $TOOL" -m "$ERROR" -p high --type error -q
+            send_notification -s "$SESSION_ID" -t "Tool Error: $TOOL" -m "$ERROR" -p high --type error -d delivery_class=routine -q
         fi
         ;;
 

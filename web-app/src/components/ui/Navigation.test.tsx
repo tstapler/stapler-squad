@@ -3,26 +3,29 @@ import { render, screen } from "@testing-library/react";
 import { Navigation } from "./Navigation";
 
 // Mock next/navigation
-jest.mock("next/navigation", () => ({
-  usePathname: jest.fn().mockReturnValue("/"),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    navigation: () => ({
+      usePathname: jest.fn().mockReturnValue("/"),
+    }),
+    link: () => {
+      const MockLink = React.forwardRef<
+        HTMLAnchorElement,
+        React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean }
+      >(function MockLink({ href, children, prefetch: _prefetch, ...rest }, ref) {
+        return (
+          <a href={href} ref={ref} {...rest}>
+            {children}
+          </a>
+        );
+      });
+      MockLink.displayName = "MockLink";
+      return MockLink;
+    },
+  }),
+);
 
 // Mock next/link so it renders as a plain anchor
-jest.mock("next/link", () => {
-  const MockLink = React.forwardRef<
-    HTMLAnchorElement,
-    React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean }
-  >(function MockLink({ href, children, prefetch: _prefetch, ...rest }, ref) {
-    return (
-      <a href={href} ref={ref} {...rest}>
-        {children}
-      </a>
-    );
-  });
-  MockLink.displayName = "MockLink";
-  return MockLink;
-});
-
 // Mock useFeatureFlag — default to false; overridden per-test
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),

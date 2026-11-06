@@ -1,0 +1,125 @@
+/**
+ * touchDrag — shared helpers for touch-driven terminal drag gestures
+ * (long-press text selection in useTerminalGestures, and the draggable
+ * selection handles in XtermTerminal). Kept here instead of duplicated in
+ * both call sites so the cell-coordinate math and per-frame throttling stay
+ * consistent between the two gestures.
+ */
+
+/**
+ * Converts a viewport point to clamped terminal cell coordinates.
+ * `rect` should be captured once per drag (at touchstart), not
+ * re-measured on every touchmove — the DOM read is what makes raw,
+ * unthrottled touchmove handlers janky on Android.
+ */
+export interface CellGeometry {
+  rect: { left: number; top: number };
+  cellW: number;
+  cellH: number;
+  maxCol: number;
+  maxRow: number;
+}
+
+export function pointToCell(
+  clientX: number,
+  clientY: number,
+  geometry: CellGeometry
+): { col: number; row: number } {
+  const { rect, cellW, cellH, maxCol, maxRow } = geometry;
+  return {
+    col: Math.max(0, Math.min(maxCol, Math.floor((clientX - rect.left) / cellW))),
+    row: Math.max(0, Math.min(maxRow, Math.floor((clientY - rect.top) / cellH))),
+  };
+}
+
+/**
+ * Wraps a per-point handler so it runs at most once per animation frame,
+ * always with the most recent point — intermediate touchmove events are
+ * coalesced instead of each one forcing an immediate xterm redraw.
+ * Returns [throttled handler, cancel, flush] — call cancel() on gesture end/cleanup
+ * to drop any frame still pending from the last point before teardown, or
+ * flush() to apply that point immediately first.
+ */
+export function rafThrottlePoint(
+  handler: (clientX: number, clientY: number) => void
+): [(clientX: number, clientY: number) => void, () => void, () => void] {
+  let rafId: number | null = null;
+  let latestX = 0;
+  let latestY = 0;
+
+  const throttled = (clientX: number, clientY: number) => {
+    latestX = clientX;
+    latestY = clientY;
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      handler(latestX, latestY);
+    });
+  };
+
+  const cancel = () => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  };
+
+  /** Runs the handler now with the latest point if a frame is pending, so release does not drop the last travel. */
+  const flush = () => {
+    if (rafId === null) return;
+    cancelAnimationFrame(rafId);
+    rafId = null;
+    handler(latestX, latestY);
+  };
+
+  return [throttled, cancel, flush];
+}
+
+/** The slice of xterm's Terminal that getTerminalRowText reads; structural so tests need no real xterm. */
+export interface RowTextSource {
+  cols: number;
+  buffer: {
+    active: {
+      viewportY: number;
+      getLine(row: number): { translateToString(trim: boolean, start?: number, end?: number): string } | undefined;
+    };
+  };
+}
+
+/**
+ * Text window of `windowSize` columns around `activeCol` on a viewport row, for the
+ * selection magnifier. `cursorOffset` is the index of `activeCol` within `text`.
+ * Display only — never feeds back into selection math.
+ */
+export function getTerminalRowText(
+  terminal: RowTextSource,
+  viewportRow: number,
+  activeCol: number,
+  windowSize = 20
+): { text: string; cursorOffset: number } {
+  const buf = terminal.buffer.active;
+  const line = buf.getLine(viewportRow + buf.viewportY);
+  const startCol = Math.max(0, activeCol - Math.floor(windowSize / 2));
+  const endCol = Math.min(terminal.cols, startCol + windowSize);
+  const text = (line?.translateToString(false, startCol, endCol) ?? '').padEnd(endCol - startCol, ' ');
+  return { text, cursorOffset: activeCol - startCol };
+}
+
+/** Fixed bubble size so positioning needs no layout read inside the RAF callback. */
+export const MAGNIFIER_WIDTH = 200;
+export const MAGNIFIER_HEIGHT = 32;
+const MAGNIFIER_GAP = 56; // clears the finger and fingertip occlusion
+const MAGNIFIER_EDGE = 8;
+
+/** Top-left of the magnifier bubble: centered above the touch point, kept inside the viewport width. */
+export function computeMagnifierPosition(
+  clientX: number,
+  clientY: number,
+  viewportWidth: number
+): { left: number; top: number } {
+  const maxLeft = Math.max(MAGNIFIER_EDGE, viewportWidth - MAGNIFIER_WIDTH - MAGNIFIER_EDGE);
+  return {
+    left: Math.max(MAGNIFIER_EDGE, Math.min(maxLeft, clientX - MAGNIFIER_WIDTH / 2)),
+    top: Math.max(MAGNIFIER_EDGE, clientY - MAGNIFIER_HEIGHT - MAGNIFIER_GAP),
+  };
+}

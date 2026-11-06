@@ -1,0 +1,12 @@
+{
+  "id": "backlog-bulk-actions",
+  "type": "frontend",
+  "component": "BacklogBulkActions",
+  "path": "web-app/src/components/backlog/BacklogBulkActions.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/backlog/BacklogBulkActions.test.tsx"
+  ],
+  "lastModified": "2026-10-17T00:00:00Z"
+}

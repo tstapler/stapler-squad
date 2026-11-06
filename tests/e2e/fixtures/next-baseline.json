@@ -1,0 +1,12 @@
+{
+  "capturedFrom": "next",
+  "redirects": {
+    "/backlog": "/",
+    "/backlog/board": "/",
+    "/config": "/settings",
+    "/login": "/",
+    "/sessions/new": "/",
+    "/settings/backlog-sources": "/",
+    "/settings/defaults": "/settings"
+  }
+}

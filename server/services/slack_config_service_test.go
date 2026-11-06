@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -22,7 +21,7 @@ import (
 // callback_config_service_test.go).
 func newIsolatedSlackConfigService(t *testing.T) *SlackConfigService {
 	t.Helper()
-	envtest.NewIsolatedStateDir(t)
+	withIsolatedStateDir(t)
 	return NewSlackConfigService(NewSlackNotifier())
 }
 

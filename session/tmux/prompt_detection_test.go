@@ -157,7 +157,7 @@ func TestPromptDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a tmux instance with the test program
-			tmux := &TmuxSession{program: tt.program}
+			tmux := &TmuxSession{program: tt.program, programKind: kindOfShellText(tt.program)}
 
 			// Call the prompt detection logic directly
 			hasPrompt := tmux.detectPromptInContent(tt.content)
@@ -262,7 +262,7 @@ The codebase is well-structured and follows Python best practices. The main area
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmux := &TmuxSession{program: ProgramClaude}
+			tmux := &TmuxSession{program: ProgramClaude, programKind: KindClaude}
 			hasPrompt := tmux.detectPromptInContent(tt.content)
 
 			if hasPrompt != tt.expected {
@@ -315,7 +315,7 @@ func TestStatusUpdateLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmux := &TmuxSession{program: tt.program}
+			tmux := &TmuxSession{program: tt.program, programKind: kindOfShellText(tt.program)}
 
 			// Test the prompt detection
 			hasPrompt := tmux.detectPromptInContent(tt.content)

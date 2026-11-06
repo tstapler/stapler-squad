@@ -1,0 +1,3 @@
+cursor/origin_mode_decom -- esctest2 decstbm.py (DECOM); xterm DECOM ?6
+[6;12r[?6h[1;1Hrow1-in-region[3;10Hr3c10[99;1Hclamped-to-region-bottom[?6l[1;1Habsolute-after-decom-off[2;1Htail
+[?6h[H-home-in-decom[[5B[?6l[r[20;1Hreset-region

@@ -24,7 +24,7 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		WithPragma("busy_timeout", "5000").
 		WithTxLockImmediate().
 		Build()
-	db, err := sql.Open("sqlite", fullDSN)
+	db, err := sql.Open("sqlite", fullDSN) //nolint:norawdb unused legacy history store
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

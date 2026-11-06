@@ -6,13 +6,18 @@ export interface DocEntry {
   content: string;
 }
 
-const DOC_FILES = [
+export const DOC_FILES = [
   "what-is-stapler-squad",
   "session-types",
   "omnibar",
   "keyboard-shortcuts",
   "configuration",
   "tmux-integration",
+  "backlog",
+  "insights",
+  "notifications",
+  "tagging-rules",
+  "workflows",
 ];
 
 export async function loadDocs(): Promise<DocEntry[]> {

@@ -2,8 +2,8 @@
 // +feature: tymux-rollout
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { createClient } from "@connectrpc/connect";
-import { TymuxRolloutService } from "@/gen/session/v1/tymux_rollout_pb";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
+import { TymuxRolloutService, TymuxdVersionDirection, type TymuxdVersionInfo } from "@/gen/session/v1/tymux_rollout_pb";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { timestampDate, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -49,16 +49,23 @@ export function TymuxRolloutPanel() {
   const [sessionNames, setSessionNames] = useState<string[]>([]);
   const [newOverrideName, setNewOverrideName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [migrateTitle, setMigrateTitle] = useState("");
+  const [migrateStatus, setMigrateStatus] = useState<string | null>(null);
+  const [daemon, setDaemon] = useState<TymuxdVersionInfo | undefined>(undefined);
+  const [replaceBlockedByLiveSessions, setReplaceBlockedByLiveSessions] = useState(false);
 
   const applyStatus = useCallback((status: {
     rollbackRehearsalCompletedAt?: Timestamp;
     sessionOverrides: SessionOverride[];
     globalOverride?: boolean;
+    daemon?: TymuxdVersionInfo;
   }) => {
     const ts = status.rollbackRehearsalCompletedAt;
     setRehearsalCompletedAt(ts ? timestampDate(ts) : null);
     setOverrides(status.sessionOverrides);
     setGlobalOverride(status.globalOverride);
+    // Only Get/Replace carry daemon info; keep the last known value otherwise.
+    if (status.daemon) setDaemon(status.daemon);
   }, []);
 
   const load = useCallback(async () => {
@@ -127,6 +134,44 @@ export function TymuxRolloutPanel() {
       applyStatus(status);
     } catch {
       setError("Failed to update the global override");
+    } finally {
+      setBusy(false);
+    }
+  }, [client, applyStatus, track]);
+
+  // kibitzer:ignore replace-magic-literal -- this is a TS union type literal (the two valid
+  // ProcessManagerBackend values), not a repeated data literal; the other flagged occurrences
+  // (testIdPrefix/subjectLabel props below) are unrelated pre-existing JSX attributes.
+  const migrateSessionBackend = useCallback(async (backendOverride: "tmux" | "tymux") => {
+    const id = migrateTitle.trim();
+    if (!id) return;
+    track({ name: "tymux_session_migrated", category: "user_action", component: "TymuxRolloutPanel", labels: { backendOverride } });
+    setBusy(true);
+    setError(null);
+    setMigrateStatus(null);
+    try {
+      await sessionClient.restartSession({ id, preserveOutput: true, backendOverride });
+      setMigrateStatus(`"${id}" restarted on ${backendOverride}.`);
+    } catch {
+      setError(`Failed to migrate "${id}" to ${backendOverride}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [sessionClient, migrateTitle, track]);
+
+  const replaceDaemon = useCallback(async (allowInterruptLiveSessions: boolean) => {
+    track({ name: "tymuxd_replace", category: "user_action", component: "TymuxRolloutPanel", labels: { allowInterruptLiveSessions: String(allowInterruptLiveSessions) } });
+    setBusy(true);
+    setError(null);
+    setReplaceBlockedByLiveSessions(false);
+    try {
+      applyStatus(await client.replaceTymuxd({ allowInterruptLiveSessions }));
+    } catch (e) {
+      if (ConnectError.from(e).code === Code.FailedPrecondition) {
+        setReplaceBlockedByLiveSessions(true);
+      } else {
+        setError("Failed to replace tymuxd");
+      }
     } finally {
       setBusy(false);
     }
@@ -210,6 +255,86 @@ export function TymuxRolloutPanel() {
         <p className={styles.hint}>
           Stored as <code>{toStaplerSquadSessionName(newOverrideName.trim())}</code> — the
           sanitized tmux session name a session with this title resolves to.
+        </p>
+      )}
+
+      <h3 className={styles.heading}>Migrate a live session</h3>
+      <p className={styles.description}>
+        Restarts an existing session under the target backend right now — kills the
+        current process, rebuilds it on tmux or tymux, and resumes. There is no live
+        hand-off between backends (they&apos;re different daemons), so this is a restart,
+        not an in-place swap.
+      </p>
+      <div className={styles.addRow}>
+        <input
+          className={styles.input}
+          list="tymux-session-names"
+          placeholder="Session title to migrate"
+          aria-label="Session title to migrate"
+          value={migrateTitle}
+          onChange={(e) => setMigrateTitle(e.target.value)}
+          data-testid="tymux-migrate-input"
+        />
+        <button
+          className={styles.actionButton}
+          disabled={busy || !migrateTitle.trim()}
+          onClick={() => migrateSessionBackend("tymux")}
+          data-testid="tymux-migrate-to-tymux"
+        >
+          Restart on tymux
+        </button>
+        <button
+          className={styles.actionButton}
+          disabled={busy || !migrateTitle.trim()}
+          onClick={() => migrateSessionBackend("tmux")}
+          data-testid="tymux-migrate-to-tmux"
+        >
+          Restart on tmux
+        </button>
+      </div>
+      {migrateStatus && <p className={styles.hint}>{migrateStatus}</p>}
+
+      <h3 className={styles.heading}>tymuxd version</h3>
+      <div data-testid="tymuxd-version">
+        {daemon?.running ? (
+          <p className={styles.description}>
+            Running <code>{daemon.runningVersion || "unknown"}</code> (pid {daemon.pid}); configured binary{" "}
+            <code>{daemon.installedVersion || "unknown"}</code>
+            {daemon.direction === TymuxdVersionDirection.SAME && " — up to date."}
+            {daemon.direction === TymuxdVersionDirection.UPGRADE && " — an upgrade is available."}
+            {daemon.direction === TymuxdVersionDirection.DOWNGRADE && " — the configured binary is older (a downgrade)."}
+          </p>
+        ) : (
+          <p className={styles.description}>No tymuxd is running.</p>
+        )}
+      </div>
+      {daemon?.running && daemon.direction !== TymuxdVersionDirection.SAME && (
+        <>
+          <p className={styles.hint}>
+            Replacing restarts the daemon; each live session&apos;s program is respawned when it
+            reconnects, interrupting any running agent.
+          </p>
+          <button
+            className={styles.actionButton}
+            disabled={busy}
+            onClick={() => replaceDaemon(false)}
+            data-testid="tymuxd-replace"
+          >
+            Replace with configured version
+          </button>
+        </>
+      )}
+      {replaceBlockedByLiveSessions && (
+        <p className={styles.hint} role="alert">
+          Live sessions would be interrupted.{" "}
+          <button
+            className={styles.actionButton}
+            disabled={busy}
+            onClick={() => replaceDaemon(true)}
+            data-testid="tymuxd-replace-anyway"
+          >
+            Replace anyway
+          </button>
         </p>
       )}
     </section>

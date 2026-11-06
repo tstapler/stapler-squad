@@ -1,0 +1,14 @@
+{
+  "xterm": {
+    "knownFailing": [
+      "kitty-keyboard-query"
+    ],
+    "reasons": {
+      "kitty-keyboard-query": "xterm.js 6.0.0 does not implement the Kitty keyboard protocol, so CSI ? u gets no reply."
+    }
+  },
+  "ghostty": {
+    "knownFailing": [],
+    "reasons": {}
+  }
+}

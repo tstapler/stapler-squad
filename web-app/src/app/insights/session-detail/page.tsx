@@ -2,7 +2,8 @@
 "use client";
 
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { SessionDetailPageClient } from "./SessionDetailPageClient";
 
 /**
@@ -23,6 +24,7 @@ import { SessionDetailPageClient } from "./SessionDetailPageClient";
  * HTML/JS bundle on cold load, with no dynamic path segment involved.
  */
 function SessionDetailRouteInner() {
+  usePageView();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("sessionId") ?? "";
 

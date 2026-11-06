@@ -58,6 +58,7 @@ jest.mock("@connectrpc/connect", () => ({
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
+jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}) }));
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: () => "http://localhost:8543",
   createAuthInterceptor: () => jest.fn(),
@@ -93,6 +94,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [{ index: 0, text: "Do the thing", status: "pending" }],
     linkedSessions: [],

@@ -122,3 +122,58 @@ func TestAssociator_WhenAssociatingManyResultsViaSnapshot_ExpectStorageQueriedOn
 
 	assert.Equal(t, 1, storage.calls, "expected exactly one ListSessionRecords call for %d results", len(results))
 }
+
+func TestAssociateRecordWithSnapshot_MatchReturnsFullRecord(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	storage := &stubStorage{
+		records: []SessionRecord{
+			{
+				SessionID:      "sess-123",
+				ConversationID: "abc-123",
+				Path:           "/some/path",
+				CreatedAt:      now,
+				Tags:           []string{"backend", "urgent"},
+			},
+		},
+	}
+	a := NewAssociator(storage)
+	result := &ParseResult{SessionUUID: "abc-123"}
+
+	rec, isOrphan := a.AssociateRecordWithSnapshot(result, a.Snapshot())
+	assert.False(t, isOrphan)
+	assert.Equal(t, "sess-123", rec.SessionID)
+	assert.Equal(t, "abc-123", rec.ConversationID)
+	assert.Equal(t, "/some/path", rec.Path)
+	assert.Equal(t, []string{"backend", "urgent"}, rec.Tags)
+}
+
+func TestAssociateRecordWithSnapshot_NoMatchReturnsZeroValueAndOrphanTrue(t *testing.T) {
+	t.Parallel()
+	a := NewAssociator(&stubStorage{records: []SessionRecord{}})
+	result := &ParseResult{SessionUUID: "no-match"}
+
+	rec, isOrphan := a.AssociateRecordWithSnapshot(result, a.Snapshot())
+	assert.True(t, isOrphan)
+	assert.Equal(t, SessionRecord{}, rec)
+}
+
+// TestAssociator_WhenTranscriptPathIsShorterThanSessionPath_ExpectOrphanNotFalseMatch
+// guards the reverse-direction bug isPathPrefixMatch's doc comment describes: a
+// transcript whose decoded ProjectPath is a short, generic ancestor (e.g. a Claude
+// invocation run straight in $HOME) must not match every session whose Path happens
+// to be somewhere under it.
+func TestAssociator_WhenTranscriptPathIsShorterThanSessionPath_ExpectOrphanNotFalseMatch(t *testing.T) {
+	t.Parallel()
+	storage := &stubStorage{
+		records: []SessionRecord{
+			{SessionID: "sess-stelekit", Path: "/home/user/projects/stelekit"},
+		},
+	}
+	a := NewAssociator(storage)
+	result := &ParseResult{ProjectPath: "/home/user"}
+
+	sessionID, isOrphan := a.Associate(result)
+	assert.Equal(t, "", sessionID)
+	assert.True(t, isOrphan)
+}

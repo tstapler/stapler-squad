@@ -218,6 +218,15 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, 
 	// Use the tmux dependency injection method
 	mockTmuxSession := tmux.NewTmuxSessionWithDeps(instance.Title, instance.Program, mockPtyFactory, mockExecutor)
 
+	// Pre-seed the mock as already alive so initTmuxSession()'s HasSession() &&
+	// IsAlive() reuse guard (see session/instance_tmux.go) accepts this
+	// injected mock instead of discarding it for a brand-new *real* tmux
+	// session -- which would defeat this helper's whole "prevent real tmux
+	// command execution" purpose. Safe here because the mock was already
+	// constructed with instance.Program baked in correctly, so there is
+	// nothing this reuse skips that the tests below depend on.
+	mockExecutor.sessionsCreated[mockTmuxSession.GetSanitizedName()] = true
+
 	// Replace the real tmux session with the mock
 	instance.processManager.(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
 

@@ -33,23 +33,21 @@ package gogitstore
 
 import (
 	"bytes"
-	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/idxfile"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // realFixtureIdxBytes builds a small real packed fixture and returns its raw
 // on-disk .idx bytes, for use as a valid-input baseline / fuzz seed.
 func realFixtureIdxBytes(t *testing.T) []byte {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 40)
 
@@ -298,27 +296,25 @@ func beU32(b []byte, off int) uint32 {
 func FuzzLoadMemoryIndexMmap(f *testing.F) {
 	// Build seeds from a throwaway *testing.T-shaped fixture builder. F
 	// doesn't give us a *testing.T, so this seed-building step uses a
-	// minimal local git invocation rather than reusing realFixtureIdxBytes
-	// (which requires *testing.T for Fatalf/Skip).
-	if _, err := exec.LookPath("git"); err == nil {
-		if valid, ok := buildFuzzSeedIdx(); ok {
-			f.Add(valid)
-			// A handful of the most interesting mutations from the
-			// table-driven test above, inlined here since F.Add needs
-			// concrete []byte values, not a *testing.T-based helper.
-			if len(valid) > idxHeaderLen+8 {
-				nonMonotonic := append([]byte(nil), valid...)
-				setBE32(nonMonotonic, idxMagicLen+idxVersionLen+0*4, 0xffffff00)
-				setBE32(nonMonotonic, idxMagicLen+idxVersionLen+1*4, 1)
-				f.Add(nonMonotonic)
+	// minimal go-git fixture rather than reusing realFixtureIdxBytes
+	// (which requires *testing.T for Fatalf).
+	if valid, ok := buildFuzzSeedIdx(); ok {
+		f.Add(valid)
+		// A handful of the most interesting mutations from the
+		// table-driven test above, inlined here since F.Add needs
+		// concrete []byte values, not a *testing.T-based helper.
+		if len(valid) > idxHeaderLen+8 {
+			nonMonotonic := append([]byte(nil), valid...)
+			setBE32(nonMonotonic, idxMagicLen+idxVersionLen+0*4, 0xffffff00)
+			setBE32(nonMonotonic, idxMagicLen+idxVersionLen+1*4, 1)
+			f.Add(nonMonotonic)
 
-				truncated := append([]byte(nil), valid[:idxHeaderLen+5]...)
-				f.Add(truncated)
+			truncated := append([]byte(nil), valid[:idxHeaderLen+5]...)
+			f.Add(truncated)
 
-				badMagic := append([]byte(nil), valid...)
-				badMagic[0] = 'X'
-				f.Add(badMagic)
-			}
+			badMagic := append([]byte(nil), valid...)
+			badMagic[0] = 'X'
+			f.Add(badMagic)
 		}
 	}
 	f.Add([]byte{})
@@ -370,34 +366,27 @@ func buildFuzzSeedIdx() (data []byte, ok bool) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	run := func(args ...string) bool {
-		// Bounded like gitRunErr in gogitstore_test.go: an unbounded
-		// context.Background() here leaves a wedged git subprocess blocking
-		// cmd.Run() forever, past go test's own -timeout (see gitCommandTimeout's
-		// doc comment for the reproduced hang this pattern fixes).
-		ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout(args))
-		defer cancel()
-		cmd := safeexec.CommandContextPG(ctx, "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.local",
-		)
-		return cmd.Run() == nil
-	}
-	if !run("init", "-q", "-b", "main") {
-		return nil, false
-	}
-	if !run("config", "user.name", "test") || !run("config", "user.email", "test@test.local") {
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
 		return nil, false
 	}
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("seed content for fuzz corpus\n"), 0o644); err != nil {
 		return nil, false
 	}
-	if !run("add", ".") || !run("commit", "-q", "-m", "seed") {
+	wt, err := repo.Worktree()
+	if err != nil {
 		return nil, false
 	}
-	if !run("gc", "-q") {
+	if _, err := wt.Add("a.txt"); err != nil {
+		return nil, false
+	}
+	sig := &object.Signature{Name: "test", Email: "test@test.local", When: time.Unix(1700000000, 0)}
+	if _, err := wt.Commit("seed", &git.CommitOptions{Author: sig}); err != nil {
+		return nil, false
+	}
+	if repackRepoErr(repo) != nil {
 		return nil, false
 	}
 

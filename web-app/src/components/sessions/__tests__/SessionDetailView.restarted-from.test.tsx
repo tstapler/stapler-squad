@@ -8,6 +8,7 @@
  * session's title when it still resolves in the live session list, or plain
  * non-clickable text with "(no longer available)" when it doesn't.
  */
+import "./sessionDetailViewBaseMocks";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionDetailView } from "../SessionDetailView";
@@ -16,26 +17,6 @@ import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types
 import type { Session } from "@/gen/session/v1/types_pb";
 import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";
 
-jest.mock("next/dynamic", () => require("./sessionDetailViewTestFixtures").mockNextDynamic());
-
-jest.mock("../DiffViewer", () => require("./sessionDetailViewTestFixtures").mockDiffViewer());
-jest.mock("../VcsPanel", () => require("./sessionDetailViewTestFixtures").mockVcsPanel());
-jest.mock("../SessionLogsTab", () => require("./sessionDetailViewTestFixtures").mockSessionLogsTab());
-jest.mock("../FilesTab", () => require("./sessionDetailViewTestFixtures").mockFilesTab());
-jest.mock("../ArtifactsTab", () => require("./sessionDetailViewTestFixtures").mockArtifactsTab());
-jest.mock("../WorkspaceSwitchModal", () => require("./sessionDetailViewTestFixtures").mockWorkspaceSwitchModal());
-jest.mock("../TagEditor", () => require("./sessionDetailViewTestFixtures").mockTagEditor());
-jest.mock("../ResumeSessionModal", () => require("./sessionDetailViewTestFixtures").mockResumeSessionModal());
-jest.mock("../BrowserTab", () => require("./sessionDetailViewTestFixtures").mockBrowserTabSimple());
-jest.mock("../SessionSummaryPanel", () => require("./sessionDetailViewTestFixtures").mockSessionSummaryPanelNull());
-jest.mock("../HandoffSummarySection", () => require("./sessionDetailViewTestFixtures").mockHandoffSummarySection());
-jest.mock("@/components/ui/ActionBar", () => require("./sessionDetailViewTestFixtures").mockActionBar());
-jest.mock("@/components/ui/Modal", () => require("./sessionDetailViewTestFixtures").mockModal());
-jest.mock("@/lib/config", () => require("./sessionDetailViewTestFixtures").mockLibConfig());
-jest.mock("@/lib/constants/programs", () => require("./sessionDetailViewTestFixtures").mockConstantsPrograms());
-jest.mock("@/lib/store", () => require("./sessionDetailViewTestFixtures").mockStore());
-jest.mock("@/lib/store/sessionsSlice", () => require("./sessionDetailViewTestFixtures").mockSessionsSlice());
-jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixtures").mockUseShells());
 jest.mock("@/lib/hooks/useWorkflows", () => require("./sessionDetailViewTestFixtures").mockUseWorkflowsEmpty());
 
 const makeSession = (overrides: Partial<Session>): Session =>

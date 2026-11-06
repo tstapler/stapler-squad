@@ -1,0 +1,13 @@
+{
+  "id": "claim-chip",
+  "type": "frontend",
+  "name": "Board-card chip showing an item's external URL is claimed by (or disputed with) another host",
+  "component": "ClaimChip",
+  "path": "web-app/src/components/backlog/ClaimChip.tsx",
+  "filePath": "web-app/src/components/backlog/ClaimChip.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "ClaimChip on cards (cross-host claim dedup)"
+  ]
+}

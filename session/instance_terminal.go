@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // GetCreatedAt returns the time this instance was created. The field is immutable after creation.
@@ -46,6 +47,23 @@ func (i *Instance) GetStableID() string {
 // write; a direct field read or an i.mu-guarded read would not be.
 func (i *Instance) GetProgram() string {
 	return i.Snapshot().Program
+}
+
+// GetAltScreenActive reports whether this instance's pane was last observed
+// in the alternate screen buffer. Reads via Snapshot(), not the raw field --
+// see .claude/rules/instance-lock-free-reads.md.
+func (i *Instance) GetAltScreenActive() bool {
+	return i.Snapshot().AltScreenActive
+}
+
+// GetAltScreenBootstrapped reports whether AltScreenActive reflects a
+// confirmed observation (live transition or a completed
+// IsAlternateScreenActiveBootstrap query) rather than its unset zero value --
+// see altScreenActiveForSnapshot (server/services/connectrpc_websocket.go),
+// the one caller that needs to tell "confirmed not in alt screen" apart from
+// "never checked" before deciding whether a fresh tmux query is warranted.
+func (i *Instance) GetAltScreenBootstrapped() bool {
+	return i.Snapshot().AltScreenBootstrapped
 }
 
 // MatchesID reports whether id refers to this instance.
@@ -91,14 +109,16 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// Use mutex for thread safety
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	// Update the title
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 
+	// After releasing i.mu: pm() takes pmMu, and updateProcessManagerForRestart nests i.mu inside
+	// pmMu, so calling it with i.mu held would be an ABBA deadlock.
+	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
 }
@@ -153,8 +173,8 @@ func (i *Instance) Preview() (string, error) {
 	// approximation reconstructed from a raw byte stream. CapturePaneContent has
 	// a 1s TTL cache (see TmuxProcessManager), so preferring it here does not add
 	// a subprocess spawn on every poll tick.
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if content, err := tb.CapturePaneContent(); err == nil {
+	if _, ok := capabilityOf[CachedScreenCapturer](i.processManager); ok {
+		if content, err := i.processManager.CapturePaneContent(); err == nil {
 			return content, nil
 		}
 	}
@@ -175,12 +195,19 @@ func (i *Instance) Preview() (string, error) {
 	// No controller at all (e.g. external/attached sessions): try capture-pane
 	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
 	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
-	content, err := i.pm().CapturePaneContent()
+	content, err := tymux.FinalScreen(i.pm().CapturePaneContent())
 	if err != nil {
 		return "", nil
 	}
 
 	return content, nil
+}
+
+// CapturePaneContentFinal is CapturePaneContent for readers that want what an
+// exited pane last showed (previews, debug dumps) rather than a fail-fast
+// ErrPaneExited. Liveness-sensitive loops keep calling CapturePaneContent.
+func (i *Instance) CapturePaneContentFinal() (string, error) {
+	return tymux.FinalScreen(i.CapturePaneContent())
 }
 
 // PreviewContext is Preview with an external context threaded onto the
@@ -199,22 +226,20 @@ func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if tpm, ok := tb.mgr.(*TmuxProcessManager); ok {
-			content, err := tpm.CapturePaneContentContext(ctx)
-			if err == nil {
-				return content, nil
-			}
-			// A cancellation/deadline means the caller no longer wants this
-			// result — falling back to the non-cancellable Preview() here
-			// would silently ignore that and block on a fresh subprocess
-			// call anyway, defeating the whole point of threading ctx
-			// through in the first place (see doc comment above). Only
-			// fall back for genuine capture failures (e.g. subprocess
-			// error, no pane).
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return "", ctx.Err()
-			}
+	if c, ok := capabilityOf[ContextCapturer](i.processManager); ok {
+		content, err := c.CapturePaneContentContext(ctx)
+		if err == nil {
+			return content, nil
+		}
+		// A cancellation/deadline means the caller no longer wants this
+		// result — falling back to the non-cancellable Preview() here
+		// would silently ignore that and block on a fresh subprocess
+		// call anyway, defeating the whole point of threading ctx
+		// through in the first place (see doc comment above). Only
+		// fall back for genuine capture failures (e.g. subprocess
+		// error, no pane).
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", ctx.Err()
 		}
 	}
 
@@ -263,15 +288,11 @@ func (i *Instance) CaptureCurrentState() error {
 		return nil
 	}
 	path, err := func() (string, error) {
-		tb, ok := i.processManager.(*TmuxBackend)
+		r, ok := capabilityOf[PaneCwdReporter](i.processManager)
 		if !ok {
 			return "", nil
 		}
-		sess := tb.TmuxManager().Session()
-		if sess == nil {
-			return "", nil
-		}
-		return sess.GetPaneCurrentPath()
+		return r.PaneCurrentPath()
 	}()
 	if err != nil {
 		return fmt.Errorf("CaptureCurrentState '%s': %w", i.Title, err)
@@ -341,6 +362,7 @@ func (i *Instance) GitHub() GitHubMetadataView {
 		PRURL:          gh.GitHubPRURL,
 		Owner:          gh.GitHubOwner,
 		Repo:           gh.GitHubRepo,
+		Host:           gh.GitHubHost,
 		SourceRef:      gh.GitHubSourceRef,
 		ClonedRepoPath: gh.ClonedRepoPath,
 	}
@@ -409,8 +431,8 @@ type PRStatusUpdate struct {
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
 func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
-	var result prUpdateResult
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	result, _ := sendSyncValue(i, func(s *instanceState) (prUpdateResult, error) {
+		var result prUpdateResult
 		inst := s.inst
 		// i.mu guards the writes + buildSnapshot together: legacy setters
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
@@ -432,7 +454,15 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)
-		return nil
+		return result, nil
 	})
 	return result
+}
+
+// syncProcessLabel tells the process manager the record's new title: tymux keys record identity
+// and daemon session names on it, so a stale label would leave the old one registered.
+func (i *Instance) syncProcessLabel(title string) {
+	if l, ok := capabilityOf[SessionLabeler](i.pm()); ok {
+		l.SetSessionLabel(title)
+	}
 }

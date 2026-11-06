@@ -23,7 +23,7 @@ func TestTUIExit(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Verify TUI is running
 		assert.True(t, session.IsRunning(), "TUI should be running before quit")
@@ -40,7 +40,6 @@ func TestTUIExit(t *testing.T) {
 		}
 
 		// Give time for process to fully exit
-		time.Sleep(200 * time.Millisecond)
 
 		// Process should no longer be running (or ProcessState should be set)
 		// Note: IsRunning might not be reliable after WaitForExit
@@ -55,7 +54,7 @@ func TestTUIExit(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for TUI to be ready
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Verify TUI is running
 		assert.True(t, session.IsRunning(), "TUI should be running before Ctrl+C")
@@ -70,7 +69,6 @@ func TestTUIExit(t *testing.T) {
 			t.Logf("Exit wait result: %v", err)
 		}
 
-		time.Sleep(200 * time.Millisecond)
 		t.Log("Ctrl+C exit test completed")
 	})
 
@@ -81,7 +79,7 @@ func TestTUIExit(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Send multiple 'q' keys rapidly
 		for i := 0; i < 3; i++ {
@@ -90,7 +88,6 @@ func TestTUIExit(t *testing.T) {
 				t.Logf("Error sending q (iteration %d): %v", i, err)
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
 		}
 
 		// Wait for exit
@@ -109,7 +106,7 @@ func TestTUIExit(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Verify running
 		assert.True(t, session.IsRunning(), "TUI should be running")
@@ -143,7 +140,7 @@ func TestTUINoHangOnExit(t *testing.T) {
 			session, err := StartExpectSession(t, config)
 			require.NoError(t, err, "Iteration %d: should start session", i+1)
 
-			time.Sleep(500 * time.Millisecond)
+			awaitRunning(t, session)
 
 			// Verify running
 			assert.True(t, session.IsRunning(), "Iteration %d: session should be running", i+1)
@@ -151,8 +148,6 @@ func TestTUINoHangOnExit(t *testing.T) {
 			// Close session
 			err = session.Close()
 			assert.NoError(t, err, "Iteration %d: should close session", i+1)
-
-			time.Sleep(200 * time.Millisecond)
 
 			// Note: IsRunning() check removed - it's not reliable immediately after Close()
 			// The important thing is that Close() completes without hanging
@@ -168,7 +163,7 @@ func TestTUINoHangOnExit(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Measure exit time
 		startTime := time.Now()
@@ -204,19 +199,15 @@ func TestTUIExitStates(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Enter help screen
 		err = session.SendKeys("?")
 		require.NoError(t, err)
 
-		time.Sleep(300 * time.Millisecond)
-
 		// Exit from help
 		err = session.SendKeys("q")
 		assert.NoError(t, err)
-
-		time.Sleep(300 * time.Millisecond)
 
 		// Should exit or return to main screen
 		// Try to exit again from main screen
@@ -240,19 +231,15 @@ func TestTUIExitStates(t *testing.T) {
 		session, err := StartExpectSession(t, config)
 		require.NoError(t, err)
 
-		time.Sleep(1 * time.Second)
+		awaitRunning(t, session)
 
 		// Enter search
 		err = session.SendKeys("s")
 		require.NoError(t, err)
 
-		time.Sleep(300 * time.Millisecond)
-
 		// Exit with escape
 		err = session.SendEscape()
 		assert.NoError(t, err)
-
-		time.Sleep(300 * time.Millisecond)
 
 		// Now quit from main screen
 		err = session.SendKeys("q")

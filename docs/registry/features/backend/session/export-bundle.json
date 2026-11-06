@@ -1,0 +1,20 @@
+{
+  "id": "session:export-bundle",
+  "type": "backend",
+  "service": "SessionBundleService",
+  "method": "ExportSessionBundle",
+  "protoFile": "proto/session/v1/rum_bundle.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_bundle_service.go",
+  "tested": true,
+  "testIds": [
+    "TestAssembleBundle_ValidZIPWithManifest",
+    "TestAssembleBundle_SizeCapDropsAnalytics",
+    "TestAssembleBundle_ScrollbackTailNotOldest",
+    "TestAssembleBundle_NilCtxHistoryStore",
+    "TestAssembleBundle_FiveSecondDeadline",
+    "TestAssembleBundle_FlushCalledBeforeRead",
+    "TestAssembleBundle_IncludesTracesAndProfiles"
+  ],
+  "lastModified": "2026-10-16T12:42:44.51953433-07:00"
+}

@@ -168,27 +168,6 @@ export interface TerminalState {
 }
 
 /**
- * Test result for escape code testing
- */
-export interface EscapeCodeTestResult {
-  scenario: EscapeCodeTestScenario;
-  /** Total frames tested */
-  framesProcessed: number;
-  /** Frames with validation failures */
-  failedFrames: number;
-  /** Detailed failures */
-  failures: TestFailure[];
-  /** Coverage by category */
-  coverage: CategoryCoverage[];
-  /** Performance metrics */
-  performance: EscapeCodePerformanceMetrics;
-  /** Overall pass/fail */
-  passed: boolean;
-  /** Timestamp */
-  timestamp: number;
-}
-
-/**
  * Individual test failure
  */
 export interface TestFailure {

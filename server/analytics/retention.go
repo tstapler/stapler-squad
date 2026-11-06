@@ -2,12 +2,12 @@ package analytics
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
-	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
 // StartRetentionEnforcer starts a background goroutine that periodically deletes
@@ -17,39 +17,36 @@ import (
 //     when the count exceeds this limit. Use 0 to disable.
 //   - maxAgeDays:           rows older than this many days are deleted unconditionally.
 //     Use 0 to disable age-based eviction.
-//   - escapeRetentionDays:  escape_event rows older than this many days are deleted.
-//     Use 0 to disable escape event age-based eviction.
 //
-// The goroutine exits when ctx is cancelled.
-func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int) {
+// Escape events live in their own database; see package escapedb.
+//
+// The goroutine exits when ctx is cancelled and is tracked on wg so the caller
+// can join it.
+func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, wg *sync.WaitGroup) {
 	if client == nil {
 		return
 	}
-	go func() {
+	wg.Go(func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 
 		// Run once immediately so limits are enforced right after startup.
-		runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays)
+		runRetention(ctx, client, maxRows, maxAgeDays)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runRetention(ctx, client, maxRows, maxAgeDays, escapeRetentionDays)
+				runRetention(ctx, client, maxRows, maxAgeDays)
 			}
 		}
-	}()
+	})
 }
 
 // runRetention performs one enforcement cycle: age-based eviction first, then
-// count-based eviction if still over limit. Also deletes escape_event rows
-// older than escapeRetentionDays.
-func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int, escapeRetentionDays int) {
-	// Phase 0: delete escape_event rows older than escapeRetentionDays.
-	runEscapeEventRetention(ctx, client, escapeRetentionDays)
-
+// count-based eviction if still over limit.
+func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int) {
 	// Phase 1: delete rows older than maxAgeDays.
 	if maxAgeDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
@@ -96,21 +93,4 @@ func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDa
 		return
 	}
 	log.Info("analytics/retention count eviction deleted rows", "deleted", deleted, "was", count, "limit", maxRows)
-}
-
-// runEscapeEventRetention deletes escape_event rows older than retentionDays.
-// Called from runRetention when escapeRetentionDays > 0.
-func runEscapeEventRetention(ctx context.Context, client *ent.Client, retentionDays int) {
-	if retentionDays <= 0 {
-		return
-	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	deleted, err := client.EscapeEvent.Delete().
-		Where(escapeevent.WallTimeLT(cutoff)).
-		Exec(ctx)
-	if err != nil {
-		log.Warn("analytics/retention escape_event age eviction failed", "err", err)
-	} else if deleted > 0 {
-		log.Info("analytics/retention escape_event age eviction deleted rows", "deleted", deleted, "cutoff", cutoff.Format(time.RFC3339))
-	}
 }

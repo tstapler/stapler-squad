@@ -1,22 +1,30 @@
 "use client";
 
 import { useEffect } from "react";
-import dynamic from "next/dynamic";
-import { Session } from "@/gen/session/v1/types_pb";
+import { lazyComponent } from "@/lib/lazy";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
+import { useSessionDetailActivity } from "./useSessionDetailActivity";
 import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
-import { useAppSelector } from "@/lib/store";
-import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import { useAppDispatch, useAppSelector } from "@/lib/store";
+import { selectAllSessions, selectSessionsError, setError } from "@/lib/store/sessionsSlice";
+import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { pendingQuestionFor } from "@/lib/reply/replyQuestion";
+import { useStickyReplyQuestion } from "@/lib/hooks/useStickyReplyQuestion";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { ReadOnlyBanner } from "./ReadOnlyBanner";
+import { ReplyCard } from "./ReplyCard";
+import { isReadOnlyRefusal, READ_ONLY_REFUSAL_TOAST } from "./readOnlyCopy";
 
 // Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
 // XtermTerminal, syntax-highlight packs, WASM) so they are NOT in the initial bundle.
 // This defers ~2MB of JS parse/eval until the user actually opens a session.
-const SessionDetailView = dynamic(
+const SessionDetailView = lazyComponent(
   () => import("./SessionDetailView").then((m) => ({ default: m.SessionDetailView })),
   {
-    ssr: false,
     loading: () => (
       <div style={{ padding: "20px", textAlign: "center", color: "var(--text-secondary)" }}>
         Loading...
@@ -27,14 +35,7 @@ const SessionDetailView = dynamic(
 
 export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts" | "summary";
 
-interface SessionDetailProps {
-  session: Session;
-  onClose: () => void;
-  onFullscreenChange?: (isFullscreen: boolean) => void;
-  onTabChange?: (tab: SessionDetailTab) => void;
-  initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
+interface SessionDetailNavigation {
   onNext?: () => void;
   onPrevious?: () => void;
   showNavigation?: boolean;
@@ -50,8 +51,24 @@ interface SessionDetailProps {
   onBack?: () => void;
   /** Whether back navigation is available. */
   canGoBack?: boolean;
+}
+
+interface SessionDetailProps extends SessionDetailNavigation {
+  session: Session;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
+  /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
+  backlogEntry?: BacklogIndexEntry;
+  /** Whether this session's pane currently has focus. Defaults to true. */
+  isActive?: boolean;
+  /** Window is the visible one. Defaults to true. Gates polling, keys and measuring via useSessionDetailActivity. */
+  windowActive?: boolean;
 }
 
 export function SessionDetail({
@@ -73,40 +90,90 @@ export function SessionDetail({
   onBack,
   canGoBack,
   backlogItemId,
+  backlogEntry,
+  isActive,
+  windowActive,
 }: SessionDetailProps) {
+  const { pollMode } = useSessionDetailActivity({ isFocused: isActive ?? true, windowActive: windowActive ?? true });
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
+  const sessionsError = useAppSelector(selectSessionsError);
+  const dispatch = useAppDispatch();
+  const { showActionToast, markAsRead } = useNotificationCommands();
+  const { notificationHistory } = useNotificationState();
+  // Kill switch: the server's hidden_session_reply flag (a missing value reads as off).
+  const replyEnabled = useFeatureFlag("hidden_session_reply");
+  const unreadQuestion = session.hidden && replyEnabled
+    ? pendingQuestionFor(notificationHistory, session.id)
+    : undefined;
+  // Marking the notification read after a send must not unmount the card holding its receipt.
+  const stickyQuestion = useStickyReplyQuestion(unreadQuestion, session.id);
+  const pendingQuestion = session.hidden && replyEnabled ? stickyQuestion : undefined;
+
+  // A write the server refused on a hidden session reads as one plain line, never the raw RPC error.
+  useEffect(() => {
+    if (!session.hidden || !isReadOnlyRefusal(sessionsError)) return;
+    showActionToast(READ_ONLY_REFUSAL_TOAST, "error", "readonly-refusal");
+    dispatch(setError(null));
+  }, [session.hidden, sessionsError, showActionToast, dispatch]);
 
   // Prefetch VCS data as soon as a session is selected so tabs load instantly.
   useEffect(() => {
+    // A hidden-window pane fetches nothing; an unfocused one prefetches as background so the cap applies.
+    if (pollMode === "off") return;
     const baseUrl = getApiBaseUrl();
-    prefetchVcsStatus(session.id, baseUrl);
-  }, [session.id]);
+    prefetchVcsStatus(session.id, baseUrl, pollMode === "fast");
+  }, [session.id, pollMode]);
 
+  const detailView = (
+    <SessionDetailView
+      session={session}
+      allSessions={allSessions}
+      actions={actions}
+      onClose={onClose}
+      onFullscreenChange={onFullscreenChange}
+      onTabChange={onTabChange}
+      initialTab={initialTab}
+      embedded={embedded}
+      onNext={onNext}
+      onPrevious={onPrevious}
+      showNavigation={showNavigation}
+      onApprovalResolved={onApprovalResolved}
+      onDismissFromQueue={onDismissFromQueue}
+      queuePosition={queuePosition}
+      queueTotal={queueTotal}
+      nextSessionName={nextSessionName}
+      previousSessionName={previousSessionName}
+      onBack={onBack}
+      canGoBack={canGoBack}
+      backlogItemId={backlogItemId}
+      isActive={isActive}
+      windowActive={windowActive}
+      backlogEntry={backlogEntry}
+    />
+  );
+
+  // Read-only is decided from session.hidden (the server enforces the same rule, Story 5.1).
+  // The wrapper exists only for hidden sessions so a visible session's layout is untouched.
   return (
-    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()}>
-      <SessionDetailView
-        session={session}
-        allSessions={allSessions}
-        actions={actions}
-        onClose={onClose}
-        onFullscreenChange={onFullscreenChange}
-        onTabChange={onTabChange}
-        initialTab={initialTab}
-        embedded={embedded}
-        onNext={onNext}
-        onPrevious={onPrevious}
-        showNavigation={showNavigation}
-        onApprovalResolved={onApprovalResolved}
-        onDismissFromQueue={onDismissFromQueue}
-        queuePosition={queuePosition}
-        queueTotal={queueTotal}
-        nextSessionName={nextSessionName}
-        previousSessionName={previousSessionName}
-        onBack={onBack}
-        canGoBack={canGoBack}
-        backlogItemId={backlogItemId}
-      />
+    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} pollMode={pollMode}>
+      {session.hidden ? (
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", minHeight: 0 }}>
+          <ReadOnlyBanner replyCardPresent={pendingQuestion !== undefined} />
+          {pendingQuestion && (
+            <ReplyCard
+              key={pendingQuestion.id}
+              sessionId={session.id}
+              notification={pendingQuestion}
+              onSent={() => void markAsRead(pendingQuestion.id)}
+              onViewOutput={() => onTabChange?.("terminal")}
+            />
+          )}
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>{detailView}</div>
+        </div>
+      ) : (
+        detailView
+      )}
     </SessionVcsProvider>
   );
 }

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "incremental": false
+  },
+  "include": [
+    "build/**/*.ts",
+    "build/**/*.tsx",
+    "scripts/verify-eval-patch.mjs",
+    "src/main.tsx",
+    "src/theme-boot.ts",
+    "src/types/*.d.ts"
+  ],
+  "exclude": ["node_modules", "build/**/*.test.ts", "build/**/fixtures/**", "build/oracle/*.cjs"]
+}

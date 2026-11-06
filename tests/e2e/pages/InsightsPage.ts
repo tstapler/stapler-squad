@@ -1,6 +1,7 @@
 import { Page, Locator } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 /**
  * Page object for the /insights dashboard (project_plans/insights-cost-intelligence),
@@ -82,6 +83,35 @@ export class InsightsPage {
     });
   }
 
+  /**
+   * Count-agnostic variant of `mockGetInsightsSummary` for a fail-then-succeed Retry flow: every
+   * request fails until `release()` is called, then every request succeeds. Unlike a response
+   * queue it does not depend on how many times the page's mount effect fires (twice under Next's
+   * StrictMode dev build, once under a build without it).
+   */
+  async mockGetInsightsSummaryFailingUntilReleased(
+    failure: { errorMessage: string },
+    success: MockInsightsSummaryResponse,
+  ): Promise<{ release: () => void }> {
+    let released = false;
+    await this.page.route("**/session.v1.InsightsService/GetInsightsSummary", async (route) => {
+      if (!released) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "unknown", message: failure.errorMessage }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(buildInsightsSummaryResponse(success.body ?? {})),
+      });
+    });
+    return { release: () => { released = true; } };
+  }
+
   // ---------------------------------------------------------------------
   // Findings panel (design/ux.md B1)
   // ---------------------------------------------------------------------
@@ -138,6 +168,53 @@ export class InsightsPage {
   getSessionsTableRows(): Locator {
     return this.page.locator("table tbody tr");
   }
+
+  // ---------------------------------------------------------------------
+  // Stage cost chart (project_plans/backlog-stage-execution-costs, design/ux.md)
+  // ---------------------------------------------------------------------
+
+  getStageCostChart(): Locator {
+    return this.page.getByTestId("stage-cost-chart");
+  }
+
+  /** The chart's `role="img"` wrapper — its `aria-label` mirrors the rendered bar values (AC13). */
+  getStageCostChartImg(): Locator {
+    return this.getStageCostChart().getByRole("img");
+  }
+
+  /**
+   * A stage/role's legend entry (`data-testid="stage-cost-legend-<role>"`,
+   * StageCostChart.tsx). Also the interaction target for "clicking the bar"
+   * in tests: recharts renders each individual bar as an anonymous SVG
+   * shape with no data-testid or ARIA role of its own, so the legend
+   * button — which invokes the identical `onRoleClick` handler with the
+   * same role argument (see StageCostChart.tsx's shared `handleRoleActivate`)
+   * — is the only convention-compliant (data-testid/ARIA-only) locator for
+   * that cross-filter interaction.
+   */
+  getStageCostLegendEntry(role: string): Locator {
+    return this.page.getByTestId(`stage-cost-legend-${role}`);
+  }
+
+  getRoleFilterChip(): Locator {
+    return this.page.getByTestId("role-filter-chip");
+  }
+}
+
+/**
+ * Presses Tab up to `maxPresses` times until `locator`'s element is
+ * `document.activeElement`, returning whether it was reached. Mirrors this
+ * file's `assertTabWrapsWithinDialog` precedent for the same
+ * press-and-check-focus shape.
+ */
+export async function tabUntilFocused(page: Page, locator: Locator, maxPresses = 60): Promise<boolean> {
+  for (let i = 0; i < maxPresses; i++) {
+    if (await locator.evaluate((el) => el === document.activeElement).catch(() => false)) {
+      return true;
+    }
+    await page.keyboard.press("Tab");
+  }
+  return await locator.evaluate((el) => el === document.activeElement).catch(() => false);
 }
 
 export interface MockInsightsSummaryResponse {
@@ -166,6 +243,7 @@ export function buildInsightsSummaryResponse(overrides: Record<string, unknown> 
     unpricedModels: [],
     findings: [],
     activityBreakdown: [],
+    roleBreakdown: [],
     ...overrides,
   };
 }
@@ -179,6 +257,22 @@ export function buildFinding(overrides: Record<string, unknown> = {}) {
     sessionId: "session-alpha",
     conversationId: "conv-alpha",
     message: "Cache-hit floor breach: 9% hit rate vs. 40% floor",
+    ...overrides,
+  };
+}
+
+/**
+ * Builds one RoleCostBreakdown as canonical JSON (see insights_pb.ts's
+ * RoleCostBreakdown doc comment: sum(role_breakdown[].estimatedCostUsd)
+ * across a response always equals its totalCostUsd).
+ */
+export function buildRoleBreakdown(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionRole: "work",
+    estimatedCostUsd: 1,
+    sessionCount: 1,
+    items: [],
+    unpricedSessionCount: 0,
     ...overrides,
   };
 }

@@ -1,0 +1,5 @@
+edit/insert_replace_mode_irm -- esctest2 sm.py/rm.py (IRM); libvterm 15state_m
+[1;1H0123456789[1;3H[4hINS[4lover
+[3;1H0123456789[3;3H[4h世界[4l[5;1Habcdefgh[5;4H[4h[1mB[0m[4l
+[7;1H0123456789[7;1H[4hxyz[4h[4l[7;12Htail
+[9;1Hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[9;1H[4hINSERT-pushes-off-edge[4l

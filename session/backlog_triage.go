@@ -45,6 +45,9 @@ type HeadlessTriageResult struct {
 	// sets them after parsing, from server-tracked state, before persisting.
 	Iteration int    `json:"iteration,omitempty"`
 	Feedback  string `json:"feedback,omitempty"`
+	// InputHash fingerprints the item content this result was produced for; automatic
+	// retriage of unchanged content is skipped against it (server/services triage skip policy).
+	InputHash string `json:"input_hash,omitempty"`
 }
 
 // maxHeadlessTriageTasks caps the task list to keep the checklist scannable.
@@ -58,7 +61,7 @@ func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) st
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
@@ -120,7 +123,7 @@ func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 
 	sb.WriteString("## Prior triage result (iteration ")

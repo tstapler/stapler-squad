@@ -36,8 +36,9 @@
  * landing.
  */
 import { test, expect, Page } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 const RULE_NAME = "Auto-allow safe git status checks";
 const RACE_MESSAGE = `already auto-resolved by rule "${RULE_NAME}" while you were reviewing it — no action needed`;
 
@@ -57,6 +58,8 @@ async function mockPendingApproval(page: Page, approvalId: string, sessionId: st
             metadata: { approval_id: approvalId, tool_name: "Bash" },
             createdAt: new Date().toISOString(),
             isRead: false,
+            // The server-computed field the client reads for "needs a decision".
+            isPendingDecision: true,
           },
         ],
         totalCount: 1,

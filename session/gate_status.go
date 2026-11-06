@@ -44,6 +44,12 @@ type GateStatus struct {
 	Satisfied   bool
 	Description string
 	ActionHint  string
+	// ConfigError is non-empty when this gate's configuration references
+	// something that no longer resolves (a removed custom-check skill, an
+	// unresolvable pipeline mode) — set instead of a normal satisfaction
+	// evaluation, before GateSatisfactionRepository is ever consulted
+	// (ADR-006, Part B). Empty means no config error.
+	ConfigError string
 }
 
 // ErrGateNotSatisfied is the sentinel error wrapped by a WorkflowEngine's

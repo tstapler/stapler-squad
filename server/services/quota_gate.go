@@ -165,7 +165,7 @@ func (g *QuotaGate) StatusDetail() string {
 		return "Throttled — foreground session active, dispatch resumes automatically once idle."
 	}
 	if cfg.Enabled && cfg.AssumedWindowTokenBudget <= 0 {
-		return "Reactive-only mode — proactive quota threshold not calibrated (set Quota.AssumedWindowTokenBudget in config.json to enable)."
+		return "Reactive-only mode — proactive quota threshold not calibrated (set a token budget in Settings > Backlog quota to enable)."
 	}
 	return ""
 }
@@ -196,10 +196,12 @@ func foregroundSessionActive(instances []*session.Instance) bool {
 // drives BacklogController.Enable/Disable and fires notifications. Called
 // from exactly one place in production: the shared 60s reconcile ticker
 // (plus once synchronously at boot). A no-op entirely when
-// QuotaConfig.Enabled is false.
+// QuotaConfig.Enabled is false, except that a backlog this gate paused is
+// resumed so disabling the gate can never leave the factory stopped.
 func (g *QuotaGate) Reconcile(ctx context.Context) {
 	cfg := g.cfgFn()
 	if !cfg.Enabled {
+		g.resumeIfPausedOnDisable(ctx)
 		return
 	}
 	now := time.Now()
@@ -302,6 +304,29 @@ func (g *QuotaGate) Reconcile(ctx context.Context) {
 	}
 }
 
+// resumeIfPausedOnDisable re-enables backlog when the gate is switched off
+// while it holds the pause. On Enable failure pausedByQuota is kept so the
+// next tick retries.
+func (g *QuotaGate) resumeIfPausedOnDisable(ctx context.Context) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.state.pausedByQuota {
+		return
+	}
+	if !g.backlogCtrl.IsEnabled() {
+		if err := g.backlogCtrl.Enable(ctx); err != nil {
+			log.Error("QuotaGate: failed to resume backlog after gate disabled", "err", err)
+			return
+		}
+	}
+	v := true
+	g.state.lastSetEnabled = &v
+	g.state.pausedByQuota = false
+	g.state.consecutiveBelow = 0
+	g.state.consecutiveAbove = 0
+	log.Info("QuotaGate: quota gate disabled while paused; resuming backlog")
+}
+
 // disable and enable must be called with g.mu held (both call sites are
 // inside Reconcile, which holds the lock for its entire body). Auto-resume
 // (enable) must never fire when pausedByQuota == false (backlog is off
@@ -386,7 +411,7 @@ func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		derivePriority(true, true), // urgent, important — automation just stopped dispatching work right now
 		"Backlog Automation Paused", msg,
 		map[string]string{"type": quotaGatePausedType, "reason": reason},
 	))
@@ -405,7 +430,7 @@ func (g *QuotaGate) notifyResumed(cfg config.QuotaConfig, estimate HeadroomEstim
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		derivePriority(false, false), // urgent, important — good-news recovery, purely informational
 		"Backlog Automation Resumed", msg,
 		map[string]string{"type": quotaGateResumedType},
 	))
@@ -421,4 +446,37 @@ func (g *QuotaGate) logUncalibratedUsage(estimate HeadroomEstimate, now time.Tim
 	}
 	g.state.lastUncalibratedLogAt = now
 	log.Info("QuotaGate: observed 5h token usage (soft signal uncalibrated)", "tokens_5h", estimate.TokensUsed)
+}
+
+// LogQuotaEffectiveConfig logs every effective QuotaConfig value plus the
+// derived QuotaMode, labelling values the operator has not set "(default)".
+// stored is the raw config.json value; the effective value is derived from it.
+func LogQuotaEffectiveConfig(msg string, stored config.QuotaConfig) {
+	log.Info(msg, quotaLogAttrs(stored)...)
+}
+
+func quotaLogAttrs(stored config.QuotaConfig) []any {
+	eff := stored.QuotaConfigOrDefault()
+	val := func(v any, isDefault bool) string {
+		if isDefault {
+			return fmt.Sprintf("%v (default)", v)
+		}
+		return fmt.Sprint(v)
+	}
+	budget := "off (default)"
+	if eff.DefaultCostBudgetThresholdUSD != nil {
+		budget = fmt.Sprintf("%.2f", *eff.DefaultCostBudgetThresholdUSD)
+	}
+	return []any{
+		"enabled", eff.Enabled, "mode", eff.Mode(),
+		"pause_below_headroom_pct", val(eff.PauseBelowHeadroomPct, stored.PauseBelowHeadroomPct <= 0),
+		"resume_margin_pct", val(eff.ResumeMarginPct, stored.ResumeMarginPct <= 0),
+		"assumed_window_token_budget", val(eff.AssumedWindowTokenBudget, stored.AssumedWindowTokenBudget <= 0),
+		"consecutive_ticks_to_pause", val(eff.ConsecutiveTicksToPause, stored.ConsecutiveTicksToPause <= 0),
+		"consecutive_ticks_to_resume", val(eff.ConsecutiveTicksToResume, stored.ConsecutiveTicksToResume <= 0),
+		"rate_limit_window_minutes", val(eff.RateLimitWindowMinutes, stored.RateLimitWindowMinutes <= 0),
+		"manual_override_grace_minutes", val(eff.ManualOverrideGraceMinutes, stored.ManualOverrideGraceMinutes <= 0),
+		"foreground_throttle_delay_seconds", val(eff.ForegroundThrottleDelaySeconds, stored.ForegroundThrottleDelaySeconds <= 0),
+		"default_cost_budget_threshold_usd", budget,
+	}
 }

@@ -30,6 +30,16 @@ func (f *fakeInstanceStore) ListInstanceData() ([]session.InstanceData, error) {
 	return nil, nil
 }
 
+func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+	for _, inst := range f.instances {
+		data := inst.ToInstanceData()
+		if data.MatchesID(id) {
+			return &data, nil
+		}
+	}
+	return nil, session.ErrInstanceDataNotFound
+}
+
 func (f *fakeInstanceStore) SaveInstances([]*session.Instance) error { return nil }
 
 func (f *fakeInstanceStore) AddInstance(*session.Instance) error { return nil }

@@ -27,6 +27,7 @@ function makeItem(activityNotes: ActivityNote[]): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -42,6 +43,16 @@ describe("ActivityLogSection", () => {
   it("renders nothing when there are no activity notes", () => {
     const { container } = render(<ActivityLogSection item={makeItem([])} defaultExpanded={true} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders a diagnosis note as an outcome card and other notes as plain text", () => {
+    const notes = [
+      makeNote({ message: "Diagnosis result: BUG_FILED\n\nWake loop found." }),
+      makeNote({ message: "just a note" }),
+    ];
+    render(<ActivityLogSection item={makeItem(notes)} defaultExpanded={true} />);
+    expect(screen.getAllByTestId("diagnose-result-card")).toHaveLength(1);
+    expect(screen.getByText("just a note")).toBeInTheDocument();
   });
 
   it("renders all notes visible when at or below the 8-item cap", () => {

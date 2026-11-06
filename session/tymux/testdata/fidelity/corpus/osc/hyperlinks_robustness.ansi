@@ -1,0 +1,7 @@
+osc/hyperlinks_robustness -- OSC 8 malformed input; xterm ctlseqs OSC parsing
+bare-OSC8: ]8\x ]8;\y ]8;;\z
+no-uri-sep: ]8;id=a\t]8;;\
+unterminated-then-text: ]8;;https://e.com/u\u1]8;;\
+very-long-uri: ]8;;https://e.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\long]8;;\
+control-in-uri: ]8;;https://e.com/ok\c]8;;\
+]8;;javascript:alert(1)\js-scheme]8;;\ ]8;;\

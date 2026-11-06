@@ -7,8 +7,9 @@ const _features = [
 // Validates: page renders, nav link exists, summary cards shown, no crash.
 
 import { test, expect } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 test.describe("insights-dashboard", () => {
   test("insights-dashboard_should_renderPage_When_navigatedTo", async ({ page }) => {

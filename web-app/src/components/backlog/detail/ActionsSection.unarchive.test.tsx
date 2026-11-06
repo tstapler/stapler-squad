@@ -15,6 +15,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -43,6 +44,8 @@ function renderActions(overrides: Partial<React.ComponentProps<typeof ActionsSec
       onManualReviewSubmit={noop}
       onManualReviewCancel={noop}
       terminalState={null}
+      activeWorkSessionCount={0}
+      onSendBackWithFeedback={async () => {}}
       {...overrides}
     />
   );

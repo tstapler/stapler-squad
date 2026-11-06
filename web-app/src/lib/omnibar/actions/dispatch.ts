@@ -3,6 +3,15 @@ import { OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { ThemeName } from "@/lib/contexts/ThemeContext";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
+// NOTE: dispatchOmnibarAction has no production caller — Omnibar.tsx's real
+// input/submit handling (including the "backlog: " trigger's ChatBacklogItem
+// branch) is implemented inline in Omnibar.tsx itself, not routed through
+// here. This module exists to satisfy the OmnibarAction registry checklist
+// (docs/reference/feature-testing-registry.md); its own tests
+// (dispatch.test.ts) verify this dispatcher's logic in isolation, not the
+// shipped omnibar's actual behavior — see Omnibar.backlogIntentReview.test.tsx
+// for that.
+
 export interface ActionDeps {
   navigate: (sessionId: string) => void;
   createSession: (data: OmnibarSessionData) => Promise<void>;
@@ -115,6 +124,19 @@ export function dispatchOmnibarAction(
     case "chat_backlog_item":
       if (track) track({ name: "omnibar.chat_backlog_item", category: "user_action" });
       void deps.createBacklogItemFromChat(action.text);
+      deps.close();
+      return;
+    case "fan_out":
+      if (track) track({ name: "omnibar.fan_out", category: "user_action", labels: { count: String(action.count) } });
+      void deps.createSession({
+        title: action.title ?? action.prompt.slice(0, 40),
+        path: action.path,
+        sessionType: "new_worktree",
+        program: action.program ?? "",
+        autoYes: false,
+        initialPrompt: action.prompt,
+        fanoutCount: action.count,
+      });
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

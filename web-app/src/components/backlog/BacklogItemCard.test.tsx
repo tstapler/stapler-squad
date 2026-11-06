@@ -35,6 +35,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [{ text: "Do the thing", status: "todo" } as never],
     linkedSessions: [],
@@ -771,9 +772,23 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" });
     expect(badge).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
     expect(badge).toHaveAttribute("target", "_blank");
+    expect(badge).toHaveAttribute("title", "acme/widget#42");
+    expect(badge).toHaveTextContent("widget#42");
+  });
+
+  it("BacklogItemCard_should_FallBackToBareId_When_ExternalUrlUnparseable", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://example.com/tracker/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
     expect(badge).toHaveTextContent("#42");
   });
 
@@ -809,7 +824,7 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue #42" }));
+    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" }));
 
     expect(onClick).not.toHaveBeenCalled();
   });
@@ -831,7 +846,7 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
       />
     );
 
-    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue acme/widget#42" });
     fireEvent.keyDown(badge, { key: "Enter" });
 
     expect(onClick).not.toHaveBeenCalled();
@@ -874,5 +889,180 @@ describe("BacklogBoard — cross-card independence", () => {
     expect(cards[0]).toHaveTextContent("Running…");
     expect(cards[1]).not.toBeDisabled();
     expect(cards[1]).toHaveTextContent("Mark Ready");
+  });
+});
+
+describe("BacklogBoard — multi-reason stuck items (BUG-105)", () => {
+  // Same benign jest/vanilla-extract mock warning silencing as
+  // BlockerChip.test.tsx.
+  beforeAll(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("BacklogBoard_should_ResolveBounceCapExhaustedAsPrimaryAndIndicateOthers_When_ItemHasFourOpenStuckReasons", () => {
+    // BUG-105: live item 09e91e3e-e13d-4166-a5f2-447242447f77 had 4 reasons
+    // open at once. See BacklogItemDetail.test.tsx's matching test — both
+    // must resolve the same primary reason from this fixture.
+    mockUseWatchBacklogItems.mockReturnValue({
+      items: [makeItem({ id: "item-1", status: "in_progress" })],
+      connectionState: "live",
+    });
+    const stuckRows = [
+      makeStuckItem({ reason: StuckReason.BOUNCING }),
+      makeStuckItem({ reason: StuckReason.REWORK_BLOCKED_STALE }),
+      makeStuckItem({ reason: StuckReason.MULTIPLE_REASONS }),
+      makeStuckItem({ reason: StuckReason.BOUNCE_CAP_EXHAUSTED }),
+    ];
+
+    render(<BacklogBoard onAction={jest.fn()} onItemClick={jest.fn()} stuckItems={stuckRows} />);
+
+    expect(screen.getByText("Bounce cap exhausted")).toBeInTheDocument();
+    expect(screen.queryByText("Not converging")).not.toBeInTheDocument();
+    // The 3 dropped reasons must be indicated, not silently invisible.
+    expect(screen.getByTestId("blocker-chip-more")).toHaveTextContent("+3 more");
+  });
+});
+
+describe("ClaimChip on cards (cross-host claim dedup)", () => {
+  const claim = (overrides = {}) => ({
+    externalUrl: "https://github.com/o/r/issues/1",
+    claimingHostId: "host_01K",
+    itemDeepLink: "ssq://hostA/backlog/v1/bl_1",
+    disputed: false,
+    ...overrides,
+  });
+
+  it("renders no chip without a claim", () => {
+    render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.queryByTestId("claim-chip")).not.toBeInTheDocument();
+  });
+
+  it("renders 'Claimed: hostA' with a title, and 'Disputed' for a disputed claim", () => {
+    const { rerender } = render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} claim={claim()} />);
+    const chip = screen.getByTestId("claim-chip");
+    expect(chip).toHaveTextContent("Claimed: hostA");
+    expect(chip).toHaveAttribute("title", "Claimed by hostA");
+    rerender(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} claim={claim({ disputed: true })} />);
+    expect(screen.getByTestId("claim-chip")).toHaveTextContent("Disputed");
+  });
+
+  it("BacklogBoard matches a foreign claim to its card by externalUrl only", () => {
+    const url = "https://github.com/o/r/issues/1";
+    mockUseWatchBacklogItems.mockReturnValue({
+      items: [
+        makeItem({ id: "item-1", title: "Claimed one", externalUrl: url }),
+        makeItem({ id: "item-2", title: "Other", externalUrl: "https://github.com/o/r/issues/2" }),
+      ],
+      connectionState: "live",
+    });
+    render(<BacklogBoard onAction={jest.fn()} onItemClick={jest.fn()} foreignClaims={[claim({ externalUrl: url })]} />);
+    expect(screen.getAllByTestId("claim-chip")).toHaveLength(1);
+  });
+});
+
+describe("BacklogItemCard — dependency chip", () => {
+  const dep = (title: string, status: string) => ({ itemId: `id-${title}`, publicId: "", title, status });
+
+  it("shows a chip with the blocker title and a status tooltip while a blocker is unresolved", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ blockedBy: [dep("Fix auth", "in_progress")] })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    const chip = screen.getByTestId("dependency-chip");
+    expect(chip).toHaveTextContent("Fix auth");
+    expect(chip).toHaveAttribute("title", "Blocked by: Fix auth (in_progress)");
+  });
+
+  it("shows nothing once every blocker is resolved or when there are none", () => {
+    const { rerender } = render(
+      <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "done")] })} onAction={jest.fn()} onClick={jest.fn()} />
+    );
+    expect(screen.queryByTestId("dependency-chip")).not.toBeInTheDocument();
+    rerender(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.queryByTestId("dependency-chip")).not.toBeInTheDocument();
+  });
+
+  it("opens the blocker via the card's onClick prop", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "ready")] })} onAction={jest.fn()} onClick={onClick} />
+    );
+    fireEvent.click(screen.getByTestId("dependency-chip"));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledWith("id-Fix auth");
+  });
+
+  it("opens only the blocker, not the card, when a chip child is clicked", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ blockedBy: [dep("A", "ready"), dep("B", "ready")] })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+    expect(screen.getByTestId("dependency-chip")).toHaveAttribute("data-action-button", "true");
+    fireEvent.click(screen.getByTestId("dependency-chip-more"));
+    // Reaches the chip handler (opens dep A) exactly once; the card handler adds no second call.
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledWith("id-A");
+  });
+});
+
+describe("BacklogItemCard source badge", () => {
+  it("labels a Linear item with its tracker and bare identifier", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "linear", externalId: "ENG-123", externalUrl: "https://linear.app/acme/issue/ENG-123/x" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    const badge = screen.getByLabelText("Imported from Linear issue ENG-123");
+    expect(badge).toHaveTextContent("ENG-123");
+    expect(badge).toHaveAttribute("href", "https://linear.app/acme/issue/ENG-123/x");
+  });
+
+  it("keeps the repo-qualified GitHub label for github_issues items", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "github_issues", externalId: "22", externalUrl: "https://github.com/acme/widgets/issues/22" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByLabelText("Imported from GitHub issue acme/widgets#22")).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemCard source badge URL safety and fallbacks", () => {
+  it("renders no link for a javascript: externalUrl", () => {
+    const { container } = render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "linear", externalId: "ENG-1", externalUrl: "javascript:alert(1)" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(screen.getByText("ENG-1")).toBeInTheDocument();
+  });
+
+  it("uses a neutral External badge for an unknown non-empty plugin id", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ pluginId: "constructor", externalId: "X-1", externalUrl: "https://example.com/x/1" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByLabelText("Imported from External issue X-1")).toBeInTheDocument();
   });
 });

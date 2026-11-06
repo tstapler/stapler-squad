@@ -1,0 +1,8 @@
+modes/scroll_region_scrolled -- xterm ctlseqs DECSTBM with scrolling
+[5;8r[5;1H1
+2
+3
+4
+5
+6 (scrolls inside region)
+[20;1Houtside

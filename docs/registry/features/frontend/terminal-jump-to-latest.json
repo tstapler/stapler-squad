@@ -1,0 +1,16 @@
+{
+  "id": "terminal-jump-to-latest",
+  "type": "frontend",
+  "name": "Terminal jump-to-latest button",
+  "component": "JumpToLatestButton",
+  "path": "web-app/src/components/sessions/JumpToLatestButton.tsx",
+  "filePath": "web-app/src/components/sessions/JumpToLatestButton.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "jumpToLatest_should_BeHidden_When_BufferEmptyOrAtLive",
+    "jumpToLatest_should_SendAtMostFivePgDn_When_Tapped",
+    "jumpToLatest_should_ResetEstimate_When_ConnectionEpochChanges"
+  ],
+  "lastModified": "2026-10-02T00:00:00Z"
+}

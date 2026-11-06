@@ -1,14 +1,18 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
 // fakeSyncPlugin lets tests control exactly what Fetch returns and inspect the
@@ -767,7 +771,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 
 	// Simulate a manual revert to a pre-work status (e.g. the in-progress
 	// session was abandoned) — no GitHub-side change accompanies this.
-	_, err = storage.TransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Tick 2: same closed issue, same IssueUpdatedAt. If the watermark had
@@ -1252,14 +1256,18 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 // determineBackwardSyncTarget-returns-false branch, a different code path.
 type alwaysDenyWorkflowEngine struct{}
 
-func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus) bool { return false }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
+	return false
+}
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
 	return nil, nil
 }
-func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
+func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
 	return nil
 }
-func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus) []BacklogStatus { return nil }
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *StageConfigSnapshot) []BacklogStatus {
+	return nil
+}
 
 // TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied is the
 // regression test for the GuardedTransitionAllowed-returns-false branch
@@ -1407,4 +1415,128 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	require.Equal(t, 0, events[0].ItemsSkipped, "the archived item must not ALSO be counted as skipped")
 	require.Equal(t, 0, events[0].ItemsErrored)
 	require.Equal(t, 1, events[0].ItemsCreated+events[0].ItemsUpdated+events[0].ItemsSkipped+events[0].ItemsErrored, "aggregate counts must partition the single synced item exactly once")
+}
+
+type fakeForeignClaims map[string]ClaimRecord
+
+func (f fakeForeignClaims) ForeignClaim(url string) (ClaimRecord, bool) {
+	r, ok := f[url]
+	return r, ok
+}
+
+func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClaimIndexShowsDifferentHostForFetchedItemURL(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-claimed", Title: "Claimed elsewhere", URL: "https://github.com/o/r/issues/1"},
+			{ExternalID: "ext-free", Title: "Free", URL: "https://github.com/o/r/issues/2"},
+		},
+		newCursor: "c",
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	hostA := newTestIdentity(t)
+	storage.SetForeignClaimLookup(fakeForeignClaims{
+		"https://github.com/o/r/issues/1": NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/1", "ssq://hostA/x", time.Now()),
+	})
+
+	var buf bytes.Buffer
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
+
+	ctx := context.Background()
+	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, src))
+
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-claimed")
+	require.ErrorIs(t, err, ErrNotFound, "claimed-elsewhere item must not be created")
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-free")
+	require.NoError(t, err)
+
+	logs := buf.String()
+	require.Contains(t, logs, "sync.blocked_by_claim")
+	require.Contains(t, logs, hostA.ID.String())
+	require.Contains(t, logs, "ext-claimed")
+
+	events, _, err := storage.repo.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, 1, events[0].ItemsCreated)
+	require.Equal(t, 1, events[0].ItemsSkipped)
+}
+
+func TestSyncOne_should_CreateItem_When_NoForeignClaimLookupWired(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id:        "fake",
+		items:     []ExternalItem{{ExternalID: "ext-1", Title: "One", URL: "https://github.com/o/r/issues/1"}},
+		newCursor: "c",
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	ctx := context.Background()
+	src, err := storage.repo.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, src))
+	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
+	require.NoError(t, err)
+}
+
+// Story 1.5.7c: the backward-sync write goes through the gate; a denial or a
+// lost compare-and-swap is a counted skip retried next tick, not an error.
+func TestTransitionBackward_GateOutcomes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	sl := &SyncLoop{storage: h.storage}
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	item := h.newItem(t, BacklogStatusIdea)
+
+	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
+	require.Equal(t, string(BacklogStatusIdea), h.status(t, item.ID))
+	require.Len(t, h.rep.snapshot(), 1)
+	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+
+	sessDisableGates(t, h)
+	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
+	require.Equal(t, string(BacklogStatusArchived), h.status(t, item.ID))
+
+	require.Equal(t, backwardSyncOutcome{errored: 1}, sl.transitionBackward(ctx, "no-such-item", BacklogStatusIdea, BacklogStatusArchived))
+}
+
+func TestTransitionBackward_StaleFromLosesCAS_ItemNotArchived(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeOff)
+	sl := &SyncLoop{storage: h.storage}
+	item := h.newItem(t, BacklogStatusReady)
+	h.moveRaw(t, item.ID, BacklogStatusInProgress)
+
+	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusReady, BacklogStatusArchived))
+	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
+}
+
+func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
+	registry := NewPluginRegistry()
+	registry.Register(plugin)
+	sl := NewSyncLoop(h.storage, registry)
+	sl.SetWorkflowEngine(h.sel)
+	src, err := h.storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake", DisplayName: "s", Enabled: true, BackwardSyncEnabled: true})
+	require.NoError(t, err)
+	created, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "Issue", Status: string(BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
+	require.NoError(t, err)
+	entSrc, err := h.storage.repo.GetItemSourceByID(ctx, src.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+	require.Equal(t, string(BacklogStatusIdea), h.status(t, created.ID))
+	require.Len(t, h.rep.snapshot(), 1, "the gate, not the pre-check, must deny and report")
+	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 }

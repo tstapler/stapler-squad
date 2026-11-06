@@ -16,7 +16,14 @@ package session
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // ---- MCPServerURL ----------------------------------------------------------------
@@ -46,12 +53,45 @@ func setMCPServerURLLocked(s *instanceState, url string) {
 	s.inst.snapshot.Store(snap)
 }
 
+// setContextHealthLocked writes the verdict and republishes the snapshot itself,
+// because the nil-liveInstance path of sendSyncErr runs without the actor loop's
+// post-command rebuild.
+func setContextHealthLocked(s *instanceState, v tokens.ContextHealthVerdict) {
+	s.inst.mu.Lock()
+	s.inst.ContextHealth = v
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
 // SetMCPServerURL sets the MCP server URL on this instance.
 func (i *Instance) SetMCPServerURL(url string) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setMCPServerURLLocked(s, url)
 		return nil
 	})
+}
+
+// SetMCPServerURLProvider registers a callback buildClaudeCommand calls to
+// re-resolve the MCP server URL fresh on every claude launch. Deliberately
+// NOT actor-routed like SetMCPServerURL above: buildClaudeCommand runs
+// inside the actor's own goroutine, so an actor-routed setter would deadlock
+// on the mailbox if called re-entrantly from there.
+func (i *Instance) SetMCPServerURLProvider(fn func() string) {
+	i.mcpServerURLProvider.Store(&fn)
+}
+
+// SetMCPProofProvider installs the process-wide source of per-session MCP
+// proofs (ADR-007 rule 0), wired from server because session cannot import
+// server/services. Process-wide rather than per instance so every launch path
+// (create, resume, restart) sees it without per-call-site wiring; nil, or a
+// provider returning ok=false, means no proof is emitted.
+func SetMCPProofProvider(fn func(sessionUUID string) (headerValue string, ok bool)) {
+	if fn == nil {
+		mcpProofProvider.Store(nil)
+		return
+	}
+	mcpProofProvider.Store(&fn)
 }
 
 // ---- CreationProgress ------------------------------------------------------------
@@ -113,6 +153,9 @@ func setAutonomousModeLocked(s *instanceState, mode bool, outcome string) {
 	s.inst.mu.Lock()
 	s.inst.AutonomousMode = mode
 	s.inst.AutonomousOutcome = outcome
+	if mode {
+		s.inst.AutonomousStopReason = "" // a new run starts with no stop reason
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -150,6 +193,80 @@ func setAutonomousCompleteLocked(s *instanceState, done bool) {
 func (i *Instance) SetAutonomousComplete(done bool) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setAutonomousCompleteLocked(s, done)
+		return nil
+	})
+}
+
+// autonomousOutcomeForStop maps a StopReason to the wire outcome, which stays in
+// {"", "done", "stuck"}: only an operator-requested stop shows no badge.
+func autonomousOutcomeForStop(reason domain.StopReason) string {
+	switch reason {
+	case domain.StopReasonDone:
+		return "done"
+	case domain.StopReasonCancelledExternal:
+		return ""
+	default:
+		return "stuck"
+	}
+}
+
+func setAutonomousStoppedLocked(s *instanceState, reason domain.StopReason, outcome string) {
+	s.inst.mu.Lock()
+	s.inst.AutonomousMode = false
+	s.inst.AutonomousTurn = 0
+	s.inst.AutonomousMaxTurns = 0
+	s.inst.AutonomousOutcome = outcome
+	s.inst.AutonomousStopReason = reason
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetAutonomousStopped ends autonomy: clears mode and turn counters and records
+// the wire outcome and the stop reason atomically. The error is non-nil only
+// when the instance actor is gone, in which case nothing was written.
+func (i *Instance) SetAutonomousStopped(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		setAutonomousStoppedLocked(s, reason, autonomousOutcomeForStop(reason))
+		return nil
+	})
+}
+
+// SetAutonomousStoppedQuiet is SetAutonomousStopped with the outcome forced to
+// "", for stops no row or notification explains (boot-time clears), so the UI
+// shows no "stuck" badge.
+func (i *Instance) SetAutonomousStoppedQuiet(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		setAutonomousStoppedLocked(s, reason, "")
+		return nil
+	})
+}
+
+// SetAutonomousStopObserved records the stop reason and zeroes the turn
+// counters but keeps AutonomousMode and the outcome, for a stop that is being
+// recovered in place (approval gating keeps seeing autonomy as on).
+func (i *Instance) SetAutonomousStopObserved(reason domain.StopReason) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
+		s.inst.AutonomousTurn = 0
+		s.inst.AutonomousMaxTurns = 0
+		s.inst.AutonomousStopReason = reason
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
+		return nil
+	})
+}
+
+// ClearAutonomousStopReason drops the observed stop reason once a recovered
+// stop's driver is re-attached, keeping mode and outcome.
+func (i *Instance) ClearAutonomousStopReason() error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
+		s.inst.AutonomousStopReason = ""
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
 		return nil
 	})
 }
@@ -217,6 +334,10 @@ func (i *Instance) SetLastPRStatusCheck(t time.Time) {
 func setArchivedAtLocked(s *instanceState, t *time.Time) {
 	s.inst.mu.Lock()
 	s.inst.ArchivedAt = t
+	if t != nil {
+		// Archiving auto-unpins; every archive path funnels through here.
+		s.inst.Pinned = false
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -231,24 +352,42 @@ func (i *Instance) SetArchivedAt(t *time.Time) {
 	})
 }
 
+// archiveAtIfNilLocked is the CAS body shared by SetArchivedAtIfNil,
+// SetArchivedAtIfNilCtx and SetArchivedAtIfNilAndStop. Returns whether it set
+// the value. Must run inside an actor command.
+func archiveAtIfNilLocked(s *instanceState, t time.Time) bool {
+	s.inst.mu.Lock()
+	if s.inst.ArchivedAt != nil {
+		s.inst.mu.Unlock()
+		return false
+	}
+	s.inst.ArchivedAt = &t
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+	return true
+}
+
 // SetArchivedAtIfNil sets ArchivedAt to t only if it is currently nil.
 // Returns true if the value was set (CAS semantics).  Now actor-routed.
+// Blocks indefinitely on a busy actor — callers on a request goroutine should
+// use SetArchivedAtIfNilCtx instead.
 func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
-	var set bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
-		s.inst.mu.Lock()
-		if s.inst.ArchivedAt != nil {
-			s.inst.mu.Unlock()
-			return nil
-		}
-		s.inst.ArchivedAt = &t
-		snap := buildSnapshot(s.inst)
-		s.inst.mu.Unlock()
-		s.inst.snapshot.Store(snap)
-		set = true
-		return nil
+	set, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
+		return archiveAtIfNilLocked(s, t), nil
 	})
 	return set
+}
+
+// SetArchivedAtIfNilCtx is SetArchivedAtIfNil bounded by ctx: sendSyncErr has no
+// deadline, so one instance mid-Start would otherwise stall a whole RPC loop.
+// Returns whether the value was set, and ctx's error if the deadline fired
+// before the actor ran the command. A command already on the mailbox still runs
+// afterwards; that is harmless because the write is an idempotent CAS.
+func (i *Instance) SetArchivedAtIfNilCtx(ctx context.Context, t time.Time) (bool, error) {
+	return sendCtxValue(ctx, i, func(s *instanceState) (bool, error) {
+		return archiveAtIfNilLocked(s, t), nil
+	})
 }
 
 // stopIfNotStoppedLocked transitions the instance to Stopped from within an
@@ -279,19 +418,11 @@ func (i *Instance) ArchiveWithStop(t time.Time) error {
 // Returns true if ArchivedAt was set by this call (i.e. it was previously nil).
 // No-ops the status transition if already Stopped.
 func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
-	var set bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
-		s.inst.mu.Lock()
-		if s.inst.ArchivedAt != nil {
-			s.inst.mu.Unlock()
-			return nil
+	set, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
+		if !archiveAtIfNilLocked(s, t) {
+			return false, nil
 		}
-		s.inst.ArchivedAt = &t
-		snap := buildSnapshot(s.inst)
-		s.inst.mu.Unlock()
-		s.inst.snapshot.Store(snap)
-		set = true
-		return stopIfNotStoppedLocked(s, context.Background())
+		return true, stopIfNotStoppedLocked(s, context.Background())
 	})
 	return set
 }
@@ -301,6 +432,7 @@ func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
 func setProgramLocked(s *instanceState, program string) {
 	s.inst.mu.Lock()
 	s.inst.Program = program
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -312,6 +444,21 @@ func (i *Instance) SetProgram(program string) {
 		setProgramLocked(s, program)
 		return nil
 	})
+}
+
+// ---- AltScreenActive --------------------------------------------------------------
+
+// setAltScreenActiveLocked mirrors setGitHubResolutionLocked's shape: mutate
+// under s.inst.mu, republish the snapshot before releasing it. Called only
+// from Instance.ObserveAltScreenTransition, and only when altScreenTracker
+// reports a real state change, so this doesn't run on every PTY output chunk.
+func setAltScreenActiveLocked(s *instanceState, active bool) {
+	s.inst.mu.Lock()
+	s.inst.AltScreenActive = active
+	s.inst.AltScreenBootstrapped = true
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // ---- LastAddedToQueue -----------------------------------------------------------
@@ -327,6 +474,69 @@ func (i *Instance) SetLastAddedToQueue(t time.Time) {
 		setLastAddedToQueueLocked(s, t)
 		return nil
 	})
+}
+
+// ---- Pinned --------------------------------------------------------------------
+
+// ErrCannotPinArchivedSession is returned by SetPinned(true) on an archived
+// session. Enforced inside the actor lock so no caller can bypass it.
+var ErrCannotPinArchivedSession = errors.New("cannot pin an archived session")
+
+func setPinnedLocked(s *instanceState, v bool) error {
+	s.inst.mu.Lock()
+	if v && s.inst.ArchivedAt != nil {
+		s.inst.mu.Unlock()
+		return ErrCannotPinArchivedSession
+	}
+	if s.inst.Pinned != v {
+		// Bump UpdatedAt: the web store drops upserts whose updatedAt is unchanged.
+		s.inst.touchUpdatedAt()
+	}
+	s.inst.Pinned = v
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+	return nil
+}
+
+// SetPinned sets the Pinned flag; pinning an archived session is rejected.
+func (i *Instance) SetPinned(v bool) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		return setPinnedLocked(s, v)
+	})
+}
+
+// ---- InitialPromptSentAt ---------------------------------------------------------
+
+func setInitialPromptSentAtLocked(s *instanceState, t time.Time) {
+	s.inst.mu.Lock()
+	s.inst.InitialPromptSentAt = t
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
+
+// SetInitialPromptSentAt records when InitialPrompt was actually typed into the
+// tmux pane, updates the in-memory field/snapshot, and persists it (best-effort,
+// non-fatal on error, same convention as shellRepo -- see instance_shells.go) via
+// the injected initialPromptRepo so a later service restart's driver goroutine
+// can trust it instead of re-deriving via fragile output/JSONL heuristics.
+func (i *Instance) SetInitialPromptSentAt(t time.Time) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		setInitialPromptSentAtLocked(s, t)
+		return nil
+	})
+	if i.initialPromptRepo != nil {
+		if err := i.initialPromptRepo.UpdateInitialPromptSentAt(context.Background(), i.Title, t); err != nil {
+			log.Warn("SetInitialPromptSentAt: failed to persist", "session", i.Title, "err", err)
+		}
+	}
+}
+
+// GetInitialPromptSentAt reads InitialPromptSentAt via the lock-free published
+// Snapshot() rather than the bare field -- see instance-lock-free-reads.md.
+func (i *Instance) GetInitialPromptSentAt() time.Time {
+	return i.Snapshot().InitialPromptSentAt
 }
 
 // ---- AutoYes --------------------------------------------------------------------
@@ -353,9 +563,11 @@ func (i *Instance) SetAutoYes(v bool) {
 func setTitleDirectLocked(s *instanceState, title string) {
 	s.inst.mu.Lock()
 	s.inst.Title = title
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
+	s.inst.syncProcessLabel(title)
 }
 
 // SetTitleDirect sets the Title field directly without tmux-session constraints.
@@ -501,7 +713,7 @@ func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
 		}
 	}
 	if i.Status == Active {
-		return i.Restart(true)
+		return i.Restart(true, "")
 	}
 	return nil
 }
@@ -533,10 +745,8 @@ func bumpCreationEpochLocked(s *instanceState) uint64 {
 // new value. Exercised directly by tests; production callers are the cancel and
 // retry code paths added in Phase 3.
 func (i *Instance) bumpCreationEpoch() uint64 {
-	var newEpoch uint64
-	_ = i.sendSyncErr(func(s *instanceState) error {
-		newEpoch = bumpCreationEpochLocked(s)
-		return nil
+	newEpoch, _ := sendSyncValue(i, func(s *instanceState) (uint64, error) {
+		return bumpCreationEpochLocked(s), nil
 	})
 	return newEpoch
 }
@@ -553,12 +763,10 @@ func (i *Instance) BumpCreationEpoch() uint64 {
 
 // CreationEpoch returns the current fencing epoch for the async creation pipeline.
 func (i *Instance) CreationEpoch() uint64 {
-	var epoch uint64
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	epoch, _ := sendSyncValue(i, func(s *instanceState) (uint64, error) {
 		s.inst.mu.Lock()
-		epoch = s.inst.creationEpoch
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationEpoch, nil
 	})
 	return epoch
 }
@@ -607,8 +815,7 @@ func (i *Instance) CreationEpoch() uint64 {
 // *its own* target, so the exactly-one-winner property for two DIFFERENT
 // target statuses is unaffected.
 func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, failureReason string) bool {
-	var applied bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	applied, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
 		// creationEpoch and Status are both read/written under i.mu here (not
 		// just actor confinement): RecoverFromStopped/RetryNow mutate Status
 		// directly under i.mu from outside the actor mailbox, and a
@@ -619,11 +826,11 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 		s.inst.mu.Lock()
 		if s.inst.creationEpoch != capturedEpoch {
 			s.inst.mu.Unlock()
-			return nil
+			return false, nil
 		}
 		if s.inst.Status != Creating && s.inst.Status != status {
 			s.inst.mu.Unlock()
-			return nil
+			return false, nil
 		}
 		setFailureReasonLocked(s, failureReason)
 		s.inst.loadStatus(status)
@@ -631,8 +838,7 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 		snap := buildSnapshot(s.inst)
 		s.inst.mu.Unlock()
 		s.inst.snapshot.Store(snap)
-		applied = true
-		return nil
+		return true, nil
 	})
 	return applied
 }
@@ -653,11 +859,15 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 // Sweeper (Epic 4.1) would then immediately re-flip the retried session to
 // Failed/Stale on its next tick, before the new pipeline has a chance to run.
 func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	type retry struct {
+		epoch   uint64
+		started bool
+	}
+	r, _ := sendSyncValue(i, func(s *instanceState) (retry, error) {
 		if s.inst.Status != Failed {
-			return nil
+			return retry{}, nil
 		}
-		newEpoch = bumpCreationEpochLocked(s)
+		newEpoch := bumpCreationEpochLocked(s)
 		s.inst.mu.Lock()
 		s.inst.loadStatus(Creating)
 		s.inst.touchUpdatedAt()
@@ -665,13 +875,9 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 		s.inst.mu.Unlock()
 		s.inst.snapshot.Store(snap)
 		setCreationProgressLocked(s, "")
-		started = true
-		return nil
+		return retry{newEpoch, true}, nil
 	})
-	if !started {
-		return 0, false
-	}
-	return newEpoch, true
+	return r.epoch, r.started
 }
 
 // ---- Background Resolution cancelFunc (Epic 2.2, Story 2.2.1) -------------------
@@ -700,12 +906,10 @@ func (i *Instance) SetCreationCancelFunc(cancel context.CancelFunc) {
 // without a live pipeline goroutine ever spawned here (Task 2.2.1a's
 // documented nil case; Epic 3.2's Cancel RPC must guard against it).
 func (i *Instance) CreationCancelFunc() context.CancelFunc {
-	var cancel context.CancelFunc
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	cancel, _ := sendSyncValue(i, func(s *instanceState) (context.CancelFunc, error) {
 		s.inst.mu.Lock()
-		cancel = s.inst.creationCancelFunc
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationCancelFunc, nil
 	})
 	return cancel
 }
@@ -745,6 +949,7 @@ func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
 		s.inst.GitHubPRURL = r.PRURL
 	}
 	s.inst.touchUpdatedAt()
+	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
@@ -776,7 +981,202 @@ func applyWorktreeDetectionLocked(s *instanceState, info *WorktreeInfo) {
 	if s.inst.GitHubRepo == "" && info.GitHubRepo != "" {
 		s.inst.GitHubRepo = info.GitHubRepo
 	}
+	if s.inst.GitHubHost == "" && info.GitHubHost != "" {
+		s.inst.GitHubHost = info.GitHubHost
+	}
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
+}
+
+// ---- Session tagging fixpoint hook (session-classifier-pipeline Epic 3.3) --------
+
+// llmSentinelRuleID is the RuleTagProvenance value used for LLM-applied tags (Phase 4's
+// SessionTagClassificationPoller) — there is no per-rule TaggingRule.ID for the LLM step,
+// so this sentinel drives the same retraction/suppression bookkeeping tag-by-tag. Defined
+// here (not in session/session_tag_poller.go, per the plan's Domain Glossary) because
+// reclassifyTagsLocked's retraction loop needs to skip it ahead of Phase 4's poller landing
+// — see this function's own doc comment and pre-mortem.md Failure #1.
+const llmSentinelRuleID = "llm"
+
+// filterSuppressedTags drops any candidate present in suppressed. Pure and receiver-less so
+// both apply paths — reclassifyTagsLocked (sync fixpoint, this file) and the Phase 4 LLM
+// poller's ApplyLLMTagResult — call the exact same choke point and cannot drift apart
+// (architecture-review.md Blocker 4).
+func filterSuppressedTags(candidates []string, suppressed map[string]bool) []string {
+	if len(suppressed) == 0 {
+		return candidates
+	}
+	kept := make([]string, 0, len(candidates))
+	for _, tag := range candidates {
+		if !suppressed[tag] {
+			kept = append(kept, tag)
+		}
+	}
+	return kept
+}
+
+// sessionTaggingContextFromState builds a classifier.SessionTaggingContext from the
+// in-progress instanceState. Tags is defensively copied since ApplyToFixpoint/EvalOnce
+// only ever read it, but callers of this function must not alias s.inst.Tags into a
+// context that outlives the current critical section.
+func sessionTaggingContextFromState(s *instanceState) classifier.SessionTaggingContext {
+	return classifier.SessionTaggingContext{
+		Name:    s.inst.Title,
+		Branch:  s.inst.Branch,
+		Path:    s.inst.Path,
+		Program: s.inst.Program,
+		Tags:    append([]string(nil), s.inst.Tags...),
+	}
+}
+
+// reclassifyTagsLocked runs one fixpoint tagging pass against s's current field values and
+// merges the result into s.inst.Tags/RuleTagProvenance, retracting any rule-owned tag whose
+// condition no longer holds. Must be called with s.inst.mu already held by the caller (the
+// xxxLocked convention) — every actor setter that mutates Name/Branch/Path/Program calls this
+// before its own buildSnapshot, so tag changes land in the same published snapshot as the
+// field change that triggered them. engine may be nil (tagging not wired for this Instance,
+// e.g. bare struct-literal tests) — a no-op in that case.
+func reclassifyTagsLocked(s *instanceState, engine *classifier.TaggingEngine) {
+	if engine == nil {
+		return
+	}
+	ctx := sessionTaggingContextFromState(s)
+	matches, capHit, stillChurning := engine.ApplyToFixpoint(ctx)
+	if capHit {
+		log.Warn("tagging fixpoint hit iteration cap without converging", "session", s.inst.Title, "still_churning", stillChurning)
+	}
+	recordTagFires(s.inst, matches)
+	applyTagMatchesLocked(s.inst, matches)
+	// Re-read Tags after applyTagMatchesLocked so RequiredTags-dependent rules are checked
+	// against the post-apply tag set, not the pre-fixpoint snapshot captured above.
+	ctx.Tags = s.inst.Tags
+	retractStaleTagsLocked(s.inst, engine, ctx)
+	dropUnclassifiedIfOtherTagsPresentLocked(s)
+}
+
+// recordTagFires notifies i.tagFireRecorder (if any) of every rule that matched this pass,
+// independent of whether the resulting tag survives suppression filtering (Task 2.3.3c) —
+// "the rule fired" is a fact about its condition matching, not about the tag's final state.
+func recordTagFires(i *Instance, matches []classifier.TagMatch) {
+	if i.tagFireRecorder == nil {
+		return
+	}
+	for _, m := range matches {
+		i.tagFireRecorder.RecordTaggingRuleFire(m.RuleID)
+	}
+}
+
+// applyTagMatchesLocked merges matches into i.Tags/RuleTagProvenance, attributing each tag to
+// the exact rule that matched it (never a post-hoc OutputTag lookup — see TagMatch's doc
+// comment) and skipping anything the user has suppressed. Must be called with i.mu held.
+func applyTagMatchesLocked(i *Instance, matches []classifier.TagMatch) {
+	if i.RuleTagProvenance == nil {
+		i.RuleTagProvenance = make(map[string]string)
+	}
+	candidates := make([]string, 0, len(matches))
+	ruleIDByTag := make(map[string]string, len(matches))
+	for _, m := range matches {
+		candidates = append(candidates, m.Tag)
+		ruleIDByTag[m.Tag] = m.RuleID
+	}
+	for _, tag := range filterSuppressedTags(candidates, i.SuppressedRuleTags) {
+		if !slices.Contains(i.Tags, tag) {
+			i.Tags = append(i.Tags, tag)
+		}
+		i.RuleTagProvenance[tag] = ruleIDByTag[tag]
+	}
+}
+
+// retractStaleTagsLocked removes any rule-owned tag from i.Tags/RuleTagProvenance whose
+// owning rule no longer matches ctx — including a rule deleted via CRUD, treated identically
+// to "condition no longer holds" (pre-mortem.md Failure #4, P2: not a separate branch).
+// LLM-provenanced entries (RuleID == llmSentinelRuleID) are skipped entirely: the sync engine
+// has no authority over LLM-owned tags (pre-mortem.md Failure #1, P1) — only the Phase 4 LLM
+// path's own logic ever retracts those. Must be called with i.mu held.
+func retractStaleTagsLocked(i *Instance, engine *classifier.TaggingEngine, ctx classifier.SessionTaggingContext) {
+	rulesByID := make(map[string]classifier.TaggingRule, len(engine.Rules()))
+	for _, rule := range engine.Rules() {
+		rulesByID[rule.ID] = rule
+	}
+	for tag, ruleID := range i.RuleTagProvenance {
+		if ruleID == llmSentinelRuleID {
+			continue
+		}
+		rule, found := rulesByID[ruleID]
+		if found && ruleConditionHolds(rule, ctx) {
+			continue
+		}
+		log.Warn("retracting rule-owned tag", "session", i.Title, "tag", tag, "rule_id", ruleID, "rule_found", found)
+		i.Tags = removeTagValue(i.Tags, tag)
+		delete(i.RuleTagProvenance, tag)
+	}
+}
+
+// ruleConditionHolds reports whether rule's own condition matches ctx right now, independent
+// of whether ctx.Tags already contains rule.OutputTag (unlike EvalOnce, which deliberately
+// skips a rule once its tag is already present — the wrong behavior for a retraction check,
+// which must ask "does this rule still apply" and not "would EvalOnce emit a new match").
+// Mirrors pkg/classifier's unexported matchesTaggingRule (duplicated rather than exported
+// solely for this one caller, per pitfalls.md #1 — one ~15-line function).
+func ruleConditionHolds(rule classifier.TaggingRule, ctx classifier.SessionTaggingContext) bool {
+	if !rule.Enabled {
+		return false
+	}
+	if rule.NamePattern != nil && !rule.NamePattern.MatchString(ctx.Name) {
+		return false
+	}
+	if rule.BranchPattern != nil && !rule.BranchPattern.MatchString(ctx.Branch) {
+		return false
+	}
+	if rule.PathPattern != nil && !rule.PathPattern.MatchString(ctx.Path) {
+		return false
+	}
+	if rule.ProgramPattern != nil && !rule.ProgramPattern.MatchString(ctx.Program) {
+		return false
+	}
+	for _, required := range rule.RequiredTags {
+		if !slices.Contains(ctx.Tags, required) {
+			return false
+		}
+	}
+	return true
+}
+
+// removeTagValue returns tags with every occurrence of value removed, preserving order.
+func removeTagValue(tags []string, value string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != value {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// dropUnclassifiedIfOtherTagsPresentLocked removes UnclassifiedTag the moment any other tag
+// is present on s.inst (Epic 3.4) — codifies architecture.md's coexistence rule so
+// Unclassified never lingers alongside a genuine classification, whether the real tag came
+// from the sync fixpoint above or (Phase 4) the LLM poller. Unclassified is never
+// suppressible (ux.md), so this never touches SuppressedRuleTags. Must be called with
+// s.inst.mu already held.
+func dropUnclassifiedIfOtherTagsPresentLocked(s *instanceState) {
+	i := s.inst
+	if !slices.Contains(i.Tags, UnclassifiedTag) {
+		return
+	}
+	hasOtherTag := false
+	for _, t := range i.Tags {
+		if t != UnclassifiedTag {
+			hasOtherTag = true
+			break
+		}
+	}
+	if !hasOtherTag {
+		return
+	}
+	i.Tags = removeTagValue(i.Tags, UnclassifiedTag)
+	if i.RuleTagProvenance != nil {
+		delete(i.RuleTagProvenance, UnclassifiedTag)
+	}
 }

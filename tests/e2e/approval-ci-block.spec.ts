@@ -28,8 +28,9 @@
  */
 
 import { test, expect, Page, Locator } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 const CI_BLOCK_FLAG = "review:block-approval-on-ci-failure";
 const CHECKS_URL = "https://github.com/acme/widgets/pull/42/checks";
 const BLOCK_TEXT = "Approval blocked: CI is failing on this branch — review before approving.";
@@ -57,6 +58,8 @@ async function mockPendingApproval(page: Page, approvalId: string) {
             metadata: { approval_id: approvalId, tool_name: "Bash" },
             createdAt: new Date().toISOString(),
             isRead: false,
+            // The server-computed field the client reads for "needs a decision".
+            isPendingDecision: true,
           },
         ],
         totalCount: 1,

@@ -20,6 +20,8 @@ import {
   endStreamFlag,
   endStreamFromJson,
 } from "@connectrpc/connect/protocol-connect";
+import { recordReaderQueueDepth } from "@/lib/perf/perfDebug";
+import { recordWsLifecycle } from "@/lib/telemetry/rpcTiming";
 
 function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   const buf = new Uint8Array(5 + data.length);
@@ -38,13 +40,18 @@ export async function* fromWebSocket(
 
   const push = (item: Uint8Array | null | Error) => {
     queue.push(item);
+    recordReaderQueueDepth(queue.length);
     notify?.();
     notify = null;
   };
 
   ws.onmessage = (e) => push(new Uint8Array(e.data as ArrayBuffer));
-  ws.onerror = () => push(new ConnectError("WebSocket error", Code.Unavailable));
+  ws.onerror = () => {
+    recordWsLifecycle("watch", "error");
+    push(new ConnectError("WebSocket error", Code.Unavailable));
+  };
   ws.onclose = (ev: CloseEvent) => {
+    recordWsLifecycle("watch", "close", ev.code);
     if (signal?.aborted || ev.code === 1000) {
       push(null); // intentional close (1000=normal) or signal abort
     } else {
@@ -67,7 +74,8 @@ export async function* fromWebSocket(
           notify = r;
         });
       }
-      const item = queue.shift()!;
+      const item = queue.shift();
+      if (item === undefined) continue;
       if (item === null) return;
       if (item instanceof Error) throw item;
       yield item;
@@ -134,7 +142,10 @@ export function createWatchTransport(opt: ConnectTransportOptions): Transport {
           ws.binaryType = "arraybuffer";
 
           await new Promise<void>((resolve, reject) => {
-            ws.onopen = () => resolve();
+            ws.onopen = () => {
+              recordWsLifecycle("watch", "open");
+              resolve();
+            };
             ws.onerror = () =>
               reject(new ConnectError("WebSocket connection failed", Code.Unavailable));
           });

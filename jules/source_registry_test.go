@@ -170,7 +170,7 @@ func TestJulesSourceRegistry_Resolve_should_CoalesceConcurrentMisses_When_ManyGo
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the single ListSources call to start")
 	}
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest no observable signal that the other goroutines reached the singleflight call
 	close(client.block)
 
 	doneWG.Wait()

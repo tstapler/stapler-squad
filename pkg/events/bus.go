@@ -29,6 +29,10 @@ type EventBus struct {
 
 	nextSeq atomic.Uint64 // monotonically increasing; zero is reserved (unpublished)
 
+	// publishFilter, when set, runs before Seq assignment; returning false drops
+	// the event so it never reaches subscribers or the replay buffer.
+	publishFilter atomic.Pointer[func(*Event) bool]
+
 	bufMu sync.Mutex
 	buf   []bufferedEvent // ordered by Seq ascending; pruned on each Publish
 }
@@ -65,11 +69,27 @@ func (eb *EventBus) Subscribe(ctx context.Context) (<-chan *Event, string) {
 	return ch, id
 }
 
+// SetPublishFilter installs (or, with nil, removes) the publish filter. It is
+// race-safe against concurrent Publish. The filter runs on the publisher's
+// goroutine, possibly under caller locks, so it must be lock-free and fast.
+func (eb *EventBus) SetPublishFilter(f func(*Event) bool) {
+	if f == nil {
+		eb.publishFilter.Store(nil)
+		return
+	}
+	eb.publishFilter.Store(&f)
+}
+
 // Publish assigns a sequence number to the event, appends it to the ring buffer,
 // then broadcasts it to all active subscribers.
 // Events are sent asynchronously and non-blocking. If a subscriber's buffer is full,
 // the event is dropped for that subscriber to prevent blocking other subscribers.
 func (eb *EventBus) Publish(event *Event) {
+	// A rejected event is dropped before Seq assignment so replay cannot resurrect it.
+	if f := eb.publishFilter.Load(); f != nil && !(*f)(event) {
+		return
+	}
+
 	// Assign a monotonically increasing sequence number.
 	event.Seq = eb.nextSeq.Add(1)
 

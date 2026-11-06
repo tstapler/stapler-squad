@@ -85,20 +85,17 @@ test.describe("insights-findings-panel", () => {
     const insights = new InsightsPage(page);
     const finding = buildFinding();
 
-    // next.config.ts's reactStrictMode + this e2e harness's dev-mode build
-    // (Makefile's web-app/out target, NEXT_BUILD_MODE=development) double-
-    // invoke the mount effect, firing two real requests before the Retry
-    // click's one — so the error response must be queued twice, or the
-    // second mount call would already consume the success response.
-    await insights.mockGetInsightsSummary([
-      { errorMessage: "mock GetInsightsSummary failure" },
+    // Every request fails until released, so the test does not depend on how many times the mount
+    // effect fires (twice under Next's StrictMode dev build, once on a build without it).
+    const gate = await insights.mockGetInsightsSummaryFailingUntilReleased(
       { errorMessage: "mock GetInsightsSummary failure" },
       { body: { findings: [finding], sessions: [buildSession()] } },
-    ]);
+    );
     await insights.goto();
 
     await expect(insights.getFindingsPanel()).toContainText(/Couldn.t compute findings/i);
 
+    gate.release();
     await insights.getFindingsRetryButton().click();
 
     await expect(insights.getFindingCards().first()).toBeVisible();

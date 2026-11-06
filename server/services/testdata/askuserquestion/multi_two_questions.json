@@ -1,0 +1,47 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "permission_mode": "auto",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which letters first?",
+        "header": "First",
+        "options": [
+          {
+            "label": "A",
+            "description": "Option A"
+          },
+          {
+            "label": "B",
+            "description": "Option B"
+          },
+          {
+            "label": "C",
+            "description": "Option C"
+          }
+        ],
+        "multiSelect": false
+      },
+      {
+        "question": "Which letters also?",
+        "header": "Also",
+        "options": [
+          {
+            "label": "A",
+            "description": "Option A"
+          },
+          {
+            "label": "B",
+            "description": "Option B"
+          },
+          {
+            "label": "C",
+            "description": "Option C"
+          }
+        ],
+        "multiSelect": true
+      }
+    ]
+  }
+}

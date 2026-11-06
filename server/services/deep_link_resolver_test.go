@@ -178,7 +178,7 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 			Status: string(session.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
-		_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 		require.NoError(t, err)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://myhost/backlog/v1/"+item.ID, nil)
@@ -318,7 +318,7 @@ func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReaso
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	_, err = storage.ArchiveBacklogItem(ctx, archivedItem.ID, nil, session.TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	cases := []struct {

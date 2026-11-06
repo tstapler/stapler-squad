@@ -1,0 +1,40 @@
+---
+// design/ux.md §1.1/§1.2's wireframe (and UX acceptance criteria 3 and 5 in
+// §5) call for a docs exit path reachable without scrolling past the
+// install section AND a footer fallback for a visitor who scrolls all the
+// way down without finding an answer -- neither existed before this: the
+// splash-template landing page (index.mdx) had no "Docs" link anywhere
+// (Starlight hides the sidebar nav on `template: splash` pages, and the
+// header's only link is the site-title/logo pointing back at this same
+// page). This is the minimal fix: the exact footer row the wireframe
+// specifies, reusing Getting Started as "the docs home" since this site
+// has no separate /help/ index route.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const docsHome = `${base}/help/getting-started/`;
+---
+
+<p class="landing-footer-cta">
+	Need help getting unstuck? <a href={docsHome} data-testid="footer-browse-docs-link">Browse the docs</a>
+</p>
+<p class="landing-footer-links">
+	<a href="https://github.com/tstapler/stapler-squad">GitHub</a>
+	{' · '}
+	<a href={docsHome}>Docs</a>
+	{' · '}
+	<a href="https://github.com/tstapler/stapler-squad/issues/new">Report an issue</a>
+</p>
+
+<style>
+	.landing-footer-cta,
+	.landing-footer-links {
+		margin-top: 2rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--sl-color-gray-5, #3b3b43);
+	}
+
+	.landing-footer-links {
+		margin-top: 0.5rem;
+		padding-top: 0;
+		border-top: none;
+	}
+</style>

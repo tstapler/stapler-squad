@@ -66,6 +66,32 @@ ruleTester.run("require-on-click", rule, {
         }
       `,
     },
+    // analytics-exempt as a {/* comment */} JSX child: the comment occupies the empty expression's own
+    // range (it IS the expression's only content), so this regresses if isAnalyticsExempt goes back to
+    // getCommentsBefore(child.expression) — nothing is ever "before" a range the comment itself fills.
+    {
+      code: `
+        function MyComponent() {
+          return (
+            <button onClick={handler}>
+              {/* analytics-exempt */}
+              Click
+            </button>
+          );
+        }
+      `,
+    },
+    // analytics-exempt as a leading // comment directly before the JSXElement
+    {
+      code: `
+        function MyComponent() {
+          return (
+            // analytics-exempt
+            <button onClick={handler}>Click</button>
+          );
+        }
+      `,
+    },
   ],
 
   invalid: [

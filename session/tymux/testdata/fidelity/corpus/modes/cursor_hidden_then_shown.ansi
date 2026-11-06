@@ -1,0 +1,2 @@
+modes/cursor_hidden_then_shown -- xterm ctlseqs ?25h
+[?25lhide[?25h then show again
