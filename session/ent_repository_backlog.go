@@ -2390,7 +2390,7 @@ func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason dom
 	// Reopen-in-place: only touches a row that was already resolved. This is
 	// its own atomic, idempotent conditional UPDATE — running it unconditionally
 	// after the upsert above is safe because it only ever affects a resolved row.
-	reopened, err := tx.BacklogStuckState.Update().
+	reopen := tx.BacklogStuckState.Update().
 		Where(
 			backlogstuckstate.ItemID(parsedID),
 			backlogstuckstate.Reason(string(reason)),
@@ -2398,8 +2398,14 @@ func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason dom
 		).
 		ClearResolvedAt().
 		ClearNotifiedAt().
-		SetFirstDetectedAt(now).
-		Save(ctx)
+		SetFirstDetectedAt(now)
+	if reason == domain.StuckReasonSpawnFailed {
+		// A reopened spawn_failed row is a new failure episode; the dequeue backoff
+		// must not inherit the previous episode's attempt count (other reasons keep
+		// theirs so a flapping detector still reaches its cap).
+		reopen = reopen.SetRemediationAttempts(0).ClearNextRemediationAt()
+	}
+	reopened, err := reopen.Save(ctx)
 	if err != nil {
 		return stuckTransition{}, fmt.Errorf("mark stuck: reopen %s/%s: %w", parsedID, reason, err)
 	}

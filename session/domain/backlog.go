@@ -19,6 +19,16 @@ type TransitionDenial struct {
 
 const transitionDeniedPrefix = "transition denied: "
 
+// DequeueSpawnFailedContextPrefix starts the context of a spawn_failed row opened by
+// DequeueNextQueuedItems' spawn backoff (item rolled back to ready/queued). It tells that
+// use apart from the review-reopen one (item stranded in_progress after a failed rollback).
+const DequeueSpawnFailedContextPrefix = "dequeue spawn failed: "
+
+// IsDequeueSpawnFailedContext reports whether a spawn_failed row came from the dequeue backoff.
+func IsDequeueSpawnFailedContext(ctx string) bool {
+	return strings.HasPrefix(ctx, DequeueSpawnFailedContextPrefix)
+}
+
 // FormatTransitionDeniedContext renders d plus free-text detail as
 // "transition denied: caller=.. from=.. to=.. denied_reason=..; <detail>".
 func FormatTransitionDeniedContext(d TransitionDenial, detail string) string {

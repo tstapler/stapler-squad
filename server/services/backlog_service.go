@@ -204,6 +204,10 @@ type BacklogService struct {
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
 
+	// spawnGuard holds the in-memory part of the dequeue spawn-failure backoff
+	// (backlog_service_dequeue_backoff.go).
+	spawnGuard dequeueSpawnGuard
+
 	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
 	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
 	// startup while RPCs and the dequeue sweep already read it. nil means

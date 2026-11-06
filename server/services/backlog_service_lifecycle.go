@@ -447,6 +447,10 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
 	}
 
+	if update.RepoPath != nil && *update.RepoPath != existing.RepoPath {
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // the likely cause was just fixed
+	}
+
 	if associatePR {
 		// Routed through the shared primary-write path — not a hand-rolled
 		// field write — so the status transition (review -> pr_pending) and
@@ -1005,6 +1009,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
+	s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // an operator move obsoletes any spawn backoff
 
 	// override_reason set means this was a manual operator override (bypassing
 	// TransitionGuard, per session.TransitionGuard's override handling above),

@@ -539,6 +539,11 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// A manual spawn means the operator is retrying: forget any dequeue spawn backoff.
+	if triggeredBy == session.TriggeredByUser {
+		s.clearDequeueSpawnFailure(ctx, item.ID)
+	}
+
 	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
 	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
 	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
@@ -837,6 +842,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return fmt.Errorf("check unresolved blockers: %w", err)
 	}
 
+	spawnBlocked := s.dequeueBlockedSet(ctx)
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -851,7 +857,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			continue
 		}
 		// Sit out an earlier spawn failure's backoff instead of re-claiming every sweep.
-		if s.dequeueSpawnBackoffBlocks(ctx, item.ID) {
+		if s.dequeueSpawnBlocks(item.ID, spawnBlocked) {
 			continue
 		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
@@ -898,7 +904,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 		}
 		return false
 	}
-	s.clearDequeueSpawnFailure(ctx, item.ID)
+	s.onDequeueSpawnSucceeded(ctx, item.ID)
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
 }
