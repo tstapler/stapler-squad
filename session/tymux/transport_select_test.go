@@ -20,11 +20,12 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+	"github.com/tstapler/tymux/clients/go/selecting"
 )
 
 // fakeEndpoint is a hand-driven rpcTransport standing for one listener (TCP or Unix).
 type fakeEndpoint struct {
-	rpcTransport
+	selecting.Transport
 	err     atomic.Pointer[error]
 	calls   atomic.Int32
 	streams atomic.Int32
@@ -98,15 +99,15 @@ func (c *testClock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-func newTestSelector() (*selectingTransport, *fakeEndpoint, *fakeEndpoint, *testClock) {
+const reprobeInterval = 30 * time.Second // upstream's default
+
+func newTestSelector() (*selecting.Client, *fakeEndpoint, *fakeEndpoint, *testClock) {
 	tcp, unix := &fakeEndpoint{}, &fakeEndpoint{}
 	clock := &testClock{t: time.Unix(1_000_000, 0)}
-	s := newSelectingTransport(tcp, unix, "http://127.0.0.1:1")
-	s.now = clock.now
-	return s, tcp, unix, clock
+	return selecting.NewFromTransports(unix, tcp, selecting.Options{Now: clock.now}), tcp, unix, clock
 }
 
-func list(t *testing.T, s *selectingTransport) error {
+func list(t *testing.T, s *selecting.Client) error {
 	t.Helper()
 	_, err := s.ListSessions(context.Background(), connect.NewRequest(&v1.ListSessionsRequest{}))
 	return err
@@ -124,7 +125,7 @@ func TestSelectingTransport_UnixHealthy_UsesUnixAndNeverTouchesTCP(t *testing.T)
 	s, tcp, unix, _ := newTestSelector()
 
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 	require.Positive(t, unix.calls.Load())
 	require.Zero(t, tcp.calls.Load(), "the deprecated unauthenticated listener is not touched while the socket works")
 }
@@ -138,7 +139,7 @@ func TestSelectingTransport_UnixAbsentOrRefusing_FallsBackToTCP(t *testing.T) {
 			unix.fail(mk())
 
 			require.NoError(t, list(t, s))
-			require.Equal(t, transportTCP, s.Active())
+			require.Equal(t, selecting.TCP, s.Active())
 
 			unixCalls := unix.calls.Load()
 			require.NoError(t, list(t, s))
@@ -158,7 +159,7 @@ func TestSelectingTransport_UnixEACCES_IsHardErrorAndNeverFallsBack(t *testing.T
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
 	require.ErrorIs(t, err, syscall.EACCES, "the cause stays matchable")
 	require.Zero(t, tcp.calls.Load(), "never fall back to the unauthenticated listener on EACCES")
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 }
 
 func TestSelectingTransport_UnixEACCES_StreamSurfacesHardError(t *testing.T) {
@@ -170,7 +171,7 @@ func TestSelectingTransport_UnixEACCES_StreamSurfacesHardError(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
 	require.Zero(t, tcp.streams.Load()+tcp.calls.Load())
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 }
 
 func TestSelectingTransport_UnixRecovers_ReturnsAfterReprobeInterval(t *testing.T) {
@@ -178,16 +179,16 @@ func TestSelectingTransport_UnixRecovers_ReturnsAfterReprobeInterval(t *testing.
 	s, _, unix, clock := newTestSelector()
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active())
+	require.Equal(t, selecting.TCP, s.Active())
 
 	unix.heal()
-	clock.advance(transportReprobeInterval - time.Second)
+	clock.advance(reprobeInterval - time.Second)
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active(), "not yet due")
+	require.Equal(t, selecting.TCP, s.Active(), "not yet due")
 
 	clock.advance(2 * time.Second)
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 }
 
 func TestSelectingTransport_ReprobeStillDown_StaysOnTCPAndWaitsAnotherInterval(t *testing.T) {
@@ -196,11 +197,11 @@ func TestSelectingTransport_ReprobeStillDown_StaysOnTCPAndWaitsAnotherInterval(t
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
 
-	clock.advance(transportReprobeInterval)
+	clock.advance(reprobeInterval)
 	before := unix.calls.Load()
 	require.NoError(t, list(t, s))
 	require.Equal(t, before+1, unix.calls.Load(), "exactly one cheap probe")
-	require.Equal(t, transportTCP, s.Active())
+	require.Equal(t, selecting.TCP, s.Active())
 
 	require.NoError(t, list(t, s))
 	require.Equal(t, before+1, unix.calls.Load(), "no hot loop: next probe is a full interval away")
@@ -211,16 +212,16 @@ func TestSelectingTransport_ReprobeSeesEACCES_SurfacesHardErrorInsteadOfStayingO
 	s, tcp, unix, clock := newTestSelector()
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active())
+	require.Equal(t, selecting.TCP, s.Active())
 
 	unix.fail(eacces()) // a socket appeared that denies us
-	clock.advance(transportReprobeInterval)
+	clock.advance(reprobeInterval)
 	tcpCalls := tcp.calls.Load()
 
 	err := list(t, s)
 
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 	require.Equal(t, tcpCalls, tcp.calls.Load(), "the call did not go to TCP")
 }
 
@@ -229,7 +230,7 @@ func TestSelectingTransport_ConcurrentCallersShareOneReprobe(t *testing.T) {
 	s, _, unix, clock := newTestSelector()
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
-	clock.advance(transportReprobeInterval)
+	clock.advance(reprobeInterval)
 	before := unix.calls.Load()
 
 	var wg sync.WaitGroup
@@ -252,8 +253,8 @@ func TestSelectingTransport_BothDown_ReturnsOriginalUnreachableError(t *testing.
 
 	require.Error(t, err)
 	require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
-	require.True(t, isDialRefused(err))
-	require.Equal(t, transportUnix, s.Active(), "no switch to a dead TCP listener")
+	require.True(t, dialRefused("unix", err))
+	require.Equal(t, selecting.Unix, s.Active(), "no switch to a dead TCP listener")
 	require.ErrorIs(t, classifyRPCError("ListSessions", err), ErrTymuxdUnreachable)
 }
 
@@ -263,7 +264,7 @@ func TestSelectingTransport_OtherErrorsNeverSwitch(t *testing.T) {
 	unix.fail(connect.NewError(connect.CodeDeadlineExceeded, context.DeadlineExceeded))
 
 	require.Error(t, list(t, s))
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 	require.Zero(t, tcp.calls.Load(), "a slow daemon is not a dead listener")
 }
 
@@ -272,12 +273,12 @@ func TestSelectingTransport_TCPRefusedFallsBackToUnix(t *testing.T) {
 	s, tcp, unix, _ := newTestSelector()
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active())
+	require.Equal(t, selecting.TCP, s.Active())
 
 	unix.heal()
 	tcp.fail(refused())
 	require.NoError(t, list(t, s))
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 }
 
 func TestSelectingTransport_AttachRedialGoesThroughSelector(t *testing.T) {
@@ -290,7 +291,7 @@ func TestSelectingTransport_AttachRedialGoesThroughSelector(t *testing.T) {
 	require.NoError(t, stream.Send(&v1.AttachRequest{}))
 	_, err := stream.Receive()
 	require.Error(t, err)
-	require.Equal(t, transportTCP, s.Active(), "the refused dial told the selector to fall back")
+	require.Equal(t, selecting.TCP, s.Active(), "the refused dial told the selector to fall back")
 
 	// ReconnectLoop's redial: a fresh Attach lands on TCP.
 	redial := s.Attach(context.Background())
@@ -309,14 +310,14 @@ func TestSelectingTransport_ExistingStreamUnaffectedBySwitch(t *testing.T) {
 
 	_, err := stream.Receive()
 	require.Error(t, err, "the standing stream is not migrated; its own redial will")
-	require.Equal(t, transportTCP, s.Active())
+	require.Equal(t, selecting.TCP, s.Active())
 }
 
 func TestSharedTransportFor_OneSelectorPerDaemon(t *testing.T) {
 	t.Parallel()
 	var built atomic.Int32
 	prefix := fmt.Sprintf("shared-test-%p-", &built) // unique per run: the registry is process-global, so -count=N would reuse keys
-	mk := func() *selectingTransport {
+	mk := func() *selecting.Client {
 		built.Add(1)
 		s, _, _, _ := newTestSelector()
 		return s
@@ -409,13 +410,13 @@ func TestRealTransport_UnixOnlyDaemon_RPCsSucceedOverSocket(t *testing.T) {
 	t.Setenv("TYMUXD_SOCKET_PATH", sock)
 
 	tr := NewRealTransport(addr)
-	sel, ok := tr.(*selectingTransport)
+	sel, ok := tr.(*selecting.Client)
 	require.True(t, ok, "a daemon with a known socket gets the selecting transport")
 
 	info, err := tr.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
 	require.NoError(t, err)
 	require.Equal(t, "uds-only", info.Msg.GetVersion())
-	require.Equal(t, transportUnix, sel.Active())
+	require.Equal(t, selecting.Unix, sel.Active())
 
 	list, err := tr.ListSessions(context.Background(), connect.NewRequest(&v1.ListSessionsRequest{}))
 	require.NoError(t, err)
@@ -470,7 +471,7 @@ func TestProbeTransport_DoesNotTouchSessionTransportMetrics(t *testing.T) {
 	t.Setenv("TYMUXD_ADDR", addr)
 	t.Setenv("TYMUXD_SOCKET_PATH", sock)
 
-	recordTransportActive(addr, transportUnix) // the session transport's state
+	recordTransportActive(addr, selecting.Unix) // the session transport's state
 	before := transitionTotal(t)
 
 	probe, release := newProbeTransport(addr)
@@ -478,8 +479,8 @@ func TestProbeTransport_DoesNotTouchSessionTransportMetrics(t *testing.T) {
 	_, err := probe.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
 	require.NoError(t, err, "the probe still falls back to the socket")
 
-	require.EqualValues(t, 1, transportGauge(t, addr, transportUnix), "probe construction must not reset the gauge to tcp")
-	require.EqualValues(t, 0, transportGauge(t, addr, transportTCP))
+	require.EqualValues(t, 1, transportGauge(t, addr, string(selecting.Unix)), "probe construction must not reset the gauge to tcp")
+	require.EqualValues(t, 0, transportGauge(t, addr, string(selecting.TCP)))
 	require.Equal(t, before, transitionTotal(t), "probe fallback must not count as a session transition")
 }
 
@@ -526,21 +527,21 @@ func TestSocketPathForAddr_AddrAndSocketMustComeFromOneResolution(t *testing.T) 
 func TestSelectingTransport_RealClientMissingSocket_SendAloneTriggersFailover(t *testing.T) {
 	t.Parallel()
 	unix, _ := newUnixTransport(missingSocketPath(t))
-	sel := newSelectingTransport(&fakeEndpoint{}, unix, "http://x")
+	sel := selecting.NewFromTransports(unix, &fakeEndpoint{}, selecting.Options{})
 
 	stream := sel.Attach(context.Background())
 	err := stream.Send(&v1.AttachRequest{})
 
 	require.Error(t, err)
 	require.False(t, errors.Is(err, io.EOF), "the real dial error, not a bare io.EOF, reaches the caller: %v", err)
-	require.Equal(t, transportTCP, sel.Active())
+	require.Equal(t, selecting.TCP, sel.Active())
 }
 
 // One failed attempt plus one redial must fit ReconnectLoop's budget.
 func TestReconnect_MissingSocketThenTCP_SecondDialSucceeds(t *testing.T) {
 	t.Parallel()
 	unix, _ := newUnixTransport(missingSocketPath(t))
-	sel := newSelectingTransport(&fakeEndpoint{}, unix, "http://x")
+	sel := selecting.NewFromTransports(unix, &fakeEndpoint{}, selecting.Options{})
 	s := NewTymuxGRPCSession(sel).(*tymuxGRPCSession)
 
 	_, _, err := s.dialAttach(context.Background(), "p1")
@@ -551,78 +552,6 @@ func TestReconnect_MissingSocketThenTCP_SecondDialSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stream)
 	require.NotNil(t, first)
-}
-
-// blockingRxStream models connect-go's BidiStreamForClient: Send reports io.EOF (the cause is on
-// Receive) and Receive is not safe to call concurrently.
-type blockingRxStream struct {
-	release    chan struct{}
-	inReceive  atomic.Int32
-	maxReceive atomic.Int32
-	receives   atomic.Int32
-	sendErr    error
-}
-
-func (b *blockingRxStream) Send(*v1.AttachRequest) error { return b.sendErr }
-func (b *blockingRxStream) Receive() (*v1.AttachEvent, error) {
-	b.receives.Add(1)
-	n := b.inReceive.Add(1)
-	defer b.inReceive.Add(-1)
-	for {
-		m := b.maxReceive.Load()
-		if n <= m || b.maxReceive.CompareAndSwap(m, n) {
-			break
-		}
-	}
-	<-b.release
-	return &v1.AttachEvent{}, nil
-}
-func (b *blockingRxStream) CloseRequest() error  { return nil }
-func (b *blockingRxStream) CloseResponse() error { return nil }
-
-// A Send that sees io.EOF on a live stream (a reader goroutine is already inside Receive) must not
-// start a second Receive: that races the reader and can wedge the input gate.
-func TestFailoverStream_SendEOFDuringReaderReceive_NeverCallsReceiveConcurrently(t *testing.T) {
-	t.Parallel()
-	inner := &blockingRxStream{release: make(chan struct{}), sendErr: io.EOF}
-	sel, _, _, _ := newTestSelector()
-	f := &failoverStream{inner: inner, sel: sel, kind: transportUnix, ctx: context.Background()}
-
-	readerDone := make(chan struct{})
-	go func() { defer close(readerDone); _, _ = f.Receive() }()
-	require.Eventually(t, func() bool { return inner.maxReceive.Load() == 1 }, 5*time.Second, time.Millisecond)
-
-	sendDone := make(chan error, 1)
-	go func() { sendDone <- f.Send(&v1.AttachRequest{}) }()
-	select {
-	case err := <-sendDone:
-		require.ErrorIs(t, err, io.EOF)
-	case <-time.After(5 * time.Second):
-		close(inner.release)
-		t.Fatal("Send blocked behind the reader's Receive")
-	}
-	require.EqualValues(t, 1, inner.maxReceive.Load(), "never two concurrent Receive calls")
-	close(inner.release)
-	<-readerDone
-}
-
-// Before any Receive, the drain runs once and an event it consumes is not lost.
-func TestFailoverStream_SendEOFBeforeAnyReceive_DrainsOnceAndKeepsTheEvent(t *testing.T) {
-	t.Parallel()
-	inner := &blockingRxStream{release: make(chan struct{}), sendErr: io.EOF}
-	close(inner.release)
-	sel, _, _, _ := newTestSelector()
-	f := &failoverStream{inner: inner, sel: sel, kind: transportUnix, ctx: context.Background()}
-
-	require.ErrorIs(t, f.Send(&v1.AttachRequest{}), io.EOF, "the send failed even though the drain read an event")
-	require.EqualValues(t, 1, inner.receives.Load())
-	require.ErrorIs(t, f.Send(&v1.AttachRequest{}), io.EOF, "second EOF does not drain again")
-	require.EqualValues(t, 1, inner.receives.Load())
-
-	ev, err := f.Receive()
-	require.NoError(t, err)
-	require.NotNil(t, ev, "the stashed event comes back first")
-	require.EqualValues(t, 1, inner.receives.Load(), "served from the stash, no extra inner Receive")
 }
 
 func TestEnsureDaemonRunning_NamedInstanceCustomAddr_TCPDeadSocketLive_NeverStops(t *testing.T) {
