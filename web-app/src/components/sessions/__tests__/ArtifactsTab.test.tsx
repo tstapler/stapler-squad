@@ -35,6 +35,8 @@ function makeArtifacts(a: {
   return a as unknown as Session["artifacts"];
 }
 
+const setClipboard = (value: unknown) => Object.defineProperty(navigator, "clipboard", { value, configurable: true, writable: true });
+
 describe("ArtifactsTab", () => {
   it("ArtifactsTab_should_showScanning_When_artifactsIsNull", () => {
     render(<ArtifactsTab session={makeSession(undefined)} />);
@@ -344,10 +346,30 @@ describe("grouped view (ux.md S7)", () => {
 
   it("copy button should copy the full value and announce it", async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    setClipboard({ writeText });
     render(<ArtifactsTab session={grouped([prRec(at(10, 0), 11), commitRec(at(10, 30), "1a2b3c4d5e6f")])} />);
     fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA 1a2b3c4" }));
     expect(writeText).toHaveBeenCalledWith("1a2b3c4d5e6f");
     await waitFor(() => expect(mockAnnounce).toHaveBeenCalledWith("Copied commit 1a2b3c4", "polite", "artifact-copy"));
+  });
+
+  it("copy button should announce a failure when the clipboard is missing or rejects", async () => {
+    const original = navigator.clipboard;
+    const session = () => grouped([prRec(at(10, 0), 11), commitRec(at(10, 30), "1a2b3c4d5e6f")]);
+    try {
+      setClipboard(undefined);
+      const { unmount } = render(<ArtifactsTab session={session()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA 1a2b3c4" }));
+      await waitFor(() => expect(mockAnnounce).toHaveBeenCalledWith("Couldn't copy commit", "assertive", "artifact-copy"));
+      unmount();
+
+      mockAnnounce.mockClear();
+      setClipboard({ writeText: jest.fn().mockRejectedValue(new Error("denied")) });
+      render(<ArtifactsTab session={session()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA 1a2b3c4" }));
+      await waitFor(() => expect(mockAnnounce).toHaveBeenCalledWith("Couldn't copy commit", "assertive", "artifact-copy"));
+    } finally {
+      setClipboard(original);
+    }
   });
 });
