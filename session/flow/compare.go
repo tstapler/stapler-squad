@@ -39,14 +39,17 @@ type metricDef struct {
 	section     SectionName
 	gate        sampleGate
 	captureTied bool
-	drill       DrillKey
-	value       func(*FlowSummary) metricValue
+	// rawCount marks a count that scales with window length: comparing it
+	// across windows of unequal length would report the length gap as a change.
+	rawCount bool
+	drill    DrillKey
+	value    func(*FlowSummary) metricValue
 }
 
 func toHours(d time.Duration) float64 { return d.Hours() }
 
 var staticMetrics = []metricDef{
-	{name: "merged_items", unit: "items", section: SectionTiles, drill: DrillMerged, value: func(s *FlowSummary) metricValue {
+	{name: "merged_items", unit: "items", section: SectionTiles, rawCount: true, drill: DrillMerged, value: func(s *FlowSummary) metricValue {
 		return metricValue{float64(s.Tiles.Merged.Value), s.Tiles.Merged.Value}
 	}},
 	{name: "first_pass_yield", unit: "ratio", section: SectionTiles, gate: gateItems, drill: DrillFPY, value: func(s *FlowSummary) metricValue {
@@ -58,11 +61,11 @@ var staticMetrics = []metricDef{
 	{name: "median_bounces", unit: "reopens", section: SectionTiles, gate: gateItems, drill: DrillMerged, value: func(s *FlowSummary) metricValue {
 		return metricValue{float64(s.Tiles.MedianBounces), s.Tiles.Merged.Value}
 	}},
-	{name: "thrash_items", unit: "items", section: SectionAnomalies, drill: DrillThrashEpisode, value: func(s *FlowSummary) metricValue {
+	{name: "thrash_items", unit: "items", section: SectionAnomalies, rawCount: true, drill: DrillThrashEpisode, value: func(s *FlowSummary) metricValue {
 		return metricValue{float64(s.Anomalies.ThrashItems.Value), s.Anomalies.ThrashItems.Value}
 	}},
-	{name: "rework_review_fail", unit: "events", section: SectionCauses, drill: DrillReworkReviewFail, value: causeValue("review_fail")},
-	{name: "rework_pr_fix", unit: "events", section: SectionCauses, drill: DrillReworkPRFix, value: causeValue("pr_fix")},
+	{name: "rework_review_fail", unit: "events", section: SectionCauses, rawCount: true, drill: DrillReworkReviewFail, value: causeValue("review_fail")},
+	{name: "rework_pr_fix", unit: "events", section: SectionCauses, rawCount: true, drill: DrillReworkPRFix, value: causeValue("pr_fix")},
 	{name: "review_raw_fail_rate", unit: "ratio", section: SectionReview, gate: gateVerdicts, drill: DrillRawFail, value: func(s *FlowSummary) metricValue {
 		return metricValue{s.Review.RawFail.Ratio, s.Review.RawFail.Den}
 	}},
@@ -109,7 +112,7 @@ func dynamicMetrics(a, b *FlowSummary) []metricDef {
 	}
 	for _, trig := range sortedKeys(triggers) {
 		defs = append(defs, metricDef{
-			name: "pr_fix_split." + trig, unit: "events", section: SectionCauses, captureTied: true,
+			name: "pr_fix_split." + trig, unit: "events", section: SectionCauses, captureTied: true, rawCount: true,
 			drill: DrillReworkPRFix, value: triggerValue(trig),
 		})
 	}
@@ -174,12 +177,23 @@ type compareCtx struct {
 	winB    FlowWindow
 }
 
+// straddles reports a capture date strictly inside the span the two windows
+// cover, gap included: with a gap between them, A can lie wholly before the
+// capture and B wholly after it, which is the same pre/post mismatch. A capture
+// at or before the earliest start, or at or after the latest end, leaves both
+// windows on one side.
 func (c compareCtx) straddles() bool {
 	if c.capture.IsZero() {
 		return false
 	}
-	return c.winA.Contains(c.capture) || c.winB.Contains(c.capture)
+	return c.capture.After(minTime(c.winA.Start(), c.winB.Start())) && c.capture.Before(maxTime(c.winA.End(), c.winB.End()))
 }
+
+func (c compareCtx) equalLength() bool {
+	return c.winA.End().Sub(c.winA.Start()) == c.winB.End().Sub(c.winB.Start())
+}
+
+func windowDays(w FlowWindow) float64 { return w.End().Sub(w.Start()).Hours() / 24 }
 
 func (c compareCtx) minSample(g sampleGate) int {
 	switch g {
@@ -202,6 +216,8 @@ func (c compareCtx) compareMetric(d metricDef) CompareMetric {
 		m.State, m.Reason = CompareIncomparable, fmt.Sprintf("section %s failed in a window", d.section)
 	case d.captureTied && c.straddles():
 		m.State, m.Reason = CompareIncomparable, "window straddles capture_since "+c.capture.Format("2006-01-02")
+	case d.rawCount && !c.equalLength():
+		m.State, m.Reason = CompareIncomparable, fmt.Sprintf("windows differ in length (A %.1fd, B %.1fd); raw counts scale with length", windowDays(c.winA), windowDays(c.winB))
 	case d.gate != gateNone && (va.n < need || vb.n < need):
 		m.State, m.Reason = CompareIncomparable, fmt.Sprintf("low sample (N_A=%d, N_B=%d, need %d)", va.n, vb.n, need)
 	}

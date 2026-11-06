@@ -98,7 +98,11 @@ func (tr *dwellTracker) apply(s Span, window FlowWindow) {
 		if v.StartsBeforeWindow() {
 			start = window.Start()
 		}
-		tr.leave(start)
+		// A seeded stage whose visit began at the window start and is cut
+		// there by pre-window thrash has no in-window time: no zero sample.
+		if !(v.StartsBeforeWindow() && !tr.since.Before(start)) {
+			tr.leave(start)
+		}
 		tr.record(&tr.res.Thrash, start, v.Last())
 		tr.status, tr.since = v.NetStatus(), v.Last()
 	default:

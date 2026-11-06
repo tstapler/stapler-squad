@@ -320,3 +320,24 @@ func TestCollapse_should_ReconcileFixtureTotals_When_FixtureLoaded(t *testing.T)
 
 	assert.Equal(t, len(f.Events), real+collapsed+dq.SelfLoops)
 }
+
+// Both comparisons are strict (gap < limit), so a gap of exactly the limit is
+// on the splitting side: 15:00 breaks a run, 1:00:00 keeps episodes apart.
+func TestCollapse_should_SplitAtExactLimit_When_GapEqualsThrashGapOrMergeGap(t *testing.T) {
+	t.Parallel()
+	w := wideWindow(t)
+	cfg := DefaultConfig()
+	var seq int64
+
+	run := flipRun("g", stReady, stProg, collapseT0, 6, time.Minute, &seq)
+	for i := 3; i < 6; i++ {
+		run[i].At = run[i].At.Add(cfg.ThrashGap - time.Minute) // gap between events 2 and 3 is exactly 15:00
+	}
+	spans := Collapse(run, w, cfg)
+	assert.Empty(t, thrashSpans(spans), "an exact 15:00 gap splits the run into two 3-event runs, below the minimum")
+	assert.Len(t, realSpans(spans), 6)
+
+	first := flipRun("m", stReady, stProg, collapseT0, 6, time.Minute, &seq)
+	second := flipRun("m", stReady, stProg, first[5].At.Add(cfg.ThrashMergeGap), 6, time.Minute, &seq)
+	assert.Len(t, thrashSpans(Collapse(append(first, second...), w, cfg)), 2, "an exact 1h gap does not merge episodes")
+}

@@ -75,3 +75,22 @@ func TestDwell_should_CountNegativeGapsAndUseAsOfForOpenInterval_When_ClockSkewO
 		assert.Empty(t, res.Stages[stDoneStat].Samples)
 	})
 }
+
+func TestDwell_should_RecordNoZeroSample_When_SeededStageIsCutByPreWindowThrash(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	first := start.Add(-10 * time.Minute) // the episode began before the window
+	last := start.Add(20 * time.Minute)
+	ts, err := NewThrashSpan(DefaultConfig(), ThrashSpanParams{
+		Item: "i", Pair: FlipPair{A: stReady, B: stProg}, Count: 6, First: first, Last: last,
+		NetStatus: stProg, Cause: CausePRFixReopen, StartsBeforeWin: true,
+	})
+	require.NoError(t, err)
+	seed := Event{ItemID: "i", From: stReady, To: stProg, At: start.Add(-time.Hour)}
+
+	res := Dwell(DwellInput{Spans: []Span{ts}, Seeds: []Event{seed}, Window: dwellWindow(t, start, end), AsOf: end})
+
+	assert.Equal(t, []time.Duration{end.Sub(last)}, res.Stages[stProg].Samples, "only the post-thrash interval counts; no phantom 0s sample")
+	assert.Equal(t, []time.Duration{last.Sub(start)}, res.Thrash.Samples)
+}

@@ -269,3 +269,48 @@ func TestCompare_should_ReturnIncomparableWithReason_When_WindowStraddlesCapture
 	res = compareOf(t, f, cmpQ, WithCaptureSince(func(context.Context) (time.Time, error) { return time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC), nil }))
 	assert.NotEqual(t, CompareIncomparable, metricByName(t, res, "pr_fix_split.unknown").State, "a capture date after both windows does not straddle")
 }
+
+func TestCompare_should_RefuseRawCounts_When_WindowsDifferInLength(t *testing.T) {
+	t.Parallel()
+	f := newFakeSrc()
+	f.addMerged("a", 25, cmpAMid)
+	f.addMerged("b", 30, cmpBMid)
+
+	res := compareOf(t, f, CompareQuery{ADays: 28, BDays: 14})
+
+	for _, name := range []string{"merged_items", "thrash_items", "rework_review_fail", "rework_pr_fix"} {
+		m := metricByName(t, res, name)
+		assert.Equal(t, CompareIncomparable, m.State, name)
+		assert.Contains(t, m.Reason, "windows differ in length (A 28.0d, B 14.0d)", name)
+		assert.Nil(t, m.Delta, name)
+		assert.Positive(t, m.NA+m.NB+1, "raw values stay visible: %s", name)
+	}
+	assert.Equal(t, CompareOK, metricByName(t, res, "first_pass_yield").State, "ratios do not scale with window length")
+
+	equal := compareOf(t, f, cmpQ)
+	assert.Equal(t, CompareOK, metricByName(t, equal, "merged_items").State)
+}
+
+func TestCompare_should_StraddleCapture_When_CaptureFallsInTheGapBetweenWindows(t *testing.T) {
+	t.Parallel()
+	f := newFakeSrc()
+	f.addMerged("a", 25, cmpAMid)
+	f.addMerged("b", 30, cmpBMid)
+	f.stuck = []StuckInterval{closedStuck("a-000", "pr_needs_fix", cmpAMid, 5*time.Hour), closedStuck("b-000", "pr_needs_fix", cmpBMid, 6*time.Hour)}
+	q := CompareQuery{ // A: Oct 6-13, gap Oct 13-20, B: Oct 20-27
+		AStart: time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC), AEnd: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC),
+		BStart: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), BEnd: time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
+	}
+	at := func(c time.Time) *CompareResult {
+		return compareOf(t, f, q, WithCaptureSince(func(context.Context) (time.Time, error) { return c, nil }))
+	}
+
+	inGap := at(time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+	m := metricByName(t, inGap, "stuck_p50_hours.pr_needs_fix")
+	assert.Equal(t, CompareIncomparable, m.State, "A is pre-capture and B post-capture")
+	assert.Contains(t, m.Reason, "straddles capture_since")
+
+	// The stuck sample is too small to compare, so only the reason tells the cases apart.
+	assert.NotContains(t, metricByName(t, at(q.AStart), "stuck_p50_hours.pr_needs_fix").Reason, "straddles", "capture at the first start leaves both windows post-capture")
+	assert.NotContains(t, metricByName(t, at(q.BEnd), "stuck_p50_hours.pr_needs_fix").Reason, "straddles", "capture at the last end leaves both windows pre-capture")
+}
