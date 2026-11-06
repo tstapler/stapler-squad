@@ -10,6 +10,7 @@ import { readStats, TAB_STATS_STORAGE_KEY } from "@/lib/unfinished/tabStats";
 import { failingPR, fakeNudgeClient, makePR, session } from "./prTestFixtures";
 
 jest.mock("./NudgeButton.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
 const RUN = LinkedSessionStatus.RUNNING;
 const PAUSE = LinkedSessionStatus.PAUSED;

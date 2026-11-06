@@ -3,6 +3,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "@/lib/nav";
+import { useAnalytics } from "@/lib/analytics";
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { prAttention } from "@/lib/unfinished/prAttention";
@@ -68,6 +69,7 @@ function fixNoun(pr: UserPR): string {
 }
 
 export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }: NudgeButtonProps) {
+  const { track } = useAnalytics();
   const { state, nudge, dismiss } = useNudgePR({ client });
   const [selected, setSelected] = useState<string | undefined>();
   const [blockedIds, setBlockedIds] = useState<ReadonlyMap<string, BlockedEntry>>(new Map());
@@ -158,6 +160,7 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
 
   const onClick = async () => {
     if (disabled || !target) return;
+    track({ name: "unfinished_pr_nudge_clicked", category: "user_action", component: "NudgeButton" });
     const result = await nudge(pr, target.sessionId);
     if (result.status === "error" && result.kind === "failed_precondition") {
       block(result.sessionId, result.message);
