@@ -360,6 +360,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
+| Graceful tymuxd handoff: upgrade/downgrade the daemon without killing panes (D1-D6, compat matrix, rollback, squad vs daemon) | `docs/explanation/graceful-tymuxd-handoff.md` |
 | Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
