@@ -25,6 +25,8 @@ type DataQuality struct {
 	SelfLoops    int
 	Unparseable  int
 	NegativeGaps int
+	// UnknownSpans counts Span implementations a computation did not recognise.
+	UnknownSpans int
 }
 
 // Add returns the field-wise sum.
@@ -33,6 +35,7 @@ func (d DataQuality) Add(o DataQuality) DataQuality {
 		SelfLoops:    d.SelfLoops + o.SelfLoops,
 		Unparseable:  d.Unparseable + o.Unparseable,
 		NegativeGaps: d.NegativeGaps + o.NegativeGaps,
+		UnknownSpans: d.UnknownSpans + o.UnknownSpans,
 	}
 }
 
