@@ -1,10 +1,10 @@
-# Epic 0 sealing summary (interim) — bazel-conversion
+# Epic 0 sealing summary (interim, refreshed 2026-11-06) — bazel-conversion
 
 **Branch**: `sdd/bazel-epic0` (tip at write time: merge `44bb98334`; this file is committed on top). **Worktree**: `~/code/github.com/tstapler/stapler-squad.worktrees/bazel-epic0` (moved out of `.claude/worktrees/` with `git worktree move`). Nothing is pushed.
 
-**Status: NOT sealed.** Story 0.14 (the gate for Epics 1-11) cannot pass yet: 3 spikes have no verdict, one verdict is `Fail`, and Task 0.14's checker and economic gate are not built. This document records what is done, what the evidence says, and what each remaining item waits on. Source of truth for verdicts: `spike-results.yaml` (13 rows, parses with `yq`); evidence per spike: `spike-results.md`.
+**Status: NOT sealed.** Story 0.14 (the gate for Epics 1-11) cannot pass yet. Refreshed 2026-11-06 against `43933064f`: `python3 tools/bzl/check-spike-results.py` prints `RESULT: FAIL` with exactly one blocker, the missing S6 row (worktree cost, Story 0.10, pending measurement). S13 is no longer `Fail` (now `FallbackWorkaround`), S14 is `Fail` with the owner's "Full e2e run" decision, and S10/S10-redaction are WAIVED in `owner-attestations.yaml` `spike_waivers` (not passes). Task 0.14's checker (`check-spike-results.py`) and economic gate (`economic-gate.py`) now exist; the ADRs were finalised at Task 0.14d (ADR-002, 003, 007 Accepted; ADR-004 remote-tier parts stay Proposed; ADR-009 Accepted with the full-e2e outcome; ADR-010 stays Proposed). Source of truth for verdicts: `spike-results.yaml` (16 rows, `grep -c '^- spike:'`); evidence per spike: `spike-results.md`.
 
-## Verdicts (13 recorded)
+## Verdicts (16 recorded)
 
 | Spike | Verdict | Mechanism | Cost |
 |---|---|---|---|
@@ -20,20 +20,21 @@
 | S9 short socket path | Pass (caveat) | Bazel 9.3.1 already mounts a private short `/tmp`; the "without" arm is a stand-in bind under the long `TEST_TMPDIR` (169 bytes, fails) because the mechanism cannot be switched off | S |
 | S11 Gazelle | Pass | directives + `map_kind`, no extension; 6 resolve lines, idempotent | M |
 | S12 nogo | FallbackWorkaround | analyzers need root-x/tools twin libraries (link-time collision with the isolated `tools/lint` module); +415 actions (+31%) on a 130-target stand-in; 14 of 15 analyzer tests still skip under Bazel | M |
-| S13 lockfile merges | **Fail** | owner-gated: GitHub-side merge-driver check not run; replay favours commit lock + `bazel-lockfile-merge` driver + auto regen (driver alone left 13/20 failing `--lockfile_mode=error`) | S |
+| S13 lockfile merges | FallbackWorkaround | commit lock + client merge driver + CI auto-regen + required check; the GitHub-side check ran 2026-11-04 on a private scratch repo: GitHub merges ignore the driver (8 of 8 stayed conflicts), 32 pairs, 32 green only with regen (replay: driver alone left 13/20 failing `--lockfile_mode=error`) | S |
+| S14 selective e2e | **Fail** | selected-share median 1.00 at package, file and line granularity; start-up 18.4 s vs 3.5 s limit; owner chose "Full e2e run" (2026-11-05); ADR-009 Accepted with that outcome, T9f N/A | M |
+| S15 / S15b otel-auto | FallbackWorkaround | S15 superseded by S15b: `otel_weave_hermetic` rule behind `//:stapler-squad`; residual non-hermetic parts listed in `spike-results.yaml` | M |
 
 **No `FallbackFork`** — no rules repo needs forking so far (Task 0.14b has nothing to create).
 
-## Not run (no verdict)
+## Not run or waived (no verdict)
 
 | Item | Blocked on |
 |---|---|
-| S6 worktree cost (Story 0.10) | host load <= 2.0 (it has been 3-32); live-service OOM drop-in (Task 0.2i) is a stated precondition |
-| S14 e2e slicing (Story 0.15) | quiet host; its outcome decides ADR-009 and whether EG5 can clear |
-| S10 / S10-redaction remote cache (Story 0.12) | owner: onyx storage budget <= 100 GB, listeners :9092/:9093, Tailscale ACL, TLS cert, `bazel-cache-write` env, `main` ruleset decision D-PROTECT-WRITE |
+| S6 worktree cost (Story 0.10) | pending measurement (host load <= 2.0; live-service OOM drop-in, Task 0.2i, is a stated precondition; owner chose `OOMPolicy=continue` plus the drop-in, owner-run) |
+| S10 / S10-redaction remote cache (Story 0.12) | WAIVED until 2027-02-04 (disk cache first, owner decision 2026-11-03, `needs-owner-reconfirm`). To run them the owner must supply: onyx storage budget <= 100 GB, listeners :9092/:9093, Tailscale ACL, TLS cert, `bazel-cache-write` env, `main` ruleset decision D-PROTECT-WRITE |
 | Baseline timings Tasks 0.1b, 0.1e, 0.1j | quiet host (load guard in `lib.sh` has no override) |
-| Task 0.1g targets T1-T9 | owner confirmation (`targets_confirmed` in `owner-attestations.yaml`); `targets.yaml` is a scaffold |
-| Task 0.14 (checker `check-spike-results.py`, `economic-gate.py`, ADR finalisation) | the above |
+| Task 0.1g targets T1-T9 | owner confirmation: formulas accepted (`targets` in `owner-attestations.yaml`) but `targets_confirmed` is still unset |
+| Task 0.14 | checker and economic gate exist; ADR finalisation done (see Status); the gate itself still fails on the missing S6 row |
 
 ## Measured baselines that matter (from `tools/bzl/baseline/measured.json`, `baselines.md`)
 
@@ -78,6 +79,10 @@ From other spikes / worker notes (all unapplied in `plan.md`): `@rules_go` not `
 
 ## Housekeeping
 
-- Planning branch `sdd/bazel-conversion-plan` (main checkout) holds the plan: 14 epics / 88 stories / 269 tasks, ~38.3M CU after verification, ADRs 001-010 (002/003/007/009/010 Proposed).
+- Planning branch `sdd/bazel-conversion-plan` (main checkout) holds the plan: 14 epics / 88 stories / 269 tasks, ~38.3M CU after verification, ADRs 001-010 (as of 2026-11-06: 002, 003, 007, 009 Accepted; 004 remote-tier parts and 010 Proposed).
 - Per-spike branches `sdd/bazel-epic0-*` are all merged into `sdd/bazel-epic0`; their worktrees still sit under the main checkout's `.claude/worktrees/` and can be removed (`git worktree remove`) after you confirm — not done here.
 - Pre-existing unrelated dirty files in the main checkout were left untouched.
+
+## Owner decisions recorded since this summary was first written (`owner-attestations.yaml`)
+
+D1 lockfile: commit lock + merge driver + auto regen (`lockfile_policy`). D2 S4: keep `Pass` (`s4_verdict`). D3 Story 8.4: per-analyzer twin libraries (`nogo_story_8_4`). D4 proto: pin buf plugins locally, fix the 72 buf lint findings (`proto_and_lint`; fix work not done). D6 OOM: `OOMPolicy=continue` plus drop-in (`oom_policy`; owner runs it). D7 ADR-004 failure policy confirmed (`adr_004_failure_policy`). D8 targets: formulas accepted, values unconfirmed (`targets`); ADR-010 policy (`adr_010_policy`). D9 remote cache deferred (`remote_cache_s10`). D10 defaults accepted (`defaults`: N=30, K=10, 900 s, 90 days, 20 chars). Also recorded: ADR-009 full e2e (`adr_009_e2e`), lower-package SC1/SC3 (`adr_010_lower_package_criteria`). Not recorded as decided: D5 (delete the S1 `go_proto_library` attempts in Epic 1) and D-PROTECT-MERGE; D-PROTECT-WRITE appears only as the `defaults.cache_write_policy` text, with no ruleset or environment attestation.

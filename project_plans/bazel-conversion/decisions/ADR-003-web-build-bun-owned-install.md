@@ -1,7 +1,7 @@
 # ADR-003: Web build is a Bun-owned install wrapped in a repo-owned repository rule
 
 **Date**: 2026-11-01
-**Status**: Proposed. The repo-owned Bun repository rule is the default and is what spike S4 (Epic 0, Story 0.6) records as `Pass`; `rules_bun` is the `FallbackWorkaround` and the `aspect_rules_js` fork is the `FallbackFork`, reached in that order from S4's failure. Becomes Accepted at Story 0.14. The fork-versus-workaround costing lives in ADR-008.
+**Status**: Accepted 2026-11-06 (finalised at Task 0.14d). Spike S4 (Epic 0, Story 0.6) is `Pass`, path `repo-rule+no-sandbox` (`implementation/spike-results.yaml`; evidence: `implementation/spike-results.md` S4 "Verdict"), so the repo-owned Bun repository rule is the adopted default and neither `rules_bun` (`FallbackWorkaround`) nor the `aspect_rules_js` fork (`FallbackFork`) was needed. The `Pass` is conditional: it holds against a pinned-environment `make web-build` (Bun 1.4.3, Node 24.13.1, `BUN_INSTALL_GLOBAL_STORE=0`); against the default developer environment 174 of 380 files differ. The owner kept `Pass` on this basis (`implementation/owner-attestations.yaml`, `s4_verdict`). The fork-versus-workaround costing lives in ADR-008.
 **Context**: `aspect_rules_js` 3.5.2 consumes a pnpm lockfile only (`research/stack.md` section 5, VERIFIED absence of `bun.lock` support in docs). Repo rule: Bun only, one lockfile (`web-app/bun.lock`, `docs/how-to/use-bun-in-web-app.md`). Third-party `rules_bun` projects exist but are 0-star, months old, not in BCR.
 
 ## Decision (default)
@@ -31,3 +31,9 @@
 
 - aspect_rules_js + derived `pnpm-lock.yaml`: second lockfile, can resolve versions differently from `bun.lock`, violates the Bun rule. Rejected.
 - Leave web-app outside Bazel (host `bun`): contradicts the hermeticity driver. Rejected.
+
+## Spike outcome (Task 0.14d, evidence in `implementation/spike-results.md`)
+
+- S4 checks: parity 380 of 380 files identical against the pinned reference; Jest 231 of 231 equal; hidden-coupling escapes `0 0`; wall time 2.6x sandboxed and 1.5-2.1x unsandboxed against the 1.5x limit, so consuming actions carry `no-sandbox` (the "Passes, but ... 1.5x" row of the vocabulary table above, a recorded cost, not a downgrade).
+- Condition that comes with the acceptance: Bun and Node stay pinned and `BUN_INSTALL_GLOBAL_STORE=0` in the parity oracle; the `make` path is not itself deterministic against unpinned host tools.
+- S1-ts `Pass`: proto TypeScript output feeds the web build as an input (`gen = //tools/bzl/proto:gen_ts`).
