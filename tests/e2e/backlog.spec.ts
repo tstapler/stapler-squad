@@ -10,7 +10,8 @@ const _features = [
 ] as const;
 import { test, expect } from '@playwright/test';
 import { BacklogPage } from './pages/BacklogPage';
-import { baseUrl } from './helpers/base-url';
+import { baseUrl, slotTmp } from './helpers/base-url';
+import { createBacklogItemDirect, deleteAllBacklogItemsDirect, deleteBacklogItemsByTitlePrefix } from './pages/BacklogMutations';
 
 const BASE_URL = baseUrl();
 
@@ -37,14 +38,28 @@ test.describe('Backlog', () => {
     // Pre-seed the first-visit tour as already dismissed so it doesn't pop up
     // (and block clicks on) every other test in this suite. The dedicated
     // "Backlog Tour" tests below explicitly clear this to exercise the tour.
+    // addInitScript re-runs on every navigation, so the tour test opts out via a sessionStorage marker.
     await page.addInitScript(() => {
-      localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+      if (!sessionStorage.getItem('e2e-keep-tour-state')) {
+        localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+      }
     });
     await page.goto(`${BASE_URL}/backlog`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
   });
 
+  // Archive every item the UI-driven tests below create so the shared server is
+  // back to an empty backlog for the empty-state tests, whatever the spec order.
+  test.afterEach(async ({ request }) => {
+    await deleteBacklogItemsByTitlePrefix(request, ['Test Item', 'New Item Button Test', 'Transition Test']);
+  });
+
   test.describe('Empty State', () => {
+    // The empty state renders only when the store holds no items at all (archived included).
+    test.beforeAll(async ({ request }) => {
+      await deleteAllBacklogItemsDirect(request);
+    });
+
     test('e2e:backlog-empty-state-renders - Empty state displays headline, lifecycle diagram, and CTA button', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
@@ -54,10 +69,10 @@ test.describe('Backlog', () => {
       // Check if backlog is empty. Fail loudly if items exist — the test environment
       // must be clean for empty-state tests to be meaningful.
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s). Clear the backlog before running this test.`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
       // Verify empty state is visible
       await expect(backlogPage.emptyState).toBeVisible();
@@ -80,103 +95,79 @@ test.describe('Backlog', () => {
       expect(ctaText).toContain('Create First Item');
     });
 
-    test('e2e:backlog-empty-form-opens - Clicking CTA button reveals inline form', async ({ page }) => {
+    test('e2e:backlog-empty-form-opens - Clicking CTA button opens the new-item form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
-      // Verify form is not initially visible
-      const form = page.locator('[data-testid="backlog-empty-form"]');
+      const form = page.locator('[data-testid="backlog-form-modal"]');
       await expect(form).not.toBeVisible();
 
-      // Click CTA button to open form
       await backlogPage.emptyCtaButton.click();
-
-      // Verify form becomes visible
       await expect(form).toBeVisible();
 
-      // Verify form inputs are present
-      const titleInput = page.locator('[data-testid="backlog-empty-form-title"]');
-      const prioritySelect = page.locator('[data-testid="backlog-empty-form-priority"]');
-      const submitButton = page.locator('[data-testid="backlog-empty-form-submit"]');
-      const cancelButton = page.locator('[data-testid="backlog-empty-form-cancel"]');
-
-      await expect(titleInput).toBeVisible();
-      await expect(prioritySelect).toBeVisible();
-      await expect(submitButton).toBeVisible();
-      await expect(cancelButton).toBeVisible();
-
-      // Verify title input is focused
-      const focusedElement = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'));
-      expect(focusedElement).toBe('backlog-empty-form-title');
+      await expect(page.locator('[data-testid="backlog-title-input"]')).toBeVisible();
+      await expect(page.locator('[data-testid="backlog-priority-select"]')).toBeVisible();
+      await expect(page.locator('[data-testid="backlog-form-submit"]')).toBeVisible();
+      await expect(page.locator('[data-testid="backlog-form-cancel"]')).toBeVisible();
     });
 
-    test('e2e:backlog-empty-form-cancel - Clicking cancel hides form', async ({ page }) => {
+    test('e2e:backlog-empty-form-cancel - Clicking cancel closes the form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
-      // Open form
-      await backlogPage.emptyCtaButton.click();
-      const form = page.locator('[data-testid="backlog-empty-form"]');
+      await backlogPage.openEmptyStateForm();
+      const form = page.locator('[data-testid="backlog-form-modal"]');
       await expect(form).toBeVisible();
 
-      // Cancel form
       await backlogPage.cancelEmptyStateForm();
-
-      // Verify form is hidden
       await expect(form).not.toBeVisible();
 
-      // Verify CTA button is refocused
-      const focusedElement = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'));
-      expect(focusedElement).toBe('backlog-empty-cta-button');
+      // Cancelling creates nothing: the empty state is still showing.
+      await expect(backlogPage.emptyState).toBeVisible();
     });
 
-    test('e2e:backlog-empty-form-submit - Form requires title; submit button disabled when empty', async ({ page }) => {
+    test('e2e:backlog-empty-form-submit - Form requires a title; submitting empty shows an error', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
-      // Open form
       await backlogPage.openEmptyStateForm();
 
-      // Verify submit button is disabled when title is empty
-      const submitButton = page.locator('[data-testid="backlog-empty-form-submit"]');
-      await expect(submitButton).toHaveAttribute('aria-disabled', 'true');
-
-      // Type a title
-      await backlogPage.fillEmptyStateForm('Test Backlog Item');
-
-      // Verify submit button is now enabled
-      await expect(submitButton).not.toHaveAttribute('aria-disabled', 'true');
+      // Submitting with no title is rejected client-side and the form stays open.
+      await backlogPage.submitNewItemForm();
+      await expect(page.getByText('Title is required.')).toBeVisible();
+      await expect(page.locator('[data-testid="backlog-form-modal"]')).toBeVisible();
     });
   });
 
   test.describe('Item Creation and List', () => {
+    test.beforeAll(async ({ request }) => {
+      await deleteAllBacklogItemsDirect(request);
+    });
+
     test('e2e:backlog-create-item - Creating first item via empty state form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
       // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `This test requires a clean backlog, but found ${tableRows} item(s).`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
       const itemTitle = `Test Item ${Date.now()}`;
 
@@ -188,9 +179,7 @@ test.describe('Backlog', () => {
       await expect(itemRow.first()).toBeVisible();
 
       // Verify the item has expected content
-      const titleCell = itemRow.locator('td').first();
-      const text = await titleCell.textContent();
-      expect(text).toContain(itemTitle);
+      await expect(itemRow.first()).toContainText(itemTitle);
     });
 
     test('e2e:backlog-item-card-visible - Created item is displayed in the list after empty state', async ({ page }) => {
@@ -218,10 +207,10 @@ test.describe('Backlog', () => {
       const backlogPage = new BacklogPage(page);
 
       const tableRows = await backlogPage.getTableRows().count();
-      if (tableRows > 0) {
-        test.fail(true, `This test requires a clean backlog, but found ${tableRows} item(s).`);
-        return;
-      }
+      expect(
+        tableRows,
+        `Empty-state test requires a clean backlog but found ${tableRows} item(s); an earlier test leaked state.`,
+      ).toBe(0);
 
       const itemTitle = `Test Item Priority ${Date.now()}`;
 
@@ -373,7 +362,10 @@ test.describe('Backlog', () => {
       await expect(titleInput).toBeVisible();
 
       // Fill and submit the form
-      await backlogPage.fillNewItemForm(itemTitle);
+      await backlogPage.fillNewItemForm(itemTitle, {
+        repoPath: slotTmp('e2e-backlog-new-item'),
+        addAcCriterion: 'Item appears in the list',
+      });
       await backlogPage.submitNewItemForm();
 
       // Modal should close
@@ -384,18 +376,20 @@ test.describe('Backlog', () => {
       await expect(itemRow.first()).toBeVisible();
     });
 
-    test('e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane', async ({ page }) => {
+    test('e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane', async ({ page, request }) => {
       const backlogPage = new BacklogPage(page);
 
       const itemTitle = `Transition Test ${Date.now()}`;
 
-      // Create the item with one acceptance criterion so "Mark Ready" is enabled
-      // We must use the new-item modal form which supports adding AC criteria
-      await backlogPage.openNewItemForm();
-      await backlogPage.fillNewItemForm(itemTitle, {
-        addAcCriterion: 'At least one criterion to enable Mark Ready',
+      // Seed an idea with one acceptance criterion so "Mark Ready" is enabled. Creating it through the
+      // form would start automatic triage, which can advance the item before the test observes "Idea".
+      await createBacklogItemDirect(request, {
+        title: itemTitle,
+        status: 'idea',
+        acCriteria: ['At least one criterion to enable Mark Ready'],
       });
-      await backlogPage.submitNewItemForm();
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
 
       // Wait for item to appear in list
       const itemRow = backlogPage.getTableRows().filter({ hasText: itemTitle });
@@ -421,7 +415,7 @@ test.describe('Backlog', () => {
 
       // Status badge in the detail pane must update to "Ready"
       const detailStatus = backlogPage.getDetailStatusBadge();
-      await expect(detailStatus).toHaveAttribute('aria-label', 'Status: Ready', { timeout: 10000 });
+      await expect(detailStatus).toHaveAttribute('aria-label', 'Lifecycle stage: Ready', { timeout: 10000 });
 
       // The status badge in the list row must also show "Ready" after closing the detail pane
       await backlogPage.closeItemDetail();
@@ -499,7 +493,10 @@ test.describe('Backlog', () => {
 
       // Clear the onboarded flag the outer beforeEach pre-seeded, then reload
       // so the page mounts fresh with no first-visit state recorded.
-      await page.evaluate(() => localStorage.removeItem('stapler-squad:backlog-onboarded'));
+      await page.evaluate(() => {
+        sessionStorage.setItem('e2e-keep-tour-state', 'true');
+        localStorage.removeItem('stapler-squad:backlog-onboarded');
+      });
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
 

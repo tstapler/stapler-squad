@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // unrestoredTymuxPM models a tymux Instance that was loaded from its record but
@@ -28,6 +30,63 @@ func (p *unrestoredTymuxPM) RestoreWithWorkDir(string) error {
 	return nil
 }
 func (p *unrestoredTymuxPM) GetPTY() (*os.File, error) { return os.Stdin, nil }
+
+type retainedTymuxPM struct {
+	*unrestoredTymuxPM
+	adopted atomic.Int32
+}
+
+func (p *retainedTymuxPM) AdoptForViewing(context.Context) error {
+	p.adopted.Add(1)
+	p.attached.Store(true)
+	return nil
+}
+
+type retainedPaintManager struct{ tymux.TymuxManager }
+
+func (retainedPaintManager) HasSession() bool { return true }
+func (retainedPaintManager) CapturePaneRedraw(context.Context) (string, bool, bool, error) {
+	return "retained first paint", false, true, nil
+}
+
+func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
+	t.Parallel()
+	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := session.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
+			inst.Status = status
+			inst.Backend = session.BackendTymux
+			frame, ok := fullStateFrame(context.Background(), inst)
+			require.True(t, ok)
+			require.Equal(t, "retained first paint", frame.data)
+			h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+			require.Nil(t, h.writerFor(inst), "retained pane cannot vote for resize or send input")
+			require.True(t, inst.Started(), "viewing does not change the existing start flag")
+			require.Equal(t, status, inst.GetLifecycleStatus())
+		})
+	}
+}
+
+func TestStreamPaths_RetainedTymuxNeverRestores(t *testing.T) {
+	t.Parallel()
+	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			pm := &retainedTymuxPM{unrestoredTymuxPM: &unrestoredTymuxPM{}}
+			inst := session.NewStartedInstanceForTest(t, "retained", pm)
+			inst.Status = status // fixture, before the first snapshot is published
+			h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+			alive, err := h.ensureHubBackendAlive(inst, "sess")
+			require.NoError(t, err)
+			require.False(t, alive, "a renderable pane is not proof of a writable process")
+			require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
+			require.Equal(t, int32(2), pm.adopted.Load())
+			require.Zero(t, pm.restored.Load())
+			require.Equal(t, status, inst.GetLifecycleStatus())
+		})
+	}
+}
 
 // A not-yet-restored tymux Instance with a live stored session must still be
 // restored by the stream paths: tymux StartControlMode attaches nothing without

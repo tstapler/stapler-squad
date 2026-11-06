@@ -76,6 +76,29 @@ Parse the porcelain output into `{path, branch, head}` records (skip the
 `headRefName`. Exclude every worktree Step 0 flagged as Keep before doing
 anything else with the remaining list.
 
+## Step 1b — Liveness gate (before classifying anything)
+
+```bash
+.claude/skills/worktree-disk-cleanup/worktree-liveness.sh <path>   # one line: VERDICT path reasons
+```
+
+Run it on every worktree. It checks (a) any process whose cwd is inside the tree
+(Claude Code, shells, dev servers), (b) stapler-squad sessions in every state DB
+(`~/.stapler-squad/sessions.db`, `instances/*`, `workspaces/*`) whose `worktrees.worktree_path`,
+`existing_worktree` or `path` match, and (c) a Claude transcript or HEAD reflog touched in the
+last `RECENT_HOURS` (default 2).
+
+| Verdict | Meaning | Action |
+|---|---|---|
+| `LIVE` | process running, or Active/Creating/Hibernated/Restoring session points at it | Keep. Never remove, never snapshot-and-remove |
+| `CONFIGURED` | non-archived Paused/Stopped session still references it | Keep unless the user approves; removal also strands that session's worktree row |
+| `RECENT` | transcript or reflog activity within the window | Keep this round |
+| `IDLE` | no signal | Continue to Step 2 |
+
+Cloud/remote Claude sessions run in their own checkouts and never use local worktrees, so
+they need no check. Run the script from a context where your own shell isn't inside the target
+(it will report your own process as `LIVE`).
+
 ## Step 2 — Classify each worktree
 
 For each entry, compute:
@@ -143,14 +166,48 @@ Launch all of these in one message (parallel `Agent` calls) so they run
 concurrently — they're read-only investigations, cheap on haiku, and
 independent of each other.
 
-## Step 4 — Removal
+## Step 3b — Triage the "Manual review" bucket (dirty with real diffs)
+
+Snapshot first (Step 4's `worktree-salvage.sh`, which is non-destructive), then dispatch one
+read-only agent per snapshot (`model: haiku`, parallel) with the export dir
+(`~/.stapler-squad/salvage/<name>-<ts>/`: `meta.txt`, `uncommitted.patch`, `commits.patch`).
+Each agent decides whether the work is still worth keeping by checking:
+- does `git apply --check --reverse uncommitted.patch` succeed on current `main` (already landed)?
+- do the touched files/functions still exist, and does `git log main --since=<snapshot base date> -- <files>`
+  show the same area rewritten or the feature shipped another way (grep for the new symbols/tests)?
+- for `commits.patch`: `git cherry main <branch>` and `git log --all --grep` for equivalents.
+- is it anything other than throwaway (scratch notes, debug prints, a half-done approach superseded
+  by a merged PR)? SDD `project_plans/**` content is never throwaway.
+
+Each ends with exactly one line: `VERDICT: SUPERSEDED - <evidence>`, `VERDICT: KEEP - <what's
+unique>` or `VERDICT: UNSURE - <question for the user>`. Present the user a table (worktree,
+verdict, one-line evidence, export dir) to review; `SUPERSEDED` ones are removal candidates, all
+others stay. Sanity-check each `SUPERSEDED` claim by opening the cited commit/PR yourself.
+
+## Step 4 — Snapshot, then remove
+
+Every worktree with real uncommitted work or commits not on a remote/merged branch is snapshotted
+before removal:
+
+```bash
+out=$(.claude/skills/worktree-disk-cleanup/worktree-salvage.sh <path> [base-ref]) || { echo "KEEP: snapshot failed"; continue; }
+```
+
+This writes `refs/salvage/<name>/<ts>` (in the shared object DB; survives worktree removal;
+restore with `git worktree add <path> <ref>`) and a review tree at
+`~/.stapler-squad/salvage/<name>-<ts>/` (`uncommitted.patch`, `commits.patch`, `stat.txt`,
+`meta.txt`). It drops build junk and files over 5MB (listed in `meta.txt`), and exits nonzero
+without verifying a non-empty patch. **A nonzero exit means the worktree is kept.** Exit 2 =
+nothing to salvage (clean), fine to remove. Purge salvage refs/dirs older than 60 days only
+after the user agrees.
 
 ```bash
 git worktree remove --force <path>   # --force needed: junk/dirty files block a plain remove
 git worktree prune -v                # clean up stale worktree admin metadata afterward
 ```
 
-Never touch the `manual_review` or `keep` buckets without the user's
+Never touch the `manual_review` or `keep` buckets, or any `LIVE`/`CONFIGURED`/`RECENT` worktree
+from Step 1b, without the user's
 explicit go-ahead — that bucket is where real unshipped work lives. Get
 confirmation on removal *scope* (which buckets) before running any
 `git worktree remove`, even when every entry in a bucket looks safe — this

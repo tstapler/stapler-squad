@@ -21,6 +21,18 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
+func (s *SessionService) findLifecycleInstance(instances []*session.Instance, id string) *session.Instance {
+	if s.registry != nil {
+		if live := s.registry.Lookup(id); live != nil {
+			return live.Instance
+		}
+	}
+	if live := s.FindLiveInstance(id); live != nil {
+		return live
+	}
+	return findInstanceByID(instances, id)
+}
+
 // HibernateSession checkpoints the session state, kills the AI process, and
 // transitions the session to Hibernated status.
 // +api: session:hibernate
@@ -37,9 +49,14 @@ func (s *SessionService) HibernateSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := findInstanceByID(instances, req.Msg.Id)
+	instance := s.findLifecycleInstance(instances, req.Msg.Id)
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Retain before transitioning: poller removal must not discard the teardown barrier.
+	if s.registry != nil {
+		instance = s.registry.Retain(instance).Instance
 	}
 
 	// Stop any running autonomous driver so it does not continue injecting prompts
@@ -88,16 +105,12 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
 
-	instance := findInstanceByID(instances, req.Msg.Id)
+	instance := s.findLifecycleInstance(instances, req.Msg.Id)
 	if instance == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
-	// This instance was loaded raw from storage above, bypassing
-	// Registry.Acquire/WireInstanceCallbacks entirely, so it has no
-	// MCPServerURL provider wired yet — without this, the relaunch below
-	// would omit --mcp-config and the resumed session could never call
-	// session-scoped MCP tools again.
+	// Preserve the canonical instance's in-flight hibernation teardown barrier.
 	instance.SetMCPServerURLProvider(s.resolveMCPServerURL)
 
 	if err := instance.ResumeFromHibernation(ctx); err != nil {
@@ -740,6 +753,11 @@ func (s *SessionService) RetrySession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Retry revives the session, so an archived (deliberately retired) one must be unarchived first.
+	if instance.IsArchived() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session %s is archived; unarchive it before retrying", req.Msg.Id))
+	}
+
 	if err := instance.RetryNow(instance.GetEffectiveRootDir()); err != nil {
 		if errors.Is(err, session.ErrRetryInFlight) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
@@ -748,11 +766,13 @@ func (s *SessionService) RetrySession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retry session: %w", err))
 	}
 
+	// Publish before saving: the retry already took effect in memory, so watchers (e.g. a
+	// read-only terminal stream waiting for Active) must hear it even if persistence fails.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
+
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save retried instance: %w", err))
 	}
-
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
 
 	message := fmt.Sprintf("Session '%s' retry started", instance.Title)
 	log.Info(message)
@@ -947,6 +967,8 @@ func (s *SessionService) UnarchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	inst.SetArchivedAt(nil)
+	// Tell watchers (terminal streams that attached read-only while archived) before saving.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"archived_at"}))
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}

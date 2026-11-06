@@ -107,6 +107,36 @@ describe("JumpToSessionPanel", () => {
     await waitFor(() => expect(screen.getByText("Session not found.")).toBeInTheDocument());
   });
 
+  it("JumpToSessionPanel_should_ShowRestartWork_When_SessionNotFoundAndHandlerProvided", async () => {
+    const user = userEvent.setup();
+    const onRestartWork = jest.fn();
+    render(
+      <JumpToSessionPanel
+        linkedSessions={[makeLinkedSession({ sessionId: "w1", role: "work" })]}
+        backlogItemId="item1"
+        getSession={jest.fn().mockResolvedValue(null)}
+        onRestartWork={onRestartWork}
+      />
+    );
+    await user.click(screen.getByTestId("jump-to-session-button"));
+    await user.click(await screen.findByRole("button", { name: "Restart work" }));
+    expect(onRestartWork).toHaveBeenCalledTimes(1);
+  });
+
+  it("JumpToSessionPanel_should_OmitRestartWork_When_NoHandler", async () => {
+    const user = userEvent.setup();
+    render(
+      <JumpToSessionPanel
+        linkedSessions={[makeLinkedSession({ sessionId: "w1", role: "work" })]}
+        backlogItemId="item1"
+        getSession={jest.fn().mockResolvedValue(null)}
+      />
+    );
+    await user.click(screen.getByTestId("jump-to-session-button"));
+    await screen.findByText("Session not found.");
+    expect(screen.queryByRole("button", { name: "Restart work" })).not.toBeInTheDocument();
+  });
+
   it("JumpToSessionPanel_should_CollapsePanel_When_ClickedAgain", async () => {
     const user = userEvent.setup();
     const getSession = jest.fn().mockResolvedValue(makeFullSession("w1"));

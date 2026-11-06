@@ -872,6 +872,12 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
 	}
 	i.processManager = newPM
+	i.wireTmuxSession(command)
+	if backendOverride == BackendTymux {
+		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
+	}
+	newPM.ResetExitOnce()
+	newPM.SetOnExitCallback(instanceOnExitCallback(i))
 
 	i.mu.Lock()
 	i.Backend = backendOverride
@@ -1162,6 +1168,35 @@ func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
 	return i.pm().GetCurrentWorkingDirectory()
 }
 
+// PrepareRetainedTerminalView adopts an existing pane for inactive-session viewing.
+// handled distinguishes this read-only path from normal active-session restoration.
+func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled bool, err error) {
+	snap := i.Snapshot()
+	if snap.ArchivedAt == nil && (snap.Status == Active || snap.Status == Creating || snap.Status == Restoring) {
+		return false, nil
+	}
+	p, ok := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		if snap.ArchivedAt != nil {
+			return true, nil // An archived view must never enter the mutating restore path.
+		}
+		return false, nil
+	}
+	return true, p.AdoptForViewing(ctx)
+}
+
+// terminalScreenReady separates retained-screen reads from process/input readiness.
+func (i *Instance) terminalScreenReady() bool {
+	if i.Snapshot().Status == Paused {
+		return false
+	}
+	if i.started.Load() {
+		return true
+	}
+	_, retained := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	return retained && i.pm().HasSession()
+}
+
 // RestoreProcess is the backend-agnostic replacement for reaching into a
 // concrete *tmux.TmuxSession's RestoreWithWorkDir().
 func (i *Instance) RestoreProcess(workDir string) error {
@@ -1398,7 +1433,7 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 // GetPaneDimensionsPriority in sequence, and all of them must share the same
 // overall deadline rather than each getting an independent fresh one.
 func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
@@ -1484,7 +1519,7 @@ func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 
@@ -1513,7 +1548,7 @@ func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSn
 	if !ok {
 		return streamhub.FullStateSnapshot{}, false, nil
 	}
-	if !i.started.Load() || i.Snapshot().Status == Paused {
+	if !i.terminalScreenReady() {
 		return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted
 	}
 	data, altScreen, ok, err := c.CapturePaneRedraw(ctx)

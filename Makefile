@@ -376,7 +376,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.12.0
+TYMUX_VERSION ?= v1.14.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -933,7 +933,7 @@ $(LINTER_BIN): $(LINTER_SRC)
 # excluded outright since scanning them just re-lints scripts already
 # covered by their own branch). Includes scripts/ssq-hook-handler, which has
 # no .sh extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+SHELL_SCRIPTS := $(shell find . -type d \( -name third_party -o -name node_modules -o -path './.git' -o -path './.claude/worktrees' \) -prune -o -type f \( -name '*.sh' -o -name ssq-hook-handler \) -print)
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)

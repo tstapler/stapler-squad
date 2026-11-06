@@ -319,3 +319,21 @@ export function formatAgo(ts: Timestamp | undefined, now: number = Date.now()): 
   if (diffHour < 24) return `${diffHour}h ago`;
   return `${diffDay}d ago`;
 }
+
+/**
+ * Reasons TriggerRemediationNow has a wired action for — mirrors
+ * remediationActionByReason in server/services/backlog_service_stuck.go.
+ */
+const REMEDIABLE_STUCK_REASONS: ReadonlySet<StuckReason> = new Set([
+  StuckReason.BOUNCING,
+  StuckReason.ABANDONED_REVIEW,
+  StuckReason.AUTONOMOUS_STUCK,
+  StuckReason.STALE_WORK,
+  StuckReason.ORPHANED_TRIAGE,
+  StuckReason.PR_PENDING_NO_PR,
+  StuckReason.PR_NEEDS_FIX,
+]);
+
+export function hasRemediationAction(reason: StuckReason): boolean {
+  return REMEDIABLE_STUCK_REASONS.has(reason);
+}

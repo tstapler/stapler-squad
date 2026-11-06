@@ -114,7 +114,7 @@ func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, me
 // No-op (not an error) if the session doesn't exist anywhere or is already archived, so
 // callers can invoke this unconditionally from a sweep without extra existence checks.
 func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
-	inst := s.FindLiveInstance(sessionUUID)
+	inst := s.findLifecycleInstance(nil, sessionUUID)
 	if inst == nil {
 		if s.concStorage == nil {
 			return nil // fake InstanceStore (tests) — no storage-only fallback available
@@ -134,7 +134,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 		// unrelated mutation happens to call SaveInstances for it.
 		if archived {
 			log.Info("ArchiveSessionByUUID: archived via storage-only fallback (session not in live poller)", "uuid", sessionUUID)
-			if reInst := s.FindLiveInstance(sessionUUID); reInst != nil {
+			if reInst := s.findLifecycleInstance(nil, sessionUUID); reInst != nil {
 				if err := s.storage.SaveInstances([]*session.Instance{reInst}); err != nil {
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}

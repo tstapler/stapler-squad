@@ -87,12 +87,27 @@ const (
 )
 
 var (
+	daemonRecoveryCounter = mustInt64Counter("tymux_daemon_recovery_attempts_total",
+		metric.WithDescription("Automatic daemon recovery attempts by outcome"))
+	daemonHealthyGauge = mustInt64Gauge("tymux_daemon_healthy",
+		metric.WithDescription("1 when the last daemon probe or recovery succeeded, otherwise 0"))
+	daemonFailureGauge = mustInt64Gauge("tymux_daemon_consecutive_failures",
+		metric.WithDescription("Consecutive unsuccessful daemon probes"))
+	daemonWedgedCounter = mustInt64Counter("tymux_daemon_wedged_reports_total",
+		metric.WithDescription("Reports that the daemon accepted connections but answered no probe for daemonWedgedAfter (likely wedged; never auto-restarted)"))
 	daemonRestartCounter = mustInt64Counter("tymux_daemon_restarts_total",
 		metric.WithDescription("tymuxd spawns/restarts observed by this process, by reason (cold_start, replace, detected_restart)"))
 	daemonStartDuration = mustFloat64Histogram("tymux_daemon_start_duration_ms",
 		metric.WithDescription("Time from spawning tymuxd until it answers health checks (or the retry budget is exhausted), by outcome"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
+	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
+		metric.WithDescription("1 while tymuxd's Unix control socket is down but its deprecated TCP listener answers (sessions are on the unauthenticated fallback), otherwise 0"))
+	tcpListenerUpGauge = mustInt64Gauge("tymux_tcp_listener_up",
+		metric.WithDescription("1 while tymuxd's deprecated TCP listener answers, 0 when it does not. Informational: squad uses the Unix control socket, but other TCP-only clients of the daemon depend on it. Not part of daemon health"))
+	daemonDegradedSecondsGauge = mustFloat64Gauge("tymux_daemon_degraded_seconds",
+		metric.WithDescription("Seconds the current degraded episode (Unix control socket down, TCP fallback answering) has lasted, 0 when not degraded"),
+		metric.WithUnit("s"))
 	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
 		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))
 )
@@ -101,6 +116,32 @@ const (
 	daemonStartOK     = "ok"
 	daemonStartFailed = "failed"
 )
+
+func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
+	value := int64(0)
+	if healthy {
+		value = 1
+	}
+	daemonHealthyGauge.Record(ctx, value)
+	daemonFailureGauge.Record(ctx, int64(failures))
+}
+
+func recordTCPListenerUp(ctx context.Context, up bool) {
+	value := int64(0)
+	if up {
+		value = 1
+	}
+	tcpListenerUpGauge.Record(ctx, value)
+}
+
+func recordDaemonDegraded(ctx context.Context, degraded bool, lasted time.Duration) {
+	value := int64(0)
+	if degraded {
+		value = 1
+	}
+	daemonDegradedGauge.Record(ctx, value)
+	daemonDegradedSecondsGauge.Record(ctx, lasted.Seconds())
+}
 
 func recordDaemonRestart(reason string) {
 	daemonRestartCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", reason)))
@@ -130,6 +171,14 @@ func mustFloat64Histogram(name string, opts ...metric.Float64HistogramOption) me
 		panic(err)
 	}
 	return h
+}
+
+func mustFloat64Gauge(name string, opts ...metric.Float64GaugeOption) metric.Float64Gauge {
+	g, err := telemetry.GetMeter().Float64Gauge(name, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return g
 }
 
 func mustInt64Gauge(name string, opts ...metric.Int64GaugeOption) metric.Int64Gauge {

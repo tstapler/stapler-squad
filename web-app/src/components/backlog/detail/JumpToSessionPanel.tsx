@@ -24,6 +24,8 @@ export interface JumpToSessionPanelProps {
   backlogItemId: string;
   /** Fetches the full Session proto by id — the real-time terminal needs more than the lightweight LinkedSession the backlog item already carries (useSessionService's getSession). */
   getSession: (id: string) => Promise<Session | null>;
+  /** Force-restarts the item's work session; shown beside the "Session not found." error when provided (pr_pending items). */
+  onRestartWork?: () => void | Promise<void>;
 }
 
 function roleLabel(role: string): string {
@@ -31,6 +33,7 @@ function roleLabel(role: string): string {
 }
 
 const PANEL_ID = "jump-to-session-panel";
+type SessionErrorKind = "not_found" | "load_failed";
 
 /**
  * A single button that opens a real, interactive terminal for the backlog
@@ -40,7 +43,7 @@ const PANEL_ID = "jump-to-session-panel";
  * operator pick a different role's most recent session when more than one
  * is available.
  */
-export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }: JumpToSessionPanelProps) {
+export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession, onRestartWork }: JumpToSessionPanelProps) {
   const { track } = useAnalytics();
   const { isMobile } = useViewport();
   const defaultTarget = getMostRecentJumpableSession(linkedSessions);
@@ -55,6 +58,8 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<SessionErrorKind | null>(null);
+  const [restarting, setRestarting] = useState(false);
 
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -74,6 +79,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
     setSession(null); // never show the previous open/role's session while loading
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     // View-only fetch to populate the inline terminal, not a user-initiated
     // mutation — the click that triggers it is tracked separately below.
     // analytics-exempt
@@ -82,6 +88,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
         if (seq !== fetchSeqRef.current) return;
         if (!result) {
           setError("Session not found.");
+          setErrorKind("not_found");
           setSession(null);
         } else {
           setSession(result);
@@ -90,6 +97,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       .catch(() => {
         if (seq !== fetchSeqRef.current) return;
         setError("Failed to load session.");
+        setErrorKind("load_failed");
         setSession(null);
       })
       .finally(() => {
@@ -230,7 +238,34 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       {!isMobile && expanded && (
         <div id={PANEL_ID} className={styles.panel} data-testid={PANEL_ID}>
           {loading && <div className={styles.panelLoading}>Loading terminal…</div>}
-          {!loading && error && <div className={styles.panelError}>{error}</div>}
+          {!loading && error && (
+            <div className={styles.panelError}>
+              {error}
+              {errorKind === "not_found" && onRestartWork && (
+                <button
+                  type="button"
+                  data-testid="jump-to-session-restart-work"
+                  disabled={restarting}
+                  onClick={async () => {
+                    if (restarting) return;
+                    setRestarting(true);
+                    track({
+                      name: "backlog_restart_work_from_missing_session",
+                      category: "user_action",
+                      component: "JumpToSessionPanel",
+                    });
+                    try {
+                      await onRestartWork();
+                    } finally {
+                      setRestarting(false);
+                    }
+                  }}
+                >
+                  Restart work
+                </button>
+              )}
+            </div>
+          )}
           {!loading && !error && session && (
             <SessionDetail
               session={session}

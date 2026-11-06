@@ -689,6 +689,10 @@ type Instance struct {
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	// -1 reserves automatic hibernation; nonnegative values count attached streams.
+	terminalViewers      atomic.Int64
+	terminalViewClosedAt atomic.Int64
+
 	snapshot atomic.Pointer[InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
@@ -771,7 +775,8 @@ type Instance struct {
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
-	hibernateWG sync.WaitGroup
+	hibernateWG         sync.WaitGroup
+	hibernateTeardownWG sync.WaitGroup
 
 	// scrollLease serializes this instance's own concurrent
 	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
@@ -2706,6 +2711,14 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	}
 
 	migrating := backendOverride != "" && backendOverride != i.Backend
+	if migrating {
+		if old, ok := capabilityOf[DaemonReadiness](i.pm()); ok && i.tymuxSessionID() != "" {
+			// Confirm the old daemon is reachable before Close tears down its stream or ownership.
+			if err := old.ensureDaemonReady(); err != nil {
+				return fmt.Errorf("cannot migrate until the old tymux daemon can confirm session termination; retry after daemon recovery: %w", err)
+			}
+		}
+	}
 
 	waspaused := i.Status == Paused
 
@@ -2768,6 +2781,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 	if err := i.updateProcessManagerForRestart(migrating, backendOverride, command); err != nil {
 		return err
+	}
+	if migrating {
+		i.applyLaunchEnv()
 	}
 
 	// Start the new session

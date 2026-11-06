@@ -45,6 +45,12 @@ var ErrTymuxdUnreachable = errors.New("tymux: tymuxd unreachable")
 // (research/pitfalls.md §2/§4's shared mitigation).
 var ErrTymuxdPortSquatted = errors.New("tymux: tymuxd port squatted by another process")
 
+// ErrTymuxdControlSocketUnresponsive means tymuxd's Unix control socket accepts connections but
+// never answers and its TCP fallback listener is down, so neither transport can reach the daemon.
+// It is reported and the daemon is not killed (it may hold live panes). Distinct from
+// ErrTymuxdPortSquatted: nothing is listening on the TCP port.
+var ErrTymuxdControlSocketUnresponsive = errors.New("tymux: tymuxd control socket unresponsive")
+
 // classifyRPCError wraps an error returned by an rpcTransport call so a
 // caller can test errors.Is(err, ErrTymuxdUnreachable) whenever the failure
 // happened at the transport level (Connect-Go's connect.CodeUnavailable —
@@ -61,3 +67,7 @@ func classifyRPCError(op string, err error) error {
 	}
 	return fmt.Errorf("tymux: %s: %w", op, err)
 }
+
+// ErrTymuxdUnresponsive means both tymuxd's TCP listener and its Unix control socket accept
+// connections but neither answers: the daemon is alive but wedged. Reported, never killed.
+var ErrTymuxdUnresponsive = errors.New("tymux: tymuxd listeners accept connections but do not answer")

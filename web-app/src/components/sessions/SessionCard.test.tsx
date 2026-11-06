@@ -434,3 +434,22 @@ describe("SessionCard — visibleColumns gating (Story 2.2.3)", () => {
     expect(screen.queryByText(/MB RAM/)).toBeNull();
   });
 });
+
+describe("SessionCard — federated host label", () => {
+  it("SessionCard_should_ShowHostName_When_SessionHasHostId", () => {
+    const session = { ...minimalSession, hostId: "h1", hostDisplayName: "devbox:8444" } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("session-host")).toHaveTextContent("devbox:8444");
+  });
+
+  it("SessionCard_should_MarkHostOffline_When_HostIsStale", () => {
+    const session = { ...minimalSession, hostId: "h1", hostDisplayName: "devbox:8444", hostStale: true } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("session-host")).toHaveTextContent("(offline)");
+  });
+
+  it("SessionCard_should_NotShowHost_When_SessionIsLocal", () => {
+    render(<SessionCard session={minimalSession as unknown as Session} />);
+    expect(screen.queryByTestId("session-host")).toBeNull();
+  });
+});
