@@ -28,12 +28,19 @@ type Event struct {
 }
 
 // FlowQuery is the single parameter object for an aggregation: a window spec,
-// optional filters and Config overrides.
+// optional filters and Config overrides. Sections (empty means all), Compact
+// and ListLimit shape the response only; they are part of the cache key.
 type FlowQuery struct {
 	Window  WindowSpec
 	ItemIDs []ItemID
 	Cohort  string
 	Config  Config
+	// Sections selects which sections to compute; the rest are Skipped.
+	Sections []SectionName
+	// Compact omits trend buckets and limits every top-N list to 3.
+	Compact bool
+	// ListLimit is the requested top-N list size (0 = default 10, max 50).
+	ListLimit int
 }
 
 // Cause labels why an item was reopened or dequeued. Closed enum.
