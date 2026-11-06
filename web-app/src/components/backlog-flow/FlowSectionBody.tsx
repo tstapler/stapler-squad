@@ -2,7 +2,9 @@
 
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { CompareFlowWindowsResponse, FlowSummary } from "@/gen/session/v1/backlog_flow_pb";
+import { FlowAnomalies } from "./FlowAnomalies";
 import { FlowCauses } from "./FlowCauses";
+import { FlowDataNotes } from "./FlowDataNotes";
 import { FlowFunnel } from "./FlowFunnel";
 import { FlowPR } from "./FlowPR";
 import { FlowReview } from "./FlowReview";
@@ -18,6 +20,9 @@ export interface FlowSectionBodyProps {
   /** Every number is a button that sets the `drill` URL parameter through this. */
   onDrill: (key: string) => void;
 }
+
+/** The response does not flag archived thrashers yet; callers with that knowledge pass their own ids. */
+export const NO_ARCHIVED_IDS: ReadonlySet<string> = new Set();
 
 const captureSince = (summary: FlowSummary): Date | null => (summary.meta?.captureSince ? timestampDate(summary.meta.captureSince) : null);
 
@@ -46,6 +51,10 @@ export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectio
       return summary.stuck ? (
         <FlowStuck stuck={summary.stuck} estimated={summary.stuck.meta?.estimated ?? []} captureSince={captureSince(summary)} onDrill={onDrill} />
       ) : null;
+    case "anomalies":
+      return summary.anomalies ? <FlowAnomalies anomalies={summary.anomalies} archivedIds={NO_ARCHIVED_IDS} onDrill={onDrill} /> : null;
+    case "notes":
+      return <FlowDataNotes notes={summary.notes} meta={summary.meta} />;
     default:
       return null;
   }

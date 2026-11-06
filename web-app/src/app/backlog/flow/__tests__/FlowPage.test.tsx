@@ -266,4 +266,37 @@ describe("FlowPage", () => {
 
     expect(await screen.findByRole("button", { name: action })).toBeInTheDocument();
   });
+
+  it("FlowPage_should_RenderSectionBodiesAndOpenAnomaliesFromBanner_When_ThrashPresent", async () => {
+    await renderAt("/backlog/flow", <FlowPage />);
+
+    expect(screen.getByRole("group", { name: "Health summary" })).toBeInTheDocument();
+    expect(screen.getByTestId("flow-thrash-banner")).toHaveTextContent("35 items thrashing; excluded from averages");
+    expect(screen.queryByText("No thrash episodes in this window")).toBeNull();
+
+    fireEvent.click(within(screen.getByTestId("flow-thrash-banner")).getByRole("button", { name: "View" }));
+    expect(await screen.findByText("No thrash episodes in this window")).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(heading("Anomalies & thrash")));
+  });
+
+  it("FlowPage_should_ReplaceBannerWithUnavailableReload_When_AnomalyDataFailed", async () => {
+    mockClient.getFlowSummary.mockResolvedValue(respond({ anomalies: { meta: { status: "failed", error: "boom" } } }));
+    await renderAt("/backlog/flow", <FlowPage />);
+
+    const banner = await screen.findByTestId("flow-thrash-banner");
+    expect(banner).toHaveTextContent("Anomaly data unavailable");
+    expect(screen.getByTestId("flow-section-error-anomalies")).toBeInTheDocument();
+
+    mockClient.getFlowSummary.mockResolvedValue(respond());
+    fireEvent.click(within(banner).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.getByTestId("flow-thrash-banner")).toHaveTextContent("35 items thrashing"));
+  });
+
+  it("FlowPage_should_SetDrillParam_When_NumberClicked", async () => {
+    mockClient.getFlowSummary.mockResolvedValue(respond({ tiles: { meta: { status: "ok" }, merged: { value: 9, drillKey: "tiles.merged" } } }));
+    await renderAt("/backlog/flow", <FlowPage />);
+
+    fireEvent.click(within(await screen.findByTestId("flow-tile-throughput")).getByRole("button", { name: /9 merged/ }));
+    expect(location()).toBe("/backlog/flow?drill=tiles.merged");
+  });
 });

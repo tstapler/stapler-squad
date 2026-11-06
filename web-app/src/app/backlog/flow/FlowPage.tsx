@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { AppLink } from "@/components/ui/AppLink";
-import { FlowSectionBody } from "@/components/backlog-flow/FlowSectionBody";
+import { FlowSectionBody, NO_ARCHIVED_IDS } from "@/components/backlog-flow/FlowSectionBody";
+import { ThrashBanner } from "@/components/backlog-flow/ThrashBanner";
 import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
@@ -198,6 +199,9 @@ export function FlowPage() {
           </p>
         ))}
         {flow.isStale && <StaleBanner since={asOf ?? new Date(flow.lastSuccessAt ?? now)} onRetry={reload} />}
+        {flow.phase === "ready" && (
+          <ThrashBanner anomalies={summary?.anomalies} archivedIds={NO_ARCHIVED_IDS} onView={() => jumpTo("anomalies")} onReload={reload} />
+        )}
         {flow.phase === "error" && <HardError message={flow.error ?? "Unknown error"} onRetry={reload} />}
         {flow.phase === "too-large" && <WindowTooLarge window={url.window} tooLarge={flow.tooLarge} onPick={selectWindow} />}
         {(flow.phase === "loading" || flow.phase === "ready") && (
