@@ -48,10 +48,14 @@ const (
 	toolRequestHelp  = "request_help"
 	toolAnswerHelp   = "answer_help"
 	// toolRequestOwnerAction is declared in tools_owner_action.go.
+	// toolReportPRCreated writes a PR onto a backlog item, so it is identity-gated
+	// even though it is a backlog tool (a forged UUID could record a PR on another
+	// session's item).
+	toolReportPRCreated = "report_pr_created"
 )
 
 // identityGatedTools is the role allowlist of ADR-007 rule 2: work sessions
-// use all five tools; the hidden roles, which already have bespoke reporting
+// use all of them; the hidden roles, which already have bespoke reporting
 // tools, may only ask for help and list their wakes. A change here needs an ADR
 // amendment, and every tool that grants authority by identity must have a row.
 var identityGatedTools = map[string][]callerRole{
@@ -62,6 +66,8 @@ var identityGatedTools = map[string][]callerRole{
 	toolAnswerHelp:   {roleWork},
 
 	toolRequestOwnerAction: {roleWork},
+	// Work sessions only; the handler still checks the caller's link to the item.
+	toolReportPRCreated: {roleWork},
 }
 
 // roleOfItemSession maps a backlog ItemSession role to a callerRole; a session
