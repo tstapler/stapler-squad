@@ -65,6 +65,7 @@ func (i *Instance) AttachPR(ref PRRef, source AttachSource, initial PRInitial) e
 		return err
 	}
 	i.persistPRAttach(out.view)
+	log.Info("session pr attached", "session", i.Snapshot().Title, "pr", ref.String(), "role", out.view.Role, "source", source)
 	return nil
 }
 

@@ -96,6 +96,7 @@ func TestDetachPRPersisted_ShouldReportNotFound_WhenPRNotAttached(t *testing.T) 
 func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	inst, ed := editorInstance(t)
 	r12 := mustPRRef(t, "", "acme", "app", 12)
+	pinsBefore, unpinsBefore := PRPinCount("pin"), PRPinCount("unpin")
 
 	require.NoError(t, inst.PinPRPersisted(context.Background(), r12, true))
 	active := ActivePR(inst.Snapshot().GitHub.PRs, "")
@@ -106,6 +107,8 @@ func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	active = ActivePR(inst.Snapshot().GitHub.PRs, "")
 	assert.Equal(t, 13, active.Ref.Number())
 	assert.Equal(t, []bool{true, false}, ed.pinCalls)
+	assert.GreaterOrEqual(t, PRPinCount("pin"), pinsBefore+1, "ssq_pr_pin_total{action=pin}")
+	assert.GreaterOrEqual(t, PRPinCount("unpin"), unpinsBefore+1, "ssq_pr_pin_total{action=unpin}")
 }
 
 func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {

@@ -17,6 +17,7 @@ const (
 	MetricPRPollTotal          = "ssq_pr_poll_total"
 	MetricPRPollFailuresTotal  = "ssq_pr_poll_failures_total"
 	MetricSessionPRCount       = "ssq_session_pr_count"
+	MetricPRPinTotal           = "ssq_pr_pin_total"
 	MetricPRDiscoveryListCalls = "ssq_pr_discovery_list_calls_total"
 	MetricPRUnverifiedTerminal = "ssq_pr_unverified_terminal_rows"
 )
@@ -27,10 +28,11 @@ type prPollMetrics struct {
 	polls         *counterByLabel
 	failures      *counterByLabel
 	sessionCounts *counterByLabel
+	pins          *counterByLabel
 	discoveryList atomic.Int64
 	unverified    atomic.Int64
 
-	pollOtel, failOtel, discoveryOtel metric.Int64Counter
+	pollOtel, failOtel, discoveryOtel, pinOtel metric.Int64Counter
 	sessionPRCount                    metric.Int64Histogram
 	unverifiedGauge                   metric.Int64Gauge
 }
@@ -38,11 +40,12 @@ type prPollMetrics struct {
 var prMetrics = newPRPollMetrics()
 
 func newPRPollMetrics() *prPollMetrics {
-	m := &prPollMetrics{polls: newCounterByLabel(), failures: newCounterByLabel(), sessionCounts: newCounterByLabel()}
+	m := &prPollMetrics{polls: newCounterByLabel(), failures: newCounterByLabel(), sessionCounts: newCounterByLabel(), pins: newCounterByLabel()}
 	meter := telemetry.GetMeter()
 	m.pollOtel, _ = meter.Int64Counter(MetricPRPollTotal)
 	m.failOtel, _ = meter.Int64Counter(MetricPRPollFailuresTotal)
 	m.discoveryOtel, _ = meter.Int64Counter(MetricPRDiscoveryListCalls)
+	m.pinOtel, _ = meter.Int64Counter(MetricPRPinTotal)
 	m.sessionPRCount, _ = meter.Int64Histogram(MetricSessionPRCount)
 	m.unverifiedGauge, _ = meter.Int64Gauge(MetricPRUnverifiedTerminal)
 	return m
@@ -73,6 +76,18 @@ func (m *prPollMetrics) observeSessionPRCount(n int) {
 	m.sessionCounts.add(strconv.Itoa(n))
 	if m.sessionPRCount != nil {
 		m.sessionPRCount.Record(context.Background(), int64(n))
+	}
+}
+
+// pin counts one user pin or unpin of a session PR.
+func (m *prPollMetrics) pin(pinned bool) {
+	action := "unpin"
+	if pinned {
+		action = "pin"
+	}
+	m.pins.add(action)
+	if m.pinOtel != nil {
+		m.pinOtel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("action", action)))
 	}
 }
 
@@ -111,3 +126,6 @@ func (c *counterByLabel) get(label string) int64 {
 
 // SessionPRCountObservations is how many times ssq_session_pr_count observed n in this process.
 func SessionPRCountObservations(n int) int64 { return prMetrics.sessionCounts.get(strconv.Itoa(n)) }
+
+// PRPinCount is ssq_pr_pin_total{action} ("pin" or "unpin") in this process.
+func PRPinCount(action string) int64 { return prMetrics.pins.get(action) }

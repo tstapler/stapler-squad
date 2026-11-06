@@ -79,6 +79,8 @@ func (i *Instance) PinPRPersisted(ctx context.Context, ref PRRef, pinned bool) e
 	}
 	i.PinPR(ref, pinned)
 	i.persistMirrorLocked()
+	prMetrics.pin(pinned)
+	log.Info("session pr pinned", "session", snap.Title, "pr", ref.String(), "pinned", pinned)
 	return nil
 }
 
