@@ -114,7 +114,7 @@ func TestProbe_should_HonourConfirmedSet_When_ResolveOnlyAfterExpiryOrMtimeChang
 }
 
 func TestProbe_should_OnlyExecuteScriptOnConfirm_When_RealRunnerAndMarkerFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	marker := filepath.Join(dir, "marker")
 	script := filepath.Join(dir, "tool")
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n: > "+marker+"\necho '  --alpha  first flag'\n"), 0o700))

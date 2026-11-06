@@ -32,7 +32,7 @@ func hermeticProber(t *testing.T, dirs []string, opts ...Option) *Prober {
 }
 
 func TestProbe_should_ReturnNotFoundAndNeverRun_When_LookPathFails(t *testing.T) {
-	p := hermeticProber(t, []string{t.TempDir()})
+	p := hermeticProber(t, []string{canonicalTempDir(t)})
 	for i := 0; i < 2; i++ {
 		res := p.Probe(context.Background(), "nope", ProbeOpts{})
 		assert.Equal(t, ProbeResult{Status: ProbeStatusNotFound}, res)
@@ -40,7 +40,7 @@ func TestProbe_should_ReturnNotFoundAndNeverRun_When_LookPathFails(t *testing.T)
 }
 
 func TestProbe_should_CallLookPathWithExpandedHome_When_TildeCommandAndWithHome(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	want := writeExec(t, home, "tool", 0o755)
 	var lookups int
 	p := NewProber(WithHome(home), WithLookPath(func(string) (string, error) { lookups++; return "", fs.ErrNotExist }))
@@ -53,7 +53,7 @@ func TestProbe_should_CallLookPathWithExpandedHome_When_TildeCommandAndWithHome(
 }
 
 func TestProbe_should_TreatErrDotAsNotFound_When_LookPathReturnsErrDot(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	writeExec(t, dir, "tool", 0o755)
 	p := hermeticProber(t, nil, WithLookPath(func(name string) (string, error) {
 		return filepath.Join(dir, name), &exec.Error{Name: name, Err: exec.ErrDot}
@@ -62,7 +62,7 @@ func TestProbe_should_TreatErrDotAsNotFound_When_LookPathReturnsErrDot(t *testin
 }
 
 func TestProbe_should_FindBinary_When_OnlyInLoginShellPathAndReportNotFoundWhen_AliasOnly(t *testing.T) {
-	shellDir := t.TempDir()
+	shellDir := canonicalTempDir(t)
 	want := writeExec(t, shellDir, "proxy-tool", 0o755)
 	p := hermeticProber(t, []string{shellDir})
 
@@ -74,7 +74,7 @@ func TestProbe_should_FindBinary_When_OnlyInLoginShellPathAndReportNotFoundWhen_
 }
 
 func TestProbe_should_ReturnNotFound_When_DirectoryNonExecutableOrWorldWritable(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "adir"), 0o755))
 	writeExec(t, dir, "plain", 0o644)
 	writeExec(t, dir, "ww", 0o757)
@@ -90,7 +90,7 @@ func TestProbe_should_ReturnNotFound_When_DirectoryNonExecutableOrWorldWritable(
 }
 
 func TestProbe_should_NeverRun_When_WrapperCommand(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	envPath := writeExec(t, dir, "env", 0o755)
 	writeExec(t, dir, "npx", 0o755)
 	p := hermeticProber(t, []string{dir})
@@ -101,7 +101,7 @@ func TestProbe_should_NeverRun_When_WrapperCommand(t *testing.T) {
 }
 
 func TestProbe_should_ResolveFirstTokenOnly_When_CommandHasDangerousArgs(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	want := writeExec(t, dir, "claude", 0o755)
 	p := hermeticProber(t, []string{dir})
 
@@ -123,7 +123,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 }
 
 func TestProbe_should_EmitExactlyOneProgramProbeLog_When_EachOutcome(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	writeExec(t, dir, "tool", 0o755)
 	writeExec(t, dir, "env", 0o755)
 	p := hermeticProber(t, []string{dir})
@@ -147,7 +147,7 @@ func TestProbe_should_LogInfoForNotFound_When_Probed(t *testing.T) {
 }
 
 func TestProbe_should_NotLogArgsOrEnvValues_When_CommandHasArgsAndAssignments(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	writeExec(t, dir, "claude", 0o755)
 	buf := captureLogs(t)
 	hermeticProber(t, []string{dir}).Probe(context.Background(), "FOO=secret claude --x argvalue123", ProbeOpts{})
@@ -159,7 +159,7 @@ func TestProbe_should_NotLogArgsOrEnvValues_When_CommandHasArgsAndAssignments(t 
 }
 
 func TestLookInDirs_should_SkipRelativeDirsAndNonExecutables_When_Searching(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	writeExec(t, dir, "tool", 0o644)
 	_, err := lookInDirs("tool", []string{"relative/dir", dir})
 	assert.Error(t, err)
@@ -167,4 +167,13 @@ func TestLookInDirs_should_SkipRelativeDirsAndNonExecutables_When_Searching(t *t
 	got, err := lookInDirs("tool2", []string{dir})
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+// canonicalTempDir returns t.TempDir() with symlinks resolved: the prober
+// reports EvalSymlinks paths, and macOS /var is a symlink to /private/var.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
 }

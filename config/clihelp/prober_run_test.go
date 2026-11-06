@@ -65,7 +65,7 @@ func runProber(t *testing.T, dirs []string, f *fakeRun, head []byte, opts ...Opt
 
 func toolIn(t *testing.T, name string) (dir, path string) {
 	t.Helper()
-	dir = t.TempDir()
+	dir = canonicalTempDir(t)
 	return dir, writeExec(t, dir, name, 0o755)
 }
 
@@ -287,7 +287,7 @@ func TestProbe_should_GiveAllTenCallersTheRealResult_When_SameBinaryProbedConcur
 }
 
 func TestProbe_should_ReturnBusyUncachedAndCapConcurrency_When_TwoFlightsHoldBothSlots(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	for _, n := range []string{"a", "b", "c"} {
 		writeExec(t, dir, n, 0o755)
 	}
