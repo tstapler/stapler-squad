@@ -37,11 +37,11 @@ export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectio
       ) : null;
     case "causes":
       return summary.causes ? (
-        <FlowCauses causes={summary.causes} estimated={summary.causes.meta?.estimated ?? []} onDrill={onDrill} />
+        <FlowCauses causes={summary.causes} estimated={summary.causes.meta?.estimated ?? []} trends={summary.trends} onDrill={onDrill} />
       ) : null;
     case "review":
       return summary.review ? (
-        <FlowReview review={summary.review} estimated={summary.review.meta?.estimated ?? []} onDrill={onDrill} />
+        <FlowReview review={summary.review} estimated={summary.review.meta?.estimated ?? []} trends={summary.trends} onDrill={onDrill} />
       ) : null;
     case "pr":
       return summary.pr ? (

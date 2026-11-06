@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { FlowCauseRow, FlowCausesSection } from "@/gen/session/v1/backlog_flow_pb";
+import type { FlowCauseRow, FlowCausesSection, FlowTrendsSection } from "@/gen/session/v1/backlog_flow_pb";
 import { DrillButton } from "./DrillButton";
+import { CauseSparkline } from "./FlowTrends";
 import { formatInt, plural } from "./flowFormatters";
 import * as styles from "./flow.css";
 
@@ -10,6 +11,8 @@ interface FlowCausesProps {
   causes: FlowCausesSection;
   /** Estimated codes of the causes section; `pr_fix_cause:unavailable` changes the PR fix label. */
   estimated: readonly string[];
+  /** Weekly rework by cause; each row embeds its own sparkline when present. */
+  trends?: FlowTrendsSection;
   onDrill: (key: string) => void;
 }
 
@@ -61,7 +64,7 @@ function SortHeader({ sortKey, sort, onSort, children }: SortHeaderProps) {
 }
 
 /** Ranked rework causes; each count is a drill button and each header sorts. */
-export function FlowCauses({ causes, estimated, onDrill }: FlowCausesProps) {
+export function FlowCauses({ causes, estimated, trends, onDrill }: FlowCausesProps) {
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const prFixSeparable = !estimated.includes(PR_FIX_UNAVAILABLE);
   const label = (cause: string) => causeLabel(cause, prFixSeparable);
@@ -86,6 +89,9 @@ export function FlowCauses({ causes, estimated, onDrill }: FlowCausesProps) {
             <SortHeader sortKey="count" sort={sort} onSort={onSort}>
               Count
             </SortHeader>
+            <th scope="col" className={styles.cell}>
+              Trend (weekly)
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -98,6 +104,9 @@ export function FlowCauses({ causes, estimated, onDrill }: FlowCausesProps) {
                 <DrillButton drillKey={row.count?.drillKey ?? ""} onDrill={onDrill} label={String(row.count?.value ?? 0)}>
                   {formatInt(row.count?.value ?? 0)}
                 </DrillButton>
+              </td>
+              <td className={styles.cell}>
+                <CauseSparkline trends={trends} cause={row.cause} label={label(row.cause)} />
               </td>
             </tr>
           ))}

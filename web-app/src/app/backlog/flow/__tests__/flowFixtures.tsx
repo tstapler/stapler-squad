@@ -25,8 +25,61 @@ export function makeSummary(overrides: SummaryInit = {}): FlowSummary {
     stuck: { meta: OK, open: 8, reasons: [{ reason: "x", duration: { n: 30 } }, { reason: "y", duration: { n: 16 } }] },
     anomalies: { meta: OK, thrashItems: { value: 35 } },
     notes: { meta: OK },
+    trends: makeTrends(),
   };
   return create(FlowSummarySchema, { ...base, ...overrides } as SummaryInit);
+}
+
+const WEEK_MS = 7 * 86_400_000;
+const FIRST_WEEK = Date.UTC(2026, 9, 5);
+const weekStart = (i: number) => timestampFromDate(new Date(FIRST_WEEK + i * WEEK_MS));
+
+interface WeeklyMix {
+  pass: number;
+  fail: number;
+  partial: number;
+  unverifiable: number;
+}
+
+/** Five weekly buckets: FAIL share 41% in week 1, 28% in week 5, and an empty week 3. */
+export const VERDICT_WEEKS: readonly WeeklyMix[] = [
+  { pass: 50, fail: 41, partial: 4, unverifiable: 5 },
+  { pass: 55, fail: 35, partial: 4, unverifiable: 6 },
+  { pass: 0, fail: 0, partial: 0, unverifiable: 0 },
+  { pass: 58, fail: 30, partial: 5, unverifiable: 7 },
+  { pass: 60, fail: 28, partial: 5, unverifiable: 7 },
+];
+
+export function makeTrends(): SummaryInit["trends"] {
+  const throughput = [4, 6, 0, 9, 9];
+  const reviewFail = [30, 25, 0, 20, 12];
+  return {
+    meta: OK,
+    throughput: throughput.map((n, i) => ({ weekStart: weekStart(i), n })),
+    throughputTotal: 28,
+    verdictMix: VERDICT_WEEKS.map((w, i) => ({
+      weekStart: weekStart(i),
+      n: w.pass + w.fail + w.partial + w.unverifiable,
+      cells: [
+        { class: "judgment", outcome: "PASS", n: w.pass },
+        { class: "judgment", outcome: "FAIL", n: w.fail },
+        { class: "judgment", outcome: "PARTIAL", n: w.partial },
+        { class: "judgment", outcome: "UNVERIFIABLE", n: w.unverifiable },
+      ].filter((cell) => cell.n > 0),
+    })),
+    verdictMixTotal: 500,
+    rework: reviewFail.map((n, i) => ({
+      weekStart: weekStart(i),
+      n,
+      byCause: [
+        { name: "review_fail", n },
+        { name: "pr_fix", n: i },
+        { name: "bounce", n: 0 },
+        { name: "other", n: 0 },
+      ],
+    })),
+    reworkTotal: 120,
+  };
 }
 
 export const resourceExhausted = (message: string) => new ConnectError(message, Code.ResourceExhausted);

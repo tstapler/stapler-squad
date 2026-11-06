@@ -1,15 +1,17 @@
 "use client";
 
-import type { FlowReviewSection } from "@/gen/session/v1/backlog_flow_pb";
+import type { FlowReviewSection, FlowTrendsSection } from "@/gen/session/v1/backlog_flow_pb";
 import { DeadlockTable } from "./DeadlockTable";
 import { DrillButton } from "./DrillButton";
 import { FlowRatio } from "./FlowRatio";
+import { FlowVerdictMix } from "./FlowVerdictMix";
 import * as styles from "./flow.css";
 
 interface FlowReviewProps {
   review: FlowReviewSection;
   /** Estimated codes of the review section. */
   estimated: readonly string[];
+  trends?: FlowTrendsSection;
   onDrill: (key: string) => void;
 }
 
@@ -28,7 +30,7 @@ function ExcludedNote({ review }: { review: FlowReviewSection }) {
 }
 
 /** Adjusted FAIL leads, raw FAIL follows; the streak table keeps its own state. */
-export function FlowReview({ review, estimated, onDrill }: FlowReviewProps) {
+export function FlowReview({ review, estimated, trends, onDrill }: FlowReviewProps) {
   const noVerdicts = (review.total?.value ?? 0) === 0;
   return (
     <div className={styles.block}>
@@ -52,6 +54,7 @@ export function FlowReview({ review, estimated, onDrill }: FlowReviewProps) {
           <ExcludedNote review={review} />
         </div>
       )}
+      <FlowVerdictMix trends={trends} />
       {review.deadlocks && (
         <DeadlockTable page={review.deadlocks} weakFilter={review.weakFilter} estimated={estimated.includes(DEADLOCK_ESTIMATED)} />
       )}

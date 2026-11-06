@@ -7,6 +7,7 @@ import type { CompareFlowWindowsResponse, FlowSummary } from "@/gen/session/v1/b
 import { DrillButton } from "./DrillButton";
 import { FlowDelta } from "./FlowDelta";
 import { FlowRatio } from "./FlowRatio";
+import { ThroughputSparkline } from "./FlowTrends";
 import { durationText, formatInt, plural } from "./flowFormatters";
 import * as styles from "./flow.css";
 
@@ -45,6 +46,7 @@ function ThroughputTile({ summary, comparison, onDrill }: FlowTilesProps) {
         )}
       </span>
       <FlowDelta comparison={comparison} metric="merged_items" good="up" />
+      <ThroughputSparkline trends={summary.trends} />
     </Tile>
   );
 }
