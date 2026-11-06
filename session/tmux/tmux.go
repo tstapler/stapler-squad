@@ -510,9 +510,11 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 const FormatSep = "|"
 
 // UTF8Env returns env with a UTF-8 LC_ALL appended so tmux does not mangle
-// non-ASCII/control characters in its output when the process has no locale.
+// control characters in its output when the process has no locale. Only the exec
+// path is affected (control-mode replies are not locale-filtered); callers must
+// still use FormatSep rather than rely on it. C.UTF-8 was verified on macOS tmux 3.8.
 func UTF8Env(env []string) []string {
-	return append(env, "LC_ALL=en_US.UTF-8")
+	return append(env, "LC_ALL=C.UTF-8")
 }
 
 // PaneDeadStatus reports whether a pane's wrapped program has exited
@@ -549,8 +551,13 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		return nil, fmt.Errorf("BatchPaneDeadStatus: %w", err)
 	}
 
+	return parsePaneDeadStatuses(string(out)), nil
+}
+
+// parsePaneDeadStatuses parses BatchPaneDeadStatus's list-panes output, keyed by session name.
+func parsePaneDeadStatuses(out string) map[string]PaneDeadStatus {
 	statuses := make(map[string]PaneDeadStatus)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
@@ -578,7 +585,7 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		}
 		statuses[name] = status
 	}
-	return statuses, nil
+	return statuses
 }
 
 // checkServerNotRunning runs tmux list-sessions directly (bypassing any circuit breaker)

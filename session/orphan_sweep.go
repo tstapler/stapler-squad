@@ -9,7 +9,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -47,7 +49,8 @@ import (
 // so a sweep tick landing in that window would otherwise see a legitimate
 // brand-new session as an orphan. Pass 0 only for the one-time startup call, where
 // this race cannot occur (no new session creation is possible before BuildRuntimeDeps
-// finishes). Any periodic caller MUST pass a nonzero minAge.
+// finishes). Any periodic caller MUST pass a nonzero minAge (production passes
+// orphanTmuxMinAge, 5m). The unparseable-created-time skip applies only when minAge > 0.
 func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) {
 	// Resolve once, here -- not per-command below. This is what actually makes this
 	// function test-safe: inside a `go test` binary it targets a per-process
@@ -86,19 +89,39 @@ type controlModeCommander interface {
 	ServerCommand(ctx context.Context, args ...string) (string, error)
 }
 
+// cmReadAttemptTimeout bounds each control-mode attempt of a read-only command so a
+// wedged client falls through to the next client or the exec fallback instead of
+// consuming the whole step budget.
+var cmReadAttemptTimeout = 3 * time.Second
+
+func isReadOnlyTmuxCommand(args []string) bool {
+	return len(args) > 0 && (args[0] == "list-sessions" || args[0] == "show-environment")
+}
+
 // newControlModeFirstRunner routes each tmux command over the first control-mode
-// client that accepts it and falls back to fallback (a subprocess) only when none is
-// available. A command that reached tmux and failed is returned as-is (never retried
-// through the fallback), so a failure stays fail-closed.
+// client that accepts it and falls back to fallback (a subprocess) when none does.
+// Read-only commands also move on after a client timeout; a command that reached tmux
+// and failed, and any kill-session timeout, is returned as-is (never retried), so a
+// failure stays fail-closed.
 func newControlModeFirstRunner[C controlModeCommander](clients []C, fallback tmuxRunFunc) tmuxRunFunc {
 	return func(ctx context.Context, args ...string) ([]byte, string, error) {
 		cmArgs, quoteErr := quoteControlModeArgs(args)
 		if quoteErr != nil {
-			return nil, "", quoteErr
+			// exec argv is not re-parsed by tmux, so it handles names control mode can't.
+			return fallback(ctx, args...)
 		}
+		readOnly := isReadOnlyTmuxCommand(args)
 		for _, c := range clients {
-			body, err := c.ServerCommand(ctx, cmArgs...)
+			attemptCtx, cancel := ctx, context.CancelFunc(func() {})
+			if readOnly {
+				attemptCtx, cancel = context.WithTimeout(ctx, cmReadAttemptTimeout)
+			}
+			body, err := c.ServerCommand(attemptCtx, cmArgs...)
+			cancel()
 			if errors.Is(err, tmux.ErrControlModeNotRunning) || errors.Is(err, tmux.ErrControlModeStopped) {
+				continue
+			}
+			if readOnly && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				continue
 			}
 			if err != nil {
@@ -115,15 +138,15 @@ var plainCMArgRe = regexp.MustCompile(`^[A-Za-z0-9_=.-]+$`)
 
 // quoteControlModeArgs single-quotes args for a control-mode command line, which
 // tmux re-parses (unlike exec argv): '#', ';' and spaces would otherwise be
-// comments, command separators or word breaks. An arg containing a single quote is
-// refused rather than escaped, keeping the sweep fail-closed.
+// comments, command separators or word breaks. An arg containing a single quote,
+// backslash or control character is refused rather than escaped.
 func quoteControlModeArgs(args []string) ([]string, error) {
 	out := make([]string, len(args))
 	for i, a := range args {
 		switch {
 		case plainCMArgRe.MatchString(a):
 			out[i] = a
-		case strings.ContainsAny(a, "'\n\\"):
+		case strings.ContainsAny(a, "'\\") || strings.IndexFunc(a, unicode.IsControl) >= 0:
 			return nil, fmt.Errorf("orphan sweep: refusing to send unquotable tmux argument %q over control mode", a)
 		default:
 			out[i] = "'" + a + "'"
@@ -135,6 +158,18 @@ func quoteControlModeArgs(args []string) ([]string, error) {
 // tmuxRunFunc runs one tmux command and returns its stdout, stderr and error.
 type tmuxRunFunc func(ctx context.Context, args ...string) (stdout []byte, stderr string, err error)
 
+var lastSweepFailureLogUnix atomic.Int64
+
+// logSweepFailure warns about a skipped sweep at most once per 10 minutes, so a
+// persistent failure is visible without a line every 5-minute tick.
+func logSweepFailure(at time.Time, msg string, err error) {
+	last := lastSweepFailureLogUnix.Load()
+	if at.Unix()-last < 600 || !lastSweepFailureLogUnix.CompareAndSwap(last, at.Unix()) {
+		return
+	}
+	log.Warn("orphan sweep: "+msg, "err", err)
+}
+
 const (
 	orphanListTimeout = 10 * time.Second
 	orphanStepTimeout = 5 * time.Second
@@ -143,6 +178,11 @@ const (
 // mangledSuffixRe matches the "_<unix-seconds>" tail produced when tmux prints the
 // list format's separator as "_" (no UTF-8 locale) and the created time fuses onto
 // the name.
+var safeSessionNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// mangledSuffixRe is belt-and-suspenders: with the '|' separator a mangled line is
+// already rejected by the missing-separator check; this catches a name+epoch that
+// still carries a separator.
 var mangledSuffixRe = regexp.MustCompile(`_\d{9,}$`)
 
 func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
@@ -173,6 +213,7 @@ func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, 
 	listCancel()
 	if err != nil {
 		// tmux not running, no sessions, or the call timed out — fail closed.
+		logSweepFailure(now(), "list-sessions failed, skipping sweep", err)
 		return
 	}
 
@@ -193,6 +234,11 @@ func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, 
 		}
 		sessionName, createdRaw := line[:cut], line[cut+len(tmux.FormatSep):]
 		if sessionName == "" || !strings.HasPrefix(sessionName, tmux.TmuxPrefix) {
+			continue
+		}
+		if !safeSessionNameRe.MatchString(sessionName) {
+			// Not a name this app creates (control chars, spaces, ...): never act on it.
+			skippedUnsure++
 			continue
 		}
 		// Session name matches a known DB session (or the keepalive sentinel) → leave alone.
@@ -245,10 +291,21 @@ func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, 
 				// differently. Don't kill it.
 				continue
 			}
-		case strings.Contains(envStderr, "unknown variable"):
+		case strings.Contains(envStderr, "unknown variable: STAPLER_SESSION_UUID"):
 			// Session exists but has no UUID (pre-UUID session): fall through to kill.
 		default:
 			// Timeout, vanished session, or any other failure: can't prove it's an orphan.
+			skippedUnsure++
+			continue
+		}
+
+		// Re-read the target right before the kill: the name must still exist with the
+		// same creation time (guards against a replaced session or a stale list).
+		recheckCtx, recheckCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+		recheck, _, recheckErr := run(recheckCtx, "list-sessions", "-F", "#{session_name}"+tmux.FormatSep+"#{session_created}",
+			"-f", "#{==:#{session_name},"+sessionName+"}")
+		recheckCancel()
+		if recheckErr != nil || strings.TrimSpace(string(recheck)) != line {
 			skippedUnsure++
 			continue
 		}

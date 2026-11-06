@@ -3,11 +3,10 @@ package tmux
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestServerCommand_should_ReturnMultiLineBodyVerbatim_When_ListSessionsRepliesOverControlMode(t *testing.T) {
@@ -72,15 +71,21 @@ func TestServerCommand_should_ReturnNotRunning_When_ControlModeNotStarted(t *tes
 	}
 }
 
+// waitForPendingCM blocks until the sender goroutine has registered the command
+// (pendingCmds is appended under controlModeSubMu before the line is written).
 func waitForPendingCM(t *testing.T, sess *TmuxSession) {
 	t.Helper()
-	if err := wait.WaitForCondition(func() bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		sess.controlModeSubMu.Lock()
-		defer sess.controlModeSubMu.Unlock()
-		return len(sess.pendingCmds) > 0
-	}, wait.WaitConfig{Timeout: 2 * time.Second, PollInterval: 5 * time.Millisecond, Description: "pending command enqueued"}); err != nil {
-		t.Fatalf("command not enqueued: %v", err)
+		n := len(sess.pendingCmds)
+		sess.controlModeSubMu.Unlock()
+		if n > 0 {
+			return
+		}
+		runtime.Gosched()
 	}
+	t.Fatal("command not enqueued")
 }
 
 func TestServerCommand_should_ReturnNotRunning_When_SessionIsRemote(t *testing.T) {
@@ -96,3 +101,52 @@ func TestServerCommand_should_ReturnNotRunning_When_SessionIsRemote(t *testing.T
 type remoteStubRunner struct{ LocalRunner }
 
 func (remoteStubRunner) IsRemote() bool { return true }
+
+func TestParseExitStatus_should_UsePipeSeparator(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		raw    string
+		code   int
+		signal string
+		ok     bool
+	}{
+		{"|", 0, "", false},   // live pane: both fields empty
+		{"1|", 1, "", true},   // exited with code, no signal
+		{"|15", 0, "", false}, // empty status means still alive
+		{"143|SIGTERM\n", 143, "SIGTERM", true},
+		{"0|", 0, "", true},
+	}
+	for _, c := range cases {
+		code, sig, ok := parseExitStatus(c.raw)
+		if code != c.code || sig != c.signal || ok != c.ok {
+			t.Errorf("parseExitStatus(%q) = %d,%q,%v want %d,%q,%v", c.raw, code, sig, ok, c.code, c.signal, c.ok)
+		}
+	}
+}
+
+func TestParsePaneDeadStatuses_should_SplitFromTheRight_When_NameContainsSeparator(t *testing.T) {
+	t.Parallel()
+	got := parsePaneDeadStatuses("a|b|1|143|SIGTERM\nlive|0||\nshort|1\n")
+	if st := got["a|b"]; !st.Dead || st.Code != 143 || st.Signal != "SIGTERM" {
+		t.Errorf("a|b = %+v", st)
+	}
+	if st, ok := got["live"]; !ok || st.Dead {
+		t.Errorf("live = %+v ok=%v", st, ok)
+	}
+	if _, ok := got["short"]; ok {
+		t.Error("a line with too few fields must be skipped")
+	}
+}
+
+func TestServerCommand_should_ReturnNotRunning_When_QueueIsBusy(t *testing.T) {
+	t.Parallel()
+	sess, _ := newDispatchTestSession(t)
+	sess.controlModeSubMu.RLock()
+	ch := sess.normPriSendCh
+	sess.controlModeSubMu.RUnlock()
+	ch <- cmSendReq{}
+	_, err := sess.ServerCommand(context.Background(), "list-sessions")
+	if !errors.Is(err, ErrControlModeNotRunning) {
+		t.Fatalf("err = %v, want ErrControlModeNotRunning", err)
+	}
+}

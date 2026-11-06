@@ -172,6 +172,15 @@ func (f *fakeTmux) run(_ context.Context, args ...string) ([]byte, string, error
 	f.calls = append(f.calls, args)
 	switch args[0] {
 	case "list-sessions":
+		if len(args) > 4 && args[3] == "-f" { // pre-kill recheck: filter to one exact name
+			want := strings.TrimSuffix(strings.TrimPrefix(args[4], "#{==:#{session_name},"), "}")
+			for _, l := range strings.Split(f.list, "\n") {
+				if strings.HasPrefix(l, want+"|") {
+					return []byte(l + "\n"), "", nil
+				}
+			}
+			return nil, "", nil
+		}
 		return []byte(f.list), "", f.listErr
 	case "show-environment":
 		if f.envFails {
@@ -375,20 +384,6 @@ func TestControlModeRunner_should_NotRetryOnExec_When_TmuxRejectedTheCommand(t *
 	require.Zero(t, fallbackCalls, "a command tmux already rejected must stay failed (fail closed)")
 }
 
-func TestControlModeRunner_should_RefuseUnquotableArgument(t *testing.T) {
-	t.Parallel()
-	fallbackCalls := 0
-	run := newControlModeFirstRunner([]*fakeCM{{}}, func(context.Context, ...string) ([]byte, string, error) {
-		fallbackCalls++
-		return nil, "", nil
-	})
-
-	_, _, err := run(context.Background(), "kill-session", "-t", "=a'; kill-server; '")
-
-	require.Error(t, err)
-	require.Zero(t, fallbackCalls)
-}
-
 func TestReconcileOrphans_should_IssueOneTmuxCommand_When_AllSessionsAreKnown(t *testing.T) {
 	t.Parallel()
 	var instances []*Instance
@@ -403,4 +398,94 @@ func TestReconcileOrphans_should_IssueOneTmuxCommand_When_AllSessionsAreKnown(t 
 	reconcileOrphanedTmuxSessions(instances, 5*time.Minute, f.run, sweepNow)
 
 	require.Len(t, f.calls, 1, "steady state must be O(1) tmux commands per round, not O(sessions)")
+}
+
+// accessorPM exposes a fixed *tmux.TmuxSession, like TmuxBackend does.
+type accessorPM struct {
+	ProcessManager
+	ts *tmux.TmuxSession
+}
+
+func (p accessorPM) TmuxSession() *tmux.TmuxSession   { return p.ts }
+func (p accessorPM) SetTmuxSession(*tmux.TmuxSession) {}
+
+func TestControlModeSessionsOn_should_FilterBySocketAndSkipInstancesWithoutTmuxSession(t *testing.T) {
+	t.Parallel()
+	onDefault := tmux.NewTmuxSessionWithServerSocket("a", "true", tmux.TmuxPrefix, "ssq-default")
+	onOther := tmux.NewTmuxSessionWithServerSocket("b", "true", tmux.TmuxPrefix, "ssq-other")
+	instances := []*Instance{
+		{processManager: accessorPM{ts: onDefault}},
+		{processManager: accessorPM{ts: onOther}},
+		{processManager: accessorPM{ts: nil}},
+		liveInstance("staplersquad_noaccessor"),
+	}
+
+	require.Equal(t, []*tmux.TmuxSession{onDefault}, controlModeSessionsOn(instances, "ssq-default"))
+	require.Equal(t, []*tmux.TmuxSession{onOther}, controlModeSessionsOn(instances, "ssq-other"))
+}
+
+func TestReconcileOrphans_should_NotKill_When_TargetChangedBeforeKill(t *testing.T) {
+	t.Parallel()
+	f := &recheckFake{fakeTmux: fakeTmux{list: "staplersquad_x|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}}
+
+	reconcileOrphanedTmuxSessions(nil, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets(), "a session recreated (new created time) between list and kill must be spared")
+}
+
+type recheckFake struct{ fakeTmux }
+
+func (f *recheckFake) run(ctx context.Context, args ...string) ([]byte, string, error) {
+	if args[0] == "list-sessions" && len(args) > 4 && args[3] == "-f" {
+		return []byte("staplersquad_x|1793999999\n"), "", nil
+	}
+	return f.fakeTmux.run(ctx, args...)
+}
+
+func TestReconcileOrphans_should_SkipNames_When_TheyContainControlCharacters(t *testing.T) {
+	t.Parallel()
+	f := &fakeTmux{list: "staplersquad_a\rb|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
+	reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_NotKill_When_UnknownVariableTextIsForADifferentVariable(t *testing.T) {
+	t.Parallel()
+	f := &fakeTmux{list: "staplersquad_x|1793909015\n", envFails: true, envErr: "unknown variable: OTHER"}
+	reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+	require.Empty(t, f.killTargets())
+}
+
+func TestControlModeRunner_should_TryFallbackOnReadTimeout_ButNeverRetryKill(t *testing.T) {
+	t.Parallel()
+	wedged := &fakeCM{err: context.DeadlineExceeded}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{wedged}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	_, _, err := run(context.Background(), "list-sessions")
+	require.NoError(t, err)
+	require.Equal(t, 1, fallbackCalls, "a wedged client must not block a read-only command")
+
+	_, _, err = run(context.Background(), "kill-session", "-t", "=x")
+	require.Error(t, err)
+	require.Equal(t, 1, fallbackCalls, "kill-session is never retried after a timeout")
+}
+
+func TestControlModeRunner_should_FallBackToExec_When_ArgumentIsUnquotable(t *testing.T) {
+	t.Parallel()
+	cm := &fakeCM{}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{cm}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	_, _, err := run(context.Background(), "list-sessions", "-f", "a\rb")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, fallbackCalls)
+	require.Empty(t, cm.calls)
 }
