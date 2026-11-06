@@ -43,6 +43,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/zalando/go-keyring"
 )
 
 // Tuning for --profile's lock profiles; see profiling.Config.
@@ -184,6 +185,8 @@ var (
 					log.Warn("Failed to set STAPLER_SQUAD_TEST_DIR; test mode may use the wrong data directory", "err", err)
 				}
 				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
+				// No Secret Service on headless CI: without this, keychain writes fail with a D-Bus error.
+				keyring.MockInit()
 			}
 
 			// Load config first so we can configure logging properly

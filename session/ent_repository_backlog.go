@@ -2377,7 +2377,21 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	err = tx.BacklogStuckState.Create().
+	if _, err := markStuckTx(ctx, tx, parsedID, reason, stuckContext, now); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("mark stuck: commit: %w", err)
+	}
+	return true, nil
+}
+
+// markStuckTx is MarkStuck's in-transaction write: the resolve-in-place upsert,
+// the conditional reopen UPDATE, and the open of an append-only stuck episode
+// (ADR-003) sharing the same now, so opened_at equals first_detected_at.
+func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason domain.StuckReason, stuckContext string, now time.Time) (stuckTransition, error) {
+	err := tx.BacklogStuckState.Create().
 		SetItemID(parsedID).
 		SetReason(string(reason)).
 		SetFirstDetectedAt(now).
@@ -2390,13 +2404,13 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 		}).
 		Exec(ctx)
 	if err != nil {
-		return false, fmt.Errorf("mark stuck: upsert %s/%s: %w", itemID, reason, err)
+		return stuckTransition{}, fmt.Errorf("mark stuck: upsert %s/%s: %w", parsedID, reason, err)
 	}
 
 	// Reopen-in-place: only touches a row that was already resolved. This is
 	// its own atomic, idempotent conditional UPDATE — running it unconditionally
 	// after the upsert above is safe because it only ever affects a resolved row.
-	if _, err := tx.BacklogStuckState.Update().
+	reopened, err := tx.BacklogStuckState.Update().
 		Where(
 			backlogstuckstate.ItemID(parsedID),
 			backlogstuckstate.Reason(string(reason)),
@@ -2405,14 +2419,15 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 		ClearResolvedAt().
 		ClearNotifiedAt().
 		SetFirstDetectedAt(now).
-		Save(ctx); err != nil {
-		return false, fmt.Errorf("mark stuck: reopen %s/%s: %w", itemID, reason, err)
+		Save(ctx)
+	if err != nil {
+		return stuckTransition{}, fmt.Errorf("mark stuck: reopen %s/%s: %w", parsedID, reason, err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("mark stuck: commit: %w", err)
-	}
-	return true, nil
+	return stuckTransition{
+		Reopened:      reopened > 0,
+		EpisodeOpened: openStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now),
+	}, nil
 }
 
 // ResolveStuck atomically, idempotently closes an open BacklogStuckState row
@@ -2426,16 +2441,29 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
 
-	n, err := r.client.BacklogStuckState.Update().
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve stuck: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	now := time.Now()
+	n, err := tx.BacklogStuckState.Update().
 		Where(
 			backlogstuckstate.ItemID(parsedID),
 			backlogstuckstate.Reason(string(reason)),
 			backlogstuckstate.ResolvedAtIsNil(),
 		).
-		SetResolvedAt(time.Now()).
+		SetResolvedAt(now).
 		Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("resolve stuck %s/%s: %w", itemID, reason, err)
+	}
+	if n > 0 {
+		closeStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("resolve stuck: commit: %w", err)
 	}
 	return n > 0, nil
 }
