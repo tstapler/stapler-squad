@@ -1,7 +1,54 @@
 {
+  "e2e_selected_share_median": 1,
   "make_cold_median_s": 56.04,
-  "mid_t1_ratio": 0.014285714285714287,
+  "mid_edit_test_s": 1.132832813,
+  "mid_first_cold_s": 222.835070858,
+  "mid_second_cold_s": 35.325112582,
   "mid_t1_n": 30,
+  "mid_t1_ratio": 0.014285714285714287,
   "mid_t1_total_test_targets": 210,
-  "e2e_selected_share_median": 1.0
+  "noisy_inputs": {
+    "mid_edit_test_s": {
+      "authorisation": "owner, measured under load; never a quiet-host number",
+      "load1_post_max": 15.63,
+      "load1_pre_max": 15.63,
+      "mem_avail_gb_min": 37.85887908935547,
+      "not_quiet": true,
+      "source": "economic-midpoint t4"
+    },
+    "mid_first_cold_s": {
+      "authorisation": "owner, measured under load; never a quiet-host number",
+      "load1_post_max": 47.69,
+      "load1_pre_max": 47.42,
+      "mem_avail_gb_min": 33.67808532714844,
+      "not_quiet": true,
+      "source": "s6measure cold"
+    },
+    "mid_second_cold_s": {
+      "authorisation": "owner, measured under load; never a quiet-host number",
+      "load1_post_max": 47.69,
+      "load1_pre_max": 47.42,
+      "mem_avail_gb_min": 33.67808532714844,
+      "not_quiet": true,
+      "source": "s6measure cold"
+    },
+    "s6_first_cold_s": {
+      "authorisation": "owner, measured under load; never a quiet-host number",
+      "load1_post_max": 47.69,
+      "load1_pre_max": 47.42,
+      "mem_avail_gb_min": 33.67808532714844,
+      "not_quiet": true,
+      "source": "s6measure cold"
+    },
+    "s6_second_cold_s": {
+      "authorisation": "owner, measured under load; never a quiet-host number",
+      "load1_post_max": 47.69,
+      "load1_pre_max": 47.42,
+      "mem_avail_gb_min": 33.67808532714844,
+      "not_quiet": true,
+      "source": "s6measure cold"
+    }
+  },
+  "s6_first_cold_s": 222.835070858,
+  "s6_second_cold_s": 35.325112582
 }
