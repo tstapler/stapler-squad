@@ -1,0 +1,100 @@
+package session
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogflowmarker"
+)
+
+// markerLimiterFor lazily builds the repo's shared marker limiter.
+func (r *EntRepository) markerLimiterFor() *MarkerLimiter {
+	r.markerLimiterOnce.Do(func() {
+		r.markerLimiter = NewMarkerLimiter(r.markerClock)
+	})
+	return r.markerLimiter
+}
+
+func (r *EntRepository) markerNow() time.Time {
+	if r.markerClock != nil {
+		return r.markerClock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// RecordFlowMarker appends a server-decided marker. Best-effort: the limiter
+// runs first (deduped decisions cost zero DB calls) and failures are logged,
+// never returned, so a marker can never block or change PR-fix behavior.
+// Never call it inside a transaction on this repo: the writer is capped at one
+// connection (SetMaxOpenConns(1)) and it would self-deadlock. It publishes no
+// item-changed events and is deliberately not exposed through any MCP/RPC handler.
+func (r *EntRepository) RecordFlowMarker(ctx context.Context, itemID string, kind FlowMarkerKind, value string, prNumber int) {
+	if kind == "" || value == "" {
+		return
+	}
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		log.WarningLog().Printf("[RecordFlowMarker] invalid item id %q: %v", itemID, err)
+		return
+	}
+	if !r.markerLimiterFor().Allow(fmt.Sprintf("%s|%s|%d", kind, id, prNumber), value) {
+		return
+	}
+	if _, err := r.client.BacklogFlowMarker.Create().
+		SetItemID(id).
+		SetKind(string(kind)).
+		SetValue(value).
+		SetPrNumber(prNumber).
+		SetCreatedAt(r.markerNow()).
+		Save(ctx); err != nil {
+		log.ErrorLog().Printf("[RecordFlowMarker] failed item=%s kind=%s value=%s: %v", id, kind, value, err)
+	}
+}
+
+// ListFlowMarkers returns markers of kind with since <= created_at < until, oldest first.
+func (r *EntRepository) ListFlowMarkers(ctx context.Context, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+	rows, err := r.client.BacklogFlowMarker.Query().
+		Where(backlogflowmarker.Kind(string(kind)),
+			backlogflowmarker.CreatedAtGTE(since.UTC()),
+			backlogflowmarker.CreatedAtLT(until.UTC())).
+		Order(ent.Asc(backlogflowmarker.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list flow markers: %w", err)
+	}
+	return toFlowMarkerData(rows), nil
+}
+
+// ListFlowMarkersForItem is ListFlowMarkers scoped to one item.
+func (r *EntRepository) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+	rows, err := r.client.BacklogFlowMarker.Query().
+		Where(backlogflowmarker.ItemID(id),
+			backlogflowmarker.Kind(string(kind)),
+			backlogflowmarker.CreatedAtGTE(since.UTC()),
+			backlogflowmarker.CreatedAtLT(until.UTC())).
+		Order(ent.Asc(backlogflowmarker.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list flow markers for item: %w", err)
+	}
+	return toFlowMarkerData(rows), nil
+}
+
+func toFlowMarkerData(rows []*ent.BacklogFlowMarker) []FlowMarkerData {
+	out := make([]FlowMarkerData, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, FlowMarkerData{
+			ItemID: m.ItemID.String(), Kind: FlowMarkerKind(m.Kind), Value: m.Value,
+			PRNumber: m.PrNumber, CreatedAt: m.CreatedAt,
+		})
+	}
+	return out
+}

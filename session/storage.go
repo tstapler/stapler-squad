@@ -1674,6 +1674,15 @@ func (s *Storage) AppendActivityNote(ctx context.Context, itemID, authorSessionU
 	return s.repo.AppendActivityNote(ctx, itemID, authorSessionUUID, authorSessionTitle, message)
 }
 
+// RecordFlowMarker records a server-decided flow marker, best-effort (see
+// EntRepository.RecordFlowMarker). A nil Storage or repo is a no-op.
+func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind FlowMarkerKind, value string, prNumber int) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	s.repo.RecordFlowMarker(ctx, itemID, kind, value, prNumber)
+}
+
 // ListActivityNotesForItem returns the full append-only activity-note history for
 // a backlog item, ordered by created_at ascending.
 func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
