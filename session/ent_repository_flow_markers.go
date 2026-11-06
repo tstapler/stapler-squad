@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogflowmarker"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
 
 // markerLimiterFor lazily builds the repo's shared marker limiter.
@@ -41,8 +42,39 @@ func (r *EntRepository) RecordFlowMarker(ctx context.Context, itemID string, kin
 		log.WarningLog().Printf("[RecordFlowMarker] invalid item id %q: %v", itemID, err)
 		return
 	}
-	if !r.markerLimiterFor().Allow(fmt.Sprintf("%s|%s|%d", kind, id, prNumber), value) {
+	r.insertFlowMarker(ctx, id, kind, value, prNumber, fmt.Sprintf("%s|%s|%d", kind, id, prNumber), nil)
+}
+
+// RecordFlowMarkerForItemPR is RecordFlowMarker for callers that do not hold
+// the item's PR number: the limiter (keyed per kind+item) runs first, and only
+// an admitted marker pays for a pr_number-only projection read.
+func (r *EntRepository) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {
+	if kind == "" || value == "" {
 		return
+	}
+	id, err := uuid.Parse(itemID)
+	if err != nil {
+		log.WarningLog().Printf("[RecordFlowMarker] invalid item id %q: %v", itemID, err)
+		return
+	}
+	r.insertFlowMarker(ctx, id, kind, value, 0, fmt.Sprintf("%s|%s|item", kind, id), func() int {
+		pr, err := r.client.BacklogItem.Query().Where(backlogitem.ID(id)).Select(backlogitem.FieldPrNumber).Int(ctx)
+		if err != nil {
+			return 0
+		}
+		return pr
+	})
+}
+
+// insertFlowMarker runs the limiter, optionally resolves the PR number, then
+// inserts; a failed insert forgets the limiter entry so the marker can retry.
+func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind FlowMarkerKind, value string, prNumber int, limiterKey string, resolvePR func() int) {
+	limiter := r.markerLimiterFor()
+	if !limiter.Allow(limiterKey, value) {
+		return
+	}
+	if resolvePR != nil {
+		prNumber = resolvePR()
 	}
 	if _, err := r.client.BacklogFlowMarker.Create().
 		SetItemID(id).
@@ -51,6 +83,7 @@ func (r *EntRepository) RecordFlowMarker(ctx context.Context, itemID string, kin
 		SetPrNumber(prNumber).
 		SetCreatedAt(r.markerNow()).
 		Save(ctx); err != nil {
+		limiter.Forget(limiterKey, value)
 		log.ErrorLog().Printf("[RecordFlowMarker] failed item=%s kind=%s value=%s: %v", id, kind, value, err)
 	}
 }
