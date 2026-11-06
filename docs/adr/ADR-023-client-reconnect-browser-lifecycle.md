@@ -61,7 +61,7 @@ Rejected because: the two streams have fundamentally different reconnect payload
 
 6. **`TerminalOutput.tsx`**: add a 2-second debounced reconnecting banner overlay. Append dim `"--- reconnected ---"` separator after successful reconnect. The old component-level reconnect `useEffect` was removed with the flag.
 
-7. **Feature flag** (historical): `NEXT_PUBLIC_RECONNECT_V2=true` gated all of the above. It was never set in the Bun build, so the hook-level path stayed dead; the flag is now removed and the path is always on.
+7. **Feature flag** (historical): `NEXT_PUBLIC_RECONNECT_V2=true` gated all of the above. It was never set in the Bun build, so the hook-level path stayed dead; the flag is now removed and the path is always on. Review changes: the 1.2 s connect-timeout is limited to foreground resumes (8 s otherwise) because it can misfire on slow socket opens, timeout aborts back off with jitter and are capped, and connection-level failures retry forever instead of hard-failing after 5 attempts (a squad restart outlasts 15 s).
 
 ---
 
