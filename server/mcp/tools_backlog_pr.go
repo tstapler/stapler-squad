@@ -9,9 +9,11 @@ import (
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -144,6 +146,14 @@ func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *session.B
 	log.Info("report_pr_created.provenance_stamped", "item", item.ID, "pr_number", prNumber)
 }
 
+// reportPRCreatedTool is the registered report_pr_created handler: reportPRCreated
+// behind the identity gate, so callerUUID is the verified session credential
+// (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
+func (h *backlogHandlers) reportPRCreatedTool() mcpserver.ToolHandlerFunc {
+	gate := &callerIdentityGate{metrics: wakes.NewMetrics(), roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	return withCallerIdentityGate(gate, toolReportPRCreated, h.reportPRCreated)
+}
+
 // reportPRCreated records a PR the calling work session created itself
 // (typically via /backlog:ship -> gh pr create, outside the mechanical
 // pushAndCreatePR path — see session/backlog_lifecycle.go) back onto the
@@ -157,13 +167,9 @@ func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *session.B
 // before trusting the self-reported pr_url/pr_number.
 //
 //nolint:gocognit,gocyclo,funlen // pre-existing complexity relocated verbatim by the tools_backlog.go split (sdd:fix-hotspot, 2026-09-12); reducing it is a separate follow-up, not a file move
-func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
-	}
-	callerUUID, err := callerSessionUUID(ctx)
-	if err != nil {
-		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
 	}
 
 	args := req.GetArguments()

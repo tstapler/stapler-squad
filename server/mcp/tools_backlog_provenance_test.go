@@ -41,7 +41,7 @@ func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.R
 		},
 		postPRComment: post,
 	}
-	result, err := handler.reportPRCreated(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
+	result, err := handler.reportPRCreatedTool()(WithVerifiedSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
 		"item_id": item.ID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/42",
 		"pr_number": float64(42), "summary": "Shipped.",
 	}))
@@ -99,7 +99,7 @@ func TestReportPRCreated_should_NotPostComment_When_NoProvenanceSourceWired(t *t
 		postPRComment: func(context.Context, githubpkg.RepoRef, int, string) error { calls++; return nil },
 	}
 
-	_, err := handler.reportPRCreated(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
+	_, err := handler.reportPRCreatedTool()(WithVerifiedSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
 		"item_id": item.ID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/42",
 		"pr_number": float64(42), "summary": "Shipped.",
 	}))

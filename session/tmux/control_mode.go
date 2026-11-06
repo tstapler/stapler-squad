@@ -1407,3 +1407,20 @@ func (t *TmuxSession) teardownControlModeGeneration(doneCh chan struct{}) (owner
 	t.controlModeRemoteProc = nil
 	return true
 }
+
+// ServerCommand runs a server-wide tmux command (list-sessions, kill-session, ...)
+// over this session's existing control-mode client instead of forking a tmux
+// process. The returned body is tmux's raw %begin/%end payload (no octal escaping,
+// which applies only to %output). Returns ErrControlModeNotRunning when control
+// mode is off, not started, or its normal-priority queue is backed up, so callers
+// can fall back to a subprocess.
+func (t *TmuxSession) ServerCommand(ctx context.Context, args ...string) (string, error) {
+	// A remote session's client is attached to another host's tmux server.
+	if t.commandRunner().IsRemote() || !t.cmEnabledForBackground() {
+		return "", ErrControlModeNotRunning
+	}
+	return t.sendCMCommand(ctx, args...)
+}
+
+// ServerSocket returns the -L socket name this session's tmux server uses ("" for the default server).
+func (t *TmuxSession) ServerSocket() string { return t.serverSocket }

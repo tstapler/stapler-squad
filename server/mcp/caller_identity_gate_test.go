@@ -38,12 +38,12 @@ func refusesUnverified(t *testing.T, s *mcpserver.MCPServer, name string) bool {
 	return resultCode(parseResult(t, res)) == CodeIdentityUnverified
 }
 
-func TestIdentityGatedTools_should_BeExactlyTheFiveToolsWithTheAdr007Allowlist(t *testing.T) {
+func TestIdentityGatedTools_should_BeExactlyTheFiveWakeToolsPlusReportPRCreated(t *testing.T) {
 	t.Parallel()
-	assert.ElementsMatch(t, newToolNames, slices.Collect(maps.Keys(identityGatedTools)))
+	assert.ElementsMatch(t, append(slices.Clone(newToolNames), toolReportPRCreated), slices.Collect(maps.Keys(identityGatedTools)))
 	hidden := []callerRole{roleTriage, roleReview, roleDiagnose}
 	for tool, allowed := range identityGatedTools {
-		assert.Contains(t, allowed, roleWork, "%s: work sessions may use all five tools", tool)
+		assert.Contains(t, allowed, roleWork, "%s: work sessions may use every gated tool", tool)
 		for _, role := range hidden {
 			want := tool == toolRequestHelp || tool == toolListWakes
 			assert.Equal(t, want, slices.Contains(allowed, role), "%s for %s", tool, role)

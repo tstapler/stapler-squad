@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -34,7 +35,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 
 	t.Run("unlinked caller is rejected", func(t *testing.T) {
 		ctx := WithSessionUUID(context.Background(), uuid.New().String())
-		result, err := handler.reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, nil)))
+		result, err := callReportPR(handler, ctx, makeToolReq(reportPRArgs(item.ID, nil)))
 		require.NoError(t, err)
 		m := parseResult(t, result)
 		require.False(t, m["success"].(bool))
@@ -48,7 +49,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 	t.Run("a request field cannot name the linked session", func(t *testing.T) {
 		ctx := WithSessionUUID(context.Background(), uuid.New().String())
 		args := reportPRArgs(item.ID, map[string]interface{}{"session_uuid": linkedUUID, "session_id": linkedUUID, "caller_session_uuid": linkedUUID})
-		result, err := handler.reportPRCreated(ctx, makeToolReq(args))
+		result, err := callReportPR(handler, ctx, makeToolReq(args))
 		require.NoError(t, err)
 		m := parseResult(t, result)
 		require.False(t, m["success"].(bool))
@@ -56,7 +57,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 	})
 
 	t.Run("no credential in context is rejected", func(t *testing.T) {
-		result, err := handler.reportPRCreated(context.Background(), makeToolReq(reportPRArgs(item.ID, nil)))
+		result, err := callReportPR(handler, context.Background(), makeToolReq(reportPRArgs(item.ID, nil)))
 		require.NoError(t, err)
 		m := parseResult(t, result)
 		require.False(t, m["success"].(bool))
@@ -72,7 +73,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 			},
 		}
 		ctx := WithSessionUUID(context.Background(), linkedUUID)
-		_, err := h.reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, nil)))
+		_, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, nil)))
 		require.NoError(t, err)
 		fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
 		require.NoError(t, gerr)
@@ -95,7 +96,7 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
 
 	args := reportPRArgs(item.ID, map[string]interface{}{"replaces_pr_number": float64(99), "override_reason": "bad PR"})
-	result, err := h.reportPRCreated(ctx, makeToolReq(args))
+	result, err := callReportPR(h, ctx, makeToolReq(args))
 	require.NoError(t, err)
 	m := parseResult(t, result)
 	require.False(t, m["success"].(bool))
@@ -104,7 +105,7 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 	// The tracked number passes the replaces check and reaches the old reassignment
 	// guard, which still demands override_reason.
 	args = reportPRArgs(item.ID, map[string]interface{}{"replaces_pr_number": float64(21)})
-	result, err = h.reportPRCreated(ctx, makeToolReq(args))
+	result, err = callReportPR(h, ctx, makeToolReq(args))
 	require.NoError(t, err)
 	m = parseResult(t, result)
 	require.False(t, m["success"].(bool))
@@ -138,7 +139,7 @@ func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber
 	h := additiveHandler(storage, true)
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
 
-	result, err := h.reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, nil)))
+	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, nil)))
 	require.NoError(t, err)
 
 	require.False(t, result.IsError, "no override_reason is required: %v", result.Content)
@@ -171,10 +172,17 @@ func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumbe
 		"scope off":                     {false, nil},
 		"scope on, explicit correction": {true, map[string]interface{}{"replaces_pr_number": float64(21)}},
 	} {
-		result, err := additiveHandler(storage, tc.scope).reportPRCreated(ctx, makeToolReq(reportPRArgs(item.ID, tc.extra)))
+		result, err := callReportPR(additiveHandler(storage, tc.scope), ctx, makeToolReq(reportPRArgs(item.ID, tc.extra)))
 		require.NoError(t, err, name)
 		m := parseResult(t, result)
 		require.False(t, m["success"].(bool), name)
 		assert.Contains(t, m["error"].(map[string]interface{})["message"], "requires override_reason", name)
 	}
+}
+
+// callReportPR drives the inner handler with the UUID carried on ctx, standing in
+// for the identity gate that reportPRCreatedTool applies in production.
+func callReportPR(h *backlogHandlers, ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	uuid, _ := sessionUUIDFromContext(ctx)
+	return h.reportPRCreated(ctx, uuid, req)
 }
