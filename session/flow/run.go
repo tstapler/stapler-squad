@@ -83,6 +83,8 @@ type run struct {
 	rows  RowCounts
 	fails []SectionFailure
 
+	streamed bool // events were read through StreamEvents
+
 	events loaded[*eventData]
 	seeds  loaded[[]Event]
 	stages loaded[[]domain.BacklogStatus]
@@ -104,34 +106,76 @@ func (r *run) failure(name SectionName, err error) {
 	r.fails = append(r.fails, SectionFailure{Section: name, Err: err})
 }
 
-// loadEvents reads the padded window once, drops self-loops and collapses.
+// loadEvents reads the padded window, drops self-loops and collapses. A window
+// above Limits.MaxWindowRows is streamed in item batches and collapsed per
+// batch (collapse is per-item, so the result is identical); above
+// Limits.HardRowCeiling it is refused with ErrWindowTooLarge.
 func (r *run) loadEvents() (*eventData, error) {
 	return r.events.get(func() (*eventData, error) {
 		rng := EventRange{From: r.w.Start().Add(-r.cfg.CollapsePad()), To: r.w.End(), ItemIDs: r.q.ItemIDs}
-		raw, err := r.a.src.Events.Events(r.ctx, rng)
+		lim := r.a.limits
+		n, err := r.a.src.Events.CountEvents(r.ctx, rng)
 		if err != nil {
-			return nil, fmt.Errorf("read events: %w", err)
+			return nil, fmt.Errorf("count events: %w", err)
 		}
-		r.rows.Events = len(raw)
-		d := &eventData{}
-		kept := make([]Event, 0, len(raw))
-		seen := map[ItemID]struct{}{}
-		for _, e := range raw {
-			if e.From == e.To {
-				d.quality.SelfLoops++
-				continue
+		if n > lim.HardRowCeiling {
+			return nil, &WindowTooLargeError{Rows: n, Limit: lim.HardRowCeiling}
+		}
+		acc := &eventAccumulator{r: r, seen: map[ItemID]struct{}{}, d: &eventData{}}
+		if n <= lim.MaxWindowRows {
+			raw, err := r.a.src.Events.Events(r.ctx, rng)
+			if err != nil {
+				return nil, fmt.Errorf("read events: %w", err)
 			}
-			kept = append(kept, e)
-			seen[e.ItemID] = struct{}{}
-			if r.w.Contains(e.At) {
-				d.rawInWindow++
+			acc.add(raw)
+		} else {
+			r.streamed = true
+			rng.ChunkItems, rng.BatchTimeout = lim.ChunkItems, lim.BatchTimeout
+			err := r.a.src.Events.StreamEvents(r.ctx, rng, func(batch []Event) error {
+				acc.add(batch)
+				return r.ctx.Err()
+			})
+			if err != nil {
+				return nil, fmt.Errorf("stream events: %w", err)
 			}
 		}
-		slices.SortStableFunc(kept, compareEvents)
-		d.ids = sortedItems(seen)
-		d.spans = Collapse(kept, r.w, r.cfg)
-		return d, nil
+		return acc.finish(), nil
 	})
+}
+
+// eventAccumulator collapses event batches into spans, keeping only collapsed
+// spans (never the raw events) between batches.
+type eventAccumulator struct {
+	r     *run
+	d     *eventData
+	seen  map[ItemID]struct{}
+	spans []Span
+}
+
+func (a *eventAccumulator) add(raw []Event) {
+	a.r.rows.Events += len(raw)
+	kept := make([]Event, 0, len(raw))
+	for _, e := range raw {
+		if e.From == e.To {
+			a.d.quality.SelfLoops++
+			continue
+		}
+		kept = append(kept, e)
+		a.seen[e.ItemID] = struct{}{}
+		if a.r.w.Contains(e.At) {
+			a.d.rawInWindow++
+		}
+	}
+	slices.SortStableFunc(kept, compareEvents)
+	a.spans = append(a.spans, Collapse(kept, a.r.w, a.r.cfg)...)
+}
+
+// finish restores Collapse's global (time, item) order across batches.
+func (a *eventAccumulator) finish() *eventData {
+	slices.SortStableFunc(a.spans, compareSpans)
+	a.d.spans = a.spans
+	a.d.ids = sortedItems(a.seen)
+	return a.d
 }
 
 func (r *run) loadStages() ([]domain.BacklogStatus, error) {
@@ -260,7 +304,7 @@ func (r *run) meta(sel map[SectionName]bool) FlowMeta {
 	slices.Sort(est)
 	m := FlowMeta{
 		AsOf: r.asOf, WindowStart: r.w.Start(), WindowEnd: r.w.End(),
-		RowCounts: r.rows, Estimated: est, SlowPath: r.q.Window.AllTime,
+		RowCounts: r.rows, Estimated: est, SlowPath: r.q.Window.AllTime || r.streamed,
 	}
 	if r.a.captureSince != nil {
 		if t, err := r.a.captureSince(r.ctx); err == nil {

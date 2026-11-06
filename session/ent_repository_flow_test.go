@@ -123,7 +123,6 @@ func TestEntFlowReader_should_ReturnTypedError_When_ContextCancelled(t *testing.
 }
 
 // Not parallel: asserts per-pool counters in the process-wide dbobs registry.
-// StreamEvents (Story 2.1.6) is not implemented yet; its label check belongs there.
 func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *testing.T) {
 	repo := newFlowTestRepo(t)
 	c := repo.GetEntClient()
@@ -139,6 +138,7 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 	calls := map[string]func() error{
 		"Events":           func() error { _, err := r.Events(ctx, rng); return err },
 		"CountEvents":      func() error { _, err := r.CountEvents(ctx, rng); return err },
+		"StreamEvents":     func() error { return r.StreamEvents(ctx, rng, func([]flow.Event) error { return nil }) },
 		"LastEventsBefore": func() error { _, err := r.LastEventsBefore(ctx, time.Now().UTC(), ids); return err },
 		"Verdicts":         func() error { _, err := r.Verdicts(ctx, win); return err },
 		"AgentDoneClaims":  func() error { _, err := r.AgentDoneClaims(ctx, win); return err },

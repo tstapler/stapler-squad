@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -46,6 +47,12 @@ func WithCacheOptions(o CacheOptions) AggregatorOption {
 	return func(a *Aggregator) { a.cacheOpts = o }
 }
 
+// WithReaderLimits overrides the row ceiling, chunk size and batch timeout;
+// zero fields keep the defaults.
+func WithReaderLimits(l ReaderLimits) AggregatorOption {
+	return func(a *Aggregator) { a.limits = l }
+}
+
 // WithCaptureSince supplies the trigger-capture date for FlowMeta and compare.
 func WithCaptureSince(f CaptureSinceFunc) AggregatorOption {
 	return func(a *Aggregator) { a.captureSince = f }
@@ -61,6 +68,7 @@ type Aggregator struct {
 	logger       *slog.Logger
 	captureSince CaptureSinceFunc
 	cacheOpts    CacheOptions
+	limits       ReaderLimits
 	cache        *Cache[*FlowSummary]
 }
 
@@ -70,6 +78,7 @@ func NewAggregator(src Sources, clock Clock, opts ...AggregatorOption) *Aggregat
 	for _, o := range opts {
 		o(a)
 	}
+	a.limits = a.limits.withDefaults()
 	a.cacheOpts.DefaultConfig = DefaultConfig()
 	a.cache = NewCache[*FlowSummary](clock, a.cacheOpts)
 	return a
@@ -133,7 +142,7 @@ func (a *Aggregator) Summary(ctx context.Context, q FlowQuery) (*FlowSummary, er
 	computed := false
 	s, err := a.cache.Do(ctx, q, func(ctx context.Context) (*FlowSummary, error) {
 		computed = true
-		return a.computeSummary(ctx, q, w, sel), nil
+		return a.computeSummary(ctx, q, w, sel)
 	})
 	if err != nil {
 		return nil, err
@@ -147,9 +156,16 @@ func (a *Aggregator) Summary(ctx context.Context, q FlowQuery) (*FlowSummary, er
 func (rc RowCounts) total() int { return rc.Events + rc.Verdicts + rc.StuckIntervals + rc.Items }
 
 // computeSummary runs every selected section against window w, uncached.
-func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWindow, sel map[SectionName]bool) *FlowSummary {
+// It fails only when the window is too large to read (ErrWindowTooLarge); every
+// other source failure is reported per section.
+func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWindow, sel map[SectionName]bool) (*FlowSummary, error) {
 	started := a.clock.Now()
 	r := newRun(ctx, a, q, w)
+	if needsEvents(sel) {
+		if _, err := r.loadEvents(); errors.Is(err, ErrWindowTooLarge) {
+			return nil, err
+		}
+	}
 	s := r.buildSections(sel)
 	s.Meta = r.meta(sel)
 	s.Meta.QueryMs = a.clock.Now().Sub(started).Milliseconds()
@@ -161,5 +177,15 @@ func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWind
 	if a.observer != nil {
 		a.observer(stats)
 	}
-	return s
+	return s, nil
+}
+
+// needsEvents reports whether any selected section reads the event table.
+func needsEvents(sel map[SectionName]bool) bool {
+	for name, on := range sel {
+		if on && name != SectionStuck {
+			return true
+		}
+	}
+	return false
 }

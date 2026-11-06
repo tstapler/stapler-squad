@@ -62,13 +62,16 @@ func Collapse(events []Event, window FlowWindow, cfg Config) []Span {
 		slices.SortStableFunc(evs, compareEvents)
 		out = append(out, collapseItem(evs, window, cfg)...)
 	}
-	slices.SortStableFunc(out, func(a, b Span) int {
-		if c := SpanTime(a).Compare(SpanTime(b)); c != 0 {
-			return c
-		}
-		return strings.Compare(string(a.Item()), string(b.Item()))
-	})
+	slices.SortStableFunc(out, compareSpans)
 	return out
+}
+
+// compareSpans orders spans by time, then item.
+func compareSpans(a, b Span) int {
+	if c := SpanTime(a).Compare(SpanTime(b)); c != 0 {
+		return c
+	}
+	return strings.Compare(string(a.Item()), string(b.Item()))
 }
 
 func collapseItem(evs []Event, window FlowWindow, cfg Config) []Span {

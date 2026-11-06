@@ -49,8 +49,13 @@ func (f *fakeSrc) record(name string) {
 	f.mu.Unlock()
 }
 
-func (f *fakeSrc) Events(_ context.Context, rng EventRange) ([]Event, error) {
+func (f *fakeSrc) Events(ctx context.Context, rng EventRange) ([]Event, error) {
 	f.record("Events")
+	return f.query(ctx, rng)
+}
+
+// query filters without recording a call, so Count and Stream do not count as Events.
+func (f *fakeSrc) query(_ context.Context, rng EventRange) ([]Event, error) {
 	if f.eventsErr != nil {
 		return nil, f.eventsErr
 	}
@@ -69,17 +74,38 @@ func (f *fakeSrc) Events(_ context.Context, rng EventRange) ([]Event, error) {
 
 func (f *fakeSrc) CountEvents(ctx context.Context, rng EventRange) (int, error) {
 	f.record("CountEvents")
-	es, err := f.Events(ctx, rng)
+	es, err := f.query(ctx, rng)
 	return len(es), err
 }
 
 func (f *fakeSrc) StreamEvents(ctx context.Context, rng EventRange, fn func([]Event) error) error {
 	f.record("StreamEvents")
-	es, err := f.Events(ctx, rng)
+	es, err := f.query(ctx, rng)
 	if err != nil {
 		return err
 	}
-	return fn(es)
+	byItem := map[ItemID][]Event{}
+	var ids []ItemID
+	for _, e := range es {
+		if _, ok := byItem[e.ItemID]; !ok {
+			ids = append(ids, e.ItemID)
+		}
+		byItem[e.ItemID] = append(byItem[e.ItemID], e)
+	}
+	slices.Sort(ids)
+	size := max(rng.ChunkItems, 1)
+	for len(ids) > 0 {
+		n := min(size, len(ids))
+		var batch []Event
+		for _, id := range ids[:n] {
+			batch = append(batch, byItem[id]...)
+		}
+		ids = ids[n:]
+		if err := fn(batch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *fakeSrc) LastEventsBefore(_ context.Context, start time.Time, ids []ItemID) ([]Event, error) {

@@ -14,6 +14,10 @@ type EventRange struct {
 	From    time.Time
 	To      time.Time
 	ItemIDs []ItemID
+	// ChunkItems and BatchTimeout are StreamEvents hints; zero uses the
+	// reader's defaults. Events and CountEvents ignore them.
+	ChunkItems   int
+	BatchTimeout time.Duration
 }
 
 // EventSource reads normalized status events. Request-review events are

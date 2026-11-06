@@ -223,8 +223,14 @@ func (a *Aggregator) Compare(ctx context.Context, q CompareQuery) (*CompareResul
 	}
 	sel, _ := selectSections(compareSections)
 	fq := FlowQuery{Cohort: q.Cohort, Config: q.Config}
-	sumA := a.computeSummary(ctx, fq, winA, sel)
-	sumB := a.computeSummary(ctx, fq, winB, sel)
+	sumA, err := a.computeSummary(ctx, fq, winA, sel)
+	if err != nil {
+		return nil, err
+	}
+	sumB, err := a.computeSummary(ctx, fq, winB, sel)
+	if err != nil {
+		return nil, err
+	}
 	cc := compareCtx{a: sumA, b: sumB, cfg: effectiveConfig(q.Config), winA: winA, winB: winB}
 	meta := FlowMeta{
 		AsOf: a.clock.Now(), WindowStart: winA.Start(), WindowEnd: winB.End(), Clamps: clamps,
