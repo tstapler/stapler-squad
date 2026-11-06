@@ -241,3 +241,6 @@ func (a *stopAttempt) finish(outcome StopOutcome, err error) {
 	log.Warn("[tymux] tymuxd stop finished", "pid", a.event.PID, "outcome", string(outcome),
 		"elapsed", a.event.Elapsed.Round(time.Millisecond), "reason_kind", string(a.event.Reason.Kind), "err", err)
 }
+
+// ShutdownStopReason attributes a squad-exit stop of a daemon this process spawned.
+var ShutdownStopReason = StopReason{Kind: StopSquadShutdown, Detail: "--tymuxd-keep-server=false"}
