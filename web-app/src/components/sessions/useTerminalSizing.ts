@@ -205,7 +205,6 @@ interface ConnectionBootstrapParams {
   setIsLoadingInitialContent: (loading: boolean) => void;
   setConnectionAttempts: (attempts: number) => void;
   setShowReconnectButton: (show: boolean) => void;
-  reconnectTimeoutRef: RefObject<ReturnType<typeof setTimeout> | null>;
   previousConnectionStateRef: RefObject<boolean>;
   streamManagerRef: RefObject<TerminalStreamManager | null>;
   refs: TerminalSizingRefs;
@@ -227,7 +226,6 @@ export function useSessionConnectionBootstrap({
   setIsLoadingInitialContent,
   setConnectionAttempts,
   setShowReconnectButton,
-  reconnectTimeoutRef,
   previousConnectionStateRef,
   streamManagerRef,
   refs,
@@ -323,10 +321,6 @@ export function useSessionConnectionBootstrap({
     previousConnectionStateRef.current = false;
     setConnectionAttempts(0);
     setShowReconnectButton(false);
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
 
     // Reset stream manager for new session
     if (streamManagerRef.current) {

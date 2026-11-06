@@ -161,7 +161,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // prior mount) skips the loading overlay entirely; only a genuinely cold
   // entry starts in the loading state. See PoolEntry.warmRef's doc comment.
   const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(() => !warmRef.current);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
@@ -863,7 +862,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -1294,11 +1293,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         }
       }
 
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-
       // Delay the post-connection resize sync until after layout settles.
       // Firing immediately would start the 200ms throttle clock at T+0, causing
       // the ResizeObserver's settled-layout resize (arriving at T+150ms via its
@@ -1329,15 +1323,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       if (postConnectionResizeTimer) {
         clearTimeout(postConnectionResizeTimer);
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
     };
-    // showReconnectBanner is a pre-existing missing dependency: adding it
-    // would re-run this effect on every banner toggle, and its cleanup
-    // clears reconnectTimeoutRef.current without nulling the ref -- that
-    // would silently cancel the "show reconnect button after 5s" timer
-    // mid-countdown. Left alone rather than fixed as a drive-by.
+    // showReconnectBanner is a pre-existing missing dependency: adding it would re-run
+    // this effect on every banner toggle. Left alone rather than fixed as a drive-by.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, resize, xtermRef]);
 
@@ -1504,7 +1492,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setIsLoadingInitialContent,
     setConnectionAttempts,
     setShowReconnectButton,
-    reconnectTimeoutRef,
     previousConnectionStateRef,
     streamManagerRef,
     refs: sizingRefs,
@@ -1980,11 +1967,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {" "}• Reconnecting (attempt {connectionAttempts}/5)...
             </span>
           )}
-          {!isConnected && connectionAttempts >= 5 && (
+          {!isConnected && connectionAttempts >= 5 && !isServerUnreachable && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
+          )}
+          {isServerUnreachable && !isHardFailed && (
+            <span className={styles.statusText}> • Server unreachable, retrying every 30s</span>
           )}
           {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
           <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} pulse={connectionPulse} />
@@ -2013,7 +2003,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
           )}
           {/* Reconnect always visible when needed, regardless of toolbar state */}
-          {showReconnectButton && (
+          {(showReconnectButton || isServerUnreachable) && (
             <button
               className={styles.toolbarButton}
               onClick={handleManualReconnect}
@@ -2296,11 +2286,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </div>
           </div>
         )}
-        {!isLoadingInitialContent && connectionAttempts >= 5 && (
+        {!isLoadingInitialContent && (connectionAttempts >= 5 || isServerUnreachable) && (
           <div className={styles.unavailableOverlay}>
             <div className={styles.unavailableIcon}>⚠</div>
-            <div className={styles.unavailableText}>Terminal unavailable</div>
-            <div className={styles.unavailableSubtext}>Could not connect to terminal session</div>
+            <div className={styles.unavailableText}>{isServerUnreachable ? "Server unreachable" : "Terminal unavailable"}</div>
+            <div className={styles.unavailableSubtext}>
+              {isServerUnreachable ? "Retrying every 30 seconds" : "Could not connect to terminal session"}
+            </div>
           </div>
         )}
         {/* Task 4.2.1 — Non-blocking resizing overlay (R1.4).

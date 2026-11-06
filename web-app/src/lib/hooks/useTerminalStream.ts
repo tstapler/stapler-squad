@@ -8,7 +8,12 @@ import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BackoffState, connectTimeoutMs, isNonRetriableConnectError, isWorktreeMissingError } from "@/lib/utils/backoff";
+import {
+  BackoffState, CONNECT_TIMEOUT_ABORT_CAP, GAVE_UP_AFTER_ATTEMPTS, RECONNECT_BASE_MS, RECONNECT_CAP_MS,
+  STREAM_REFUSED_CLOSE_CODE, connectTimeoutAbortDelay, connectTimeoutMs, getWsCloseCode, isNonRetriableConnectError,
+  isWorktreeMissingError, jitteredDelay,
+} from "@/lib/utils/backoff";
+import { queueForConnectSlot, tryAcquireConnectSlot, type ReleaseConnectSlot } from "@/lib/utils/connectGate";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
 import { useTerminalFlowControl, type ResizeOptions } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
@@ -122,6 +127,8 @@ interface TerminalStreamResult {
   /** Terminal state machine (R1.4) — typed lifecycle state driven by server messages. */
   terminalState: TerminalState;
   isHardFailed: boolean;
+  /** Connection-level failures exhausted GAVE_UP_AFTER_ATTEMPTS retries; retries continue (unlike isHardFailed). */
+  isServerUnreachable: boolean;
   handleManualReconnect: () => void;
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
   markResyncComplete: () => void;
@@ -178,7 +185,17 @@ export function useTerminalStream({
   // disconnected session before either handshake completes.
   const isConnectingRef = useRef(false);
   const shouldReconnectRef = useRef(false);
-  const terminalBackoffRef = useRef(new BackoffState(1000, 30_000));
+  const terminalBackoffRef = useRef(new BackoffState(RECONNECT_BASE_MS, RECONNECT_CAP_MS));
+  // Set when a connection-level failure has burned GAVE_UP_AFTER_ATTEMPTS retries: the pane shows a calm
+  // "server unreachable" state, but retries continue (only definitive errors set isHardFailed).
+  const [isServerUnreachable, setIsServerUnreachable] = useState(false);
+  const consecutiveTimeoutAbortsRef = useRef(0);
+  const streamRefusedCountRef = useRef(0);
+  const lastAttemptRefusedRef = useRef(false);
+  // True after a foreground/visibility/online resume: only then is the fast connect-timeout used.
+  const resumeReconnectRef = useRef(false);
+  const releaseSlotRef = useRef<ReleaseConnectSlot | null>(null);
+  const cancelSlotWaitRef = useRef<(() => void) | null>(null);
   const isHardFailedRef = useRef(false);
   const terminalDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -247,6 +264,7 @@ export function useTerminalStream({
     if (!wasForeground && foreground) {
       terminalBackoffRef.current.reset();
       foregroundConnectAttemptRef.current = 0;
+      resumeReconnectRef.current = true;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -338,7 +356,24 @@ export function useTerminalStream({
     }
 
     isDisconnectingRef.current = false;
+    lastAttemptRefusedRef.current = false;
     setTerminalState('CONNECTING');
+
+    // Bound connects in flight across all panes; a queued attempt stays in CONNECTING.
+    let releaseSlot = tryAcquireConnectSlot();
+    if (!releaseSlot) {
+      const queued = queueForConnectSlot(foregroundRef.current);
+      cancelSlotWaitRef.current = queued.cancel;
+      releaseSlot = await queued.promise;
+      cancelSlotWaitRef.current = null;
+      if (!releaseSlot || myGeneration !== connectionGenerationRef.current || isDisconnectingRef.current) {
+        releaseSlot?.();
+        isConnectingRef.current = false;
+        return;
+      }
+    }
+    const releaseConnectSlot = releaseSlot;
+    releaseSlotRef.current = releaseConnectSlot;
 
     try {
       // Task 2.2.2 — unconditionally tear down whatever generation this call
@@ -361,7 +396,7 @@ export function useTerminalStream({
       firstMessageRef.current = true;
       connectTimeoutAbortedRef.current = false;
       const foregroundAtSchedule = foregroundRef.current;
-      const timeoutMs = connectTimeoutMs(foregroundAtSchedule, foregroundConnectAttemptRef.current);
+      const timeoutMs = connectTimeoutMs(foregroundAtSchedule && resumeReconnectRef.current, foregroundConnectAttemptRef.current);
       foregroundConnectAttemptRef.current += 1;
       const attemptNumber = foregroundConnectAttemptRef.current;
       connectTimeoutRef.current = setTimeout(() => {
@@ -421,6 +456,11 @@ export function useTerminalStream({
 
             if (firstMessageRef.current) {
               clearConnectTimeout();
+              releaseConnectSlot();
+              consecutiveTimeoutAbortsRef.current = 0;
+              streamRefusedCountRef.current = 0;
+              resumeReconnectRef.current = false;
+              setIsServerUnreachable(false);
               isConnectingRef.current = false;
               isConnectedRef.current = true; // sync ref before state setter — mirrors the disconnect-path precedent in the finally block below, closing the window where a same-tick second connect() call could read a stale isConnectedRef before React flushes setIsConnected(true)
               setIsConnected(true);
@@ -582,6 +622,7 @@ export function useTerminalStream({
             // isWorktreeMissingError is checked here (terminal-stream-specific),
             // not folded into the shared isNonRetriableConnectError — see that
             // function's doc comment for why.
+            lastAttemptRefusedRef.current = getWsCloseCode(err) === STREAM_REFUSED_CLOSE_CODE;
             if (isNonRetriableConnectError(err) || isWorktreeMissingError(err)) {
               shouldReconnectRef.current = false;
               isHardFailedRef.current = true;
@@ -600,6 +641,7 @@ export function useTerminalStream({
             }
           }
         } finally {
+          releaseConnectSlot();
           if (myGeneration === connectionGenerationRef.current) {
             // A superseded generation is a deliberate reconnect; reaching here means this stream ended on its own.
             const livedMs = Date.now() - connectStartedAt;
@@ -635,37 +677,34 @@ export function useTerminalStream({
                 clearTimeout(reconnectTimerRef.current);
                 reconnectTimerRef.current = null;
               }
-              if (connectTimeoutAbortedRef.current) {
-                // A connect-timeout abort is our own deliberate fast-retry optimization
-                // (see the catch block above), not a real stream failure — it must not
-                // consume the 5-attempt hard-fail budget or escalate the backoff delay,
-                // or a connection whose genuine first-message latency exceeds the
-                // connect-timeout (e.g. large scrollback replay over a high-RTT VPN link)
-                // would eventually hard-fail instead of getting the unlimited patience it
-                // had before the per-attempt connect-timeout existed. Retry immediately —
-                // each cycle is already bounded by the connect-timeout itself, so this
-                // can't thundering-herd the way an unthrottled real-failure retry could.
-                console.info(`[reconnect] stream=terminal trigger=connect-timeout attempt=${terminalBackoffRef.current.attempt} delay=0ms (excluded from backoff)`);
-                reconnectTimerRef.current = setTimeout(() => {
-                  reconnectTimerRef.current = null;
-                  if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                    connectRef.current?.(undefined, undefined, { isAutoRetry: true });
-                  }
-                }, 0);
-              } else if (terminalBackoffRef.current.attempt >= 5) {
-                shouldReconnectRef.current = false;
-                isHardFailedRef.current = true;
-                setIsHardFailed(true);
+              let delay: number;
+              let trigger: string;
+              if (connectTimeoutAbortedRef.current && consecutiveTimeoutAbortsRef.current < CONNECT_TIMEOUT_ABORT_CAP) {
+                // Our own timeout, not a server verdict: retry on an escalating jittered schedule
+                // without touching the backoff, but only up to the cap so a black-holed network
+                // cannot reopen every pane every few seconds forever.
+                consecutiveTimeoutAbortsRef.current += 1;
+                delay = connectTimeoutAbortDelay(consecutiveTimeoutAbortsRef.current);
+                trigger = "connect-timeout";
+              } else if (lastAttemptRefusedRef.current) {
+                // Mux admission control (1013): wait it out without spending the unreachable budget.
+                streamRefusedCountRef.current += 1;
+                delay = jitteredDelay(RECONNECT_BASE_MS, RECONNECT_CAP_MS, streamRefusedCountRef.current - 1);
+                trigger = "stream-refused";
               } else {
-                const delay = terminalBackoffRef.current.next();
-                console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
-                reconnectTimerRef.current = setTimeout(() => {
-                  reconnectTimerRef.current = null;
-                  if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                    connectRef.current?.(undefined, undefined, { isAutoRetry: true });
-                  }
-                }, delay);
+                delay = terminalBackoffRef.current.next();
+                trigger = "close";
+                // Connection-level failures never go terminal (a squad restart outlasts any fixed
+                // budget); past the threshold the pane just shows a calmer "server unreachable" state.
+                if (terminalBackoffRef.current.attempt >= GAVE_UP_AFTER_ATTEMPTS) setIsServerUnreachable(true);
               }
+              console.info(`[reconnect] stream=terminal trigger=${trigger} attempt=${terminalBackoffRef.current.attempt} delay=${Math.round(delay)}ms`);
+              reconnectTimerRef.current = setTimeout(() => {
+                reconnectTimerRef.current = null;
+                if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+                  connectRef.current?.(undefined, undefined, { isAutoRetry: true });
+                }
+              }, delay);
             }
           }
         }
@@ -675,6 +714,7 @@ export function useTerminalStream({
       // schema validation, MessageQueue construction) — the connect-timeout scheduled
       // above must not outlive this now-dead attempt.
       isConnectingRef.current = false;
+      releaseConnectSlot();
       clearConnectTimeout();
       handleError(err);
       setIsConnected(false);
@@ -698,6 +738,9 @@ export function useTerminalStream({
       reconnectTimerRef.current = null;
     }
     clearConnectTimeout();
+    cancelSlotWaitRef.current?.();
+    releaseSlotRef.current?.();
+    releaseSlotRef.current = null;
     const isResyncingRef = getIsResyncingRef();
     if (isDisconnectingRef.current || isResyncingRef.current) {
       if (isResyncingRef.current) {
@@ -773,7 +816,16 @@ export function useTerminalStream({
       terminalDebounceTimerRef.current = setTimeout(() => {
         terminalDebounceTimerRef.current = null;
         if (shouldReconnectRef.current && !isConnectedRef.current && !isDisconnectingRef.current) {
+          // Also revives the "server unreachable" state: it is retrying, not terminal.
+          if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+          }
           terminalBackoffRef.current.reset();
+          consecutiveTimeoutAbortsRef.current = 0;
+          streamRefusedCountRef.current = 0;
+          foregroundConnectAttemptRef.current = 0;
+          resumeReconnectRef.current = true;
           console.info("[reconnect] stream=terminal trigger=visibility delay=0ms");
           connectRef.current();
         }
@@ -796,7 +848,13 @@ export function useTerminalStream({
     isHardFailedRef.current = false;
     setIsHardFailed(false);
     shouldReconnectRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     terminalBackoffRef.current.reset();
+    consecutiveTimeoutAbortsRef.current = 0;
+    streamRefusedCountRef.current = 0;
     connectRef.current();
   }, []);
 
@@ -816,6 +874,7 @@ export function useTerminalStream({
     stopRecording: metrics.stopRecording,
     terminalState,
     isHardFailed,
+    isServerUnreachable,
     handleManualReconnect,
     requestFullResync: flowControl.requestFullResync,
     markResyncComplete: flowControl.markResyncComplete,
