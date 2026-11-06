@@ -189,10 +189,10 @@ func TestFDFreeWatcherMergesNarrowStreamsUnderNewAncestor(t *testing.T) {
 	}, func(e fsnotify.Event) bool { return e.Name == want })
 }
 
-// Not parallel: processStreams is process-wide.
+// Not parallel: the stream count is process-wide.
 func TestFDFreeWatcherFallsBackToKqueueWhenStreamBudgetIsSpent(t *testing.T) {
 	_, paths := populate(t, 6, 1)
-	base := int(processStreams.Load())
+	base := int(fsevents.LiveStreams())
 	w, ok := NewFDFree(WithMaxStreams(base + 3))
 	require.True(t, ok)
 	for _, p := range paths {
@@ -210,7 +210,7 @@ func TestFDFreeWatcherFallsBackToKqueueWhenStreamBudgetIsSpent(t *testing.T) {
 	})
 	require.NoError(t, w.Remove(paths[5]))
 	require.NoError(t, w.Close())
-	require.Equal(t, base, int(processStreams.Load()), "Close must release every stream")
+	require.Equal(t, base, int(fsevents.LiveStreams()), "Close must release every stream")
 }
 
 func TestFDFreeWatcherSharesOneStreamAcrossManySiblingDirs(t *testing.T) {
@@ -298,4 +298,40 @@ func skipIfHostDropsFSEvents(t *testing.T) {
 			t.Skip("host FSEvents delivered nothing to a bare canary stream; cannot judge dirwatch here")
 		}
 	}
+}
+
+// Not parallel: it measures the process-wide fd table. Each stream used to hold
+// ~14 fds through kFSEventStreamCreateFlagWatchRoot (4,206 fds at 300 streams).
+func TestFDFreeStreamsHoldNoFDsEach(t *testing.T) {
+	_, paths := populate(t, 40, 0)
+	w, ok := NewFDFree(WithMaxStreams(1000))
+	require.True(t, ok)
+	t.Cleanup(func() { _ = w.Close() })
+	require.NoError(t, w.Add(paths[0])) // first stream pays one-time CoreServices setup
+	before := openFDs(t)
+	for _, p := range paths[1:] {
+		require.NoError(t, w.Add(p))
+	}
+	fw := w.(*fseventsWatcher)
+	fw.mu.Lock()
+	streams := len(fw.streams)
+	fw.mu.Unlock()
+	require.Equal(t, 40, streams, "premise: one stream per disjoint dir")
+	require.LessOrEqual(t, openFDs(t)-before, 2, "39 extra streams must not hold fds")
+}
+
+// The scanner's dropRemovedAdmin depends on a pruned admin dir reporting Remove
+// when its stream is rooted at the parent (.git/worktrees) and WatchRoot is off.
+func TestFDFreeWatcherReportsChildDirRemovalOnSharedParentStream(t *testing.T) {
+	root, paths := populate(t, 2, 1)
+	w, ok := NewFDFree(RootAt(root))
+	require.True(t, ok)
+	t.Cleanup(func() { _ = w.Close() })
+	for _, p := range paths {
+		require.NoError(t, w.Add(p))
+	}
+	eventually(t, w, func(int) {
+		require.NoError(t, os.RemoveAll(paths[1]))
+		require.NoError(t, os.Mkdir(paths[1], 0o755))
+	}, func(e fsnotify.Event) bool { return e.Name == paths[1] && e.Has(fsnotify.Remove) })
 }

@@ -145,6 +145,14 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 	ctx, w.cancel = context.WithCancel(ctx)
 	w.queue.Start(ctx)
 	go w.run(ctx)
+	startedAt := time.Now()
+	// An FSEvents stream can deliver late or lose a write right after starting, with no
+	// error: re-enqueue transcripts modified since the watch started, once, shortly after.
+	time.AfterFunc(historyCatchUpDelay, func() {
+		if ctx.Err() == nil {
+			w.enqueueModifiedSince(startedAt.Add(-time.Minute))
+		}
+	})
 	return nil
 }
 
@@ -241,6 +249,36 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 			continue
 		}
 		w.queue.Enqueue(filepath.Join(dir, name))
+	}
+}
+
+// historyCatchUpDelay is the one-shot safety-net rescan after the watch starts.
+const historyCatchUpDelay = 15 * time.Second
+
+// enqueueModifiedSince enqueues every project-level transcript written after since.
+func (w *HistoryFileWatcher) enqueueModifiedSince(since time.Time) {
+	projects, err := os.ReadDir(w.watchDir)
+	if err != nil {
+		return
+	}
+	for _, p := range projects {
+		if !p.IsDir() {
+			continue
+		}
+		dir := filepath.Join(w.watchDir, p.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			name := f.Name()
+			if f.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
+				continue
+			}
+			if info, err := f.Info(); err == nil && info.ModTime().After(since) {
+				w.queue.Enqueue(filepath.Join(dir, name))
+			}
+		}
 	}
 }
 

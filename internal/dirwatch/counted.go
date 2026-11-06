@@ -107,7 +107,7 @@ func unregisterCounted(c *counted) {
 func registerGauge() {
 	m := otel.Meter("stapler-squad/dirwatch")
 	g, err := m.Int64ObservableGauge("fs.watches",
-		metric.WithDescription("Distinct paths currently watched, per watcher; on kqueue each costs 1 fd plus 1 per file in a watched dir"))
+		metric.WithDescription("Distinct paths currently watched, per watcher. Costs no fds under FSEvents; under kqueue (fallback or STAPLER_SQUAD_DIRWATCH=fsnotify) each costs 1 fd plus 1 per file in the dir"))
 	if err != nil {
 		log.Warn("dirwatch: register fs.watches gauge", "err", err)
 		return

@@ -350,6 +350,7 @@ func (s *Scanner) Start(ctx context.Context) {
 		} else {
 			s.mu.Lock()
 			s.gitwatch.override = w
+			s.gitwatch.resyncDelay = watchResyncDelay
 			s.gitwatch.ownsOverride = true // fsnotifyLoop closes it on exit, so a restart needs a fresh one
 			s.mu.Unlock()
 		}
@@ -926,6 +927,25 @@ func (s *Scanner) AddRepo(repoPath string) {
 	s.repoSet.Store(repoPath, true)
 	s.watchRepo(repoPath)
 	s.EnqueueRepo(repoPath)
+	s.scheduleWatchResync(repoPath)
+}
+
+// scheduleWatchResync re-enqueues repoPath once, watchResyncDelay after its
+// watch was registered: an FSEvents stream can deliver its first event seconds
+// late, or lose one right after starting, with no error, so one late rescan
+// closes that window. Zero delay (kqueue, tests) disables it.
+func (s *Scanner) scheduleWatchResync(repoPath string) {
+	s.mu.RLock()
+	d := s.gitwatch.resyncDelay
+	s.mu.RUnlock()
+	if d <= 0 {
+		return
+	}
+	time.AfterFunc(d, func() {
+		if _, tracked := s.repoSet.Load(repoPath); tracked {
+			s.EnqueueRepo(repoPath)
+		}
+	})
 }
 
 // IsTracked reports whether repoPath is currently in the scan set, regardless

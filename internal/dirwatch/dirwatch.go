@@ -1,9 +1,12 @@
-// Package dirwatch provides a directory watcher that costs no file descriptors
+// Package dirwatch provides a directory watcher that costs no file descriptor
 // per watched file. fsnotify's kqueue backend (macOS) opens one fd for every
 // file inside every watched directory, so watching ~1,400 directories held
-// ~9,000 fds in a long-lived instance; the FSEvents-backed watcher here holds a
-// handful of streams instead. On platforms where fsnotify is already cheap
-// (inotify) NewFDFree reports false and callers keep using fsnotify.
+// ~9,000 fds in a long-lived instance. The FSEvents-backed watcher here holds
+// no fds per watched path or stream (measured: +0 fds across 280 streams) but
+// each stream locks an OS thread and the kernel refuses new ones near 512 per
+// process, so streams are shared (RootAt, WithRootFunc), budgeted, and past the
+// budget a path falls back to kqueue. On platforms where fsnotify is already
+// cheap (inotify) NewFDFree reports false and callers keep using fsnotify.
 package dirwatch
 
 import (

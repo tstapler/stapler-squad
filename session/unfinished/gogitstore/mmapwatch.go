@@ -29,6 +29,9 @@ import (
 // call instead of one per raw event.
 const packWatchDebounce = 200 * time.Millisecond
 
+// packWatchLateRefresh is the one-shot safety-net refresh after the watch starts.
+const packWatchLateRefresh = 15 * time.Second
+
 // startPackWatchLocked starts (at most once per store) a background
 // goroutine watching this store's objects/pack directory, calling
 // refreshIndexes on activity. Callers MUST hold s.mu (called from
@@ -74,6 +77,10 @@ func (s *SharedObjectStore) packWatchLoop(w dirwatch.Watcher, stop chan struct{}
 	// loading the indexes and the watch becoming live raises no event.
 	timer := time.NewTimer(packWatchDebounce)
 	timerC := timer.C
+	// And once more after packWatchLateRefresh: an FSEvents stream can deliver its
+	// first event seconds late, so a repack right after startup may raise nothing.
+	late := time.NewTimer(packWatchLateRefresh)
+	defer late.Stop()
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -94,6 +101,10 @@ func (s *SharedObjectStore) packWatchLoop(w dirwatch.Watcher, stop chan struct{}
 				timer.Reset(packWatchDebounce)
 			}
 			timerC = timer.C
+		case <-late.C:
+			if err := s.refreshIndexes(); err != nil {
+				log.Warn("gogitstore: late refreshIndexes failed", "commonDir", s.commonDirAbs, "err", err)
+			}
 		case <-timerC:
 			timerC = nil
 			if err := s.refreshIndexes(); err != nil {

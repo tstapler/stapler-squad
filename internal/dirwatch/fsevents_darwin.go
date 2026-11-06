@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/fsevents"
 	"github.com/tstapler/stapler-squad/log"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -27,6 +28,11 @@ const (
 type rootStream struct {
 	stream *fsevents.Stream
 	refs   map[string]struct{} // resolved watch paths served by this stream
+	// startedAt/firstEvent feed fs.stream_first_event_lag: FSEvents can deliver
+	// the first event seconds late (or never) with no error, so the lag is the
+	// only visible signal.
+	startedAt  time.Time
+	firstEvent atomic.Bool
 }
 
 type fseventsWatcher struct {
@@ -44,9 +50,8 @@ type fseventsWatcher struct {
 	warned   bool
 }
 
-// processStreams counts live FSEvents streams across all watchers: each locks an
-// OS thread and the kernel refuses new ones at about 512 per process.
-var processStreams atomic.Int64 //nolint:gochecknoglobals // process-wide budget feeding fs.streams
+// fallbackWatches counts paths served by kqueue because FSEvents was unavailable.
+var fallbackWatches atomic.Int64 //nolint:gochecknoglobals // feeds the fs.fallback_watches gauge
 
 // DefaultMaxStreams leaves headroom under the ~512 per-process FSEvents limit
 // for streams owned by other packages (e.g. the working-tree watcher).
@@ -141,10 +146,11 @@ func (w *fseventsWatcher) addFallbackLocked(name string, cause error) error {
 		return err
 	}
 	w.fbNames[name] = struct{}{}
+	fallbackWatches.Add(1)
 	if !w.warned {
 		w.warned = true
 		log.Warn("dirwatch: FSEvents unavailable for a path, using kqueue (one fd per file in it)",
-			"watcher", w.cfg.name, "path", name, "cause", cause, "streams", processStreams.Load())
+			"watcher", w.cfg.name, "path", name, "cause", cause, "streams", fsevents.LiveStreams())
 	}
 	return nil
 }
@@ -193,18 +199,25 @@ func (w *fseventsWatcher) streamForLocked(root string) (rs *rootStream, fresh bo
 	if max <= 0 {
 		max = DefaultMaxStreams
 	}
-	if processStreams.Load() >= max {
+	if fsevents.LiveStreams() >= max {
 		return nil, false, errStreamBudget
 	}
 	since := fsevents.CurrentEventID()
 	if since == 0 {
 		since = fsevents.SinceNow // 0 would replay the volume's whole history
 	}
+	rs = &rootStream{refs: make(map[string]struct{}), startedAt: time.Now()}
 	s, err := fsevents.NewStream(fsevents.Config{
-		Paths:     []string{root},
-		SinceWhen: since,
-		Latency:   streamLatency,
-		OnEvents:  w.onEvents,
+		Paths:       []string{root},
+		SinceWhen:   since,
+		Latency:     streamLatency,
+		NoWatchRoot: true, // WatchRoot costs ~14 fds per stream; removals arrive as events on the parent
+		OnEvents: func(evs []fsevents.Event) {
+			if rs.firstEvent.CompareAndSwap(false, true) {
+				recordFirstEventLag(w.cfg.name, time.Since(rs.startedAt))
+			}
+			w.onEvents(evs)
+		},
 	})
 	if err != nil {
 		return nil, false, err
@@ -212,8 +225,7 @@ func (w *fseventsWatcher) streamForLocked(root string) (rs *rootStream, fresh bo
 	if err := s.Start(); err != nil {
 		return nil, false, err
 	}
-	processStreams.Add(1)
-	rs = &rootStream{stream: s, refs: make(map[string]struct{})}
+	rs.stream = s
 	for r, old := range w.streams {
 		if covers(root, r) {
 			for p := range old.refs {
@@ -227,10 +239,7 @@ func (w *fseventsWatcher) streamForLocked(root string) (rs *rootStream, fresh bo
 	return rs, true, nil
 }
 
-func (w *fseventsWatcher) stopStream(s *fsevents.Stream) {
-	s.Stop()
-	processStreams.Add(-1)
-}
+func (w *fseventsWatcher) stopStream(s *fsevents.Stream) { s.Stop() }
 
 var errStreamBudget = errors.New("dirwatch: FSEvents stream budget spent")
 
@@ -239,6 +248,7 @@ func (w *fseventsWatcher) Remove(name string) error {
 	w.mu.Lock()
 	if _, ok := w.fbNames[name]; ok {
 		delete(w.fbNames, name)
+		fallbackWatches.Add(-1)
 		kq := w.fallback
 		w.mu.Unlock()
 		return kq.Remove(name)
@@ -289,6 +299,8 @@ func (w *fseventsWatcher) Close() error {
 	streams := w.streams
 	w.streams = make(map[string]*rootStream)
 	kq := w.fallback
+	fallbackWatches.Add(-int64(len(w.fbNames)))
+	w.fbNames = make(map[string]struct{})
 	w.mu.Unlock()
 	for _, rs := range streams {
 		w.stopStream(rs.stream)
@@ -304,41 +316,54 @@ func (w *fseventsWatcher) Close() error {
 	return nil
 }
 
-// onEvents runs on the FSEvents run-loop thread and must not block.
+// onEvents runs on the FSEvents run-loop thread and must not block. Filesystem
+// probes (opsFor) happen before taking mu so a slow stat never stalls Add/Remove.
 func (w *fseventsWatcher) onEvents(evs []fsevents.Event) {
+	type decoded struct {
+		path    string
+		dropped bool
+		op      fsnotify.Op
+	}
+	batch := make([]decoded, 0, len(evs))
+	for _, e := range evs {
+		p := filepath.Clean(e.Path)
+		if e.Flags&(fsevents.MustScanSubDirs|fsevents.UserDropped|fsevents.KernelDropped|fsevents.EventIdsWrapped) != 0 {
+			batch = append(batch, decoded{path: p, dropped: true})
+			continue
+		}
+		if op := opsFor(e.Flags, p); op != 0 {
+			batch = append(batch, decoded{path: p, op: op})
+		}
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return
 	}
-	for _, e := range evs {
-		p := filepath.Clean(e.Path)
-		if e.Flags&(fsevents.MustScanSubDirs|fsevents.UserDropped|fsevents.KernelDropped|fsevents.EventIdsWrapped) != 0 {
-			// Only escalate when the dropped region can contain something we watch;
+	for _, d := range batch {
+		if d.dropped {
+			// Only escalate when the dropped region can contain a watched path;
 			// recursive churn under objects/** must not rescan every repo.
-			if w.touchesWatchedLocked(p) {
+			if w.touchesWatchedLocked(d.path) {
 				w.overflowLocked()
 			}
 			continue
 		}
-		names := w.byReal[p]
+		names := w.byReal[d.path]
 		if len(names) == 0 {
-			parents := w.byReal[filepath.Dir(p)]
+			parents := w.byReal[filepath.Dir(d.path)]
 			if len(parents) == 0 {
 				continue
 			}
 			names = make([]string, len(parents))
 			for i, n := range parents {
-				names[i] = filepath.Join(n, filepath.Base(p))
+				names[i] = filepath.Join(n, filepath.Base(d.path))
 			}
-		}
-		op := opsFor(e.Flags, p)
-		if op == 0 {
-			continue
 		}
 		for _, name := range names {
 			select {
-			case w.events <- fsnotify.Event{Name: name, Op: op}:
+			case w.events <- fsnotify.Event{Name: name, Op: d.op}:
 			default:
 				w.overflowLocked() // a full buffer means lost events; consumers rescan on overflow
 			}
@@ -346,7 +371,7 @@ func (w *fseventsWatcher) onEvents(evs []fsevents.Event) {
 	}
 }
 
-// touchesWatchedLocked reports whether p is, contains or directly holds a watched path.
+// touchesWatchedLocked reports whether p is, contains, or is a direct child of a watched path.
 func (w *fseventsWatcher) touchesWatchedLocked(p string) bool {
 	if p == "." || p == "" || p == string(filepath.Separator) {
 		return true // flags without a path: cannot scope, assume the worst
@@ -397,13 +422,35 @@ func opsFor(f fsevents.EventFlags, path string) fsnotify.Op {
 
 func init() {
 	m := otel.Meter("stapler-squad/dirwatch")
+	fb, _ := m.Int64ObservableGauge("fs.fallback_watches",
+		metric.WithDescription("Watched paths served by kqueue because FSEvents was unavailable (stream budget spent or start refused); never re-promoted to FSEvents"))
+	lag, lerr := m.Float64Histogram("fs.stream_first_event_lag",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds from a stream starting to its first delivered event; FSEvents can deliver late or drop events with no error"))
+	if lerr == nil {
+		firstEventLag = lag
+	}
 	g, err := m.Int64ObservableGauge("fs.streams",
 		metric.WithDescription("Live FSEvents streams opened by dirwatch; each locks an OS thread and the kernel refuses new ones near 512 per process"))
 	if err != nil {
 		return
 	}
 	_, _ = m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		o.ObserveInt64(g, processStreams.Load())
+		o.ObserveInt64(g, fsevents.LiveStreams())
+		if fb != nil {
+			o.ObserveInt64(fb, fallbackWatches.Load())
+		}
 		return nil
-	}, g)
+	}, g, fb)
+}
+
+var firstEventLag metric.Float64Histogram //nolint:gochecknoglobals // set once in init
+
+func recordFirstEventLag(watcher string, d time.Duration) {
+	if firstEventLag != nil {
+		firstEventLag.Record(context.Background(), d.Seconds(), metric.WithAttributes(attribute.String("watcher", watcher)))
+	}
+	if d > 5*time.Second {
+		log.Warn("dirwatch: FSEvents stream delivered its first event late", "watcher", watcher, "lag", d)
+	}
 }
