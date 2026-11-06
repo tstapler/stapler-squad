@@ -210,6 +210,10 @@ const defaultRetryMaxAttempts = 1
 // MaxDelaySeconds is unset (<=0).
 const defaultRetryMaxDelaySeconds = 300
 
+// defaultInteractiveStallMinutes is used by InteractiveStallTimeoutOrDefault
+// whenever InteractiveStallMinutes is unset (<=0).
+const defaultInteractiveStallMinutes = 30
+
 // validRetryOnReasons is the complete vocabulary RetryOnOrDefault accepts;
 // used both as the all-three fallback and to filter out typos.
 var validRetryOnReasons = []string{"crashed", "stalled", "tmux_exited"} //nolint:gochecknoglobals // read-only vocabulary, never mutated; callers only get defensive copies (see append([]string(nil), ...) below)
@@ -246,6 +250,21 @@ type RetryPolicyConfig struct {
 	// wiring into the retry driver yet; this field exists so a config can
 	// opt in ahead of that integration landing without a later schema change.
 	StaleTriggersRetry *bool `json:"stale_triggers_retry,omitempty"`
+	// InteractiveStallMinutes is how long an interactive (non-backlog) session
+	// with a live pane may produce no meaningful output before the driver logs
+	// a "stall decision" for it. Interactive stalls never restart the pane or
+	// mark the session PermanentlyFailed; operator-facing alerts come from the
+	// review queue's stale badge and StaleSessionNotifier. Default: 30.
+	InteractiveStallMinutes int `json:"interactive_stall_minutes,omitempty"`
+}
+
+// InteractiveStallTimeoutOrDefault returns InteractiveStallMinutes as a
+// duration, falling back to defaultInteractiveStallMinutes when unset (<=0).
+func (c RetryPolicyConfig) InteractiveStallTimeoutOrDefault() time.Duration {
+	if c.InteractiveStallMinutes <= 0 {
+		return defaultInteractiveStallMinutes * time.Minute
+	}
+	return time.Duration(c.InteractiveStallMinutes) * time.Minute
 }
 
 // EnabledOrDefault returns whether automated retry is enabled, defaulting to

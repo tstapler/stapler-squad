@@ -408,6 +408,8 @@ type Config struct {
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
 	// TCCEnrichmentConsent records app consent by opaque protected-root ID, not OS grants.
 	TCCEnrichmentConsent map[string]bool `json:"tcc_enrichment_consent,omitempty"`
+	// TCCEnrichmentDenied records roots whose probe hit EPERM, until the user re-checks.
+	TCCEnrichmentDenied map[string]bool `json:"tcc_enrichment_denied,omitempty"`
 	// FeatureFlagScopes holds per-scope overrides of a scopable flag, keyed by
 	// flag name then scope ("kind:review"). A scope key is explicit when present;
 	// deleting it returns the scope to the flag's global value. Today only

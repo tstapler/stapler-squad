@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/tstapler/stapler-squad/log"
 	"sort"
 	"sync"
+	"syscall"
 )
 
 var ErrUnknownRoot = errors.New("unknown protected root ID")
@@ -17,20 +19,26 @@ type ConsentRoot struct {
 	Service   Kind
 	Paths     []string
 	Consented bool
+	// Denied is sticky: set when a probe returns EPERM, cleared only by Recheck.
+	Denied bool
 }
 
 // ConsentGate parks enrichment until the user agrees to its filesystem access.
 // Ready may do filesystem I/O; run it only inside the enricher's probe boundary.
 type ConsentGate struct {
-	classify func(string) Result
-	persist  func(string) error
-	mu       sync.Mutex
-	roots    map[string]ConsentRoot
-	consent  map[string]bool
+	classify      func(string) Result
+	persist       func(string) error
+	mu            sync.Mutex
+	roots         map[string]ConsentRoot
+	consent       map[string]bool
+	denied        map[string]bool
+	persistDenied func(id string, denied bool) error
+	pending       []deniedOp
+	draining      bool
 }
 
 func NewConsentGate(classify func(string) Result, consent map[string]bool, persist func(string) error) *ConsentGate {
-	g := &ConsentGate{classify: classify, persist: persist, roots: map[string]ConsentRoot{}, consent: map[string]bool{}}
+	g := &ConsentGate{classify: classify, persist: persist, roots: map[string]ConsentRoot{}, consent: map[string]bool{}, denied: map[string]bool{}}
 	for id, allowed := range consent {
 		g.consent[id] = allowed
 	}
@@ -57,7 +65,7 @@ func (g *ConsentGate) ReadyDependency(dependency Dependency) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	root := g.roots[id]
-	root.ID, root.Root, root.Service, root.Consented = id, result.Root, result.Service, g.consent[id]
+	root.ID, root.Root, root.Service, root.Consented, root.Denied = id, result.Root, result.Service, g.consent[id], g.denied[id]
 	found := false
 	for _, p := range root.Paths {
 		if p == dependency.EnrichmentKey {
@@ -112,5 +120,102 @@ func (g *ConsentGate) Continue(id string) ([]string, error) {
 	root := g.roots[id]
 	root.Consented = true
 	g.roots[id] = root
+	return append([]string(nil), root.Paths...), nil
+}
+
+// SetDeniedStore restores persisted denied roots and sets the writer used when
+// that state changes. Call before serving requests.
+func (g *ConsentGate) SetDeniedStore(initial map[string]bool, persist func(id string, denied bool) error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for id, d := range initial {
+		g.denied[id] = d
+	}
+	g.persistDenied = persist
+}
+
+// IsTCCDenial reports whether err looks like a TCC denial. TCC returns EPERM,
+// while ordinary file permissions return EACCES. EPERM can also come from
+// immutable flags or MDM/SIP, so this is a hint, never proof of a TCC denial.
+func IsTCCDenial(err error) bool { return errors.Is(err, syscall.EPERM) }
+
+// ObserveResult marks the root holding enrichmentKey denied when err is EPERM.
+// Only roots already classified as protected by Ready are known here.
+func (g *ConsentGate) ObserveResult(enrichmentKey string, err error) {
+	if !IsTCCDenial(err) {
+		return
+	}
+	g.mu.Lock()
+	var ids []string
+	for id, root := range g.roots {
+		for _, p := range root.Paths {
+			if p == enrichmentKey && !g.denied[id] {
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, id := range ids {
+		g.denied[id] = true
+		root := g.roots[id]
+		root.Denied = true
+		g.roots[id] = root
+		g.enqueuePersistLocked(id, true)
+	}
+	g.mu.Unlock()
+}
+
+type deniedOp struct {
+	id     string
+	denied bool
+}
+
+// enqueuePersistLocked queues a config write behind a single drain goroutine:
+// writes stay in state-change order (persist(true) cannot land after
+// persist(false)) and config.UpdateConfig disk I/O stays off the enricher worker.
+func (g *ConsentGate) enqueuePersistLocked(id string, denied bool) {
+	if g.persistDenied == nil {
+		return
+	}
+	g.pending = append(g.pending, deniedOp{id, denied})
+	if !g.draining {
+		g.draining = true
+		go g.drainPersist()
+	}
+}
+
+func (g *ConsentGate) drainPersist() {
+	for {
+		g.mu.Lock()
+		if len(g.pending) == 0 {
+			g.draining = false
+			g.mu.Unlock()
+			return
+		}
+		op := g.pending[0]
+		g.pending = g.pending[1:]
+		persist := g.persistDenied
+		g.mu.Unlock()
+		if err := persist(op.id, op.denied); err != nil {
+			log.Warn("tcc: failed to persist denied state; it will not survive a restart", "root_id", op.id, "denied", op.denied, "err", err)
+		}
+	}
+}
+
+// Recheck clears a sticky denial and returns the root's paths to re-probe, or
+// nil when the root was not denied.
+func (g *ConsentGate) Recheck(id string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	root, known := g.roots[id]
+	if !known {
+		return nil, ErrUnknownRoot
+	}
+	if !g.denied[id] {
+		return nil, nil
+	}
+	delete(g.denied, id)
+	root.Denied = false
+	g.roots[id] = root
+	g.enqueuePersistLocked(id, false)
 	return append([]string(nil), root.Paths...), nil
 }

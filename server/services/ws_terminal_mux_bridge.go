@@ -2,12 +2,17 @@ package services
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -42,6 +47,11 @@ type TerminalMuxBridge struct {
 	poolSize atomic.Int32
 	// stallTimeout is a field so tests can shrink it without mutating shared state.
 	stallTimeout time.Duration
+	// readIdle, now and logf are set only by NewTerminalMuxBridge (never zero); tests inject
+	// them via options instead of process-global swaps.
+	readIdle time.Duration
+	now      func() time.Time
+	logf     func(level slog.Level, msg string, args ...any)
 
 	// policies is the upgrade origin rule per listener; a listener without one is refused.
 	policies map[string]func(*http.Request) bool
@@ -71,6 +81,7 @@ func WithTerminalMuxDispatchers(d UnaryDispatchers) TerminalMuxOption {
 func NewTerminalMuxBridge(serve muxServeFunc, poolSize int, opts ...TerminalMuxOption) *TerminalMuxBridge {
 	b := &TerminalMuxBridge{
 		serve: serve, sockets: map[*muxSocket]struct{}{}, stallTimeout: defaultMuxStallTimeout,
+		readIdle: muxReadIdle, now: time.Now, logf: logMuxAt,
 		policies: map[string]func(*http.Request) bool{ListenerLocal: loopbackOriginAllowed},
 	}
 	b.poolSize.Store(int32(poolSize))
@@ -78,6 +89,23 @@ func NewTerminalMuxBridge(serve muxServeFunc, poolSize int, opts ...TerminalMuxO
 		o(b)
 	}
 	return b
+}
+
+// withTerminalMuxLogger redirects the bridge's own log lines (tests).
+func withTerminalMuxLogger(f func(level slog.Level, msg string, args ...any)) TerminalMuxOption {
+	return func(b *TerminalMuxBridge) {
+		if f != nil {
+			b.logf = f
+		}
+	}
+}
+
+func logMuxAt(level slog.Level, msg string, args ...any) {
+	if level >= slog.LevelWarn {
+		log.Warn(msg, args...)
+		return
+	}
+	log.Info(msg, args...)
 }
 
 // PoolSize reports the advertised socket count.
@@ -165,6 +193,12 @@ type muxSocket struct {
 	upgrade  *http.Request // identity (cookie, host, peer) re-checked on every OPEN
 	listener string
 	denials  int // refused OPENs on this socket; only touched by readLoop
+	openedAt time.Time
+	// lastReadNanos is the UnixNano of the last frame readLoop received (or openedAt).
+	lastReadNanos atomic.Int64
+	// teardownCause records a server-side teardown (write failure, control queue overflow)
+	// so the read error it provokes is not misreported as a peer fault. First writer wins.
+	teardownCause atomic.Pointer[muxCloseReason]
 
 	mu       sync.Mutex
 	streams  map[uint32]*muxStreamConn
@@ -177,12 +211,69 @@ type muxSocket struct {
 }
 
 func newMuxSocket(b *TerminalMuxBridge, conn *websocket.Conn, upgrade *http.Request, listener string) *muxSocket {
-	return &muxSocket{
-		bridge: b, conn: conn, upgrade: upgrade, listener: listener,
+	now := b.now()
+	st := &muxSocket{
+		bridge: b, conn: conn, upgrade: upgrade, listener: listener, openedAt: now,
 		streams: map[uint32]*muxStreamConn{},
 		notify:  make(chan struct{}, 1),
 		done:    make(chan struct{}),
 	}
+	st.lastReadNanos.Store(now.UnixNano())
+	return st
+}
+
+// muxCloseReason is the closed set of terminal_mux_socket_closed_total{reason} values; the
+// "terminal mux socket closed" log line carries the same string.
+type muxCloseReason string
+
+const (
+	muxClosePeerClosed      muxCloseReason = "peer_closed"
+	muxCloseReadError       muxCloseReason = "read_error"
+	muxCloseIdleTimeout     muxCloseReason = "idle_timeout"
+	muxCloseMalformed       muxCloseReason = "malformed"
+	muxCloseUnauthorized    muxCloseReason = "unauthorized"
+	muxCloseShutdown        muxCloseReason = "shutdown"
+	muxCloseWriteError      muxCloseReason = "write_error"
+	muxCloseControlOverflow muxCloseReason = "control_overflow"
+)
+
+// level is Info for a clean end and Warn for anything that points at a fault.
+func (r muxCloseReason) level() slog.Level {
+	if r == muxClosePeerClosed || r == muxCloseShutdown {
+		return slog.LevelInfo
+	}
+	return slog.LevelWarn
+}
+
+// muxClose is why readLoop returned, with the underlying error when there was one.
+type muxClose struct {
+	reason muxCloseReason
+	err    error
+}
+
+// errMuxSocketClosed is the error every stream of a dropped mux socket reads. It is a
+// *websocket.CloseError (1006) so existing close-code handling is unchanged; the stream
+// logs use errors.Is against it to avoid one ERROR per pane, since the socket logs once.
+var errMuxSocketClosed = &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "mux socket closed"}
+
+// isPeerCausedWriteError reports a write failure caused by the peer going away (reset, broken
+// pipe, closed or EOF'd connection); those are not server faults and readLoop classifies them.
+func isPeerCausedWriteError(err error) bool {
+	var ce *websocket.CloseError
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.As(err, &ce)
+}
+
+// recordWriteFailure notes a server-side write failure as the teardown cause; a peer-caused
+// one records nothing so the read side classifies it.
+func (s *muxSocket) recordWriteFailure(err error) {
+	if !isPeerCausedWriteError(err) {
+		s.failTeardown(muxCloseWriteError)
+	}
+}
+
+func (s *muxSocket) failTeardown(r muxCloseReason) {
+	s.teardownCause.CompareAndSwap(nil, &r)
 }
 
 func (s *muxSocket) wake() {
@@ -197,6 +288,7 @@ func (s *muxSocket) sendControl(frame []byte) {
 	s.mu.Lock()
 	if len(s.control) >= muxControlQueueLimit {
 		s.mu.Unlock()
+		s.failTeardown(muxCloseControlOverflow)
 		_ = s.conn.Close() // peer is not reading control replies; tear the socket down
 		return
 	}
@@ -223,8 +315,8 @@ func (s *muxSocket) run(ctx context.Context) {
 	ctx, s.span = telemetry.GetTracer().Start(ctx, "terminal_mux.socket")
 	defer s.span.End()
 	muxMetrics.socketOpened()
-	reason := "peer_closed"
-	defer func() { muxMetrics.socketClosed(reason) }()
+	closed := muxClose{reason: muxClosePeerClosed}
+	defer func() { muxMetrics.socketClosed(string(closed.reason)) }()
 
 	s.sendControl(encodeMuxConfig(muxFrameHello, s.bridge.config()))
 	s.wg.Add(1)
@@ -232,15 +324,40 @@ func (s *muxSocket) run(ctx context.Context) {
 	go s.pingLoop()
 	stopOnShutdown := context.AfterFunc(ctx, func() { _ = s.conn.Close() })
 	defer stopOnShutdown()
-	reason = s.readLoop(ctx)
+	closed = s.readLoop(ctx)
 	close(s.done)
 	_ = s.conn.Close()
-	s.killStreams()
+	streams := s.killStreams()
 	s.wg.Wait()
-	s.span.SetAttributes(attribute.String("close_reason", reason))
+	s.span.SetAttributes(attribute.String("close_reason", string(closed.reason)))
+	s.logClosed(closed, streams)
 }
 
-func (s *muxSocket) killStreams() {
+// logClosed emits the one line that explains a dropped socket; every pane it carried only
+// sees the synthetic errMuxSocketClosed.
+func (s *muxSocket) logClosed(c muxClose, streams int) {
+	now := s.bridge.now()
+	args := []any{
+		"reason", string(c.reason),
+		"streams", streams,
+		"age", now.Sub(s.openedAt).Round(time.Millisecond).String(),
+		"since_last_frame", now.Sub(time.Unix(0, s.lastReadNanos.Load())).Round(time.Millisecond).String(),
+		"listener", s.listener,
+		"remote_addr", s.upgrade.RemoteAddr,
+		"user_agent", s.upgrade.UserAgent(),
+	}
+	if c.err != nil {
+		args = append(args, "err", c.err)
+	}
+	var ce *websocket.CloseError
+	if errors.As(c.err, &ce) {
+		args = append(args, "close_code", ce.Code, "close_text", ce.Text)
+	}
+	s.bridge.logf(c.reason.level(), "terminal mux socket closed", args...)
+}
+
+// killStreams ends every stream with errMuxSocketClosed and returns how many there were.
+func (s *muxSocket) killStreams() int {
 	s.mu.Lock()
 	streams := make([]*muxStreamConn, 0, len(s.streams))
 	for _, st := range s.streams {
@@ -248,8 +365,9 @@ func (s *muxSocket) killStreams() {
 	}
 	s.mu.Unlock()
 	for _, st := range streams {
-		st.endWith(&websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "mux socket closed"})
+		st.endWith(errMuxSocketClosed)
 	}
+	return len(streams)
 }
 
 // pingLoop keeps an idle socket alive from the server side: browsers throttle timers in
@@ -267,32 +385,44 @@ func (s *muxSocket) pingLoop() {
 	}
 }
 
-// readLoop dispatches client frames and returns the close reason.
-func (s *muxSocket) readLoop(ctx context.Context) string {
+// readLoop dispatches client frames and returns why it stopped.
+func (s *muxSocket) readLoop(ctx context.Context) muxClose {
 	for {
-		_ = s.conn.SetReadDeadline(time.Now().Add(muxReadIdle))
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.bridge.readIdle))
 		typ, msg, err := s.conn.ReadMessage()
 		if err != nil {
-			if ctx.Err() != nil {
-				return "shutdown"
-			}
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return "peer_closed"
-			}
-			return "read_error"
+			return s.classifyReadError(ctx, err)
 		}
+		s.lastReadNanos.Store(s.bridge.now().UnixNano())
 		if typ != websocket.BinaryMessage {
-			return "malformed"
+			return muxClose{muxCloseMalformed, errors.New("non-binary message")}
 		}
 		f, derr := decodeMuxFrame(msg)
 		if derr != nil {
-			return "malformed"
+			return muxClose{muxCloseMalformed, derr}
 		}
 		muxMetrics.frame("in", f.Type)
 		if !s.dispatch(ctx, f) {
-			return "unauthorized"
+			return muxClose{muxCloseUnauthorized, nil}
 		}
 	}
+}
+
+func (s *muxSocket) classifyReadError(ctx context.Context, err error) muxClose {
+	if ctx.Err() != nil {
+		return muxClose{muxCloseShutdown, err}
+	}
+	// A peer close frame wins over any server-side cause recorded while replying to it.
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return muxClose{muxClosePeerClosed, err}
+	}
+	if r := s.teardownCause.Load(); r != nil {
+		return muxClose{*r, err}
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return muxClose{muxCloseIdleTimeout, err}
+	}
+	return muxClose{muxCloseReadError, err}
 }
 
 // dispatch handles one client frame; false ends the socket (repeated unauthorized OPENs).
@@ -451,6 +581,7 @@ func (s *muxSocket) writeLoop() {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(muxWriteWait))
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			muxMetrics.writeError()
+			s.recordWriteFailure(err)
 			_ = s.conn.Close() // unblocks readLoop; the socket tears down
 			<-s.done
 			return

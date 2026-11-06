@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -28,6 +28,9 @@ import (
 // rename each into place, unlink the old pair) — into one refreshIndexes
 // call instead of one per raw event.
 const packWatchDebounce = 200 * time.Millisecond
+
+// packWatchLateRefresh is the one-shot safety-net refresh after the watch starts.
+const packWatchLateRefresh = 15 * time.Second
 
 // startPackWatchLocked starts (at most once per store) a background
 // goroutine watching this store's objects/pack directory, calling
@@ -47,7 +50,7 @@ func (s *SharedObjectStore) startPackWatchLocked() {
 	s.packWatchStarted = true
 
 	packDir := filepath.Join(s.commonDirAbs, "objects", "pack")
-	w, err := fsnotify.NewWatcher()
+	w, err := dirwatch.New(dirwatch.WithName("gogit-pack"))
 	if err != nil {
 		log.Warn("gogitstore: fsnotify unavailable, mmap index staleness will only be caught by Registry TTL eviction", "err", err)
 		return
@@ -67,11 +70,17 @@ func (s *SharedObjectStore) startPackWatchLocked() {
 // (mirrors session/unfinished/scanner.go's fsnotifyLoop goroutine-exit
 // convention, though this loop is otherwise independent of it — see package
 // doc above).
-func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{}) {
+func (s *SharedObjectStore) packWatchLoop(w dirwatch.Watcher, stop chan struct{}) {
 	defer func() { _ = w.Close() }()
 
-	var timer *time.Timer
-	var timerC <-chan time.Time
+	// One refresh right after the watch starts: a repack that landed between
+	// loading the indexes and the watch becoming live raises no event.
+	timer := time.NewTimer(packWatchDebounce)
+	timerC := timer.C
+	// And once more after packWatchLateRefresh: an FSEvents stream can deliver its
+	// first event seconds late, so a repack right after startup may raise nothing.
+	late := time.NewTimer(packWatchLateRefresh)
+	defer late.Stop()
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -82,7 +91,7 @@ func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{
 		select {
 		case <-stop:
 			return
-		case _, ok := <-w.Events:
+		case _, ok := <-w.Events():
 			if !ok {
 				return
 			}
@@ -92,12 +101,16 @@ func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{
 				timer.Reset(packWatchDebounce)
 			}
 			timerC = timer.C
+		case <-late.C:
+			if err := s.refreshIndexes(); err != nil {
+				log.Warn("gogitstore: late refreshIndexes failed", "commonDir", s.commonDirAbs, "err", err)
+			}
 		case <-timerC:
 			timerC = nil
 			if err := s.refreshIndexes(); err != nil {
 				log.Warn("gogitstore: refreshIndexes failed", "commonDir", s.commonDirAbs, "err", err)
 			}
-		case _, ok := <-w.Errors:
+		case _, ok := <-w.Errors():
 			if !ok {
 				return
 			}
