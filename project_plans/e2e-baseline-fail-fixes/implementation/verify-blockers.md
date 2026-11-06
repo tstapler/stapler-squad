@@ -17,3 +17,11 @@
 - AC6: `testIgnore` includes `DEV_SERVER_SPECS = '**/dev-mode-hmr.spec.ts'` for both projects (playwright.config.ts:208, :254).
 - AC7: visual-regression rows untouched.
 - AC8: not verified (B2).
+
+## B3 — `bun run lint:duplicates` crashes before scanning
+- `cd web-app && bun run lint:duplicates` -> `Error: Cannot find module '@jscpd/finder'` (from `@jscpd/html-reporter`), exit 1. No `web-app/` file is changed by this branch.
+
+## sdd:6-verify summary (inline; diff is 3 Go lines + 4 locator strings + 2 baseline rows)
+- Idioms/architecture: `gofmt -l main.go` clean; `go vet .` clean; `go-keyring v0.2.8` already a direct dependency in go.mod:51. The plan's optional `jules.InitTestMode()` facade was not added (concern, not blocker).
+- Baseline: 2693 -> 2691 specs; 20 target rows (jules 10, alias 6, local-file-browser 4) still `fail` pending a browser run.
+- Verdict: NOT PASS-ready for AC1-4, AC8, AC9; blocked by B1-B3, not by a found defect.
