@@ -134,10 +134,14 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 	rng := FlowEventRange{From: time.Now().UTC().Add(-48 * time.Hour)}
 	ids := []flow.ItemID{flow.ItemID(item.String())}
 	ctx := context.Background()
+	win, err := flow.NewFlowWindowBounds(rng.From, time.Now().UTC().Add(time.Hour))
+	require.NoError(t, err)
 	calls := map[string]func() error{
 		"Events":           func() error { _, err := r.Events(ctx, rng); return err },
 		"CountEvents":      func() error { _, err := r.CountEvents(ctx, rng); return err },
 		"LastEventsBefore": func() error { _, err := r.LastEventsBefore(ctx, time.Now().UTC(), ids); return err },
+		"Verdicts":         func() error { _, err := r.Verdicts(ctx, win); return err },
+		"AgentDoneClaims":  func() error { _, err := r.AgentDoneClaims(ctx, win); return err },
 	}
 	for name, call := range calls {
 		beforeR, beforeW := poolQueries("ent-read"), poolQueries("ent")
