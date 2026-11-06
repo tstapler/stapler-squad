@@ -161,7 +161,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // prior mount) skips the loading overlay entirely; only a genuinely cold
   // entry starts in the loading state. See PoolEntry.warmRef's doc comment.
   const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(() => !warmRef.current);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0);
@@ -863,7 +862,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -1283,6 +1282,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       // On reconnect (not first connect), append a separator so the user can see where
       // the reconnection happened. showReconnectBanner being true means we disconnected.
+      if (hasEverConnectedRef.current) bumpConnectionEpoch(); // resets gesture/paging state, as the old retry path did
       if (hasEverConnectedRef.current && showReconnectBanner) {
         const terminal = xtermRef.current?.terminal;
         if (terminal && terminal.buffer.active.length > 0) {
@@ -1291,11 +1291,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             manager.write("\r\n\x1b[2m--- reconnected ---\x1b[0m\r\n");
           }
         }
-      }
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
       }
 
       // Delay the post-connection resize sync until after layout settles.
@@ -1322,28 +1317,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       if (isInitialScrollbackDoneRef.current) {
         setIsLoadingInitialContent(false);
       }
-      if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (!isConnected) {
-            setShowReconnectButton(true);
-          }
-        }, 5000);
-      }
     }
 
     return () => {
       if (postConnectionResizeTimer) {
         clearTimeout(postConnectionResizeTimer);
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
     };
-    // showReconnectBanner is a pre-existing missing dependency: adding it
-    // would re-run this effect on every banner toggle, and its cleanup
-    // clears reconnectTimeoutRef.current without nulling the ref -- that
-    // would silently cancel the "show reconnect button after 5s" timer
-    // mid-countdown. Left alone rather than fixed as a drive-by.
+    // showReconnectBanner is a pre-existing missing dependency: adding it would re-run
+    // this effect on every banner toggle. Left alone rather than fixed as a drive-by.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, resize, xtermRef]);
 
@@ -1373,6 +1355,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         bannerTimerRef.current = null;
       }
     };
+  }, [isConnected]);
+
+  // A pane that stays disconnected for 5s gets a manual Reconnect (the hook keeps retrying with
+  // backoff, which can be 10-30s between tries, so the user needs a way to retry now).
+  useEffect(() => {
+    if (isConnected) {
+      setShowReconnectButton(false);
+      return;
+    }
+    if (!hasEverConnectedRef.current) return;
+    const timer = setTimeout(() => setShowReconnectButton(true), 5000);
+    return () => clearTimeout(timer);
   }, [isConnected]);
 
   // Clear loading overlay when max reconnect attempts reached
@@ -1495,29 +1489,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, xtermRef]);
 
-  // Auto-reconnect with exponential backoff
-  useEffect(() => {
-    if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
-    // Must not fire once the hook has hard-failed (e.g. a non-retriable WS
-    // close code): the hook already set shouldReconnectRef.current = false
-    // in that case, but calling connect() below unconditionally resets it
-    // back to true (see useTerminalStream.ts's connect()), silently
-    // reconnecting right through the hard-fail and hiding the Retry banner.
-    if (isHardFailed) return;
-    if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
-      const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
-      console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
-
-      const timeout = setTimeout(() => {
-        console.log("[TerminalOutput] Attempting reconnection...");
-        bumpConnectionEpoch();
-        connect();
-      }, backoffDelay);
-
-      return () => clearTimeout(timeout);
-    }
-  }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
-
   // Starts the connection for a session: pre-size from cache, then session-switch
   // connect, then post-disconnect connect. The effects inside run in that fixed
   // order -- see the ORDERING INVARIANT in useSessionConnectionBootstrap.
@@ -1533,7 +1504,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setIsLoadingInitialContent,
     setConnectionAttempts,
     setShowReconnectButton,
-    reconnectTimeoutRef,
     previousConnectionStateRef,
     streamManagerRef,
     refs: sizingRefs,
@@ -2009,11 +1979,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {" "}• Reconnecting (attempt {connectionAttempts}/5)...
             </span>
           )}
-          {!isConnected && connectionAttempts >= 5 && (
+          {!isConnected && connectionAttempts >= 5 && !isServerUnreachable && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
+          )}
+          {isServerUnreachable && !isConnected && !isHardFailed && (
+            <span className={styles.statusText}> • Server unreachable, retrying</span>
           )}
           {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
           <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} pulse={connectionPulse} />
@@ -2042,7 +2015,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
           )}
           {/* Reconnect always visible when needed, regardless of toolbar state */}
-          {showReconnectButton && (
+          {(showReconnectButton || (isServerUnreachable && !isConnected)) && (
             <button
               className={styles.toolbarButton}
               onClick={handleManualReconnect}
@@ -2325,11 +2298,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </div>
           </div>
         )}
-        {!isLoadingInitialContent && connectionAttempts >= 5 && (
+        {!isLoadingInitialContent && !isConnected && (connectionAttempts >= 5 || isServerUnreachable) && (
           <div className={styles.unavailableOverlay}>
             <div className={styles.unavailableIcon}>⚠</div>
-            <div className={styles.unavailableText}>Terminal unavailable</div>
-            <div className={styles.unavailableSubtext}>Could not connect to terminal session</div>
+            <div className={styles.unavailableText}>{isServerUnreachable ? "Server unreachable" : "Terminal unavailable"}</div>
+            <div className={styles.unavailableSubtext}>
+              {isServerUnreachable ? "Still retrying in the background" : "Could not connect to terminal session"}
+            </div>
           </div>
         )}
         {/* Task 4.2.1 — Non-blocking resizing overlay (R1.4).

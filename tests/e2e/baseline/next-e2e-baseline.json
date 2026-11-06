@@ -11055,7 +11055,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-02 edit alias description",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11137,7 +11137,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-04 add environment variable via Advanced section",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11184,7 +11184,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-05 add tag via tag input Enter key",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11406,7 +11406,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-02 edit alias description",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11488,7 +11488,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-04 add environment variable via Advanced section",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11535,7 +11535,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-05 add tag via tag input Enter key",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47403,7 +47403,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > Dispatch stays disabled until the egress checkbox is checked, then enables",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47452,7 +47452,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > completes the full dispatch flow with keyboard only",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47538,7 +47538,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > dispatches to Jules in 3 clicks when repo already acknowledged",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47587,7 +47587,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > prefills the Branch field from the item's tracked branch, and disables Dispatch to Jules with a no-branch reason when none exists",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47636,7 +47636,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > revoking egress consent immediately re-shows the confirmation in a freshly opened dialog",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47685,7 +47685,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > Dispatch stays disabled until the egress checkbox is checked, then enables",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47734,7 +47734,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > completes the full dispatch flow with keyboard only",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47820,7 +47820,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > dispatches to Jules in 3 clicks when repo already acknowledged",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47869,7 +47869,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > prefills the Branch field from the item's tracked branch, and disables Dispatch to Jules with a no-branch reason when none exists",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -47918,7 +47918,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > revoking egress consent immediately re-shows the confirmation in a freshly opened dialog",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49282,7 +49282,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium",
    "title": "local-file-browser > local-file-browser > navigates into a symlinked directory",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49329,7 +49329,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium",
    "title": "local-file-browser > local-file-browser > open terminal here creates a directory-mode session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49481,7 +49481,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium-dom",
    "title": "local-file-browser > local-file-browser > navigates into a symlinked directory",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49528,7 +49528,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium-dom",
    "title": "local-file-browser > local-file-browser > open terminal here creates a directory-mode session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -63530,55 +63530,6 @@
       {
        "retry": 0,
        "status": "passed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
       }
      ]
     }
@@ -63875,55 +63826,6 @@
       {
        "retry": 0,
        "status": "passed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium-dom",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
       }
      ]
     }

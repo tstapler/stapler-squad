@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"io"
 	"math/rand"
 	"os"
@@ -340,6 +341,7 @@ func copyFilePreservingMode(src, dst string, perm os.FileMode) (err error) {
 // whole test binary run finishes, regardless of which subset of tests ran or
 // how many distinct numCommits values they requested.
 func TestMain(m *testing.M) {
+	dirwatch.ForceFSNotify(true)
 	code := m.Run()
 	// hasAnyFixtureCacheEntry guards against calling goldenFixtureRoot() (which
 	// lazily CREATES the directory) when this run never built any fixture at

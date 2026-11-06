@@ -3,20 +3,28 @@
 
 import { useRef, useState } from "react";
 import { useBacklogImageAttachment } from "@/lib/hooks/useBacklogImageAttachment";
+import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { BrainstormPanel } from "./BrainstormPanel";
 import * as formStyles from "./BacklogItemForm.css";
 import * as styles from "./BacklogComposeWidget.css";
 
 interface BacklogComposeWidgetProps {
   /** Text the user had already typed before opening the widget. */
   initialText: string;
-  /** Called with the trimmed text; the caller owns closing and background creation. */
-  onSubmit: (text: string) => void;
+  /** Called with the trimmed text and repo path ("" = none); the caller owns closing and background creation. */
+  onSubmit: (text: string, repoPath: string) => void;
   /** Receives the current draft so the caller can restore it to the omnibar input. */
   onCancel: (draft: string) => void;
 }
 
 export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: BacklogComposeWidgetProps) {
   const [text, setText] = useState(initialText);
+  const knownRepoPaths = useSessionRepoPaths();
+  // Pre-fill with the most recently active repo until the user edits or clears the field.
+  const [repoPathEdit, setRepoPathEdit] = useState<string | null>(null);
+  const repoPath = repoPathEdit ?? knownRepoPaths[0] ?? "";
+  const [exploring, setExploring] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { error, uploading, onFileInputChange, onPaste } = useBacklogImageAttachment({
@@ -26,7 +34,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
 
   const canSubmit = text.trim() !== "" && !uploading;
   const submit = () => {
-    if (canSubmit) onSubmit(text.trim());
+    if (canSubmit) onSubmit(text.trim(), repoPath.trim());
   };
 
   return (
@@ -65,7 +73,28 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           {error}
         </span>
       )}
+      <label htmlFor="backlog-compose-repo" className={formStyles.label}>
+        Repository (AI triage needs a repo path to run)
+      </label>
+      <RepoPathInput
+        id="backlog-compose-repo"
+        value={repoPath}
+        onChange={setRepoPathEdit}
+        placeholder="Optional — leave empty to skip automatic triage"
+        data-testid="backlog-compose-repo"
+      />
+      {exploring && <BrainstormPanel draftText={text} knownRepoPaths={knownRepoPaths} />}
       <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.exploreToggle}
+          onClick={() => setExploring((v) => !v)}
+          aria-expanded={exploring}
+          data-testid="backlog-compose-explore"
+        >
+          {/* analytics-exempt */}
+          <span aria-hidden="true">✨</span> {exploring ? "Hide AI explore" : "Explore with AI"}
+        </button>
         <button
           type="button"
           className={styles.attachButton}
@@ -73,6 +102,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           disabled={uploading}
           data-testid="backlog-compose-attach"
         >
+          {/* analytics-exempt */}
           {uploading ? "Uploading…" : <><span aria-hidden="true">📎</span> Attach image</>}
         </button>
         <input
@@ -90,6 +120,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           onClick={() => onCancel(text)}
           data-testid="backlog-compose-cancel"
         >
+          {/* analytics-exempt */}
           Cancel
         </button>
         <button
@@ -99,6 +130,7 @@ export function BacklogComposeWidget({ initialText, onSubmit, onCancel }: Backlo
           disabled={!canSubmit}
           data-testid="backlog-compose-submit"
         >
+          {/* analytics-exempt */}
           Create
         </button>
       </div>

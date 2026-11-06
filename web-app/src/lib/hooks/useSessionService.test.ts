@@ -90,8 +90,7 @@ describe("isRetriableCloseCode", () => {
 
 // ===== Visibility / online handler debounce integration tests =====
 //
-// The hook registers `handleVisibilityOrOnline` via useEffect only when
-// NEXT_PUBLIC_RECONNECT_V2 === "true".  We mount the real hook with mocked
+// The hook registers `handleVisibilityOrOnline` via useEffect.  We mount the real hook with mocked
 // ConnectRPC/store deps to confirm events on `document`/`window` reach the
 // hook's internal handler.
 
@@ -193,16 +192,12 @@ describe("useSessionService visibility/online handler", () => {
   // fake-timer coordination), we capture the registered handler via
   // jest.spyOn on addEventListener and invoke it directly.
 
-  let originalEnv: string | undefined;
   let capturedDocHandler: ((ev: Event) => void) | null = null;
   let capturedWinHandler: ((ev: Event) => void) | null = null;
   let docAddSpy: jest.SpyInstance;
   let winAddSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    originalEnv = process.env.NEXT_PUBLIC_RECONNECT_V2;
-    (process.env as Record<string, string | undefined>).NEXT_PUBLIC_RECONNECT_V2 = "true";
-
     capturedDocHandler = null;
     capturedWinHandler = null;
 
@@ -236,7 +231,6 @@ describe("useSessionService visibility/online handler", () => {
   });
 
   afterEach(() => {
-    (process.env as Record<string, string | undefined>).NEXT_PUBLIC_RECONNECT_V2 = originalEnv;
     docAddSpy.mockRestore();
     winAddSpy.mockRestore();
     jest.clearAllMocks();
@@ -270,7 +264,7 @@ describe("useSessionService visibility/online handler", () => {
     const callsBefore = mockWatchSessions.mock.calls.length;
 
     // Invoke the captured online handler — shouldReconnectRef is true after autoWatch
-    act(() => { capturedWinHandler!(new Event("online")); });
+    act(() => { capturedWinHandler?.(new Event("online")); });
 
     // Wait for the debounce (200ms) + listSessions promise + watchSessions call
     await waitFor(
@@ -295,11 +289,11 @@ describe("useSessionService visibility/online handler", () => {
     jest.useFakeTimers({ legacyFakeTimers: true });
 
     // Fire three events within the 200ms debounce window
-    act(() => { capturedWinHandler!(new Event("online")); });
+    act(() => { capturedWinHandler?.(new Event("online")); });
     act(() => { jest.advanceTimersByTime(50); });
-    act(() => { capturedWinHandler!(new Event("online")); });
+    act(() => { capturedWinHandler?.(new Event("online")); });
     act(() => { jest.advanceTimersByTime(50); });
-    act(() => { capturedWinHandler!(new Event("online")); });
+    act(() => { capturedWinHandler?.(new Event("online")); });
 
     // Advance past debounce threshold — only one more watchSessions call
     act(() => { jest.advanceTimersByTime(300); });
@@ -311,23 +305,6 @@ describe("useSessionService visibility/online handler", () => {
       () => expect(mockWatchSessions.mock.calls.length).toBe(callsBefore + 1),
       { timeout: 1000 }
     );
-  });
-
-  it("handleVisibilityOrOnline_should_notRegisterListeners_When_featureFlagIsAbsent", async () => {
-    (process.env as Record<string, string | undefined>).NEXT_PUBLIC_RECONNECT_V2 = undefined;
-
-    const store = makeTestStore();
-    renderHook(
-      () => useSessionService({ autoWatch: false, enabled: true }),
-      { wrapper: makeWrapper(store) }
-    );
-
-    // Flush effects — listSessions not called for autoWatch:false, so just flush pending promises
-    await act(async () => { await Promise.resolve(); });
-
-    // Without the feature flag, no listeners should have been registered
-    expect(capturedDocHandler).toBeNull();
-    expect(capturedWinHandler).toBeNull();
   });
 });
 

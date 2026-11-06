@@ -56,6 +56,12 @@ type EntRepository struct {
 	pendingGuidance pendingGuidanceCache
 	migrationMode   bool // When true, enables dual-write mode for migration
 
+	// markerLimiter is built lazily (markerLimiterOnce) from markerClock, an
+	// injectable test clock (nil => time.Now); see RecordFlowMarker.
+	markerLimiter     *MarkerLimiter
+	markerLimiterOnce sync.Once
+	markerClock       func() time.Time
+
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
 	// database instead of running schema creation and startup migrations — see

@@ -20,3 +20,6 @@ func CurrentEventID() EventID { return 0 }
 
 // VolumeUUID returns "" off darwin.
 func VolumeUUID(string) string { return "" }
+
+// LiveStreams returns 0 off darwin.
+func LiveStreams() int64 { return 0 }

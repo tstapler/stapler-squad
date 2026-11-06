@@ -195,8 +195,16 @@ func (s *Stream) Start() error {
 		s.unregister()
 		return err
 	}
+	liveStreams.Add(1)
 	return nil
 }
+
+// liveStreams counts started, not yet stopped streams across every owner in the
+// process. Each holds an OS thread and the kernel refuses new ones near 512.
+var liveStreams atomic.Int64 //nolint:gochecknoglobals // process-wide stream budget
+
+// LiveStreams reports the number of running streams in this process.
+func LiveStreams() int64 { return liveStreams.Load() }
 
 func (s *Stream) unregister() {
 	registryMu.Lock()
@@ -218,8 +226,11 @@ func (s *Stream) run(ready chan<- error) {
 	defer cfRelease(arr)
 
 	ctx := streamContext{info: s.id}
-	h := fsStreamCreate(0, callbackPtr, &ctx, arr, s.cfg.SinceWhen, s.cfg.Latency.Seconds(),
-		createFlagFileEvents|createFlagNoDefer|createFlagWatchRoot)
+	flags := uint32(createFlagFileEvents | createFlagNoDefer)
+	if !s.cfg.NoWatchRoot {
+		flags |= createFlagWatchRoot
+	}
+	h := fsStreamCreate(0, callbackPtr, &ctx, arr, s.cfg.SinceWhen, s.cfg.Latency.Seconds(), flags)
 	if h == 0 {
 		ready <- errors.New("fsevents: FSEventStreamCreate failed")
 		return
@@ -300,6 +311,7 @@ func (s *Stream) Stop() {
 	}
 	<-s.done
 	s.unregister()
+	liveStreams.Add(-1)
 }
 
 // FlushSync blocks until all events up to now have been delivered, giving
