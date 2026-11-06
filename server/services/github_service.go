@@ -271,7 +271,8 @@ func (gs *GitHubService) MergePR(
 }
 
 // resolveMergeMethod prefers the typed merge_method, then the deprecated
-// legacy method string (passed through unvalidated, as before), then "merge".
+// legacy method string (passed through unvalidated, as before), then "squash"
+// (plan T4.1.1: the S3 merge dialog's default).
 func resolveMergeMethod(req *sessionv1.MergePRRequest) string {
 	switch req.GetMergeMethod() {
 	case sessionv1.MergeMethod_MERGE_METHOD_MERGE:
@@ -284,7 +285,7 @@ func resolveMergeMethod(req *sessionv1.MergePRRequest) string {
 	if m := req.GetMethod(); m != "" { //nolint:staticcheck // deprecated legacy field, intentionally still honored
 		return m
 	}
-	return "merge"
+	return "squash"
 }
 
 // ClosePR closes the PR without merging for a session.

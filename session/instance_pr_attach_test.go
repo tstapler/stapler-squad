@@ -373,3 +373,12 @@ func TestInstanceToSession_ShouldMapActivePR_WhenSessionHoldsSeveral(t *testing.
 	assert.Equal(t, 12, s.Git.PRNumber)
 	assert.Equal(t, "https://github.com/acme/app/pull/12", s.Git.PRURL)
 }
+
+func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
+	inst := newPRTestInstance(t)
+	before := SessionPRCountObservations(3)
+	for _, n := range []int{11, 12, 13} {
+		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", n), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	}
+	assert.GreaterOrEqual(t, SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
+}

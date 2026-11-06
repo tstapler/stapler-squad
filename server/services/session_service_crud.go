@@ -202,7 +202,7 @@ func (s *SessionService) GetSession(
 		wfNames := s.workflowNames()
 		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
-				Session: adapters.InstanceToProto(inst, wfNames),
+				Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 			}), nil
 		}
 		// Not in poller — also check external sessions
@@ -226,7 +226,7 @@ func (s *SessionService) GetSession(
 	wfNames := s.workflowNames()
 	if inst := findInstanceByID(instances, req.Msg.Id); inst != nil {
 		return connect.NewResponse(&sessionv1.GetSessionResponse{
-			Session: adapters.InstanceToProto(inst, wfNames),
+			Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 		}), nil
 	}
 
