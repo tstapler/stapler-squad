@@ -4,6 +4,7 @@ import io
 import os
 import tempfile
 import unittest
+from datetime import date
 
 spec = importlib.util.spec_from_file_location(
     "csr", os.path.join(os.path.dirname(os.path.abspath(__file__)), "check-spike-results.py"))
@@ -114,6 +115,49 @@ class CheckSpikeResults(unittest.TestCase):
             open(p, "w").write("adr_009_e2e:\n  decision: Full e2e run\n  spikes: [S14]\n")
             self.assertIsNone(csr.owner_accepted_fails(p))
             self.assertIsNone(csr.owner_accepted_fails(os.path.join(d, "missing.yaml")))
+
+    def _waiver(self, **kw):
+        w = {"spike": "S10", "reason": "owner deferred the remote cache", "granted": "2026-11-06", "expires": "2027-02-04"}
+        w.update(kw)
+        return w
+
+    def _rows_without_s10(self):
+        return [r for r in good_rows() if r["spike"] not in ("S10", "S10-redaction")]
+
+    def test_waived_ok(self):
+        valid, werrs = csr.validate_waivers([self._waiver(), self._waiver(spike="S10-redaction")], date(2026, 11, 6))
+        self.assertEqual(werrs, [])
+        per_id, errs = csr.check(self._rows_without_s10(), valid)
+        self.assertEqual(errs, [])
+        self.assertTrue(per_id["S10"].startswith("WAIVED (expires 2027-02-04: owner deferred"))
+
+    def test_expired_waiver_fails(self):
+        valid, werrs = csr.validate_waivers([self._waiver()], date(2027, 2, 5))
+        self.assertTrue(any("expired" in e for e in werrs))
+        per_id, errs = csr.check(self._rows_without_s10(), valid)
+        self.assertEqual(per_id["S10"], "MISSING")
+        self.assertTrue(any(e.startswith("S10:") for e in errs))
+
+    def test_short_reason_rejected(self):
+        valid, werrs = csr.validate_waivers([self._waiver(reason="too short")], date(2026, 11, 6))
+        self.assertEqual(valid, {})
+        self.assertTrue(any("reason" in e for e in werrs))
+
+    def test_non_waivable_id_rejected(self):
+        valid, werrs = csr.validate_waivers([self._waiver(spike="S6")], date(2026, 11, 6))
+        self.assertEqual(valid, {})
+        self.assertTrue(any("not waivable" in e for e in werrs))
+        per_id, _ = csr.check([r for r in good_rows() if r["spike"] != "S6"], valid)
+        self.assertEqual(per_id["S6"], "MISSING")
+
+    def test_over_90_days_rejected(self):
+        _, werrs = csr.validate_waivers([self._waiver(expires="2027-03-01")], date(2026, 11, 6))
+        self.assertTrue(any("90 days" in e for e in werrs))
+
+    def test_real_row_beats_waiver(self):
+        valid, _ = csr.validate_waivers([self._waiver()], date(2026, 11, 6))
+        per_id, _ = csr.check(good_rows(), valid)
+        self.assertEqual(per_id["S10"], "Pass")
 
 
 if __name__ == "__main__":
