@@ -331,6 +331,15 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 	for _, p := range engineWriteProcedures { // pinned in quota_listener_test.go
 		want[p] = middleware.ProfileRebinding
 	}
+	for _, p := range []string{
+		sessionv1connect.SessionServiceAttachSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceDetachSessionPullRequestProcedure,
+		sessionv1connect.SessionServicePinSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceRefreshSessionPullRequestsProcedure,
+		sessionv1connect.SessionServiceDetachItemPullRequestProcedure,
+	} {
+		want["/api"+p] = middleware.ProfileRebinding
+	}
 	assert.Equal(t, want, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)
