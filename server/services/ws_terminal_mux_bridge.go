@@ -3,13 +3,16 @@ package services
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -44,7 +47,8 @@ type TerminalMuxBridge struct {
 	poolSize atomic.Int32
 	// stallTimeout is a field so tests can shrink it without mutating shared state.
 	stallTimeout time.Duration
-	// readIdle, now and logf are fields so tests can inject them without process-global swaps.
+	// readIdle, now and logf are set only by NewTerminalMuxBridge (never zero); tests inject
+	// them via options instead of process-global swaps.
 	readIdle time.Duration
 	now      func() time.Time
 	logf     func(level slog.Level, msg string, args ...any)
@@ -89,7 +93,11 @@ func NewTerminalMuxBridge(serve muxServeFunc, poolSize int, opts ...TerminalMuxO
 
 // withTerminalMuxLogger redirects the bridge's own log lines (tests).
 func withTerminalMuxLogger(f func(level slog.Level, msg string, args ...any)) TerminalMuxOption {
-	return func(b *TerminalMuxBridge) { b.logf = f }
+	return func(b *TerminalMuxBridge) {
+		if f != nil {
+			b.logf = f
+		}
+	}
 }
 
 func logMuxAt(level slog.Level, msg string, args ...any) {
@@ -248,6 +256,22 @@ type muxClose struct {
 // logs use errors.Is against it to avoid one ERROR per pane, since the socket logs once.
 var errMuxSocketClosed = &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "mux socket closed"}
 
+// isPeerCausedWriteError reports a write failure caused by the peer going away (reset, broken
+// pipe, closed or EOF'd connection); those are not server faults and readLoop classifies them.
+func isPeerCausedWriteError(err error) bool {
+	var ce *websocket.CloseError
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.As(err, &ce)
+}
+
+// recordWriteFailure notes a server-side write failure as the teardown cause; a peer-caused
+// one records nothing so the read side classifies it.
+func (s *muxSocket) recordWriteFailure(err error) {
+	if !isPeerCausedWriteError(err) {
+		s.failTeardown(muxCloseWriteError)
+	}
+}
+
 func (s *muxSocket) failTeardown(r muxCloseReason) {
 	s.teardownCause.CompareAndSwap(nil, &r)
 }
@@ -388,11 +412,12 @@ func (s *muxSocket) classifyReadError(ctx context.Context, err error) muxClose {
 	if ctx.Err() != nil {
 		return muxClose{muxCloseShutdown, err}
 	}
-	if r := s.teardownCause.Load(); r != nil {
-		return muxClose{*r, err}
-	}
+	// A peer close frame wins over any server-side cause recorded while replying to it.
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return muxClose{muxClosePeerClosed, err}
+	}
+	if r := s.teardownCause.Load(); r != nil {
+		return muxClose{*r, err}
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return muxClose{muxCloseIdleTimeout, err}
@@ -556,7 +581,7 @@ func (s *muxSocket) writeLoop() {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(muxWriteWait))
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			muxMetrics.writeError()
-			s.failTeardown(muxCloseWriteError)
+			s.recordWriteFailure(err)
 			_ = s.conn.Close() // unblocks readLoop; the socket tears down
 			<-s.done
 			return

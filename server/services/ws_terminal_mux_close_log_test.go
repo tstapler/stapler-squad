@@ -2,13 +2,17 @@ package services
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -248,7 +252,7 @@ func TestMuxBridge_should_LogOnceNotPerPane_When_SocketDropsWithManyStreams(t *t
 		errChan := make(chan error, 2)
 		readOneInputFrame(inputReadLoopParams{stream: stream, errChan: errChan, sessionID: "mux-noise-test"})
 		err := <-errChan
-		require.ErrorIs(t, err, errMuxSocketClosed)
+		assert.ErrorIs(t, err, errMuxSocketClosed)
 		sendEndStreamError(stream, err)
 	}
 	h := newMuxCloseHarness(t, allowAllDispatcher, time.Minute, nil, serve)
@@ -271,4 +275,38 @@ func TestMuxBridge_should_LogOnceNotPerPane_When_SocketDropsWithManyStreams(t *t
 		}
 	}
 	assert.GreaterOrEqual(t, perPane, panes, "the per-pane read lines should still exist, at Debug")
+}
+
+func TestMuxSocketClose_should_ClassifyWriteFailuresDeterministically(t *testing.T) {
+	t.Parallel()
+	newSock := func() *muxSocket {
+		return newMuxSocket(NewTerminalMuxBridge(echoServe, 1), nil, httptest.NewRequest(http.MethodGet, "/", nil), ListenerLocal)
+	}
+	peerErrs := map[string]error{
+		"reset":       &net.OpError{Op: "write", Err: syscall.ECONNRESET},
+		"broken pipe": &net.OpError{Op: "write", Err: syscall.EPIPE},
+		"closed":      net.ErrClosed,
+		"eof":         io.EOF,
+	}
+	for name, werr := range peerErrs {
+		assert.True(t, isPeerCausedWriteError(werr), name)
+	}
+	assert.False(t, isPeerCausedWriteError(os.ErrDeadlineExceeded), "a write timeout is a server-side write failure")
+	assert.False(t, isPeerCausedWriteError(errors.New("disk on fire")))
+
+	// A genuine write failure wins over the read error it provokes.
+	s := newSock()
+	s.recordWriteFailure(os.ErrDeadlineExceeded)
+	assert.Equal(t, muxCloseWriteError, s.classifyReadError(context.Background(), errors.New("use of closed")).reason)
+
+	// A peer-caused write failure records nothing, so the read side decides.
+	s = newSock()
+	s.recordWriteFailure(&net.OpError{Op: "write", Err: syscall.EPIPE})
+	assert.Equal(t, muxCloseReadError, s.classifyReadError(context.Background(), &net.OpError{Op: "read", Err: syscall.ECONNRESET}).reason)
+
+	// A clean peer close frame is not overridden by a later write failure.
+	s = newSock()
+	s.recordWriteFailure(os.ErrDeadlineExceeded)
+	closeErr := &websocket.CloseError{Code: websocket.CloseNormalClosure}
+	assert.Equal(t, muxClosePeerClosed, s.classifyReadError(context.Background(), closeErr).reason)
 }

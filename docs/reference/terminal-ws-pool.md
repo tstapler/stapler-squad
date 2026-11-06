@@ -61,7 +61,7 @@ The 1006 above is synthetic: the server gives every stream of a dropped socket `
 | `write_error` | Warn | A server write failed and the server tore the socket down. |
 | `control_overflow` | Warn | The client stopped reading control frames (queue over 1024). |
 
-`write_error` and `control_overflow` previously counted as `read_error`.
+Before this change `idle_timeout`, `write_error` and `control_overflow` were all counted as `read_error`, so an alert selecting `reason="read_error"` will under-count after deploy. A write failure caused by the peer going away (reset, broken pipe, closed connection) is not `write_error`; it is classified from the read side (`read_error` or `peer_closed`).
 
 ## Metrics
 
