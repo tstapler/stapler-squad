@@ -60,7 +60,7 @@ func sampleFlowSummary() *flow.FlowSummary {
 			RowCounts: flow.RowCounts{Events: 5, Verdicts: 3, StuckIntervals: 2, Items: 4},
 			Estimated: []string{
 				flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", flow.EstimatedPRFixCauseSinceCapture,
-				flow.EstimatedPRFixOutcomeSinceCapture,
+				flow.EstimatedPRFixDwellSplit, flow.EstimatedPRFixOutcomeSinceCapture,
 			},
 		},
 		Tiles: flow.TilesSection{
@@ -143,7 +143,7 @@ func TestBacklogFlowService_should_HaveLegendEntry_When_CodeInEstimatedVocabular
 	t.Parallel()
 	vocabulary := []string{
 		flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", "pr_fix_dwell:combined", "stuck_history:lower_bound",
-		flow.EstimatedPRFixCauseSinceCapture, flow.EstimatedPRFixOutcomeSinceCapture,
+		flow.EstimatedPRFixCauseSinceCapture, flow.EstimatedPRFixDwellSplit, flow.EstimatedPRFixOutcomeSinceCapture,
 	}
 	for _, code := range vocabulary {
 		text, ok := flowEstimatedLegend[code]
@@ -397,14 +397,22 @@ func TestBacklogFlowService_should_MapStuckNotesAndLegendDriftCode_When_Episodes
 	assert.NotEmpty(t, got.Meta.EstimatedLegend["stuck_episode_drift:1"])
 }
 
-func TestBacklogFlowService_should_MapPROutcomes_When_Present(t *testing.T) {
+func TestBacklogFlowService_should_MapPROutcomesAndTriggerDwell_When_Present(t *testing.T) {
 	t.Parallel()
 	sum := sampleFlowSummary()
 	sum.PR.Outcomes = flow.PROutcomes{Recording: true, Steered: 5, Respawned: 2, SkippedActive: 1, ResolvedWithin24h: 3}
+	sum.PR.TriggerDwell = []flow.TriggerDwellRow{{
+		Trigger: "ci", Cycles: flow.CountMetric{Value: 4, Drill: flow.DrillPRFixDwell},
+		Dwell: flow.DurationMetric{Stats: flow.Percentiles{N: 4, P50: time.Hour, P90: 2 * time.Hour, Max: 3 * time.Hour}, Drill: flow.DrillPRFixDwell},
+	}}
 	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sum}), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
 	require.NoError(t, err)
 
 	o := got.Pr.Outcomes
 	assert.True(t, o.Recording)
 	assert.EqualValues(t, []int32{5, 2, 1, 3}, []int32{o.Steered, o.Respawned, o.SkippedActive, o.ResolvedWithin_24H})
+	require.Len(t, got.Pr.TriggerDwell, 1)
+	assert.Equal(t, "ci", got.Pr.TriggerDwell[0].Trigger)
+	assert.EqualValues(t, 4, got.Pr.TriggerDwell[0].Cycles.Value)
+	assert.EqualValues(t, time.Hour.Milliseconds(), got.Pr.TriggerDwell[0].Dwell.P50Ms)
 }

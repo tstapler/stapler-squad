@@ -92,6 +92,24 @@ describe("FlowPR", () => {
     expect(box).not.toHaveTextContent("not yet recording");
   });
 
+  it("FlowPR_should_ShowTriggerDwellSplit_When_DwellSplitEstimated", () => {
+    const triggerDwell = [
+      { trigger: "ci", cycles: { value: 4 }, dwell: { n: 4, p50Ms: BigInt(2 * HOUR), p90Ms: BigInt(4 * HOUR), drillKey: "pr.fix_dwell" } },
+      { trigger: "conflict", cycles: { value: 2 }, dwell: { n: 2, p50Ms: BigInt(6 * HOUR), p90Ms: BigInt(8 * HOUR), drillKey: "pr.fix_dwell" } },
+    ];
+    render3(["pr_fix_dwell:combined", "pr_fix_dwell_split:since_capture"], [], CAPTURE, pr({ triggerDwell }));
+
+    const split = screen.getByTestId("flow-pr-trigger-dwell");
+    expect(split).toHaveTextContent("ci: median 2h, p90 4h, N 4");
+    expect(split).toHaveTextContent("conflict: median 6h, p90 8h, N 2");
+  });
+
+  it("FlowPR_should_HideTriggerDwell_When_SplitNotEstimated", () => {
+    render3(["pr_fix_dwell:combined"]);
+
+    expect(screen.queryByTestId("flow-pr-trigger-dwell")).not.toBeInTheDocument();
+  });
+
   it("FlowPR_should_SayNoPrFixes_When_NothingInWindow", () => {
     render3([], [], CAPTURE, pr({ cycles: { value: 0 }, fixDwell: { n: 0 } }));
 

@@ -48,7 +48,9 @@ func NewFlowServiceFromStorage(storage *session.Storage, opts ...flow.Aggregator
 		return &BacklogFlowService{}
 	}
 	reader := session.NewEntFlowReader(storage.GetEntClient())
-	src := flow.Sources{Events: reader, Verdicts: reader, Stuck: reader, Items: reader}
+	src := flow.Sources{Events: reader, Verdicts: reader, Stuck: reader, Items: reader, Markers: reader}
+	// Prepended so a caller-supplied WithCaptureSince still wins.
+	opts = append([]flow.AggregatorOption{flow.WithCaptureSince(reader.CaptureSince)}, opts...)
 	return &BacklogFlowService{agg: flow.NewAggregator(src, flow.SystemClock{}, opts...)}
 }
 

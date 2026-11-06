@@ -141,6 +141,48 @@ func TestRework_should_SplitPRFixByTriggerOnlyAfterCapture_When_JoinActive(t *te
 	assert.Equal(t, []string{"pr_fix_cause:unavailable"}, none.Estimated)
 }
 
+func TestPrFixDwell_should_SplitByTriggerOnlyAfterCapture_When_TriggerRecordsExist(t *testing.T) {
+	t.Parallel()
+	asOf := s12Base.Add(20 * 24 * time.Hour)
+	w := dwellWindow(t, s12Base, asOf)
+	post := prCapture.Add(24 * time.Hour)
+	spans := []Span{
+		// pre-capture cycle: stays combined only
+		s12Real(t, "pre", stPRPend, stProg, prCapture.Add(-10*time.Hour)),
+		s12Real(t, "pre", stProg, stPRPend, prCapture.Add(-9*time.Hour)),
+		// CI cycle 2h, conflict cycle 4h, unjoined post-capture cycle 6h
+		s12Real(t, "ci", stPRPend, stProg, post),
+		s12Real(t, "ci", stProg, stPRPend, post.Add(2*time.Hour)),
+		s12Real(t, "cf", stPRPend, stProg, post),
+		s12Real(t, "cf", stProg, stPRPend, post.Add(4*time.Hour)),
+		s12Real(t, "un", stPRPend, stProg, post),
+		s12Real(t, "un", stProg, stPRPend, post.Add(6*time.Hour)),
+	}
+	join := NewTriggerJoin([]Marker{trig("ci", "ci", post.Add(-time.Minute)), trig("cf", "conflict", post.Add(-time.Minute)), trig("pre", "ci", prCapture.Add(-11*time.Hour))}, prCapture)
+
+	res := PRFixDwellWith(spans, w, asOf, DefaultConfig(), join)
+
+	assert.Equal(t, 4, res.Stats.N, "combined stats cover every cycle")
+	require.Len(t, res.TriggerDwell, 3)
+	byTrig := map[PRFixTrigger]TriggerDwell{}
+	for _, td := range res.TriggerDwell {
+		byTrig[td.Trigger] = td
+	}
+	assert.Equal(t, 2*time.Hour, byTrig[PRFixTriggerCI].Stats.Max)
+	assert.Equal(t, 4*time.Hour, byTrig[PRFixTriggerConflict].Stats.Max)
+	assert.Equal(t, 1, byTrig[PRFixTriggerUnknown].Cycles, "only the post-capture unjoined cycle; the pre-capture cycle is excluded")
+	assert.Equal(t, []string{"pr_fix_dwell:combined", "pr_fix_dwell_split:since_capture", "pr_fix_cause:since_capture"}, res.Estimated)
+	for _, c := range res.Cycles {
+		if c.Item == "pre" {
+			assert.Equal(t, PRFixTriggerUnknown, c.Trigger)
+		}
+	}
+
+	plain := PRFixDwell(spans, w, asOf, DefaultConfig())
+	assert.Empty(t, plain.TriggerDwell)
+	assert.Contains(t, plain.Estimated, "pr_fix_cause:unavailable")
+}
+
 type fakeMarkers struct {
 	markers []Marker
 	capture MarkerCapture
@@ -203,6 +245,10 @@ func TestAggregator_should_SplitPRFixAndCountOutcomes_When_MarkersAndCaptureExis
 	assert.Equal(t, PROutcomes{Recording: true, Steered: 1, Respawned: 0, SkippedActive: 1}, s.PR.Outcomes,
 		"the reopen precedes the first outcome marker, so it is not counted as respawned")
 	assert.Contains(t, s.PR.Meta.Estimated, "pr_fix_outcome:since_capture")
+	assert.Contains(t, s.PR.Meta.Estimated, "pr_fix_dwell_split:since_capture")
+	assert.NotContains(t, s.PR.Meta.Estimated, "pr_fix_cause:unavailable")
+	require.Len(t, s.PR.TriggerDwell, 1)
+	assert.Equal(t, "ci", s.PR.TriggerDwell[0].Trigger)
 	assert.Equal(t, []string{"pr_fix_cause:since_capture"}, s.Causes.Meta.Estimated)
 	assert.Equal(t, []TriggerRow{{Trigger: "ci", Count: 1}}, s.Causes.PRFixTriggers)
 }
@@ -213,6 +259,7 @@ func TestAggregator_should_ReportNotRecordingAndKeepUnavailable_When_NoMarkerSou
 		s := prSummary(t, prFixFake("x"), m, time.Time{})
 
 		assert.Equal(t, PROutcomes{}, s.PR.Outcomes, name)
+		assert.Empty(t, s.PR.TriggerDwell, name)
 		assert.Contains(t, s.PR.Meta.Estimated, "pr_fix_cause:unavailable", name)
 		assert.True(t, s.Meta.CaptureSince.IsZero(), name)
 	}

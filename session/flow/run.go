@@ -236,7 +236,7 @@ func (r *run) leadResult(ev *eventData) *LeadTimeResult {
 
 func (r *run) prfixResult(ev *eventData) *PRFixDwellResult {
 	if r.prfix == nil {
-		res := PRFixDwell(ev.spans, r.w, r.asOf, r.cfg)
+		res := PRFixDwellWith(ev.spans, r.w, r.asOf, r.cfg, r.triggerJoin())
 		r.prfix = &res
 	}
 	return r.prfix

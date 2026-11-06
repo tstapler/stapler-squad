@@ -215,6 +215,8 @@ type PRSection struct {
 	Notes     []string
 	// Outcomes counts nudge outcomes recorded since capture.
 	Outcomes PROutcomes
+	// TriggerDwell splits dwell by joined trigger for cycles after capture.
+	TriggerDwell []TriggerDwellRow
 }
 
 // PROutcomes is the PR-fix outcome tally. Recording false means outcome
@@ -225,6 +227,13 @@ type PROutcomes struct {
 	Respawned         int
 	SkippedActive     int
 	ResolvedWithin24h int
+}
+
+// TriggerDwellRow is the PR-fix dwell of cycles joined to one trigger.
+type TriggerDwellRow struct {
+	Trigger string
+	Cycles  CountMetric
+	Dwell   DurationMetric
 }
 
 // StuckReasonRow is one stuck reason.

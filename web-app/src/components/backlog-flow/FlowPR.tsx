@@ -115,6 +115,30 @@ function Outcomes({ pr, estimated }: Pick<FlowPRProps, "pr" | "estimated">) {
   );
 }
 
+function TriggerDwell({ pr, estimated, onDrill }: Pick<FlowPRProps, "pr" | "estimated" | "onDrill">) {
+  if (!estimated.includes(DWELL_SPLIT_SINCE_CAPTURE) || pr.triggerDwell.length === 0) return null;
+  return (
+    <div className={styles.block} data-testid="flow-pr-trigger-dwell">
+      <span className={styles.secondary}>
+        <EstimatedValue title="Dwell split by trigger exists only for cycles since capture began">dwell by trigger</EstimatedValue>
+      </span>
+      <ul className={styles.row}>
+        {pr.triggerDwell.map((row) => {
+          const text = durationText(row.dwell);
+          return (
+            <li key={row.trigger}>
+              {row.trigger}:{" "}
+              <DrillButton drillKey={row.dwell?.drillKey ?? ""} onDrill={onDrill}>
+                {text ? `median ${text.median}, p90 ${text.p90}, N ${row.dwell?.n ?? 0}` : `N ${row.cycles?.value ?? 0}`}
+              </DrillButton>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function FlowPR(props: FlowPRProps) {
   const { pr, onDrill } = props;
   const none = (pr.cycles?.value ?? 0) === 0 && (pr.fixDwell?.n ?? 0) === 0 && !pr.outcomes?.recording;
@@ -128,6 +152,7 @@ export function FlowPR(props: FlowPRProps) {
         </DrillButton>
       </p>
       <CombinedDwell {...props} />
+      <TriggerDwell pr={pr} estimated={props.estimated} onDrill={onDrill} />
       <CauseBucket {...props} />
       <Outcomes pr={pr} estimated={props.estimated} />
     </div>

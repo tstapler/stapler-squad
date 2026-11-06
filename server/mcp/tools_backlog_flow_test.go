@@ -388,3 +388,33 @@ func TestFlowTools_should_ReportBusy_When_AggregatorBusy(t *testing.T) {
 
 	assert.Contains(t, errorMessage(t, m), "busy")
 }
+
+func TestGetFlowSummary_should_CarryPROutcomesTriggerDwellAndStuckNotes_When_CaptureExists(t *testing.T) {
+	t.Parallel()
+	agg := &fakeFlowAgg{summary: &flow.FlowSummary{
+		Meta: flow.FlowMeta{Estimated: []string{flow.EstimatedPRFixOutcomeSinceCapture, "stuck_episode_drift:2"}},
+		PR: flow.PRSection{
+			Outcomes: flow.PROutcomes{Recording: true, Steered: 5, Respawned: 2, SkippedActive: 1, ResolvedWithin24h: 3},
+			TriggerDwell: []flow.TriggerDwellRow{{
+				Trigger: "ci", Cycles: flow.CountMetric{Value: 4}, Dwell: flow.DurationMetric{Stats: flow.Percentiles{N: 4, P50: time.Hour}},
+			}},
+		},
+		Stuck: flow.StuckSection{Notes: []string{"open episodes differ from open stuck rows by 2"}},
+	}}
+	h := newFakeFlowHandlers(agg)
+	h.svc = services.NewBacklogFlowService(agg)
+
+	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
+
+	out := fieldPath(m, "summary.pr.outcomes").(map[string]any)
+	assert.Equal(t, true, out["recording"])
+	assert.EqualValues(t, 5, out["steered"])
+	assert.EqualValues(t, 2, out["respawned"])
+	assert.EqualValues(t, 1, out["skipped_active"])
+	assert.EqualValues(t, 3, out["resolved_within_24h"])
+	assert.Len(t, fieldPath(m, "summary.pr.trigger_dwell"), 1)
+	assert.Equal(t, []any{"open episodes differ from open stuck rows by 2"}, fieldPath(m, "summary.stuck.notes"))
+	legend := fieldPath(m, "summary.meta.estimated_legend").(map[string]any)
+	assert.NotEmpty(t, legend["pr_fix_outcome:since_capture"])
+	assert.NotEmpty(t, legend["stuck_episode_drift:2"])
+}

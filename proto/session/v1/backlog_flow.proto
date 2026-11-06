@@ -304,6 +304,8 @@ message FlowPRSection {
   repeated string notes = 5;
   // outcomes counts PR-fix nudge outcomes recorded since capture.
   FlowPROutcomes outcomes = 6;
+  // trigger_dwell splits dwell by joined trigger for cycles after capture.
+  repeated FlowTriggerDwellRow trigger_dwell = 7;
 }
 
 // FlowPROutcomes counts PR-fix outcomes in the window. When recording is false
@@ -315,6 +317,13 @@ message FlowPROutcomes {
   int32 skipped_active = 4;
   // resolved_within_24h counts outcomes followed by a merge within 24 hours.
   int32 resolved_within_24h = 5;
+}
+
+// FlowTriggerDwellRow is the PR-fix dwell of cycles joined to one trigger.
+message FlowTriggerDwellRow {
+  string trigger = 1;
+  FlowCountMetric cycles = 2;
+  FlowDurationMetric dwell = 3;
 }
 
 message FlowStuckReasonRow {

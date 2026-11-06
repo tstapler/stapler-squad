@@ -151,6 +151,12 @@ func (r *run) pr(s *PRSection) error {
 	s.OpenCount = res.OpenCount
 	s.Notes = slices.Clone(res.Notes)
 	s.Meta.Estimated = slices.Clone(res.Estimated)
+	for _, td := range res.TriggerDwell {
+		s.TriggerDwell = append(s.TriggerDwell, TriggerDwellRow{
+			Trigger: string(td.Trigger), Cycles: CountMetric{Value: td.Cycles, Drill: DrillPRFixDwell},
+			Dwell: DurationMetric{Stats: td.Stats, Drill: DrillPRFixDwell},
+		})
+	}
 	if err := r.prOutcomes(ev, s); err != nil {
 		return err
 	}

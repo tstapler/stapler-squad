@@ -153,3 +153,24 @@ func (r *EntFlowReader) firstMarkerAt(ctx context.Context, kind FlowMarkerKind) 
 	}
 	return first.CreatedAt.UTC(), nil
 }
+
+// CaptureSince is the earliest of the first stuck episode, first pr_fix_trigger
+// marker and first pr_fix_outcome marker; zero when none exist. It is the date
+// before which capture-dependent metrics are unavailable or lower bounds.
+func (r *EntFlowReader) CaptureSince(ctx context.Context) (time.Time, error) {
+	sc, err := r.StuckCapture(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	mc, err := r.MarkerCapture(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var earliest time.Time
+	for _, t := range []time.Time{sc.CaptureSince, mc.FirstTrigger, mc.FirstOutcome} {
+		if !t.IsZero() && (earliest.IsZero() || t.Before(earliest)) {
+			earliest = t
+		}
+	}
+	return earliest, nil
+}
