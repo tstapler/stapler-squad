@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -135,13 +137,13 @@ func TestPrintT9(t *testing.T) {
 		T9dServicesLOC: 67000, T9dSessionLOC: 68000, T9eTargetModelShare: 0.07,
 	}
 	var out bytes.Buffer
-	if !PrintT9(&out, good, DefaultT9Targets) || strings.Count(out.String(), ": PASS") != 5 || !strings.Contains(out.String(), "T9f: UNMEASURED") {
+	if !PrintT9(&out, good, DefaultT9Targets, T9fLine(t.TempDir())) || strings.Count(out.String(), ": PASS") != 5 || !strings.Contains(out.String(), "T9f: UNMEASURED") {
 		t.Fatalf("good report: %s", out.String())
 	}
 	bad := *good
 	bad.T9dTestInversions = 12
 	out.Reset()
-	if PrintT9(&out, &bad, DefaultT9Targets) || !strings.Contains(out.String(), "T9d: FAIL") {
+	if PrintT9(&out, &bad, DefaultT9Targets, T9fLine(t.TempDir())) || !strings.Contains(out.String(), "T9d: FAIL") {
 		t.Fatalf("inversions must fail T9d: %s", out.String())
 	}
 }
@@ -158,5 +160,34 @@ func TestRatchet(t *testing.T) {
 	}
 	if v, s := Ratchet(found, ParseAllowlist("core svc\na b")); len(v)+len(s) != 0 {
 		t.Fatalf("exact allowlist must pass, got %v %v", v, s)
+	}
+}
+
+func TestT9fLine(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if got := T9fLine(root); !strings.HasPrefix(got, "T9f: UNMEASURED") {
+		t.Fatalf("no attestations file: %s", got)
+	}
+	path := filepath.Join(root, attestationsRel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(body string) {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("adr_009_e2e:\n  decision: Selective e2e\n  date: 2026-11-05\n")
+	if got := T9fLine(root); !strings.HasPrefix(got, "T9f: UNMEASURED") {
+		t.Fatalf("other decision must stay UNMEASURED: %s", got)
+	}
+	write("other:\n  decision: Full e2e run\nadr_009_e2e:\n  decision: Full e2e run\n  date: 2026-11-05\n")
+	if got := T9fLine(root); !strings.HasPrefix(got, "T9f: N/A (owner decision 2026-11-05: Full e2e run") {
+		t.Fatalf("full e2e run must be N/A: %s", got)
+	}
+	write("other:\n  decision: Full e2e run\n")
+	if got := T9fLine(root); !strings.HasPrefix(got, "T9f: UNMEASURED") {
+		t.Fatalf("decision under another section must not count: %s", got)
 	}
 }

@@ -1,7 +1,7 @@
 # ADR-009: Expensive tests (Playwright e2e first) join the Bazel graph through observed-dependency slices, with selection on every PR and a full run as the safety net
 
 **Date**: 2026-11-02
-**Status**: Proposed (owner directive 2026-11-02; becomes Accepted at Story 0.14 if spike S14, Story 0.15, passes). Amends ADR-005 (see "Amendment to ADR-005").
+**Status**: Accepted 2026-11-05 with the "Full e2e run" outcome: spike S14 (Story 0.15) is `Fail` (selected-share median 1.00 at package, file and line granularity; S-e start-up 18.4 s against the 3.5 s limit; zero-miss claim not established; `implementation/spike-results.yaml`), and the owner chose "Full e2e run" (AskUserQuestion, 2026-11-05, recorded in `implementation/owner-attestations.yaml` as `adr_009_e2e`): e2e stays a full run in CI, with no e2e selection, so Epic 12 is not released and the selective-e2e parts of the Decision below are not adopted. The directive applies to the Go, Jest and integration layers. Original status: Proposed (owner directive 2026-11-02; was to become Accepted at Story 0.14 if spike S14, Story 0.15, passed). Amends ADR-005 (see "Amendment to ADR-005"; that amendment is not applied).
 **Context**: Owner directive: "structure Bazel so that only the dependencies that update have to re-run their tests, helping us prevent running all of our really expensive tests for every change."
 
 ## Evidence
@@ -73,3 +73,7 @@ ADR-005 does not list Playwright in its exception table; the plan's actual posit
 - If S14 fails (median selected share above 0.50, or any missed failure in the mutation backtest), the recorded fallback is a coarser slice (package prefix plus declared registry sources, expected to select more) or diff-line coverage selection (heuristic, tighter, needs a larger escape budget); the owner decides before Epic 12 is released. If both fail, the e2e suite stays a full run and the goal is met only for the Go, Jest and integration layers; this is the main way the directive could be unattainable.
 - An ongoing cost: the manifest must be regenerated when specs or features change; the nightly regeneration job and the staleness check make that automatic, but it is a new piece of infrastructure to own.
 - Package granularity (ADR-010, 2026-11-02): risk 1 (core packages in every slice) has a refactor mitigation, Epic 13, whose clusters are chosen by criterion SC5 from this ADR's manifest. Measured before S14 (INFERRED universal-slice proxy): 71% of recent Go production commits touch `session`, `server/services`, `server`, `config` or the root package, and the criteria-selected splits are predicted to lower that to 61% (last 100) and 58% (last 500). Epic 12 does not depend on Epic 13; the Story 12.4 replay is re-run at Story 13.7 to record the effect. An alternative with no code movement is a file-level slice (ADR-010 Decision 7).
+
+### Update (2026-11-05): owner decision after the S14 `Fail`
+
+- Owner choice "Full e2e run" (AskUserQuestion, 2026-11-05): keep e2e as a full run in CI; no e2e selection. `check-spike-results.py` shows S14 as owner-accepted (display only) and `scoping t9` reports T9f as N/A by owner decision; S14 stays `Fail` in `spike-results.yaml` and no PASS rule is changed.

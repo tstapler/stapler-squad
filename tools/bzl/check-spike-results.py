@@ -42,6 +42,31 @@ def owner_deferrals(path):
     return ids, "disk cache first" if "disk cache" in decision else decision, date
 
 
+def owner_accepted_fails(path):
+    """Return (spike ids, decision, date) for a recorded owner acceptance of a Fail verdict, or None.
+
+    Reads the `adr_009_e2e` section of owner-attestations.yaml. Display only: a Fail row stays Fail and the
+    exit code never depends on this.
+    """
+    if not os.path.exists(path):
+        return None
+    sec, found = None, {}
+    with open(path) as f:
+        for raw in f:
+            if re.match(r"^\S", raw):
+                sec = raw.split(":", 1)[0]
+            elif sec == "adr_009_e2e":
+                m = re.match(r"^\s+(decision|date|spikes|status):\s*(.*)$", raw.rstrip())
+                if m:
+                    found[m.group(1)] = m.group(2).strip().strip("\"'")
+    if found.get("status") != "recorded" or not found.get("decision"):
+        return None
+    ids = [i for i in re.findall(r"S\d+[A-Za-z]*(?:-redaction)?", found.get("spikes", "")) if i in OPTIONAL + REQUIRED]
+    if not ids:
+        return None
+    return ids, found["decision"], found.get("date", "")
+
+
 def _scalar(v):
     v = v.strip()
     if v[:1] in "\"'":
@@ -119,15 +144,21 @@ def main(argv):
     print("spike-results check: %s" % path)
     for sid in REQUIRED + OPTIONAL:
         print("  %-14s %s" % (sid, per_id[sid]))
-    blocking = [s for s, v in per_id.items() if v == "Fail"]
+    attest_path = os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS)
+    accepted = owner_accepted_fails(attest_path)
+    accepted_ids = set(accepted[0]) if accepted else set()
+    blocking = [s for s, v in per_id.items() if v == "Fail" and s not in accepted_ids]
     if blocking:
         print("BLOCKING (verdict Fail): %s" % ", ".join(blocking))
+    owned = [s for s, v in per_id.items() if v == "Fail" and s in accepted_ids]
+    if owned:
+        print("OWNER-ACCEPTED Fail (verdict stays Fail): %s (%s, %s)" % (", ".join(owned), accepted[1], accepted[2]))
     for e in errors:
         print("ERROR: %s" % e)
     missing = [s for s in REQUIRED if per_id[s] == "MISSING"]
     if missing:
         print("MISSING required ids: %s" % ", ".join(missing))
-    deferred = owner_deferrals(os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS))
+    deferred = owner_deferrals(attest_path)
     if deferred:
         print("owner-deferred: %s (%s, %s)" % (", ".join(deferred[0]), deferred[1], deferred[2]))
     ok = not errors
