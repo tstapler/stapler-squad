@@ -1,5 +1,6 @@
 import { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 import { baseUrl } from "../helpers/base-url";
+import { seedReviewVerdictItem } from "./BacklogItemDetailPage";
 import { createBacklogItemDirect, transitionBacklogItemDirect } from "./BacklogMutations";
 
 const BASE_URL = baseUrl();
@@ -16,7 +17,8 @@ export interface SeededFlowData {
 
 /**
  * Seeds the isolated test server through the e2e-local debug endpoints (BacklogMutations.ts): one item walked
- * through the happy path to done, and one item that flips ready <-> in_progress, which is a thrash item.
+ * through the happy path to done, one item that flips ready <-> in_progress (a thrash item), and one item with a
+ * PARTIAL review verdict so the verdict-mix chart has bars.
  */
 export async function seedFlowData(request: APIRequestContext): Promise<SeededFlowData> {
   const mergedItemId = await createBacklogItemDirect(request, { title: "Flow e2e merged item" });
@@ -28,6 +30,7 @@ export async function seedFlowData(request: APIRequestContext): Promise<SeededFl
   for (let flip = 0; flip < THRASH_FLIPS; flip++) {
     await transitionBacklogItemDirect(request, thrashItemId, flip % 2 === 0 ? "in_progress" : "ready");
   }
+  await seedReviewVerdictItem(request, { title: "Flow e2e verdict item" });
   return { mergedItemId, thrashItemId };
 }
 
@@ -126,5 +129,58 @@ export class BacklogFlowPage {
 
   async unstubDrilldown(): Promise<void> {
     await this.page.unroute(DRILLDOWN_PATH);
+  }
+
+  /** Focuses the Flow view tab, then presses Tab `count` times; each stop records whether it follows the previous one in DOM order. */
+  async tabThrough(count: number): Promise<{ label: string; followsPrevious: boolean }[]> {
+    await this.viewTabs.getByRole("link", { name: "Flow" }).focus();
+    await this.page.evaluate(() => {
+      (window as unknown as { __flowPrev: Element | null }).__flowPrev = document.activeElement;
+    });
+    const stops: { label: string; followsPrevious: boolean }[] = [];
+    for (let i = 0; i < count; i++) {
+      await this.page.keyboard.press("Tab");
+      stops.push(
+        await this.page.evaluate(() => {
+          const w = window as unknown as { __flowPrev: Element | null };
+          const el = document.activeElement as HTMLElement;
+          const label = el.getAttribute("aria-label") ?? el.textContent?.trim() ?? el.tagName;
+          const follows = w.__flowPrev === null || Boolean(w.__flowPrev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+          w.__flowPrev = el;
+          return { label, followsPrevious: follows };
+        }),
+      );
+    }
+    return stops;
+  }
+
+  /** Visible buttons, links and radios in the page whose box is smaller than `min` CSS px on either side. */
+  async undersizedTargets(min: number): Promise<string[]> {
+    const main = this.page.locator("main");
+    const targets = main.getByRole("button").or(main.getByRole("link")).or(main.getByRole("radio"));
+    const problems: string[] = [];
+    for (const target of await targets.all()) {
+      const box = await target.boundingBox();
+      if (box && (box.width < min || box.height < min)) {
+        problems.push(`${(await target.textContent())?.trim() || (await target.getAttribute("aria-label"))}: ${Math.round(box.width)}x${Math.round(box.height)}`);
+      }
+    }
+    return problems;
+  }
+
+  /** Computed transition-duration, in seconds, of every element inside the page's charts. */
+  async chartTransitionSeconds(): Promise<number[]> {
+    return this.page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="flow-chart"] *, [data-testid^="flow-sparkline"] *')].map((el) => parseFloat(getComputedStyle(el).transitionDuration.split(",")[0])),
+    );
+  }
+
+  /** Scroll regions (tables overflowing their box) that lack an accessible name. */
+  async unlabelledScrollRegions(): Promise<string[]> {
+    return this.page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("[role=region]")]
+        .filter((el) => el.scrollWidth > el.clientWidth && !el.getAttribute("aria-label") && !el.getAttribute("aria-labelledby"))
+        .map((el) => el.outerHTML.slice(0, 80)),
+    );
   }
 }
