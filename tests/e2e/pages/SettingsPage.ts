@@ -43,7 +43,7 @@ export class SettingsPage {
   async clickEditAlias(name: string) {
     await this.page
       .getByTestId(`alias-row-${name}`)
-      .getByRole("button", { name: "Edit" })
+      .getByRole("button", { name: "Edit", exact: true })
       .click();
   }
 

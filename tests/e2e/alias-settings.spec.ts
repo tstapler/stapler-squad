@@ -13,6 +13,9 @@ import { baseUrl } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
 
+// The Global Defaults section has its own tag/env-var controls; scope to the alias form.
+const aliasForm = (page: import("@playwright/test").Page) => page.getByLabel(/^(New|Edit) Alias/);
+
 test.describe("alias-settings", () => {
   let settings: SettingsPage;
 
@@ -59,7 +62,7 @@ test.describe("alias-settings", () => {
     await settings.clickNewAlias();
     await settings.fillAliasName("e2e-envvar");
     await page.getByLabel("Advanced").check();
-    await page.getByRole("button", { name: "Add variable" }).click();
+    await aliasForm(page).getByRole("button", { name: "Add variable" }).click();
     await page.getByLabel("Environment variable key 1").fill("E2E_VAR");
     await page.getByLabel("Environment variable value 1").fill("hello");
     await settings.saveAlias();
@@ -69,9 +72,9 @@ test.describe("alias-settings", () => {
   test("AC-05 add tag via tag input Enter key", async ({ page }) => {
     await settings.clickNewAlias();
     await settings.fillAliasName("e2e-tags");
-    await page.getByPlaceholder("Add a tag...").fill("e2e-tag");
-    await page.getByPlaceholder("Add a tag...").press("Enter");
-    await expect(page.getByText("e2e-tag")).toBeVisible();
+    await aliasForm(page).getByPlaceholder("Add a tag...").fill("e2e-tag");
+    await aliasForm(page).getByPlaceholder("Add a tag...").press("Enter");
+    await expect(aliasForm(page).getByRole("button", { name: "Remove tag e2e-tag" })).toBeVisible();
   });
 
   test("AC-06 cancel does not persist data", async ({ page }) => {
