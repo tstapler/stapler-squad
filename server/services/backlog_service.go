@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -906,7 +907,16 @@ func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *sessi
 // path, cloning it if necessary (mirrors SessionService.CreateSession's handling
 // of GitHub URLs). Plain filesystem paths pass through unchanged.
 func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
-	if input == "" || !session.IsGitHubURL(input) {
+	if input == "" {
+		return input, nil
+	}
+	if !session.IsGitHubURL(input) {
+		// "scheme://" input no recognizer accepts (e.g. "https://github.com/") is
+		// never a usable filesystem path. Configured GHE URLs still pass through
+		// unchanged, as before.
+		if strings.Contains(input, "://") && !s.isEnterpriseGitHubURL(input) {
+			return "", fmt.Errorf("repo_path %q is not a local path or a recognized GitHub URL", input)
+		}
 		return input, nil
 	}
 	localPath, _, err := s.resolveGitHubInput(input)
@@ -914,6 +924,13 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 		return "", fmt.Errorf("failed to resolve GitHub URL %q: %w", input, err)
 	}
 	return localPath, nil
+}
+
+func (s *BacklogService) isEnterpriseGitHubURL(input string) bool {
+	if s.cfg == nil {
+		return false
+	}
+	return session.IsGitHubURLWithHosts(input, s.EnterpriseHosts())
 }
 
 // itemSessionToProto converts an ItemSessionSummary to its proto representation.

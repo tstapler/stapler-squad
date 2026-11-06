@@ -93,6 +93,7 @@ export function BrainstormPanel({ draftText, knownRepoPaths }: BrainstormPanelPr
           disabled={!question.trim()}
           data-testid="brainstorm-ask"
         >
+          {/* analytics-exempt */}
           Ask
         </button>
       </div>
