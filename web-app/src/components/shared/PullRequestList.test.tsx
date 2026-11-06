@@ -53,6 +53,8 @@ function setPhone(matches: boolean) {
 
 beforeEach(() => setPhone(false));
 
+const setClipboard = (value: unknown) => Object.defineProperty(navigator, "clipboard", { value, configurable: true, writable: true });
+
 describe("PullRequestList rows and disclosure", () => {
   it("list_should_showThreeRowsWithStateTextAndDefaultTargetHint_When_ThreePrs", () => {
     render(<PullRequestList pullRequests={three()} actions={fakeActions()} nowMs={NOW} />);
@@ -575,5 +577,40 @@ describe("PullRequestList live announcements (UX-S10-3, A-10)", () => {
     rerender(<PullRequestList pullRequests={prs} holds={[hold]} actions={actions} nowMs={NOW} />);
     act(() => void jest.advanceTimersByTime(2_100));
     expect(region.textContent).toBe(before);
+  });
+
+  it("headerMenu_should_returnFocusToTriggerOnEscape_AndCloseOnOutsideMousedown", async () => {
+    const user = userEvent.setup();
+    render(<div><PullRequestList pullRequests={three()} actions={fakeActions()} nowMs={NOW} /><button>outside</button></div>);
+    const trigger = screen.getByTestId("pr-header-menu");
+    await user.click(trigger);
+    expect(screen.getByTestId("pr-track-by-url")).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("pr-track-by-url")).toBeNull();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    expect(screen.getByTestId("pr-track-by-url")).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "outside" }));
+    expect(screen.queryByTestId("pr-track-by-url")).toBeNull();
+  });
+
+  it("copyLink_should_showAlertNote_When_ClipboardMissingOrDenied", async () => {
+    const user = userEvent.setup();
+    const original = navigator.clipboard;
+    try {
+      for (const clipboard of [undefined, { writeText: jest.fn().mockRejectedValue(new Error("denied")) }]) {
+        setClipboard(clipboard);
+        const { unmount } = render(<PullRequestList pullRequests={[makePr({ number: 12 })]} actions={fakeActions()} nowMs={NOW} />);
+        await user.click(screen.getByTestId("pr-menu-12"));
+        await user.click(screen.getByTestId("pr-menu-copyLink-12"));
+        const note = await screen.findByTestId("pr-note");
+        expect(note).toHaveTextContent("Couldn't copy link");
+        expect(note).toHaveAttribute("role", "alert");
+        unmount();
+      }
+    } finally {
+      setClipboard(original);
+    }
   });
 });
