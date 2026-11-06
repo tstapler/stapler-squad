@@ -101,3 +101,42 @@ Status is left at Proposed: acceptance is the owner's confirmation of the Unreso
 
 - Changelog, 2026-11-05: owner decision via AskUserQuestion, recorded in `implementation/owner-attestations.yaml` as `adr_010_lower_package_criteria`: "SC1 counts declarations relocated into the core (not callers' uses); SC3 does not count a lower package's natural callers as importers" for lower packages (packages the core `session` imports). This reads the "uses" and "importers" of a lower package as its callers rather than coupling; upper clusters keep the original SC1 (staying uses) and SC3 (all importers). The ADR stays Proposed; `targets_confirmed` is untouched.
 - Applied the same day: `session/hostclaim` and the lower `session/cmdexec` (`command_*`) were moved. `scoping t9` after: T9a 0.4158, T9b 0.5806, T9c 0.3637, T9d PASS (`server/services` 69,546, `session` 71,252 against 72,000, inversions 0), T9e PASS, T9f N/A (ADR-009 "Full e2e run"). Rows in `implementation/scoping-ledger.md`.
+
+## Reconciliation: predicted versus measured T9a-e (Tasks 13.7a/13.7b, 2026-11-06)
+
+Measured by `go run ./tools/bzl/scoping t9` on `sdd/bazel-epic0` at `43933064f`, compared with `tools/bzl/scoping/baseline.json` (tree `145bce76b`, 378 Go-touching changes, 17 PRs). Output, verbatim:
+
+```
+T9a: PASS (test_loc_share=0.4158 max=0.45)
+T9b: PASS (universal_touch_500=0.5806 max=0.61)
+T9c: PASS (lib_loc_share=0.3637 max=0.395 lower=0.553 min=0.12)
+T9d: PASS (services=69546 session=71252 inversions=0 max=72000)
+T9e: PASS (target_share=0.0501 max=0.30)
+T9f: N/A (owner decision 2026-11-05: Full e2e run, ADR-009; no e2e selection, so no slice size)
+```
+
+| Component | Baseline (`baseline.json`) | Predicted at close (table above) | Measured | Bound | Result |
+|---|---|---|---|---|---|
+| T9a test-LOC share, last 500 | 55.4% | 43.5% | 41.58% | at most 45.0% | better than predicted by 1.9 pp |
+| T9b universal-slice touch, last 500 | 70.97% | 58% | 58.06% | at most 61% | matches |
+| T9c mean lib-LOC share | 39.45% | 38.5% | 36.37% | at most 39.5% | better than predicted by 2.1 pp |
+| T9c changes with lower lib LOC | 0% | 14.8% | 55.3% | at least 12% | far above prediction (see note 2) |
+| T9d `server/services` / `session` LOC | 93,019 / 92,060 | 67,445 / 68,883 | 69,546 / 71,252 | each at most 72,000 | 2.1k and 2.4k LOC above prediction, inside the 3,000 LOC tolerance |
+| T9d test inversions | 12 | 0 | 0 | 0 | matches |
+| T9e target-model share | 4.43% | 7.2% | 5.01% | at most 30% | below prediction |
+| T9f | n/a | n/a | N/A | n/a | ADR-009 "Full e2e run" (`owner-attestations.yaml` `adr_009_e2e`) |
+
+Notes (each cites its source):
+
+1. The baseline values here differ from the ADR's Evidence section (T9c 40.5%, T9e 0.053) because the harness baseline was recomputed on tree `145bce76b`; the Evidence section used `14b02fd65`. T9a and T9b baselines agree.
+2. The "changes with lower lib LOC" figure moved from 12.7-14.8% in `implementation/scoping-ledger.md` (continuation rows through `session` p0) to 55.3% at the final tree. The ledger does not record the intermediate values after continuation 4, and this pass did not re-derive the cause; treat the jump as UNVERIFIED. It clears the 12% bound either way.
+3. Bounds were met only after the 2026-11-05 owner decision on SC1 and SC3 for lower packages (`adr_010_lower_package_criteria`), which let `session/hostclaim` and `session/cmdexec` move (`scoping-ledger.md` "Epic 13 owner decisions"). T9d `session` was 74,306 LOC (FAIL) before it and 71,252 after.
+4. Per-cluster predicted versus measured, and every cluster skipped by criterion with its numbers, are in `implementation/scoping-ledger.md` ("Predicted versus measured (Task 13.7a)" and continuations 1-4). Predictions that missed: `session/external` and `wsbridge` (-0.18 / -0.15 pp predicted, -0.04 / -0.05 pp measured, both skipped by SC6); `session/prpoller` was not predicted to pass and measured -0.22 pp.
+
+### Tier C follow-up (Task 13.7b)
+
+Tier C is recorded here as a follow-up, not planned in this epic. Remaining core, from `scoping-ledger.md` and Decision 3: `Instance` (38 files), `EntRepository` (15), `Storage` (11), with 321 and 225 inbound symbols. `session` `storage*` (8 files, 4.0k LOC) and `ent_*` (22 files, 9.6k LOC) pass SC6 (`ent_*`: lib -0.134 pp, test -0.188 pp, universal -1.2 pp) but fail SC1 with 14 staying uses each; `session` p2 (startup backfills) stays rejected because `NewEntRepository` itself loops over `startupMigrations`, which is not behaviour-preserving across its 86 call sites. The design lives in `docs/architecture-audit-session-package-split-2026-09-07.md` items 3 and 4 and needs interface extraction, which this ADR forbids doing mechanically. Other follow-ups already listed above: `session` p1 (needs collaborators injected), `server/services` p2 (websocket transport, 27 declarations; `wsconn` since moved, see the 2026-11-05 update).
+
+### Status
+
+Stays **Proposed**. `owner-attestations.yaml` `adr_010_policy` records an execution policy (all tiers may be executed by agents, agents merge when CI passes, characterization tests required before Tier B/C moves, no freeze windows), not acceptance of the Unresolved Questions; `targets` there is `recorded` with `targets_confirmed` unset. Acceptance remains the owner's confirmation.

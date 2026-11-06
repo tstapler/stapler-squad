@@ -1,7 +1,7 @@
 # ADR-001: Reject Full Bazel/bzlmod Adoption for This Initiative
 
 **Date**: 2026-08-27
-**Status**: Accepted
+**Status**: Superseded by [bazel-conversion ADR-001](../../bazel-conversion/decisions/ADR-001-adopt-bazel-bzlmod-build-of-record.md) (adopts Bazel/bzlmod as the build of record, owner decision 2026-11-01; that ADR answers each rejection reason below point by point) and, for the free-runner/remote-cache objection, [bazel-conversion ADR-004](../../bazel-conversion/decisions/ADR-004-self-hosted-bazel-remote-cache-on-onyx.md) (self-hosted cache on `onyx`). The decision below is kept unchanged as the historical record for the ci-speed initiative.
 **Context**: ci-speed — evaluating build-graph/caching tooling changes (requirements.md Scope; explicitly flagged as a "Rabbit Hole")
 
 ---
