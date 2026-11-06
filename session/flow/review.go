@@ -102,16 +102,18 @@ func (r *run) review(s *ReviewSection) error {
 	s.RawFail = ratioMetric(sum.RawFail, sum.Total, n, DrillRawFail)
 	s.AdjustedFail = ratioMetric(sum.AdjustedFail, sum.AdjustedTotal, n, DrillAdjustedFail)
 	s.Override = ratioMetric(sum.Overridden, sum.Total, n, DrillOverride)
+	s.Unverifiable = ratioMetric(sum.ByOutcome[OutcomeUnverifiable], sum.Total, n, DrillUnverifiable)
 	s.Unrecognized = sum.Unrecognized
 	for _, c := range AllVerdictClasses() {
 		s.Classes = append(s.Classes, VerdictClassRow{
 			Class: c.String(), Total: CountMetric{Value: sum.ByClass[c], Drill: DrillVerdictClass(c)}, NonPass: sum.nonPassByClass[c],
+			NonPassDrill: DrillNonPass(c),
 		})
 	}
 	s.WeakFilter = WeakFilterNote
 	meta, caps, soft := r.deadlockInputs(vd)
 	report := DetectDeadlocks(reviewHistories(vd, meta, caps), r.cfg, r.a.clock)
-	s.StalledCount = report.StalledCount
+	s.StalledCount, s.StalledDrill = report.StalledCount, DrillStalled
 	limit, truncated := listLimitFor(r.q.ListLimit, r.q.Compact)
 	s.Deadlocks = pageOf(deadlockRows(report.Candidates, meta), limit, truncated)
 	s.ReviewerStreaks = pageOf(streakRows(report.ReviewerStreaks, meta), limit, truncated)
@@ -171,6 +173,12 @@ func (r *run) reviewDrill(sets DrillSets) error {
 		class, _ := ClassifyVerdict(v)
 		mark(DrillVerdicts, v.ItemID)
 		mark(DrillVerdictClass(class), v.ItemID)
+		if v.Outcome != OutcomePass {
+			mark(DrillNonPass(class), v.ItemID)
+		}
+		if v.Outcome == OutcomeUnverifiable {
+			mark(DrillUnverifiable, v.ItemID)
+		}
 		if v.Outcome == OutcomeFail {
 			mark(DrillRawFail, v.ItemID)
 			if class == ClassJudgment {
@@ -182,8 +190,26 @@ func (r *run) reviewDrill(sets DrillSets) error {
 		}
 	}
 	meta, caps, _ := r.deadlockInputs(vd)
-	for _, c := range DetectDeadlocks(reviewHistories(vd, meta, caps), r.cfg, r.a.clock).Candidates {
+	report := DetectDeadlocks(reviewHistories(vd, meta, caps), r.cfg, r.a.clock)
+	for _, c := range report.Candidates {
 		mark(DrillDeadlock, c.ItemID)
+		if c.Resolution == ResolutionOpen && !c.InFlight {
+			mark(DrillStalled, c.ItemID)
+		}
+	}
+	for _, b := range VerdictMixSeries(vd.vs, r.w) {
+		sets[DrillBucket(DrillVerdicts, b.WeekStart)] = nil
+	}
+	for _, k := range []DrillKey{DrillUnverifiable, DrillStalled} {
+		sets[k] = nil
+	}
+	for _, c := range AllVerdictClasses() {
+		sets[DrillNonPass(c)] = nil
+	}
+	for _, v := range vd.vs {
+		if w := DrillBucket(DrillVerdicts, isoWeekStart(v.CreatedAt)); r.w.Contains(v.CreatedAt) {
+			mark(w, v.ItemID)
+		}
 	}
 	for k, set := range byKey {
 		sets[k] = sortedItems(set)

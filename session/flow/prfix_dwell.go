@@ -70,7 +70,7 @@ func PRFixDwellWith(spans []Span, window FlowWindow, asOf time.Time, cfg Config,
 	res := PRFixDwellResult{
 		Estimated: []string{"pr_fix_dwell:combined", EstimatedPRFixCauseUnavailable},
 		Notes:     []string{prFixGapNote},
-		Drill:     DrillSets{},
+		Drill:     DrillSets{DrillPRFixOpen: nil},
 	}
 	if join.Active() {
 		res.Estimated = []string{"pr_fix_dwell:combined", EstimatedPRFixDwellSplit, EstimatedPRFixCauseSinceCapture}
@@ -85,6 +85,7 @@ func PRFixDwellWith(spans []Span, window FlowWindow, asOf time.Time, cfg Config,
 			samples = append(samples, c.Duration)
 			res.Drill.add(DrillPRFixDwell, id)
 			if c.Open {
+				res.Drill.add(DrillPRFixOpen, id)
 				res.OpenCount++
 			}
 		}

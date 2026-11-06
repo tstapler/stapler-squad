@@ -31,7 +31,17 @@ const allTimeHint = "use all_time=true for all-time"
 // aggregator; no flow math lives here.
 type BacklogFlowService struct {
 	agg FlowAggregator
+	// enabled reports the backlog feature flag; nil means always enabled.
+	enabled func() bool
 }
+
+// flowMaxWindowDays is the longest bounded window; longer requests are clamped
+// (all_time exists for the rest). The MCP tools clamp to the same value.
+const flowMaxWindowDays = 365
+
+// SetEnabledCheck gates every handler on the backlog feature flag, as the MCP
+// flow tools are. Call it before the service starts serving.
+func (s *BacklogFlowService) SetEnabledCheck(enabled func() bool) { s.enabled = enabled }
 
 // NewBacklogFlowService returns a service over agg. A nil agg yields
 // FailedPrecondition from every handler.
@@ -55,6 +65,9 @@ func NewFlowServiceFromStorage(storage *session.Storage, opts ...flow.Aggregator
 }
 
 func (s *BacklogFlowService) ready() error {
+	if s.enabled != nil && !s.enabled() {
+		return connect.NewError(connect.CodeFailedPrecondition, errors.New("the backlog feature is disabled"))
+	}
 	if s.agg == nil {
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("flow aggregator is not available"))
 	}
@@ -71,7 +84,7 @@ func windowSpec(days int32, allTime bool) (flow.WindowSpec, error) {
 	if days < 1 {
 		return flow.WindowSpec{}, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("window_days must be >= 1; %s", allTimeHint))
 	}
-	return flow.WindowSpec{Days: int(days)}, nil
+	return flow.WindowSpec{Days: int(min(days, flowMaxWindowDays))}, nil
 }
 
 // flowError maps an aggregator error to a connect code: caller mistakes are

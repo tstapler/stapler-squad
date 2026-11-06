@@ -144,6 +144,7 @@ func TestBacklogFlowService_should_HaveLegendEntry_When_CodeInEstimatedVocabular
 	vocabulary := []string{
 		flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", "pr_fix_dwell:combined", "stuck_history:lower_bound",
 		flow.EstimatedPRFixCauseSinceCapture, flow.EstimatedPRFixDwellSplit, flow.EstimatedPRFixOutcomeSinceCapture,
+		flow.EstimatedLeadTimeInWindowOnly, flow.EstimatedFPYInWindowOnly, flow.EstimatedDwellSeedMixedOffset,
 	}
 	for _, code := range vocabulary {
 		text, ok := flowEstimatedLegend[code]
@@ -384,6 +385,26 @@ func TestBacklogFlowService_should_ServeEmptySummary_When_BuiltFromStorage(t *te
 	assert.EqualValues(t, 0, got.Tiles.Merged.Value)
 }
 
+// Every code the real aggregator emits for a bounded window must be explained;
+// an unlisted code would render as the generic "no description" legend.
+func TestBacklogFlowService_should_ExplainEveryEmittedCode_When_RealAggregatorServesBoundedWindow(t *testing.T) {
+	t.Parallel()
+	repo, err := session.NewEntRepository(session.WithDatabasePath(":memory:"))
+	require.NoError(t, err)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	defer storage.Close()
+
+	got, err := callSummary(t, NewFlowServiceFromStorage(storage), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	require.NoError(t, err)
+
+	require.Contains(t, got.Meta.Estimated, flow.EstimatedLeadTimeInWindowOnly)
+	require.Contains(t, got.Meta.Estimated, flow.EstimatedFPYInWindowOnly)
+	for _, code := range got.Meta.Estimated {
+		assert.NotEqual(t, flowUnknownLegend, got.Meta.EstimatedLegend[code], code)
+	}
+}
+
 func TestBacklogFlowService_should_MapStuckNotesAndLegendDriftCode_When_EpisodesDrift(t *testing.T) {
 	t.Parallel()
 	sum := sampleFlowSummary()
@@ -415,4 +436,67 @@ func TestBacklogFlowService_should_MapPROutcomesAndTriggerDwell_When_Present(t *
 	assert.Equal(t, "ci", got.Pr.TriggerDwell[0].Trigger)
 	assert.EqualValues(t, 4, got.Pr.TriggerDwell[0].Cycles.Value)
 	assert.EqualValues(t, time.Hour.Milliseconds(), got.Pr.TriggerDwell[0].Dwell.P50Ms)
+}
+
+func TestBacklogFlowService_should_ClampWindowDaysTo365_When_RequestExceedsMax(t *testing.T) {
+	t.Parallel()
+	fake := &fakeFlowAgg{summary: sampleFlowSummary()}
+
+	_, err := callSummary(t, NewBacklogFlowService(fake), &sessionv1.GetFlowSummaryRequest{WindowDays: 100000})
+
+	require.NoError(t, err)
+	assert.Equal(t, 365, fake.gotSummary.Window.Days)
+}
+
+func TestBacklogFlowService_should_RefuseEveryHandler_When_BacklogFeatureDisabled(t *testing.T) {
+	t.Parallel()
+	fake := &fakeFlowAgg{summary: sampleFlowSummary()}
+	svc := NewBacklogFlowService(fake)
+	enabled := false
+	svc.SetEnabledCheck(func() bool { return enabled })
+
+	_, err := callSummary(t, svc, &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = svc.ListFlowDrilldown(context.Background(), connect.NewRequest(&sessionv1.ListFlowDrilldownRequest{Key: "tiles.merged", WindowDays: 7}))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+
+	enabled = true
+	_, err = callSummary(t, svc, &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	assert.NoError(t, err, "the check is evaluated per call, so enabling the feature takes effect without a restart")
+}
+
+func TestBacklogFlowService_should_MapGapFields_When_SummaryCarriesThem(t *testing.T) {
+	t.Parallel()
+	sum := sampleFlowSummary()
+	sum.Funnel.Stages = []flow.FunnelStageRow{{
+		Status: "review", AdvancedDrill: "funnel.advanced.review",
+		BackEdgeTargets: []flow.BackEdgeRow{{To: "in_progress", Count: 426, Drill: "funnel.back_edge.review.in_progress"}},
+	}}
+	sum.Causes.Rework = []flow.CauseRow{{Cause: "review_fail", Count: flow.CountMetric{Value: 9, Drill: flow.DrillReworkReviewFail}, ItemsAffected: 4}}
+	sum.Causes.ZeroBounceDrill = flow.DrillZeroBounce
+	sum.Review.Unverifiable = flow.RatioMetric{Num: 110, Den: 528, Ratio: 110.0 / 528, Drill: flow.DrillUnverifiable}
+	sum.Anomalies.Items.Items = []flow.ThrashItemRow{{ItemID: "x", Archived: true}}
+	sum.Anomalies.ArchivedItems = 2
+	week := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	sum.Trends.Throughput = []flow.ThroughputBucket{{WeekStart: week, N: 3, Drill: flow.DrillBucket(flow.DrillMerged, week)}}
+	sum.Trends.Rework = []flow.ReworkBucket{{WeekStart: week, N: 1, Drill: flow.DrillBucket(flow.DrillReworkAny, week),
+		ByCause: []flow.NamedCount{{Name: "bounce", Count: 1, Drill: flow.DrillBucket(flow.DrillReworkBounce, week)}}}}
+
+	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sum}), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	require.NoError(t, err)
+
+	edge := got.Funnel.Stages[0].BackEdgeTargets[0]
+	assert.Equal(t, "in_progress", edge.ToStage)
+	assert.EqualValues(t, 426, edge.Count)
+	assert.Equal(t, "funnel.back_edge.review.in_progress", edge.DrillKey)
+	assert.Equal(t, "funnel.advanced.review", got.Funnel.Stages[0].AdvancedDrillKey)
+	assert.EqualValues(t, 4, got.Causes.Rework[0].ItemsAffected)
+	assert.Equal(t, "rework.zero_bounce", got.Causes.ZeroBounceDrillKey)
+	assert.EqualValues(t, 110, got.Review.Unverifiable.Num)
+	assert.Equal(t, "review.unverifiable", got.Review.Unverifiable.DrillKey)
+	assert.True(t, got.Anomalies.Items.Items[0].Archived)
+	assert.EqualValues(t, 2, got.Anomalies.ArchivedItems)
+	assert.Equal(t, "tiles.merged@2026-10-05T00:00:00Z", got.Trends.Throughput[0].DrillKey)
+	assert.Equal(t, "rework.any@2026-10-05T00:00:00Z", got.Trends.Rework[0].DrillKey)
+	assert.Equal(t, "rework.bounce@2026-10-05T00:00:00Z", got.Trends.Rework[0].ByCause[0].DrillKey)
 }

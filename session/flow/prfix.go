@@ -30,6 +30,9 @@ const (
 	EstimatedPRFixCauseSinceCapture   = "pr_fix_cause:since_capture"
 	EstimatedPRFixCauseUnavailable    = "pr_fix_cause:unavailable"
 	EstimatedPRFixDwellSplit          = "pr_fix_dwell_split:since_capture"
+	EstimatedLeadTimeInWindowOnly     = "lead_time:in_window_only"
+	EstimatedFPYInWindowOnly          = "fpy:in_window_only"
+	EstimatedDwellSeedMixedOffset     = "dwell_seed:mixed_offset"
 )
 
 // TriggerJoinWindow is how far before a reopen event its trigger marker may

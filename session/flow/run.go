@@ -13,6 +13,7 @@ const (
 	defaultListLimit = 10
 	maxListLimit     = 50
 	compactListLimit = 3
+	itemMetaChunk    = 500
 )
 
 // listLimitFor resolves a requested top-N size: 0 means the default, Compact
@@ -221,6 +222,7 @@ func (r *run) loadDwell() (DwellResult, error) {
 func (r *run) reworkResult(ev *eventData) *ReworkResult {
 	if r.rework == nil {
 		res := ReworkWith(ev.spans, r.cfg, r.triggerJoin())
+		bucketDrill(res.Drill, ev.spans, &res, r.trendWeeks(ev))
 		r.rework = &res
 	}
 	return r.rework
@@ -248,13 +250,16 @@ func (r *run) itemMeta(ids []ItemID) (map[ItemID]ItemMeta, error) {
 	if len(ids) == 0 {
 		return out, nil
 	}
-	items, err := r.a.src.Items.Items(r.ctx, ids)
-	if err != nil {
-		return out, fmt.Errorf("read items: %w", err)
-	}
-	r.rows.Items += len(items)
-	for _, it := range items {
-		out[it.ID] = it
+	// Chunked so a large id list stays under the database's bound-variable limit.
+	for chunk := range slices.Chunk(ids, itemMetaChunk) {
+		items, err := r.a.src.Items.Items(r.ctx, chunk)
+		if err != nil {
+			return out, fmt.Errorf("read items: %w", err)
+		}
+		r.rows.Items += len(items)
+		for _, it := range items {
+			out[it.ID] = it
+		}
 	}
 	return out, nil
 }

@@ -53,7 +53,7 @@ func (r *run) trends(s *TrendsSection) error {
 	if err != nil {
 		return err
 	}
-	weeks := weekStarts(r.w, earliestSpanTime(ev.spans, r.w))
+	weeks := r.trendWeeks(ev)
 	throughput := throughputSeries(r.reworkResult(ev), weeks)
 	rework := reworkSeries(ev.spans, weeks)
 	mix := verdictMixRows(VerdictMixSeries(vd.vs, r.w))
@@ -75,6 +75,53 @@ func (r *run) trends(s *TrendsSection) error {
 	return nil
 }
 
+func (r *run) trendWeeks(ev *eventData) []time.Time {
+	return weekStarts(r.w, earliestSpanTime(ev.spans, r.w))
+}
+
+// bucketDrill registers the item sets behind the throughput and rework trend
+// buckets in sets: every week gets its keys (empty when quiet) so a bucket
+// drill never reads as an unknown key. Sets are distinct items, whereas a
+// rework bucket's n counts events.
+func bucketDrill(sets DrillSets, spans []Span, rw *ReworkResult, weeks []time.Time) {
+	for _, wk := range weeks {
+		sets[DrillBucket(DrillMerged, wk)] = nil
+		sets[DrillBucket(DrillReworkAny, wk)] = nil
+		for _, c := range AllReworkCauses() {
+			sets[DrillBucket(reworkDrillKeys[c], wk)] = nil
+		}
+	}
+	in := map[DrillKey]map[ItemID]struct{}{}
+	mark := func(k DrillKey, id ItemID) {
+		if _, ok := sets[k]; !ok {
+			return
+		}
+		if in[k] == nil {
+			in[k] = map[ItemID]struct{}{}
+		}
+		in[k][id] = struct{}{}
+	}
+	for _, it := range rw.Items {
+		if it.Merged() {
+			mark(DrillBucket(DrillMerged, isoWeekStart(it.MergedAt)), it.Item)
+		}
+	}
+	for _, sp := range spans {
+		rs, ok := sp.(RealSpan)
+		if !ok {
+			continue
+		}
+		if cause, isRework := classifyReworkSpan(rs); isRework {
+			wk := isoWeekStart(rs.At())
+			mark(DrillBucket(DrillReworkAny, wk), rs.Item())
+			mark(DrillBucket(reworkDrillKeys[cause], wk), rs.Item())
+		}
+	}
+	for k, set := range in {
+		sets[k] = sortedItems(set)
+	}
+}
+
 func weekIndex(weeks []time.Time, t time.Time) (int, bool) {
 	ws := isoWeekStart(t)
 	for i, w := range weeks {
@@ -90,6 +137,7 @@ func throughputSeries(rw *ReworkResult, weeks []time.Time) []ThroughputBucket {
 	out := make([]ThroughputBucket, len(weeks))
 	for i, w := range weeks {
 		out[i].WeekStart = w
+		out[i].Drill = DrillBucket(DrillMerged, w)
 	}
 	for _, it := range rw.Items {
 		if !it.Merged() {
@@ -108,9 +156,9 @@ func reworkSeries(spans []Span, weeks []time.Time) []ReworkBucket {
 	causes := AllReworkCauses()
 	out := make([]ReworkBucket, len(weeks))
 	for i, w := range weeks {
-		out[i] = ReworkBucket{WeekStart: w, ByCause: make([]NamedCount, len(causes))}
+		out[i] = ReworkBucket{WeekStart: w, Drill: DrillBucket(DrillReworkAny, w), ByCause: make([]NamedCount, len(causes))}
 		for j, c := range causes {
-			out[i].ByCause[j].Name = c.String()
+			out[i].ByCause[j] = NamedCount{Name: c.String(), Drill: DrillBucket(reworkDrillKeys[c], w)}
 		}
 	}
 	for _, sp := range spans {
@@ -132,7 +180,7 @@ func reworkSeries(spans []Span, weeks []time.Time) []ReworkBucket {
 func verdictMixRows(buckets []VerdictMixBucket) []VerdictMixBucketRow {
 	rows := make([]VerdictMixBucketRow, len(buckets))
 	for i, b := range buckets {
-		rows[i] = VerdictMixBucketRow{WeekStart: b.WeekStart, N: b.Total}
+		rows[i] = VerdictMixBucketRow{WeekStart: b.WeekStart, N: b.Total, Drill: DrillBucket(DrillVerdicts, b.WeekStart)}
 		for _, class := range AllVerdictClasses() {
 			for _, o := range verdictOutcomes {
 				if n := b.Count(class, o); n > 0 {

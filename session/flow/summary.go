@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // String returns the wire name, or "unknown" for an out-of-range value.
@@ -23,6 +26,12 @@ func (s SectionStatus) String() string {
 	return "unknown"
 }
 
+// UTCTimestampCutover is when event timestamps began being stored in UTC.
+// Earlier rows carry mixed offsets, so the window-start seed lookup (which
+// matches stored timestamps exactly) can miss them and dwell near the window
+// start is then inexact.
+var UTCTimestampCutover = time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+
 func ratioMetric(num, den int, lowSampleN int, drill DrillKey) RatioMetric {
 	return RatioMetric{Num: num, Den: den, Ratio: ratio(num, den), LowSample: den < lowSampleN, Drill: drill}
 }
@@ -39,6 +48,9 @@ func (r *run) tiles(s *TilesSection) error {
 	s.FirstPassYield = ratioMetric(rw.FPY.Passed, rw.FPY.Total, r.cfg.LowSampleN, DrillFPY)
 	s.ThrashAffected = CountMetric{Value: rw.FPY.ThrashAffected, Drill: DrillFPYThrashAffected}
 	s.MedianBounces = rw.MedianBounces
+	if !r.q.Window.AllTime {
+		s.Meta.Estimated = []string{EstimatedLeadTimeInWindowOnly, EstimatedFPYInWindowOnly}
+	}
 	if ev.rawInWindow == 0 {
 		s.Meta.Status = SectionEmpty
 	}
@@ -62,14 +74,24 @@ func (r *run) funnel(s *FunnelSection) error {
 	for _, st := range f.Stages {
 		key := DrillFunnelStage(string(st.Status))
 		s.Stages = append(s.Stages, FunnelStageRow{
-			Status:    string(st.Status),
-			Entered:   CountMetric{Value: st.Entered, Drill: key},
-			Advanced:  st.Advanced,
-			BackEdges: st.BackEdges,
-			Dwell:     DurationMetric{Stats: st.Dwell, Drill: key},
+			Status:        string(st.Status),
+			Entered:       CountMetric{Value: st.Entered, Drill: key},
+			Advanced:      st.Advanced,
+			BackEdges:     st.BackEdges,
+			Dwell:         DurationMetric{Stats: st.Dwell, Drill: key},
+			AdvancedDrill: DrillFunnelAdvanced(string(st.Status)),
 		})
+		row := &s.Stages[len(s.Stages)-1]
+		for _, t := range st.BackEdgeTargets {
+			row.BackEdgeTargets = append(row.BackEdgeTargets, BackEdgeRow{
+				To: string(t.To), Count: t.Count, Drill: DrillFunnelBackEdge(string(st.Status), string(t.To)),
+			})
+		}
 	}
 	s.Other, s.Archived = f.Other, f.Archived
+	if !r.q.Window.AllTime && r.w.Start().Before(UTCTimestampCutover) {
+		s.Meta.Estimated = []string{EstimatedDwellSeedMixedOffset}
+	}
 	s.Thrash = DurationMetric{Stats: dwell.Thrash.Percentiles(r.cfg.LowSampleN), Drill: DrillThrashEpisode}
 	if ev.rawInWindow == 0 {
 		s.Meta.Status = SectionEmpty
@@ -93,14 +115,17 @@ func (r *run) causes(s *CausesSection) error {
 	total := 0
 	for _, c := range AllReworkCauses() {
 		total += rw.Causes[c]
-		s.Rework = append(s.Rework, CauseRow{Cause: c.String(), Count: CountMetric{Value: rw.Causes[c], Drill: reworkDrillKeys[c]}})
+		s.Rework = append(s.Rework, CauseRow{
+			Cause: c.String(), Count: CountMetric{Value: rw.Causes[c], Drill: reworkDrillKeys[c]},
+			ItemsAffected: len(rw.Drill[reworkDrillKeys[c]]),
+		})
 	}
 	for trig, n := range rw.PRFixTriggers {
 		s.PRFixTriggers = append(s.PRFixTriggers, TriggerRow{Trigger: string(trig), Count: n})
 	}
 	slices.SortFunc(s.PRFixTriggers, func(a, b TriggerRow) int { return strings.Compare(a.Trigger, b.Trigger) })
 	s.BounceBuckets = slices.Clone(rw.BounceBuckets[:])
-	s.ZeroBounce, s.MergedCount = rw.ZeroBounce, rw.MergedCount
+	s.ZeroBounce, s.MergedCount, s.ZeroBounceDrill = rw.ZeroBounce, rw.MergedCount, DrillZeroBounce
 	s.Notes, s.Unclassified = reworkNoteTally(ev.spans)
 	s.Meta.Estimated = slices.Clone(rw.Estimated)
 	if total == 0 && len(s.Notes) == 0 {
@@ -148,7 +173,7 @@ func (r *run) pr(s *PRSection) error {
 	res := r.prfixResult(ev)
 	s.FixDwell = DurationMetric{Stats: res.Stats, Drill: DrillPRFixDwell}
 	s.Cycles = CountMetric{Value: len(res.Cycles), Drill: DrillPRFixDwell}
-	s.OpenCount = res.OpenCount
+	s.OpenCount, s.OpenDrill = res.OpenCount, DrillPRFixOpen
 	s.Notes = slices.Clone(res.Notes)
 	s.Meta.Estimated = slices.Clone(res.Estimated)
 	for _, td := range res.TriggerDwell {
@@ -276,13 +301,22 @@ func (r *run) anomalies(s *AnomaliesSection) error {
 		s.Meta.Status = SectionEmpty
 		return nil
 	}
-	ids := make([]ItemID, len(s.Items.Items))
-	for i, row := range s.Items.Items {
+	// Metadata for every thrash item, not just the page, so ArchivedItems
+	// covers the whole count the banner shows.
+	ids := make([]ItemID, len(rows))
+	for i, row := range rows {
 		ids[i] = row.ItemID
 	}
 	meta, err := r.itemMeta(ids)
+	for _, row := range rows {
+		if meta[row.ItemID].Status == domain.BacklogStatusArchived {
+			s.ArchivedItems++
+		}
+	}
 	for i := range s.Items.Items {
-		s.Items.Items[i].Title = meta[s.Items.Items[i].ItemID].Title
+		m := meta[s.Items.Items[i].ItemID]
+		s.Items.Items[i].Title = m.Title
+		s.Items.Items[i].Archived = m.Status == domain.BacklogStatusArchived
 	}
 	if err != nil {
 		s.Meta.Status, s.Meta.Error = SectionPartial, err.Error()

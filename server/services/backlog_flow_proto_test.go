@@ -11,7 +11,13 @@ import (
 
 // flowNumberFields are the field names that make a message a "metric": a number
 // a reader may want to open. Each such message must carry drill_key beside it.
-var flowNumberFields = map[protoreflect.Name]bool{"value": true, "count": true, "ratio": true}
+var flowNumberFields = map[protoreflect.Name]bool{"value": true, "count": true, "ratio": true, "n": true}
+
+// flowNonDrillable lists messages that carry a number but intentionally no
+// item set, with the reason. Anything else with a number needs a drill_key.
+var flowNonDrillable = map[protoreflect.Name]string{
+	"FlowVerdictMixCell": "one class/outcome cell of a weekly verdict bar; its week bucket carries the drill_key",
+}
 
 func isNumericKind(k protoreflect.Kind) bool {
 	switch k {
@@ -40,6 +46,9 @@ func TestBacklogFlowProto_should_CarryDrillKey_When_MessageHasNumericValueCountO
 		if !hasNumber {
 			continue
 		}
+		if _, skip := flowNonDrillable[md.Name()]; skip {
+			continue
+		}
 		checked++
 		dk := fields.ByName("drill_key")
 		if assert.NotNil(t, dk, "message %s has a numeric value/count/ratio but no drill_key", md.Name()) {
@@ -47,6 +56,14 @@ func TestBacklogFlowProto_should_CarryDrillKey_When_MessageHasNumericValueCountO
 		}
 	}
 	assert.GreaterOrEqual(t, checked, 4, "walk found too few metric messages; the detector is broken")
+}
+
+func TestBacklogFlowProto_should_ListOnlyRealMessages_When_NonDrillableDeclared(t *testing.T) {
+	t.Parallel()
+	msgs := sessionv1.File_session_v1_backlog_flow_proto.Messages()
+	for name := range flowNonDrillable {
+		assert.NotNil(t, msgs.ByName(name), "stale exemption %s", name)
+	}
 }
 
 func TestBacklogFlowProto_should_ExposeSixRPCs(t *testing.T) {

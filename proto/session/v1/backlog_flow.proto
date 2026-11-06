@@ -197,8 +197,23 @@ message FlowFunnelStageRow {
   string status = 1;
   FlowCountMetric entered = 2;
   int32 advanced = 3;
+  // back_edges is the total number of transitions back to an earlier stage.
+  // It is a transition count (not distinct items), so it carries no drill key;
+  // open back_edge_targets for item sets.
   int32 back_edges = 4;
   FlowDurationMetric dwell = 5;
+  // back_edge_targets splits back_edges by the earlier stage it returned to.
+  repeated FlowBackEdge back_edge_targets = 6;
+  // Names the distinct items that left this stage forward (the advanced count).
+  string advanced_drill_key = 7;
+}
+
+// FlowBackEdge is the back-edge transitions from one stage to one earlier
+// stage. count is transitions; drill_key lists the distinct items behind it.
+message FlowBackEdge {
+  string to_stage = 1;
+  int32 count = 2;
+  string drill_key = 3;
 }
 
 message FlowFunnelSection {
@@ -211,7 +226,10 @@ message FlowFunnelSection {
 
 message FlowCauseRow {
   string cause = 1;
+  // count is events; items_affected is the distinct items behind them (the
+  // size of count.drill_key's item set).
   FlowCountMetric count = 2;
+  int32 items_affected = 3;
 }
 
 // FlowTriggerRow is one PR-fix trigger count. trigger is one of ci, conflict,
@@ -230,15 +248,21 @@ message FlowCausesSection {
   // last bucket holds ten or more.
   repeated int32 bounce_buckets = 4;
   int32 zero_bounce = 5;
+  // merged_count equals tiles.merged and median_bounces is a statistic over
+  // that cohort, so neither carries its own drill key; zero_bounce_drill_key
+  // names the zero-bounce items.
   int32 merged_count = 6;
   repeated FlowNamedCount notes = 7;
   int32 unclassified = 8;
+  string zero_bounce_drill_key = 9;
 }
 
 message FlowVerdictClassRow {
   string class = 1;
   FlowCountMetric total = 2;
   int32 non_pass = 3;
+  // Names the items with a non-PASS verdict of this class.
+  string non_pass_drill_key = 4;
 }
 
 // FlowDeadlockRow is one deadlock candidate (a heuristic). title is sanitized.
@@ -294,6 +318,10 @@ message FlowReviewSection {
   FlowStreakPage reviewer_streaks = 9;
   int32 stalled_count = 10;
   string weak_filter = 11;
+  // unverifiable is the raw UNVERIFIABLE verdict count over the raw total.
+  FlowRatioMetric unverifiable = 12;
+  // Names the open deadlock candidates with no verdict inside the stall window.
+  string stalled_drill_key = 13;
 }
 
 message FlowPRSection {
@@ -306,6 +334,8 @@ message FlowPRSection {
   FlowPROutcomes outcomes = 6;
   // trigger_dwell splits dwell by joined trigger for cycles after capture.
   repeated FlowTriggerDwellRow trigger_dwell = 7;
+  // Names the items with a PR-fix cycle still open (the open_count).
+  string open_drill_key = 8;
 }
 
 // FlowPROutcomes counts PR-fix outcomes in the window. When recording is false
@@ -351,6 +381,8 @@ message FlowThrashItemRow {
   google.protobuf.Timestamp last_at = 6;
   string pair = 7;
   string cause = 8;
+  // archived is true when the item's current status is archived.
+  bool archived = 9;
 }
 
 message FlowThrashItemPage {
@@ -365,18 +397,24 @@ message FlowAnomaliesSection {
   FlowSectionStatus meta = 1;
   FlowCountMetric thrash_items = 2;
   FlowThrashItemPage items = 3;
+  // archived_items counts the thrashing items (all, not just this page) whose
+  // current status is archived.
+  int32 archived_items = 4;
 }
 
-// FlowThroughputBucket is merged items in one ISO week. Trend buckets are chart
-// series without an item set, so they carry n and no drill_key.
+// FlowThroughputBucket is merged items in one ISO week. drill_key is
+// "<key>@<week_start RFC3339>" and opens that week's items; it is empty only
+// when the bucket was computed without an item set.
 message FlowThroughputBucket {
   google.protobuf.Timestamp week_start = 1;
   int32 n = 2;
+  string drill_key = 3;
 }
 
 message FlowTrendCell {
   string name = 1;
   int32 n = 2;
+  string drill_key = 3;
 }
 
 message FlowVerdictMixCell {
@@ -389,12 +427,14 @@ message FlowVerdictMixBucket {
   google.protobuf.Timestamp week_start = 1;
   int32 n = 2;
   repeated FlowVerdictMixCell cells = 3;
+  string drill_key = 4;
 }
 
 message FlowReworkBucket {
   google.protobuf.Timestamp week_start = 1;
   int32 n = 2;
   repeated FlowTrendCell by_cause = 3;
+  string drill_key = 4;
 }
 
 // FlowTrendsSection feeds the charts. Totals are kept when compact omits buckets.

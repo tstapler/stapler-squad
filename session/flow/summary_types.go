@@ -101,6 +101,8 @@ type DurationMetric struct {
 type NamedCount struct {
 	Name  string
 	Count int
+	// Drill names the item set behind Count; empty when none exists.
+	Drill DrillKey
 }
 
 // TilesSection is the headline numbers.
@@ -117,11 +119,23 @@ type TilesSection struct {
 
 // FunnelStageRow is one funnel stage.
 type FunnelStageRow struct {
-	Status    string
-	Entered   CountMetric
-	Advanced  int
-	BackEdges int
-	Dwell     DurationMetric
+	Status   string
+	Entered  CountMetric
+	Advanced int
+	// BackEdges is the transition total; BackEdgeTargets splits it by target stage.
+	BackEdges       int
+	BackEdgeTargets []BackEdgeRow
+	Dwell           DurationMetric
+	// AdvancedDrill names the distinct items behind Advanced.
+	AdvancedDrill DrillKey
+}
+
+// BackEdgeRow is the back-edge transitions from a stage to one earlier stage;
+// Drill names the distinct items that took it.
+type BackEdgeRow struct {
+	To    string
+	Count int
+	Drill DrillKey
 }
 
 // FunnelSection is the stage funnel plus the thrash dwell bucket.
@@ -137,6 +151,8 @@ type FunnelSection struct {
 type CauseRow struct {
 	Cause string
 	Count CountMetric
+	// ItemsAffected is the distinct items behind Count (the drill set size).
+	ItemsAffected int
 }
 
 // TriggerRow is one PR-fix trigger count.
@@ -154,9 +170,12 @@ type CausesSection struct {
 	// last bucket holds ten or more.
 	BounceBuckets []int
 	ZeroBounce    int
-	MergedCount   int
-	Notes         []NamedCount
-	Unclassified  int
+	// ZeroBounceDrill names the zero-bounce items. MergedCount equals
+	// tiles.merged and MedianBounces is a statistic over it, so neither has a key.
+	ZeroBounceDrill DrillKey
+	MergedCount     int
+	Notes           []NamedCount
+	Unclassified    int
 }
 
 // VerdictClassRow is one verdict class.
@@ -164,6 +183,8 @@ type VerdictClassRow struct {
 	Class   string
 	Total   CountMetric
 	NonPass int
+	// NonPassDrill names the items with a non-PASS verdict of this class.
+	NonPassDrill DrillKey
 }
 
 // DeadlockRow is one deadlock candidate. Title is the raw item title; the
@@ -193,16 +214,19 @@ type StreakRow struct {
 
 // ReviewSection is the review-gate analysis.
 type ReviewSection struct {
-	Meta            SectionMeta
-	Total           CountMetric
-	Classes         []VerdictClassRow
-	RawFail         RatioMetric
-	AdjustedFail    RatioMetric
-	Override        RatioMetric
+	Meta         SectionMeta
+	Total        CountMetric
+	Classes      []VerdictClassRow
+	RawFail      RatioMetric
+	AdjustedFail RatioMetric
+	Override     RatioMetric
+	// Unverifiable is raw UNVERIFIABLE verdicts over the raw total.
+	Unverifiable    RatioMetric
 	Unrecognized    int
 	Deadlocks       ListPage[DeadlockRow]
 	ReviewerStreaks ListPage[StreakRow]
 	StalledCount    int
+	StalledDrill    DrillKey
 	WeakFilter      string
 }
 
@@ -212,6 +236,8 @@ type PRSection struct {
 	FixDwell  DurationMetric
 	Cycles    CountMetric
 	OpenCount int
+	// OpenDrill names the items with a PR-fix cycle still open.
+	OpenDrill DrillKey
 	Notes     []string
 	// Outcomes counts nudge outcomes recorded since capture.
 	Outcomes PROutcomes
@@ -263,25 +289,32 @@ type ThrashItemRow struct {
 	LastAt   time.Time
 	Pair     string
 	Cause    string
+	// Archived is true when the item's current status is archived.
+	Archived bool
 }
 
 // AnomaliesSection lists thrash items, which are excluded from the averages.
 type AnomaliesSection struct {
 	Meta        SectionMeta
 	ThrashItems CountMetric
-	Items       ListPage[ThrashItemRow]
+	// ArchivedItems counts all thrashing items (not just the page) that are archived.
+	ArchivedItems int
+	Items         ListPage[ThrashItemRow]
 }
 
 // ThroughputBucket is merged items in one ISO week (Monday 00:00 UTC).
 type ThroughputBucket struct {
 	WeekStart time.Time
 	N         int
+	// Drill opens the week's items (DrillBucket of the series key).
+	Drill DrillKey
 }
 
 // VerdictMixBucketRow is one week of verdict counts by class and outcome.
 type VerdictMixBucketRow struct {
 	WeekStart time.Time
 	N         int
+	Drill     DrillKey
 	Cells     []VerdictMixCell
 }
 
@@ -296,6 +329,7 @@ type VerdictMixCell struct {
 type ReworkBucket struct {
 	WeekStart time.Time
 	N         int
+	Drill     DrillKey
 	ByCause   []NamedCount
 }
 

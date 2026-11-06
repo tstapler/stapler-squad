@@ -150,7 +150,7 @@ func ReworkWith(spans []Span, cfg Config, join *TriggerJoin) ReworkResult {
 		Causes:        make(map[ReworkCause]int),
 		PRFixTriggers: make(map[PRFixTrigger]int),
 		Estimated:     []string{EstimatedPRFixCauseUnavailable},
-		Drill:         DrillSets{},
+		Drill:         DrillSets{DrillZeroBounce: nil, DrillReworkAny: nil},
 		join:          join,
 	}
 	if join.Active() {
@@ -189,6 +189,7 @@ func countRealRework(item *ItemRework, rs RealSpan, preMerge bool, res *ReworkRe
 		return
 	}
 	res.Causes[cause]++
+	res.Drill.add(DrillReworkAny, item.Item)
 	switch cause {
 	case ReworkReviewFail, ReworkBounce:
 		if cause == ReworkReviewFail {
@@ -208,6 +209,7 @@ func countRealRework(item *ItemRework, rs RealSpan, preMerge bool, res *ReworkRe
 			item.PreMergePRFix++
 		}
 	case ReworkOther:
+		res.Drill.add(DrillReworkOther, item.Item)
 	}
 }
 
@@ -266,6 +268,7 @@ func (res *ReworkResult) summarize(cfg Config) {
 		res.BounceBuckets[min(it.PreMergeBounces, BounceOverflowBucket)]++
 		if it.PreMergeBounces == 0 {
 			res.ZeroBounce++
+			res.Drill.add(DrillZeroBounce, it.Item)
 		}
 		if it.PreMergeThrash > 0 {
 			res.FPY.ThrashAffected++

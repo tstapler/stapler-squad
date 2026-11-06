@@ -34,6 +34,9 @@ var flowEstimatedLegend = map[string]string{
 	flow.EstimatedPRFixDwellSplit:          "PR-fix dwell is split by trigger only for cycles after capture began; earlier cycles stay combined",
 	flow.EstimatedPRFixOutcomeSinceCapture: "PR-fix outcome counts cover only the period since outcome capture began",
 	"pr_fix_dwell:combined":                "PR-fix dwell is combined across triggers",
+	flow.EstimatedDwellSeedMixedOffset:     "stage dwell near the window start is inexact: events before 2026-08-18 were stored with mixed UTC offsets, so some window-start states cannot be found",
+	flow.EstimatedLeadTimeInWindowOnly:     "lead time uses in-window events only: items started before the window start are excluded or understated",
+	flow.EstimatedFPYInWindowOnly:          "first-pass yield uses in-window events only: rework before the window start and merges that skip pr_pending are not seen, so yield can read high near the window start",
 	"stuck_history:lower_bound":            "stuck history is a lower bound: intervals before detection began are not recorded",
 }
 
@@ -180,6 +183,10 @@ func funnelToProto(s flow.FunnelSection) *sessionv1.FlowFunnelSection {
 			return &sessionv1.FlowFunnelStageRow{
 				Status: r.Status, Entered: countMetric(r.Entered), Advanced: flowI32(r.Advanced),
 				BackEdges: flowI32(r.BackEdges), Dwell: durationMetric(r.Dwell),
+				AdvancedDrillKey: string(r.AdvancedDrill),
+				BackEdgeTargets: mapSlice(r.BackEdgeTargets, func(b flow.BackEdgeRow) *sessionv1.FlowBackEdge {
+					return &sessionv1.FlowBackEdge{ToStage: b.To, Count: flowI32(b.Count), DrillKey: string(b.Drill)}
+				}),
 			}
 		}),
 		Other: flowI32(s.Other), Archived: flowI32(s.Archived), Thrash: durationMetric(s.Thrash),
@@ -187,22 +194,23 @@ func funnelToProto(s flow.FunnelSection) *sessionv1.FlowFunnelSection {
 }
 
 func namedCount(n flow.NamedCount) *sessionv1.FlowNamedCount {
-	return &sessionv1.FlowNamedCount{Name: n.Name, Count: flowI32(n.Count)}
+	return &sessionv1.FlowNamedCount{Name: n.Name, Count: flowI32(n.Count), DrillKey: string(n.Drill)}
 }
 
 func causesToProto(s flow.CausesSection) *sessionv1.FlowCausesSection {
 	return &sessionv1.FlowCausesSection{
 		Meta: sectionStatusToProto(s.Meta),
 		Rework: mapSlice(s.Rework, func(r flow.CauseRow) *sessionv1.FlowCauseRow {
-			return &sessionv1.FlowCauseRow{Cause: r.Cause, Count: countMetric(r.Count)}
+			return &sessionv1.FlowCauseRow{Cause: r.Cause, Count: countMetric(r.Count), ItemsAffected: flowI32(r.ItemsAffected)}
 		}),
 		PrFixTriggers: mapSlice(s.PRFixTriggers, func(r flow.TriggerRow) *sessionv1.FlowTriggerRow {
 			return &sessionv1.FlowTriggerRow{Trigger: r.Trigger, Count: flowI32(r.Count), DrillKey: string(flow.DrillReworkPRFix)}
 		}),
 		BounceBuckets: mapSlice(s.BounceBuckets, flowI32),
 		ZeroBounce:    flowI32(s.ZeroBounce), MergedCount: flowI32(s.MergedCount),
-		Notes:        mapSlice(s.Notes, namedCount),
-		Unclassified: flowI32(s.Unclassified),
+		ZeroBounceDrillKey: string(s.ZeroBounceDrill),
+		Notes:              mapSlice(s.Notes, namedCount),
+		Unclassified:       flowI32(s.Unclassified),
 	}
 }
 
@@ -237,18 +245,21 @@ func reviewToProto(s flow.ReviewSection) *sessionv1.FlowReviewSection {
 	return &sessionv1.FlowReviewSection{
 		Meta: sectionStatusToProto(s.Meta), Total: countMetric(s.Total),
 		Classes: mapSlice(s.Classes, func(r flow.VerdictClassRow) *sessionv1.FlowVerdictClassRow {
-			return &sessionv1.FlowVerdictClassRow{Class: r.Class, Total: countMetric(r.Total), NonPass: flowI32(r.NonPass)}
+			return &sessionv1.FlowVerdictClassRow{
+				Class: r.Class, Total: countMetric(r.Total), NonPass: flowI32(r.NonPass), NonPassDrillKey: string(r.NonPassDrill),
+			}
 		}),
 		RawFail: ratioMetric(s.RawFail), AdjustedFail: ratioMetric(s.AdjustedFail), Override: ratioMetric(s.Override),
 		Unrecognized: flowI32(s.Unrecognized), Deadlocks: deadlockPage(s.Deadlocks), ReviewerStreaks: streakPage(s.ReviewerStreaks),
-		StalledCount: flowI32(s.StalledCount), WeakFilter: s.WeakFilter,
+		StalledCount: flowI32(s.StalledCount), StalledDrillKey: string(s.StalledDrill), WeakFilter: s.WeakFilter,
+		Unverifiable: ratioMetric(s.Unverifiable),
 	}
 }
 
 func prToProto(s flow.PRSection) *sessionv1.FlowPRSection {
 	return &sessionv1.FlowPRSection{
 		Meta: sectionStatusToProto(s.Meta), FixDwell: durationMetric(s.FixDwell), Cycles: countMetric(s.Cycles),
-		OpenCount: flowI32(s.OpenCount), Notes: s.Notes,
+		OpenCount: flowI32(s.OpenCount), OpenDrillKey: string(s.OpenDrill), Notes: s.Notes,
 		Outcomes: &sessionv1.FlowPROutcomes{
 			Recording: s.Outcomes.Recording, Steered: flowI32(s.Outcomes.Steered), Respawned: flowI32(s.Outcomes.Respawned),
 			SkippedActive: flowI32(s.Outcomes.SkippedActive), ResolvedWithin_24H: flowI32(s.Outcomes.ResolvedWithin24h),
@@ -277,7 +288,7 @@ func thrashPage(p flow.ListPage[flow.ThrashItemRow]) *sessionv1.FlowThrashItemPa
 			return &sessionv1.FlowThrashItemRow{
 				ItemId: string(r.ItemID), Title: sanitizeFlowText(r.Title, flowTitleMaxRunes),
 				Episodes: flowI32(r.Episodes), Events: flowI32(r.Events), FirstAt: flowTime(r.FirstAt),
-				LastAt: flowTime(r.LastAt), Pair: r.Pair, Cause: r.Cause,
+				LastAt: flowTime(r.LastAt), Pair: r.Pair, Cause: r.Cause, Archived: r.Archived,
 			}
 		}),
 		TotalCount: flowI32(p.TotalCount), ReturnedCount: flowI32(p.ReturnedCount), HasMore: p.HasMore, Truncated: p.Truncated,
@@ -287,6 +298,7 @@ func thrashPage(p flow.ListPage[flow.ThrashItemRow]) *sessionv1.FlowThrashItemPa
 func anomaliesToProto(s flow.AnomaliesSection) *sessionv1.FlowAnomaliesSection {
 	return &sessionv1.FlowAnomaliesSection{
 		Meta: sectionStatusToProto(s.Meta), ThrashItems: countMetric(s.ThrashItems), Items: thrashPage(s.Items),
+		ArchivedItems: flowI32(s.ArchivedItems),
 	}
 }
 
@@ -294,12 +306,12 @@ func trendsToProto(s flow.TrendsSection) *sessionv1.FlowTrendsSection {
 	return &sessionv1.FlowTrendsSection{
 		Meta: sectionStatusToProto(s.Meta),
 		Throughput: mapSlice(s.Throughput, func(b flow.ThroughputBucket) *sessionv1.FlowThroughputBucket {
-			return &sessionv1.FlowThroughputBucket{WeekStart: flowTime(b.WeekStart), N: flowI32(b.N)}
+			return &sessionv1.FlowThroughputBucket{WeekStart: flowTime(b.WeekStart), N: flowI32(b.N), DrillKey: string(b.Drill)}
 		}),
 		ThroughputTotal: flowI32(s.ThroughputTotal),
 		VerdictMix: mapSlice(s.VerdictMix, func(b flow.VerdictMixBucketRow) *sessionv1.FlowVerdictMixBucket {
 			return &sessionv1.FlowVerdictMixBucket{
-				WeekStart: flowTime(b.WeekStart), N: flowI32(b.N),
+				WeekStart: flowTime(b.WeekStart), N: flowI32(b.N), DrillKey: string(b.Drill),
 				Cells: mapSlice(b.Cells, func(c flow.VerdictMixCell) *sessionv1.FlowVerdictMixCell {
 					return &sessionv1.FlowVerdictMixCell{Class: c.Class, Outcome: c.Outcome, N: flowI32(c.Count)}
 				}),
@@ -308,9 +320,9 @@ func trendsToProto(s flow.TrendsSection) *sessionv1.FlowTrendsSection {
 		VerdictMixTotal: flowI32(s.VerdictMixTotal),
 		Rework: mapSlice(s.Rework, func(b flow.ReworkBucket) *sessionv1.FlowReworkBucket {
 			return &sessionv1.FlowReworkBucket{
-				WeekStart: flowTime(b.WeekStart), N: flowI32(b.N),
+				WeekStart: flowTime(b.WeekStart), N: flowI32(b.N), DrillKey: string(b.Drill),
 				ByCause: mapSlice(b.ByCause, func(c flow.NamedCount) *sessionv1.FlowTrendCell {
-					return &sessionv1.FlowTrendCell{Name: c.Name, N: flowI32(c.Count)}
+					return &sessionv1.FlowTrendCell{Name: c.Name, N: flowI32(c.Count), DrillKey: string(c.Drill)}
 				}),
 			}
 		}),
