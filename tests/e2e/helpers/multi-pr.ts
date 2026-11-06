@@ -3,8 +3,6 @@ import * as fs from "fs";
 import * as path from "path";
 import type { Page, Route } from "@playwright/test";
 import { slotTmp } from "./base-url";
-import { create, toBinary } from "../../../web-app/node_modules/@bufbuild/protobuf";
-import { UserPREventSchema } from "../../../web-app/src/gen/session/v1/github_user_pb";
 
 /**
  * Seeding for the session-multi-pr-tracking specs. A real session or backlog item is created through the
@@ -196,31 +194,60 @@ export interface UserPrSeed {
   title: string;
 }
 
+// Minimal proto3 encoder for UserPREvent (proto/session/v1/github_user.proto, types.proto UserPR). The e2e job
+// installs only tests/e2e's dependencies and generates no protobuf code, so the specs cannot import web-app's.
+const textEncoder = new TextEncoder();
+const varint = (n: number): number[] => {
+  const out: number[] = [];
+  let v = n;
+  while (v > 0x7f) {
+    out.push((v & 0x7f) | 0x80);
+    v = Math.floor(v / 128);
+  }
+  out.push(v);
+  return out;
+};
+const fieldString = (field: number, value: string): number[] =>
+  value === "" ? [] : [...varint((field << 3) | 2), ...varint(textEncoder.encode(value).length), ...textEncoder.encode(value)];
+const fieldVarint = (field: number, value: number): number[] => (value === 0 ? [] : [...varint(field << 3), ...varint(value)]);
+const fieldMessage = (field: number, body: number[]): number[] => [...varint((field << 3) | 2), ...varint(body.length), ...body];
+
+function encodeUserPREvent(prs: UserPrSeed[]): Uint8Array {
+  const authState = [...fieldVarint(1, 1), ...fieldString(2, "e2e-user")];
+  const body = [
+    ...fieldString(1, "snapshot"),
+    ...prs.flatMap((p) =>
+      fieldMessage(
+        2,
+        [
+          ...fieldString(1, p.owner),
+          ...fieldString(2, p.repo),
+          ...fieldVarint(3, p.number),
+          ...fieldString(4, p.title),
+          ...fieldString(5, `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`),
+          ...fieldString(6, "OPEN"),
+          ...fieldString(7, `feat-${p.number}`),
+          ...fieldString(8, "main"),
+          ...fieldString(10, "success"),
+          ...fieldVarint(21, 1),
+          ...fieldString(23, "github.com"),
+          ...fieldString(24, "e2e-user"),
+        ],
+      ),
+    ),
+    ...fieldMessage(3, authState),
+  ];
+  return Uint8Array.from(body);
+}
+
+
 /**
  * Serves the Up Next PRs panel's WatchUserPRs WebSocket stream with one snapshot, as one connected account.
  * The isolated server has no GitHub account, so without this the panel only shows "not connected".
  * Frame: a Connect envelope (flag 0, 4-byte length, binary UserPREvent) per watch-ws-transport.ts.
  */
 export async function seedUserPrs(page: Page, prs: UserPrSeed[]): Promise<void> {
-  const event = create(UserPREventSchema, {
-    eventType: "snapshot",
-    authState: { available: true, username: "e2e-user", errorMessage: "", accounts: [] },
-    prs: prs.map((p) => ({
-      owner: p.owner,
-      repo: p.repo,
-      number: p.number,
-      title: p.title,
-      htmlUrl: `https://github.com/${p.owner}/${p.repo}/pull/${p.number}`,
-      state: "OPEN",
-      headRef: `feat-${p.number}`,
-      baseRef: "main",
-      host: "github.com",
-      accountLogin: "e2e-user",
-      checkConclusion: "success",
-      detailsLoaded: true,
-    })),
-  });
-  const payload = toBinary(UserPREventSchema, event);
+  const payload = encodeUserPREvent(prs);
   const frame = new Uint8Array(5 + payload.length);
   new DataView(frame.buffer).setUint32(1, payload.length, false);
   frame.set(payload, 5);
