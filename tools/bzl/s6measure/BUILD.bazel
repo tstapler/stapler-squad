@@ -4,10 +4,23 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "s6measure_lib",
     srcs = [
+        "analyze.go",
+        "cmds.go",
+        "containment.go",
+        "cost.go",
+        "cross.go",
+        "diskconc.go",
+        "exec.go",
+        "harness.go",
+        "layering.go",
+        "layout.go",
         "main.go",
         "noisy.go",
         "proc.go",
+        "queued.go",
+        "report.go",
         "sampler.go",
+        "workers.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/s6measure",
     visibility = ["//visibility:private"],
@@ -21,6 +34,9 @@ go_binary(
 
 go_test(
     name = "s6measure_test",
-    srcs = ["s6measure_test.go"],
+    srcs = [
+        "checks_test.go",
+        "s6measure_test.go",
+    ],
     embed = [":s6measure_lib"],
 )

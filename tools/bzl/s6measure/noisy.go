@@ -80,3 +80,13 @@ func UpdateInputs(path string, kv map[string]any, noisy bool, entry map[string]a
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
+
+// AnyFailed is true when at least one build exited non-zero; a failed build cannot support a verdict.
+func AnyFailed(bs []Build) bool {
+	for _, b := range bs {
+		if b.ExitCode != 0 {
+			return true
+		}
+	}
+	return false
+}
