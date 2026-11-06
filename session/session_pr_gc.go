@@ -3,10 +3,13 @@ package session
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -107,11 +110,16 @@ func (g *SessionPRGCResult) countFor(label string, n int) {
 	}
 }
 
-// SessionPRLinkGC runs RunSessionPRLinkGC on an interval until ctx is cancelled.
+// SessionPRLinkGC runs RunSessionPRLinkGC at start and then on an interval until
+// its context is cancelled. It is a no-op while session_multi_pr is off (read
+// live, so flipping the flag takes effect without a restart).
 type SessionPRLinkGC struct {
 	repo     *EntRepository
 	interval time.Duration
 	now      func() time.Time
+	enabled  func() bool
+	wg       sync.WaitGroup
+	started  atomic.Bool
 }
 
 // NewSessionPRLinkGC builds the nightly collector; interval <= 0 means 24h.
@@ -119,12 +127,40 @@ func NewSessionPRLinkGC(repo *EntRepository, interval time.Duration) *SessionPRL
 	if interval <= 0 {
 		interval = 24 * time.Hour
 	}
-	return &SessionPRLinkGC{repo: repo, interval: interval, now: time.Now}
+	return &SessionPRLinkGC{
+		repo: repo, interval: interval, now: time.Now,
+		enabled: func() bool { return config.SessionMultiPR(config.SessionMultiPRScopePoller) },
+	}
 }
 
-// Run blocks until ctx is cancelled, collecting once per interval. Errors are
-// logged and the loop continues; the pass never revives or starts anything.
+// NewSessionPRLinkGC returns the collector over this storage's repository, or
+// nil when the storage has none.
+func (s *Storage) NewSessionPRLinkGC(interval time.Duration) *SessionPRLinkGC {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	return NewSessionPRLinkGC(s.repo, interval)
+}
+
+// Start runs the collector in the background until ctx ends. A second call is a no-op.
+func (g *SessionPRLinkGC) Start(ctx context.Context) {
+	if !g.started.CompareAndSwap(false, true) {
+		return
+	}
+	g.wg.Go(func() { g.Run(ctx) })
+}
+
+// Started reports whether Start has been called.
+func (g *SessionPRLinkGC) Started() bool { return g.started.Load() }
+
+// Wait blocks until the loop has exited (after its context is cancelled).
+func (g *SessionPRLinkGC) Wait() { g.wg.Wait() }
+
+// Run blocks until ctx is cancelled, collecting once at start and then once per
+// interval. Errors are logged and the loop continues; the pass never revives or
+// starts anything.
 func (g *SessionPRLinkGC) Run(ctx context.Context) {
+	g.runOnce(ctx)
 	ticker := time.NewTicker(g.interval)
 	defer ticker.Stop()
 	for {
@@ -132,14 +168,21 @@ func (g *SessionPRLinkGC) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			res, err := g.repo.RunSessionPRLinkGC(ctx, g.now())
-			if err != nil {
-				log.Warn("session pr link gc failed", "error", err)
-				continue
-			}
-			if res != (SessionPRGCResult{}) {
-				log.Info("session pr link gc", "links", res.Links, "tombstones", res.Tombstones, "states", res.States)
-			}
+			g.runOnce(ctx)
 		}
+	}
+}
+
+func (g *SessionPRLinkGC) runOnce(ctx context.Context) {
+	if ctx.Err() != nil || !g.enabled() {
+		return
+	}
+	res, err := g.repo.RunSessionPRLinkGC(ctx, g.now())
+	if err != nil {
+		log.Warn("session pr link gc failed", "error", err)
+		return
+	}
+	if res != (SessionPRGCResult{}) {
+		log.Info("session pr link gc", "links", res.Links, "tombstones", res.Tombstones, "states", res.States)
 	}
 }

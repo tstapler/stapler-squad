@@ -61,6 +61,7 @@ type Server struct {
 	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
 	terminalMuxBridge          atomic.Pointer[services.TerminalMuxBridge] // serves /actuator/terminal-mux
 	unfinishedScanner          *unfinished.Scanner                        // serves /actuator/unfinished-scanner; nil without deps
+	prLinkGC                   *session.SessionPRLinkGC                   // orphan session-PR link collector; nil without storage
 	tlsConfig                  *tls.Config                                // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler            // nil when auth is disabled
 	requiresAuth               bool                                       // explicit: a real validator is wired
@@ -228,6 +229,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
 		mirrorReconciler.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
+
+		// The collector gates itself on session_multi_pr each pass, so it is
+		// always started and does nothing while the flag is off.
+		if gc := deps.Storage.NewSessionPRLinkGC(0); gc != nil {
+			gc.Start(serverCtx)
+			srv.joinAfterCancel(serverCtx, gc.Wait)
+			srv.prLinkGC = gc
+		}
 	}
 
 	if deps.StopPRMaintenance != nil {

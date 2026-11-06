@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,4 +157,27 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 	res, err = repo.RunSessionPRLinkGC(ctx, now)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.States, "a state with a link survives regardless of age")
+}
+
+func TestSessionPRLinkGC_ShouldCollectOnlyWhenFlagOn_AndStopOnCancel(t *testing.T) {
+	t.Parallel()
+	repo := newPRRepo(t)
+	upsertLink(t, repo, SessionPROwner("uuid-gone"), mustPRRef(t, "", "acme", "app", 1), AttachSourceBackfill)
+	backdate(t, repo, "session_prs", "attached_at", "session_uuid = ?", time.Now().Add(-48*time.Hour), "uuid-gone")
+
+	var on atomic.Bool
+	gc := NewSessionPRLinkGC(repo, time.Hour)
+	gc.enabled = on.Load
+
+	gc.runOnce(context.Background())
+	assert.Equal(t, 1, countLinks(t, repo), "flag off: nothing collected")
+
+	on.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	gc.Start(ctx)
+	gc.Start(ctx) // second call is a no-op
+	require.True(t, gc.Started())
+	require.Eventually(t, func() bool { return countLinks(t, repo) == 0 }, 5*time.Second, 10*time.Millisecond)
+	cancel()
+	gc.Wait()
 }
