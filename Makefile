@@ -1155,6 +1155,7 @@ ready: $(if $(filter bazel,$(BUILD_SYSTEM)),sync,) ci ready-bazel-guards proto-b
 
 setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward pushes and main deletion (idempotent)
 	git config core.hooksPath scripts/hooks
+	chmod +x scripts/hooks/pre-commit scripts/hooks/pre-commit-gazelle.sh
 	@echo "git hooks: core.hooksPath=$$(git config core.hooksPath)"
 	git config merge.bazel-lockfile-merge.name "Merge driver for the Bazel lockfile (MODULE.bazel.lock)"
 	git config merge.bazel-lockfile-merge.driver "scripts/git-merge-bazel-lock.sh %O %A %B"

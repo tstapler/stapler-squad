@@ -165,6 +165,7 @@ go_test(
         "session_resumption_test.go",
         "set_window_size_remote_test.go",
         "socket_owner_darwin_test.go",
+        "socket_path_len_test.go",
         "ssh_git_env_test.go",
         "ssh_pool_test.go",
         "ssh_pty_factory_test.go",
