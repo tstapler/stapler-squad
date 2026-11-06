@@ -1058,6 +1058,7 @@ export function ReviewQueuePanel({
     // autoResolvedRules for the timing/removal side of this.
     const autoResolvedRuleName = autoResolvedRules[queueItem.sessionId];
     const isAutoResolved = !!autoResolvedRuleName;
+    const approvalId = queueItem.metadata?.["pending_approval_id"];
 
     return (
     <div
@@ -1195,7 +1196,7 @@ export function ReviewQueuePanel({
         </div>
       </div>
       <div className={itemActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        {queueItem.metadata?.["pending_approval_id"] && (
+        {approvalId && (
           <>
             <Button
               intent="primary"
@@ -1203,7 +1204,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                approveRequest(queueItem.metadata["pending_approval_id"] ?? "").finally(() => {
+                approveRequest(approvalId).finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
@@ -1220,7 +1221,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                denyRequest(queueItem.metadata["pending_approval_id"] ?? "").finally(() => {
+                denyRequest(approvalId).finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
