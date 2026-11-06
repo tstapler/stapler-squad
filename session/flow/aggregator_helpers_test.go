@@ -93,7 +93,7 @@ func (f *fakeSrc) LastEventsBefore(_ context.Context, start time.Time, ids []Ite
 			latest[e.ItemID] = e
 		}
 	}
-	var out []Event
+	out := make([]Event, 0, len(latest))
 	for _, e := range latest {
 		out = append(out, e)
 	}
