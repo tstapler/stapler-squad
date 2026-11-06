@@ -3805,8 +3805,11 @@ message TCCEnrichmentRoot {
   repeated string paths = 3;
   repeated string session_titles = 4;
   bool app_consented = 5;
-  // Enrichment outcome only: pending, unresolved/slow, error, or completed.
+  // Enrichment outcome only: pending, unresolved/slow, error, denied, or completed.
+  // "denied" means a probe failed with a permission error (EPERM/EACCES).
   string outcome = 6;
+  // System Settings deep link for this root's TCC service; set only when outcome is denied.
+  string settings_url = 7;
 }
 
 message GetTCCEnrichmentStatusResponse {
