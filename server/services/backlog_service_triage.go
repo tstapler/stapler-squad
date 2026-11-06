@@ -850,6 +850,10 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if s.heldByTransitionDenial(ctx, "DequeueNextQueuedItems", &item) {
 			continue
 		}
+		// Sit out an earlier spawn failure's backoff instead of re-claiming every sweep.
+		if s.dequeueSpawnBackoffBlocks(ctx, item.ID) {
+			continue
+		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
 			spawned++
 			if claimDedup {
@@ -889,9 +893,12 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// sibling one. The item is left claimed (in_progress) with no live
 			// session and no visible error anywhere.
 			s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		} else {
+			s.recordDequeueSpawnFailure(ctx, item, fromStatus, spawnErr)
 		}
 		return false
 	}
+	s.clearDequeueSpawnFailure(ctx, item.ID)
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
 }
