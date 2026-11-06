@@ -103,10 +103,37 @@ func TestProbeDaemon_ClassifiesListeners(t *testing.T) {
 		grpcOKServer(t, ln)
 		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), DaemonConfig{Addr: "http://" + ln.Addr().String()}))
 	})
-	t.Run("unix socket answering must not mask a dead TCP listener", func(t *testing.T) {
+	t.Run("unix socket answering with a dead TCP listener is healthy: squad does not need TCP", func(t *testing.T) {
 		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t)}
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg))
+		require.True(t, checkDaemonHealthy(context.Background(), cfg))
+	})
+	t.Run("answering unix socket with a TCP squatter is healthy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
+		t.Cleanup(srv.Close)
+		cfg := DaemonConfig{Addr: srv.URL, SocketPath: answeringUnixSocket(t)}
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg), "the socket decides; TCP is not consulted")
+	})
+	t.Run("missing unix socket file with TCP answering is an older daemon: healthy, not degraded", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: tcpAnswering(t), SocketPath: missingSocketPath(t)}
+		require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), cfg))
+	})
+	t.Run("missing unix socket and dead TCP is not listening", func(t *testing.T) {
+		cfg := DaemonConfig{Addr: closedAddr(t), SocketPath: missingSocketPath(t)}
 		require.Equal(t, daemonProbeNotListening, probeDaemon(context.Background(), cfg))
-		require.False(t, checkDaemonHealthy(context.Background(), cfg), "squad's clients are TCP-only")
+	})
+	t.Run("missing unix socket with a TCP squatter stays unhealthy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
+		t.Cleanup(srv.Close)
+		cfg := DaemonConfig{Addr: srv.URL, SocketPath: missingSocketPath(t)}
+		require.Equal(t, daemonProbeUnhealthy, probeDaemon(context.Background(), cfg))
+	})
+	t.Run("silent unix socket is busy even when TCP answers", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		grpcOKServer(t, ln)
+		cfg := DaemonConfig{Addr: "http://" + ln.Addr().String(), SocketPath: silentUnixSocket(t)}
+		require.Equal(t, daemonProbeBusy, probeDaemon(context.Background(), cfg), "inconclusive: never degraded, never killed")
 	})
 	t.Run("caller deadline mid-answer is unhealthy, not busy", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -128,17 +155,39 @@ func answeringUnixSocket(t *testing.T) string {
 	return sock
 }
 
-// TCP dead, Unix socket alive: report an error and keep the daemon (it may hold live panes).
-func TestEnsureDaemonRunning_TCPDeadUnixUp_ReportsAndDoesNotKill(t *testing.T) {
+// silentUnixSocket accepts connections on a Unix socket and never answers.
+func silentUnixSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "s.sock"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// TCP dead, Unix socket alive: degraded but usable, so the daemon is reused: no error, no stop, no spawn.
+func TestEnsureDaemonRunning_TCPDeadUnixUp_ReusesDaemon(t *testing.T) {
 	withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
 	shrinkProbeTimeouts(t)
 	stop, spawn := neverCalled(t)
 	defer stubStopTymuxd(stop)()
 	defer stubStartDaemonAttempt(spawn)()
 
-	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
+	ready, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: closedAddr(t), SocketPath: answeringUnixSocket(t), BinaryPath: "tymuxd"})
 
-	require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+	require.NoError(t, err)
+	require.Equal(t, TymuxdReady{}, ready)
 }
 
 func dialErr(errno syscall.Errno) error {
@@ -180,6 +229,9 @@ func TestDialErrors_OnlyRefusalMeansDown(t *testing.T) {
 			wantProbe := daemonProbeBusy
 			if tc.wantDown {
 				wantProbe = daemonProbeNotListening
+			}
+			if tc.name == "unix missing socket" {
+				wantProbe = daemonProbeNoSocketFile // still "down" for the kill veto below, but told apart for the supervisor
 			}
 			require.Equal(t, wantProbe, probeEndpoint(context.Background(), tc.network, "addr", nil))
 			if tc.network == "tcp" {
@@ -244,7 +296,13 @@ func TestEnsureDaemonRunning_ListenerUpButUnhealthy_IsNotStopped(t *testing.T) {
 
 			_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19982", BinaryPath: "tymuxd"})
 
-			require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			if tc.tcp {
+				require.ErrorIs(t, err, ErrTymuxdPortSquatted)
+			} else {
+				require.ErrorIs(t, err, ErrTymuxdControlSocketUnresponsive)
+				require.NotErrorIs(t, err, ErrTymuxdPortSquatted, "nothing listens on TCP, so nothing is squatting the port")
+				require.NotContains(t, err.Error(), "something is listening")
+			}
 		})
 	}
 }
@@ -316,7 +374,7 @@ func TestStopTymuxd_UnverifiablePID_DropsPIDFileWithoutKilling(t *testing.T) {
 				return nil
 			}
 
-			err := StopTymuxd()
+			err := StopTymuxd(StopReason{Kind: StopManual})
 
 			require.ErrorIs(t, err, errTymuxdPIDUnverified)
 			require.NoFileExists(t, filepath.Join(dir, tymuxdPIDFileName))
@@ -342,7 +400,7 @@ func TestTerminateProcess_SigtermFirstThenKillAfterGrace(t *testing.T) {
 			}
 			return nil
 		}
-		require.NoError(t, terminateProcess(4242))
+		require.NoError(t, terminateProcess(4242, StopReason{Kind: StopManual}))
 		return sent
 	}
 
@@ -370,6 +428,15 @@ func TestTerminateProcess_SpawnedDaemonIsReapedPromptly(t *testing.T) {
 	t.Cleanup(func() { _ = syscall.Kill(proc.Pid, syscall.SIGKILL) })
 
 	start := time.Now()
-	require.NoError(t, terminateProcess(proc.Pid))
+	require.NoError(t, terminateProcess(proc.Pid, StopReason{Kind: StopManual}))
 	require.Less(t, time.Since(start), 2*time.Second, "exited child must read as gone, not wait for SIGKILL")
+}
+
+// missingSocketPath is a socket path nothing listens on (ENOENT).
+func missingSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir + "/none.sock"
 }

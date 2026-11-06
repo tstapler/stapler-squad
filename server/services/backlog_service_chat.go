@@ -71,10 +71,18 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 		}), nil
 	}
 
-	createResp, err := s.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+	createReq := &sessionv1.CreateBacklogItemRequest{
 		Title:       deriveChatItemTitle(message),
 		Description: message,
-	}))
+		RepoPath:    strings.TrimSpace(req.Msg.RepoPath),
+	}
+	createResp, err := s.CreateBacklogItem(ctx, connect.NewRequest(createReq))
+	if err != nil && createReq.RepoPath != "" && connect.CodeOf(err) == connect.CodeInvalidArgument {
+		// An unresolvable repo path (e.g. a mistyped GitHub URL) must not lose the
+		// user's text: keep the item, skip triage, and let the client say so.
+		createReq.RepoPath = ""
+		createResp, err = s.CreateBacklogItem(ctx, connect.NewRequest(createReq))
+	}
 	if err != nil {
 		return nil, err
 	}

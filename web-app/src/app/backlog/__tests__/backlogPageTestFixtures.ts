@@ -87,11 +87,20 @@ export function storeMock() {
   };
 }
 
+// Stable identity: the page's claims effect depends on it, so a fresh jest.fn() per render would loop.
+export const mockListForeignClaims = jest.fn().mockResolvedValue([]);
+const STABLE_NO_STUCK_ITEMS: never[] = [];
+
+export function useStuckBacklogItemsMock() {
+  return { useStuckBacklogItems: () => ({ items: STABLE_NO_STUCK_ITEMS }) };
+}
+
 export function useBacklogServiceMockFactory() {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
   return {
     ...actual,
     useBacklogService: () => ({
+      listForeignClaims: mockListForeignClaims,
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),

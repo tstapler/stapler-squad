@@ -2,6 +2,7 @@ package tymux
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -16,7 +17,8 @@ type daemonMonitor struct {
 	threshold            int
 	needed               func() bool
 	healthy              func(context.Context, DaemonConfig) bool
-	probe                func(context.Context, DaemonConfig) daemonProbeResult // preferred over healthy when set; lets the monitor tell Busy from Healthy
+	tcpProbe             func(context.Context, DaemonConfig) (daemonProbeResult, bool) // nil: no TCP-liveness signal; false: inconclusive
+	probe                func(context.Context, DaemonConfig) daemonProbeResult         // preferred over healthy when set; lets the monitor tell Busy from Healthy
 	ensure               func(context.Context, DaemonConfig) (TymuxdReady, error)
 	onSpawn              func()
 	onWedged             func() // test hook, called after each wedged report
@@ -32,6 +34,10 @@ const daemonMonitorThreshold = 6
 // busy daemon under load is indistinguishable from a wedged one, and killing it destroys every pane.
 const daemonWedgedAfter = 10 * time.Minute
 
+// daemonDegradedWarnEvery rate-limits the "control socket down, using the TCP fallback" warning:
+// the state can last for hours, and the transport selector already logs each switch.
+const daemonDegradedWarnEvery = 10 * time.Minute
+
 // neededCacheTTL spares the persisted-session query the monitor's 5s tick would otherwise repeat.
 const neededCacheTTL = 15 * time.Second
 
@@ -45,10 +51,42 @@ func MonitorDaemon(ctx context.Context, cfg DaemonConfig, needed func() bool, on
 }
 
 func newDaemonMonitor(needed func() bool, onSpawn func()) daemonMonitor {
+	probe, tcpProbe := monitorProbes()
 	return daemonMonitor{
 		interval: 5 * time.Second, maxBackoff: time.Minute, threshold: daemonMonitorThreshold,
-		probe: probeDaemon, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
+		probe: probe, tcpProbe: tcpProbe, ensure: EnsureDaemonRunning, needed: cachedFor(neededCacheTTL, time.Now, needed), onSpawn: onSpawn,
 	}
+}
+
+// tcpLivenessProbeTimeout bounds the monitor's extra TCP probe so a hung daemon cannot stretch a tick.
+var tcpLivenessProbeTimeout = 2 * time.Second
+
+// tcpObservation is the TCP probe result probeDaemon already obtained on this tick.
+type tcpObservation struct {
+	result daemonProbeResult
+	ok     bool
+}
+
+// monitorProbes returns the default daemon probe and TCP-liveness probe. They share the TCP result
+// probeDaemon obtained, and are only ever called from the monitor's single run goroutine.
+func monitorProbes() (probe func(context.Context, DaemonConfig) daemonProbeResult, tcp func(context.Context, DaemonConfig) (daemonProbeResult, bool)) {
+	var last tcpObservation
+	probe = func(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
+		result, tcpResult, probed := probeDaemonWithTCP(ctx, cfg)
+		last = tcpObservation{result: tcpResult, ok: probed}
+		return result
+	}
+	tcp = func(ctx context.Context, cfg DaemonConfig) (daemonProbeResult, bool) {
+		if o := last; o.ok {
+			last = tcpObservation{}
+			return o.result, true
+		}
+		tctx, cancel := context.WithTimeout(ctx, tcpLivenessProbeTimeout)
+		defer cancel()
+		res := probeTCP(tctx, cfg)
+		return res, tctx.Err() == nil // our own deadline says nothing about the daemon
+	}
+	return probe, tcp
 }
 
 // cachedFor memoizes fn for ttl. A nil fn stays nil.
@@ -105,9 +143,81 @@ func (w *wedgeTracker) observe(ctx context.Context, cfg DaemonConfig, result dae
 	return true
 }
 
+// degradedTracker publishes the degraded gauges and rate-limits the warning for one monitor.
+type degradedTracker struct {
+	since, lastWarn time.Time
+}
+
+// observe records the current state and reports whether it emitted the warning.
+func (d *degradedTracker) observe(ctx context.Context, cfg DaemonConfig, degraded bool, now time.Time) bool {
+	if !degraded {
+		*d = degradedTracker{}
+		recordDaemonDegraded(ctx, false, 0)
+		return false
+	}
+	if d.since.IsZero() {
+		d.since = now
+	}
+	recordDaemonDegraded(ctx, true, now.Sub(d.since))
+	if !d.lastWarn.IsZero() && now.Sub(d.lastWarn) < daemonDegradedWarnEvery {
+		return false
+	}
+	d.lastWarn = now
+	log.Warn("[tymux] degraded: tymuxd Unix control socket is not answering, sessions are using its deprecated unauthenticated TCP listener; the daemon is left running",
+		"addr", cfg.Addr, "degraded_for", now.Sub(d.since).Round(time.Second))
+	return true
+}
+
+// tcpListenerTracker publishes tymux_tcp_listener_up and rate-limits the warning. TCP liveness
+// never affects daemon health (squad uses the socket); it only tells the operator that other
+// TCP-only clients of this daemon are about to fail.
+type tcpListenerTracker struct {
+	down     bool
+	lastWarn time.Time
+}
+
+// observe records whether the TCP listener answers and reports whether it emitted the warning.
+func (t *tcpListenerTracker) observe(ctx context.Context, cfg DaemonConfig, up bool, now time.Time) bool {
+	recordTCPListenerUp(ctx, up)
+	if up {
+		*t = tcpListenerTracker{}
+		return false
+	}
+	if t.down && now.Sub(t.lastWarn) < daemonDegradedWarnEvery {
+		return false
+	}
+	t.down, t.lastWarn = true, now
+	log.Warn("[tymux] tymuxd TCP listener is down; other TCP-only clients of this daemon will fail (squad itself uses the Unix control socket)", "addr", cfg.Addr)
+	return true
+}
+
+// observeTCP updates the TCP-liveness signal for a tick whose daemon probe returned result. A
+// Degraded result already proves TCP answers; a dead daemon is the health gauge's business. Only a
+// definite refusal is "down": a busy, forbidden or odd TCP listener is alive, so the gauge and the
+// warning are left alone.
+func (m daemonMonitor) observeTCP(ctx context.Context, cfg DaemonConfig, result daemonProbeResult, t *tcpListenerTracker) {
+	if result == daemonProbeDegraded {
+		t.observe(ctx, cfg, true, time.Now())
+		return
+	}
+	if result < daemonProbeBusy || m.tcpProbe == nil {
+		return
+	}
+	switch tcp, ok := m.tcpProbe(ctx, cfg); {
+	case !ok:
+	case tcp == daemonProbeHealthy:
+		t.observe(ctx, cfg, true, time.Now())
+	case tcp == daemonProbeNotListening:
+		t.observe(ctx, cfg, false, time.Now())
+	}
+}
+
 func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 	owned := false
 	var wedge wedgeTracker
+	var degraded degradedTracker
+	var tcp tcpListenerTracker
+	defer recordDaemonDegraded(context.Background(), false, 0) // never leave a stale 1 behind
 	failures := 0
 	delay := m.interval
 	for {
@@ -122,6 +232,7 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 			return
 		}
 		if m.needed != nil && !m.needed() {
+			degraded.observe(ctx, cfg, false, time.Now())
 			failures = 0
 			delay = m.interval
 			continue
@@ -133,6 +244,8 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 		if wedge.observe(ctx, cfg, result, time.Now()) && m.onWedged != nil {
 			m.onWedged()
 		}
+		degraded.observe(ctx, cfg, result == daemonProbeDegraded, time.Now())
+		m.observeTCP(ctx, cfg, result, &tcp)
 		healthy := result >= daemonProbeBusy
 		if healthy {
 			if failures > 0 {
@@ -149,7 +262,8 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 			continue
 		}
 		log.Warn("[tymux] daemon unhealthy, attempting recovery", "addr", cfg.Addr, "consecutive_failures", failures)
-		ready, err := m.ensure(ctx, cfg)
+		recoverCtx := withStopReason(ctx, StopReason{Kind: StopMonitorRecovery, Detail: fmt.Sprintf("%d consecutive failed probes (threshold %d)", failures, m.threshold)})
+		ready, err := m.ensure(recoverCtx, cfg)
 		if ready.Spawned && !owned {
 			owned = true
 			if m.onSpawn != nil {

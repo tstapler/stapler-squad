@@ -8,7 +8,9 @@
   "tested": true,
   "testIds": [
     "TestTCCEnrichmentRPC_ConsentAndUnknownRoot",
-    "TestTCCEnrichmentRPC_Disabled"
+    "TestTCCEnrichmentRPC_Disabled",
+    "TestTCCEnrichmentRPC_EPERMIsStickyDeniedAndRecheckClearsIt",
+    "TestTCCEnrichmentRPC_EACCESIsOrdinaryErrorNotDenied"
   ],
   "lastModified": "2026-11-01T23:01:03.928832484-08:00"
 }

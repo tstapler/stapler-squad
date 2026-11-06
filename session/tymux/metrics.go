@@ -101,6 +101,13 @@ var (
 		metric.WithDescription("Time from spawning tymuxd until it answers health checks (or the retry budget is exhausted), by outcome"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
+	daemonDegradedGauge = mustInt64Gauge("tymux_daemon_degraded",
+		metric.WithDescription("1 while tymuxd's Unix control socket is down but its deprecated TCP listener answers (sessions are on the unauthenticated fallback), otherwise 0"))
+	tcpListenerUpGauge = mustInt64Gauge("tymux_tcp_listener_up",
+		metric.WithDescription("1 while tymuxd's deprecated TCP listener answers, 0 when it does not. Informational: squad uses the Unix control socket, but other TCP-only clients of the daemon depend on it. Not part of daemon health"))
+	daemonDegradedSecondsGauge = mustFloat64Gauge("tymux_daemon_degraded_seconds",
+		metric.WithDescription("Seconds the current degraded episode (Unix control socket down, TCP fallback answering) has lasted, 0 when not degraded"),
+		metric.WithUnit("s"))
 	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
 		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))
 )
@@ -117,6 +124,23 @@ func recordDaemonHealth(ctx context.Context, healthy bool, failures int) {
 	}
 	daemonHealthyGauge.Record(ctx, value)
 	daemonFailureGauge.Record(ctx, int64(failures))
+}
+
+func recordTCPListenerUp(ctx context.Context, up bool) {
+	value := int64(0)
+	if up {
+		value = 1
+	}
+	tcpListenerUpGauge.Record(ctx, value)
+}
+
+func recordDaemonDegraded(ctx context.Context, degraded bool, lasted time.Duration) {
+	value := int64(0)
+	if degraded {
+		value = 1
+	}
+	daemonDegradedGauge.Record(ctx, value)
+	daemonDegradedSecondsGauge.Record(ctx, lasted.Seconds())
 }
 
 func recordDaemonRestart(reason string) {
@@ -147,6 +171,14 @@ func mustFloat64Histogram(name string, opts ...metric.Float64HistogramOption) me
 		panic(err)
 	}
 	return h
+}
+
+func mustFloat64Gauge(name string, opts ...metric.Float64GaugeOption) metric.Float64Gauge {
+	g, err := telemetry.GetMeter().Float64Gauge(name, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return g
 }
 
 func mustInt64Gauge(name string, opts ...metric.Int64GaugeOption) metric.Int64Gauge {

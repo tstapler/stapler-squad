@@ -44,7 +44,24 @@ There is no per-session ACL to check: authorization in stapler-squad is a single
 
 ## Failure behaviour
 
-A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
+A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream` treats like any WebSocket loss. Its reconnect is unconditional (no env flag) and never gives up on connection-level failures: full-jitter exponential backoff (2 s first window, 30 s cap) retries indefinitely, so streams sharing the dropped socket retry at spread-out times. After 5 consecutive failures the pane shows "Server unreachable, retrying" (each retry waits up to 30 s, about 15 s on average once the backoff is at its cap) and a tab-visible or `online` event retries at once. A stream that stayed up 10 s restarts the backoff and clears that state. Retrying stops, and the Retry banner shows, for definitive errors (4001/`Unauthenticated`, 4004/`NotFound`, a missing worktree, `HUB_START_FAILED`) and when the server itself keeps ending the stream (an error frame or a clean EndStream) for 10 minutes without a stable attach. That second case has its own backoff and clock, because squad answers that way while still loading sessions after a restart; it never shows "unreachable". Close 1013 (the server refused a stream at its per-socket cap) retries on its own schedule without counting toward "unreachable". A process-wide gate allows 4 connects in flight (until the first message); the foreground pane goes first. The connect timeout is 8 s (initial, background); only a foreground/visibility/online resume uses 1.2 s for its first 2 attempts, and a timeout abort retries after 0.5 s doubling to 5 s, at most 5 times in a row before the normal backoff takes over. While reconnecting the pane shows `Reconnecting terminal…`, and a Reconnect button appears after 5 s without a connection. The reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
+
+### Reading a 1006 in the logs
+
+The 1006 above is synthetic: the server gives every stream of a dropped socket `errMuxSocketClosed` (a 1006 `CloseError`, text `mux socket closed`). Per-pane lines for it (`WebSocket read ended: mux socket closed`, `StreamTerminal ended: mux socket closed`, `EndStreamError not sent`) log at Debug. The cause is one line per socket, `terminal mux socket closed`, with `reason`, `err`, `close_code`/`close_text` (when the error is a WebSocket close), `streams` (panes dropped), `age`, `since_last_frame`, `listener`, `remote_addr` and `user_agent`. The client sends no connection id, so correlate by `remote_addr` and time.
+
+| `reason` (same value as `terminal_mux_socket_closed_total{reason}`) | Level | Meaning |
+|---|---|---|
+| `peer_closed` | Info | Client sent a normal or going-away close frame. |
+| `shutdown` | Info | Server context cancelled. |
+| `read_error` | Warn | Transport failed with no close frame (abrupt TCP close, proxy or tailscale drop, tab killed). |
+| `idle_timeout` | Warn | No frame for 60 s (`muxReadIdle`); `since_last_frame` confirms. |
+| `malformed` | Warn | Non-binary message or undecodable frame. |
+| `unauthorized` | Warn | Three refused `OPEN`s. |
+| `write_error` | Warn | A server write failed and the server tore the socket down. |
+| `control_overflow` | Warn | The client stopped reading control frames (queue over 1024). |
+
+Before this change `idle_timeout`, `write_error` and `control_overflow` were all counted as `read_error`, so an alert selecting `reason="read_error"` will under-count after deploy. A write failure caused by the peer going away (reset, broken pipe, closed connection) is not `write_error`; it is classified from the read side (`read_error` or `peer_closed`).
 
 ## Metrics
 

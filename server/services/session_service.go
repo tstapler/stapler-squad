@@ -89,6 +89,7 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
+	federation        *FederatedSessions // nil unless host gossip is running
 
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
