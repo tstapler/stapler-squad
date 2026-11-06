@@ -46,6 +46,23 @@ There is no per-session ACL to check: authorization in stapler-squad is a single
 
 A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
 
+### Reading a 1006 in the logs
+
+The 1006 above is synthetic: the server gives every stream of a dropped socket `errMuxSocketClosed` (a 1006 `CloseError`, text `mux socket closed`). Per-pane lines for it (`WebSocket read ended: mux socket closed`, `StreamTerminal ended: mux socket closed`, `EndStreamError not sent`) log at Debug. The cause is one line per socket, `terminal mux socket closed`, with `reason`, `err`, `close_code`/`close_text` (when the error is a WebSocket close), `streams` (panes dropped), `age`, `since_last_frame`, `listener`, `remote_addr` and `user_agent`. The client sends no connection id, so correlate by `remote_addr` and time.
+
+| `reason` (same value as `terminal_mux_socket_closed_total{reason}`) | Level | Meaning |
+|---|---|---|
+| `peer_closed` | Info | Client sent a normal or going-away close frame. |
+| `shutdown` | Info | Server context cancelled. |
+| `read_error` | Warn | Transport failed with no close frame (abrupt TCP close, proxy or tailscale drop, tab killed). |
+| `idle_timeout` | Warn | No frame for 60 s (`muxReadIdle`); `since_last_frame` confirms. |
+| `malformed` | Warn | Non-binary message or undecodable frame. |
+| `unauthorized` | Warn | Three refused `OPEN`s. |
+| `write_error` | Warn | A server write failed and the server tore the socket down. |
+| `control_overflow` | Warn | The client stopped reading control frames (queue over 1024). |
+
+`write_error` and `control_overflow` previously counted as `read_error`.
+
 ## Metrics
 
 Server: `terminal_mux_sockets_open`, `terminal_mux_streams_open`, `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (histogram, per-stream queued bytes at enqueue), `terminal_mux_hol_wait` (ms from enqueue to first frame written), `terminal_mux_credit_stalls_total`, `terminal_mux_write_errors_total`, `terminal_mux_socket_closed_total{reason}`, `terminal_mux_open_denied_total{listener,reason}` (listener `local`/`remote`; reason `unauthenticated`, `forbidden`, `unavailable`, `error`). A denied `OPEN` also logs `[TerminalMux] OPEN denied` with the same two fields. Spans: `terminal_mux.socket`, `terminal_mux.stream`. Dashboard: "Terminal socket pool (ADR-033)" row in `docs/observability/grafana/dashboards/client-network.json`.
