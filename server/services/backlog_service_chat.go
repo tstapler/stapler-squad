@@ -74,6 +74,7 @@ func (s *BacklogService) CreateBacklogItemFromChat(
 	createResp, err := s.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:       deriveChatItemTitle(message),
 		Description: message,
+		RepoPath:    strings.TrimSpace(req.Msg.RepoPath),
 	}))
 	if err != nil {
 		return nil, err

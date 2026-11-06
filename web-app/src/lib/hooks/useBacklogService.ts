@@ -822,7 +822,7 @@ interface UseBacklogServiceReturn {
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
-  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  createBacklogItemFromChat: (message: string, existingItemId?: string, repoPath?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /**
    * Runs a free-text message through an LLM to produce a structured draft
    * (title/description/acceptance criteria) for the caller to review/edit —
@@ -995,13 +995,14 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const createBacklogItemFromChat = useCallback(
-    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+    async (message: string, existingItemId?: string, repoPath?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
         const resp = await clientRef.current.createBacklogItemFromChat({
           message,
           existingItemId: existingItemId ?? "",
+          repoPath: repoPath ?? "",
         });
         return resp.item
           ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
@@ -1016,8 +1017,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const parseBacklogItemIntent = useCallback(
-    // repo_path is intentionally omitted: the omnibar has no "current repo"
-    // context available before parsing.
+    // repo_path is omitted: callers pass known_repo_paths and let the LLM pick one.
     async (message: string, knownRepoPaths: string[] = []): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {

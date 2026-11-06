@@ -45,3 +45,34 @@ export const attachButton = style([
   touchTarget,
   { color: vars.color.textPrimary },
 ]);
+
+export const exploreToggle = style([
+  formStyles.attachButton,
+  touchTarget,
+  { color: vars.color.textPrimary },
+]);
+
+export const brainstormPanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  maxHeight: "240px",
+  overflowY: "auto",
+});
+
+export const brainstormTurn = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.sm,
+});
+
+export const brainstormQuestion = style({
+  fontWeight: vars.fontWeight.medium,
+});
+
+export const brainstormRow = style({
+  display: "flex",
+  gap: vars.space["2"],
+});
