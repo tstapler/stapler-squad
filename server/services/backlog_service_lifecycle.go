@@ -459,6 +459,10 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, precondition)
+	var clearedWaivers []session.AcCriterion
+	if updated != nil {
+		clearedWaivers = updated.ClearedAcWaivers
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -531,8 +535,9 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item:          backlogItemToProto(updated, s.engine, s.buildCostLookup()),
-		PrAssociation: prAssociation,
+		Item:           backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		PrAssociation:  prAssociation,
+		ClearedWaivers: acCriteriaToProto(clearedWaivers),
 	}), nil
 }
 
@@ -1627,4 +1632,17 @@ func (s *BacklogService) SubmitManualReview(
 	return connect.NewResponse(&sessionv1.SubmitManualReviewResponse{
 		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
+}
+
+// acCriteriaToProto converts criteria (used for the waivers an update dropped) to proto form.
+func acCriteriaToProto(cs []session.AcCriterion) []*sessionv1.AcCriterion {
+	out := make([]*sessionv1.AcCriterion, len(cs))
+	for i, c := range cs {
+		out[i] = &sessionv1.AcCriterion{
+			// #nosec G115 -- index into one item's short AC list.
+			Index: int32(c.Index), Text: c.Text, Status: string(c.Status),
+			WaiverReason: c.WaiverReason, WaivedBy: c.WaivedBy, WaivedAt: c.WaivedAt,
+		}
+	}
+	return out
 }

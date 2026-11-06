@@ -769,6 +769,8 @@ enum PrAssociationResult {
 message UpdateBacklogItemResponse {
   BacklogItem item = 1;
   PrAssociationResult pr_association = 2;
+  // Waivers dropped by this update because their criterion text changed or was removed.
+  repeated AcCriterion cleared_waivers = 3;
 }
 
 message ArchiveBacklogItemRequest {

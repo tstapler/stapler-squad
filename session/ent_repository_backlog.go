@@ -1350,6 +1350,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
 
+	result.ClearedAcWaivers = clearedWaivers
 	return &result, nil
 }
 

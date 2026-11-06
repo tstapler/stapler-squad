@@ -36,7 +36,7 @@ func TestAcAudit_should_RecordPreviousStatusAndActor_When_WaiveApplied(t *testin
 	assert.Equal(t, "127.0.0.1:1", rows[0].RemoteAddr)
 	assert.Equal(t, "ua", rows[0].UserAgent)
 	got := loadCriteria(t, repo, id)[0]
-	assert.Equal(t, "authenticated web session", got.WaivedBy)
+	assert.Equal(t, "session cookie credential", got.WaivedBy)
 	assert.NotEmpty(t, got.WaivedAt)
 }
 
@@ -224,17 +224,127 @@ func TestAcAudit_should_StayReadableAfterItemDelete_And_PruneByAge(t *testing.T)
 	assert.ErrorIs(t, err, session.ErrNotFound, "item gone and no rows left")
 }
 
-func TestAcAudit_should_CapRowsPerItem(t *testing.T) {
+func TestAcAudit_should_KeepWaiverRow_When_DeniedFloodExceedsRefusalCap(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	id := newWaiverItem(t, repo)
 	item, err := repo.GetBacklogItem(context.Background(), id)
 	require.NoError(t, err)
-	for i := 0; i < session.MaxAcAuditPerItem+5; i++ {
-		require.NoError(t, repo.RecordAcAudit(ownerCtx(), session.AcAuditEventData{ItemID: item.ID, Outcome: "denied:test"}))
+	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "owner call"))
+
+	for i := 0; i < 500+5; i++ {
+		require.NoError(t, repo.RecordAcAudit(ownerCtx(), session.AcAuditEventData{ItemID: item.ID, Outcome: "denied:flood"}))
 	}
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
-	assert.Len(t, rows, session.MaxAcAuditPerItem)
+	var applied, refused int
+	for _, r := range rows {
+		if r.Outcome == "applied" {
+			applied++
+		} else {
+			refused++
+		}
+	}
+	assert.Equal(t, 1, applied, "the waiver's own row must survive")
+	assert.Equal(t, session.MaxAcAuditRefusalsPerItem, refused)
+}
+
+func TestPruneAcAuditOlderThan_should_KeepLiveItemWaiverRow_But_DropOldRefusals(t *testing.T) {
+	t.Parallel()
+	repo := session.NewTestEntRepository(t)
+	id := newWaiverItem(t, repo)
+	item, err := repo.GetBacklogItem(context.Background(), id)
+	require.NoError(t, err)
+	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "r"))
+	require.NoError(t, repo.RecordAcAudit(ownerCtx(), session.AcAuditEventData{ItemID: item.ID, Outcome: "denied:x"}))
+
+	n, err := repo.PruneAcAuditOlderThan(context.Background(), time.Now().Add(time.Hour))
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "only the refusal is old-and-prunable while the item lives")
+	rows, err := repo.ListAcAudit(context.Background(), id)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "applied", rows[0].Outcome)
+}
+
+func TestAcActorFrom_should_DefaultToSystem_When_NoActorAttached(t *testing.T) {
+	t.Parallel()
+	a := session.AcActorFrom(context.Background())
+	assert.Equal(t, session.AcActorSystem, a.Class)
+	assert.Equal(t, "system (automated)", a.Label())
+}
+
+func TestUpdateBacklogItem_should_CarryWaivedByAtAndHandleDuplicateAndEmptyTexts(t *testing.T) {
+	t.Parallel()
+	repo := session.NewTestEntRepository(t)
+	id := createACItem(t, repo, "same", "same", "")
+	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 1, "second dup"))
+	before := loadCriteria(t, repo, id)[1]
+
+	// swap the duplicates and add another empty-text criterion
+	require.NoError(t, rewriteAC(t, repo, id, pend("same", "same", "", "")))
+
+	got := loadCriteria(t, repo, id)
+	require.Len(t, got, 4)
+	waived := 0
+	for _, c := range got {
+		if c.Status == session.AcStatusWaived {
+			waived++
+			assert.Equal(t, before.WaivedBy, c.WaivedBy)
+			assert.Equal(t, before.WaivedAt, c.WaivedAt)
+			assert.Equal(t, "second dup", c.WaiverReason)
+			assert.Equal(t, "same", c.Text)
+		}
+	}
+	assert.Equal(t, 1, waived, "exactly one of the duplicate texts holds the single waiver")
+	assert.NotEqual(t, session.AcStatusWaived, got[2].Status)
+	assert.NotEqual(t, session.AcStatusWaived, got[3].Status, "empty text never carries a waiver")
+}
+
+func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_When_Rejected(t *testing.T) {
+	t.Parallel()
+	repo := session.NewTestEntRepository(t)
+	id := createACItem(t, repo, "alpha", "beta")
+	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 1, "why"))
+
+	title := "renamed"
+	ac, err := session.SerializeAcCriteria(pend("alpha", "beta reworded"))
+	require.NoError(t, err)
+	res, err := repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title, AcceptanceCriteria: &ac}, nil)
+	require.NoError(t, err)
+	require.Len(t, res.ClearedAcWaivers, 1)
+	assert.Equal(t, "beta", res.ClearedAcWaivers[0].Text)
+	assert.Equal(t, "renamed", res.Title)
+
+	// A rejected rewrite must not apply the title either.
+	bad := pend("alpha", "beta reworded")
+	bad[0].Status = session.AcStatusWaived
+	title2 := "should not stick"
+	badJSON, err := session.SerializeAcCriteria(bad)
+	require.NoError(t, err)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title2, AcceptanceCriteria: &badJSON}, nil)
+	require.ErrorIs(t, err, session.ErrAcWaiverViaUpdate)
+	item, err := repo.GetBacklogItem(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", item.Title)
+}
+
+func TestUpdateBacklogItem_should_TolerateLegacyPlainTextStoredCriteria_And_RejectPlainTextIncoming(t *testing.T) {
+	t.Parallel()
+	repo := session.NewTestEntRepository(t)
+	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "legacy", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: session.AcCriteriaJSON("- do the thing\n- other"),
+	})
+	require.NoError(t, err)
+
+	plain := session.AcCriteriaJSON("still plain text")
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &plain}, nil)
+	require.Error(t, err, "plain-text criteria are not valid input to an update")
+
+	ac, serr := session.SerializeAcCriteria(pend("do the thing"))
+	require.NoError(t, serr)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	require.NoError(t, err, "an unreadable stored list pins nothing and is replaced")
 }

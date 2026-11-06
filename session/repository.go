@@ -324,6 +324,9 @@ type SourceSyncEventData struct {
 // BacklogItemData is the domain model for a backlog item.
 type BacklogItemData struct {
 	ID string
+	// ClearedAcWaivers lists waivers an UpdateBacklogItem call dropped because their criterion
+	// text changed or disappeared. It is set only on that call's return value, never persisted.
+	ClearedAcWaivers []AcCriterion
 	// PublicIDRaw is the raw public_id column value ("" when unset — see
 	// session/ent/schema/backlog_item.go's field comment for why that's a
 	// real SQL NULL underneath, not a deliberately-empty string). Do not

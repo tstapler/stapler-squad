@@ -8,9 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 )
 
-// startDBMaintenance reclaims free SQLite pages of the sessions, analytics and escape-events
-// databases in the background until ctx is cancelled (see session/dbmaint).
-// acAuditRetention bounds how long the AC audit trail is kept; per-item growth is capped on write.
+// acAuditRetention is how long refused attempts, and the trail of deleted items, are kept.
 const (
 	acAuditRetention     = 90 * 24 * time.Hour
 	acAuditPruneInterval = 6 * time.Hour
@@ -37,6 +35,8 @@ func (s *Server) startAcAuditPruning(ctx context.Context, storage interface {
 	})
 }
 
+// startDBMaintenance reclaims free SQLite pages of the sessions, analytics and escape-events
+// databases in the background until ctx is cancelled (see session/dbmaint).
 func (s *Server) startDBMaintenance(ctx context.Context, deps *ServerDependencies) {
 	if deps.Storage != nil {
 		s.startAcAuditPruning(ctx, deps.Storage)

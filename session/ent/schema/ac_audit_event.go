@@ -10,9 +10,9 @@ import (
 )
 
 // AcAuditEvent is the append-only audit trail of every attempted acceptance-criterion
-// status change (including waivers) and its outcome. Rows are never updated or deleted by
-// application code, and item_id is deliberately a plain field rather than an edge so
-// deleting an item does not cascade away the trail.
+// status change (including waivers) and its outcome. Rows are never updated; they are deleted only
+// by retention (per-item cap on refused attempts, age pruning). item_id is deliberately a plain
+// field rather than an edge so deleting an item does not cascade away the trail.
 type AcAuditEvent struct {
 	ent.Schema
 }
@@ -44,5 +44,5 @@ func (AcAuditEvent) Fields() []ent.Field {
 }
 
 func (AcAuditEvent) Indexes() []ent.Index {
-	return []ent.Index{index.Fields("item_id", "created_at"), index.Fields("item_public_id")}
+	return []ent.Index{index.Fields("item_id", "created_at"), index.Fields("item_public_id"), index.Fields("created_at")}
 }

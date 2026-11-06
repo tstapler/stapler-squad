@@ -267,3 +267,22 @@ func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesE
 	assert.Equal(t, "owner call", got[2].WaiverReason)
 	assert.NotEmpty(t, got[2].WaivedBy)
 }
+
+func TestUpdateBacklogItem_should_ReturnClearedWaivers_When_CriterionTextChanges(t *testing.T) {
+	t.Parallel()
+	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil)) // "pending one"
+
+	resp, err := f.svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: f.itemID,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "pending one, reworded", Status: "pending"},
+			{Index: 1, Text: "done one", Status: "done"},
+		},
+	}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.ClearedWaivers, 1)
+	assert.Equal(t, "pending one", resp.Msg.ClearedWaivers[0].Text)
+	assert.Equal(t, "owner call", resp.Msg.ClearedWaivers[0].WaiverReason)
+}

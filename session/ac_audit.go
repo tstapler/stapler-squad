@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -44,7 +45,10 @@ const (
 const (
 	maxAcAuditRemoteAddr = 100
 	maxAcAuditReason     = 2000
-	MaxAcAuditPerItem    = 500
+	// MaxAcAuditRefusalsPerItem bounds denied/rejected rows per item. Rows recording a real change
+	// (applied, waiver_cleared) are never evicted: they are bounded by real mutations, and a flood
+	// of refused attempts must not be able to push a waiver's provenance out.
+	MaxAcAuditRefusalsPerItem = 100
 )
 
 // AcActor is the best-available caller identity recorded with an AC mutation.
@@ -64,19 +68,20 @@ func WithAcActor(ctx context.Context, a AcActor) context.Context {
 	return context.WithValue(ctx, acActorKey{}, a)
 }
 
-// AcActorFrom returns the attached actor, or an Unverified api caller.
+// AcActorFrom returns the attached actor. Request handlers always attach one; a context without
+// an actor belongs to a non-request writer (lifecycle, sync, verdict application), recorded as system.
 func AcActorFrom(ctx context.Context) AcActor {
 	if a, ok := ctx.Value(acActorKey{}).(AcActor); ok {
 		return a
 	}
-	return AcActor{Class: AcActorUnverified, Source: "api"}
+	return AcActor{Class: AcActorSystem, Source: "system"}
 }
 
 // Label is the human-readable "who" shown next to a waiver.
 func (a AcActor) Label() string {
 	switch a.Class {
 	case AcActorAuthenticatedSession:
-		return "authenticated web session"
+		return "session cookie credential"
 	case AcActorAuthenticatedBearer:
 		return "authenticated bearer token"
 	case AcActorSystem:
@@ -117,8 +122,8 @@ func capString(s string, n int) string {
 	return strings.ToValidUTF8(s[:n], "")
 }
 
-// createAcAuditEvent appends one row and trims the item's trail to MaxAcAuditPerItem (oldest
-// first). It runs on the caller's transaction (or client) so the row commits with the change.
+// createAcAuditEvent appends one row and, for a refused attempt, trims the item's refusals to
+// MaxAcAuditRefusalsPerItem (oldest first). It runs on the caller's transaction (or client) so the row commits with the change.
 func (r *EntRepository) createAcAuditEvent(ctx context.Context, client *ent.AcAuditEventClient, d AcAuditEventData) error {
 	itemID, err := uuid.Parse(d.ItemID)
 	if err != nil {
@@ -141,16 +146,29 @@ func (r *EntRepository) createAcAuditEvent(ctx context.Context, client *ent.AcAu
 		Save(ctx); err != nil {
 		return fmt.Errorf("record ac audit event: %w", err)
 	}
-	return pruneAcAuditOverflow(ctx, client, itemID)
+	if isAcAuditChangeOutcome(d.Outcome) {
+		return nil
+	}
+	return pruneAcAuditRefusals(ctx, client, itemID)
 }
 
-func pruneAcAuditOverflow(ctx context.Context, client *ent.AcAuditEventClient, itemID uuid.UUID) error {
-	n, err := client.Query().Where(acauditevent.ItemID(itemID)).Count(ctx)
-	if err != nil || n <= MaxAcAuditPerItem {
+// isAcAuditChangeOutcome reports whether an outcome records a real change (kept forever, per item).
+func isAcAuditChangeOutcome(outcome string) bool {
+	return outcome == "applied" || strings.HasPrefix(outcome, "waiver_cleared")
+}
+
+func acAuditRefusalPredicate() predicate.AcAuditEvent {
+	return acauditevent.And(acauditevent.OutcomeNEQ("applied"), acauditevent.Not(acauditevent.OutcomeHasPrefix("waiver_cleared")))
+}
+
+func pruneAcAuditRefusals(ctx context.Context, client *ent.AcAuditEventClient, itemID uuid.UUID) error {
+	where := acauditevent.And(acauditevent.ItemID(itemID), acAuditRefusalPredicate())
+	n, err := client.Query().Where(where).Count(ctx)
+	if err != nil || n <= MaxAcAuditRefusalsPerItem {
 		return err
 	}
-	oldest, err := client.Query().Where(acauditevent.ItemID(itemID)).
-		Order(ent.Asc(acauditevent.FieldCreatedAt)).Limit(n - MaxAcAuditPerItem).IDs(ctx)
+	oldest, err := client.Query().Where(where).
+		Order(ent.Asc(acauditevent.FieldCreatedAt)).Limit(n - MaxAcAuditRefusalsPerItem).IDs(ctx)
 	if err != nil {
 		return err
 	}
@@ -158,10 +176,22 @@ func pruneAcAuditOverflow(ctx context.Context, client *ent.AcAuditEventClient, i
 	return err
 }
 
-// PruneAcAuditOlderThan deletes audit rows older than cutoff (retention for the trail of deleted
-// items, which no per-item write ever trims) and returns how many were removed.
+// PruneAcAuditOlderThan applies age retention and returns how many rows were removed: refused
+// attempts older than cutoff go for every item, but rows recording a real change are removed only
+// once their item no longer exists, so a live item's waiver keeps its provenance.
 func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
-	return r.client.AcAuditEvent.Delete().Where(acauditevent.CreatedAtLT(cutoff)).Exec(ctx)
+	refused, err := r.client.AcAuditEvent.Delete().
+		Where(acauditevent.CreatedAtLT(cutoff), acAuditRefusalPredicate()).Exec(ctx)
+	if err != nil {
+		return refused, err
+	}
+	orphaned, err := r.client.AcAuditEvent.Delete().Where(
+		acauditevent.CreatedAtLT(cutoff),
+		func(s *sql.Selector) {
+			s.Where(sql.NotIn(s.C(acauditevent.FieldItemID), sql.Select(backlogitem.FieldID).From(sql.Table(backlogitem.Table))))
+		},
+	).Exec(ctx)
+	return refused + orphaned, err
 }
 
 // RecordAcAudit appends an audit row for an attempt refused before it reached the criterion

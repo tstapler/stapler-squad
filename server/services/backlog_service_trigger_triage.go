@@ -842,7 +842,11 @@ func (s *BacklogService) TriggerTriage(
 			}
 		}
 		applyTriageResultToUpdate(&result, &update)
-		if _, updateErr := s.storage.UpdateBacklogItem(session.WithAcActor(persistCtx, session.AcActor{Class: session.AcActorSystem, Source: "api"}), itemID, update, nil); updateErr != nil {
+		if updatedItem, updateErr := s.storage.UpdateBacklogItem(session.WithAcActor(persistCtx, session.AcActor{Class: session.AcActorSystem, Source: "system"}), itemID, update, nil); updateErr == nil {
+			if updatedItem != nil && len(updatedItem.ClearedAcWaivers) > 0 {
+				log.Warn("re-triage dropped acceptance-criterion waivers whose text changed or disappeared", "item", itemID, "count", len(updatedItem.ClearedAcWaivers))
+			}
+		} else if updateErr != nil {
 			log.Error("[TriggerTriage] update plan_artifacts_path failed", "item", itemID, "error", updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
