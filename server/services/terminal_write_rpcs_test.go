@@ -52,7 +52,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"DeleteTransitionGate", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
 		"GetBacklogItemShipStatus", "GetLivenessDefinition", "GetPendingGates", "GetPipelineMode",
 		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate", "GetWorkflowEngineStatus",
-		"ImportGitHubIssue", "ListBacklogItemDependencies", "ListBacklogItems", "ListForeignClaims", "ListGitHubIssues", "ListItemSources",
+		"ImportGitHubIssue", "ListAcAuditEvents", "ListBacklogItemDependencies", "ListBacklogItems", "ListForeignClaims", "ListGitHubIssues", "ListItemSources",
 		"ListLivenessDefinitions", "ListPipelineModes", "ListStages", "ListStageTransitions",
 		"ListStuckBacklogItems", "ListTransitionGates", "OverrideClaimBlock", "OverrideVerdict",
 		"ParseBacklogItemIntent", "PreviewBackwardSyncImpact", "RecordClaimOverride", "RecordGateApproval",
