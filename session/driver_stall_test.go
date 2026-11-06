@@ -274,7 +274,9 @@ func TestInteractiveStall_DeadPaneStillFailsThroughRetryPolicy(t *testing.T) {
 	policy := retryEverything()
 	policy.RetryOn = []string{"crashed"}
 
-	_, ret := f.tick(policy, stallTestNow.Add(driverInactivityTimeout+time.Minute))
+	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
+	f.tick(policy, later)
+	_, ret := f.tick(policy, later)
 
 	if !ret || f.inst.Snapshot().Status != PermanentlyFailed {
 		t.Fatal("dead pane must still be marked permanently failed")
@@ -329,5 +331,95 @@ func TestResolveRetryPolicy_InteractiveStallTimeout(t *testing.T) {
 	override := &config.RetryPolicyConfig{InteractiveStallMinutes: 5}
 	if got := resolveRetryPolicy(global, override).InteractiveStallTimeout; got != 5*time.Minute {
 		t.Fatalf("override = %v, want 5m", got)
+	}
+}
+
+// One failed liveness probe is not a failure; two consecutive ones are, and an
+// alive probe in between resets the count.
+func TestInteractiveStall_TransientDeadProbeDoesNotFail(t *testing.T) {
+	t.Parallel()
+	f := newStallFixture(t, stallScenario{status: detection.StatusUnknown, paneDead: true})
+	policy := retryEverything()
+	policy.RetryOn = []string{"crashed"}
+	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
+	pm := f.inst.processManager.(*livenessPM)
+
+	f.tick(policy, later) // dead probe 1
+	pm.alive = true
+	f.tick(policy, later) // alive: resets
+	pm.alive = false
+	_, ret := f.tick(policy, later) // dead probe 1 again
+	if ret || f.inst.Snapshot().Status == PermanentlyFailed {
+		t.Fatal("non-consecutive dead probes must not fail the session")
+	}
+	if _, ret = f.tick(policy, later); !ret {
+		t.Fatal("two consecutive dead probes must fail the session")
+	}
+}
+
+// Operator-wait status flapping resets the stall budget and must not re-fire
+// the flag; only new output re-arms it.
+func TestInteractiveStall_StatusFlappingDoesNotRefireFlag(t *testing.T) {
+	t.Parallel()
+	f := newStallFixture(t, stallScenario{status: detection.StatusExecuting})
+	policy := retryEverything()
+	source, ok := f.inst.GetStatusManager().piSources.Load(f.inst.Title)
+	if !ok {
+		t.Fatal("fixture has no status source")
+	}
+	set := func(s detection.DetectedStatus) { source.status.Store(int32(s)) }
+	now := stallTestNow.Add(4 * time.Hour)
+
+	f.tick(policy, now)
+	for i := 1; i <= 6; i++ {
+		set(detection.StatusIdle) // operator wait: budget resets
+		f.tick(policy, now.Add(time.Duration(i)*time.Minute))
+		set(detection.StatusExecuting)
+		f.tick(policy, now.Add(time.Duration(i)*time.Minute+interactiveStallBudget(policy)*workingStallMultiplier+time.Minute))
+	}
+	if sessions, _ := f.notifier.counts(); sessions != 1 {
+		t.Fatalf("flapping status re-fired the flag %d times", sessions)
+	}
+}
+
+func TestInteractiveStall_HiddenSessionIsNotFlagged(t *testing.T) {
+	t.Parallel()
+	f := newStallFixture(t, stallScenario{status: detection.StatusUnknown})
+	f.inst.Hidden = true
+	f.inst.SetLastMeaningfulOutput(stallTestNow) // republish snapshot with Hidden
+	f.tick(retryEverything(), stallTestNow.Add(3*time.Hour))
+	if sessions, _ := f.notifier.counts(); sessions != 0 {
+		t.Fatal("hidden session must not be flagged")
+	}
+}
+
+// The interactive driver must outlive its longest stall budget, or the quiet
+// flag can never fire (the 25m safety-net deadline once ended it first).
+func TestDriverTotalDeadline_InteractiveOutlivesStallBudget(t *testing.T) {
+	t.Parallel()
+	start := stallTestNow
+	budget := interactiveStallBudget(RetryPolicy{}) * workingStallMultiplier
+	if d := driverTotalDeadline(&Instance{Title: "interactive"}, start); !d.IsZero() && d.Sub(start) <= budget {
+		t.Fatalf("interactive deadline %v must be unbounded or exceed the stall budget %v", d.Sub(start), budget)
+	}
+	if got := driverTotalDeadline(&Instance{Title: "backlog", Tags: []string{TagBacklogWork}}, start); got != start.Add(driverTotalTimeout) {
+		t.Fatalf("autonomous deadline = %v, want the %v safety net", got.Sub(start), driverTotalTimeout)
+	}
+}
+
+// Through the real gate: with an interactive deadline an already-elapsed
+// wall-clock budget does not end the driver; an autonomous one does.
+func TestDriverTickGate_InteractiveIgnoresElapsedDeadline(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "gate", Status: Active}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	stop := make(chan struct{})
+	if _, _, exit := driverTickGate(inst, stop, ticker, driverTotalDeadline(inst, time.Now().Add(-2*driverTotalTimeout))); exit {
+		t.Fatal("interactive driver exited on the total deadline")
+	}
+	inst.Tags = []string{TagBacklogWork}
+	if _, _, exit := driverTickGate(inst, stop, ticker, driverTotalDeadline(inst, time.Now().Add(-2*driverTotalTimeout))); !exit {
+		t.Fatal("autonomous driver must still stop at the total deadline")
 	}
 }

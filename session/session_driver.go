@@ -109,9 +109,12 @@ type driverAttempt struct {
 	sentInitial         bool
 	initialPromptSentAt time.Time
 	nudgeSentAt         time.Time
-	// stallFlagged edge-triggers the interactive "quiet session" flag: set when
-	// raised, cleared once the session produces output or waits on the operator.
-	stallFlagged bool
+	// flaggedOutputAt is the last-output time when the interactive "quiet
+	// session" flag was raised; non-zero means flagged. It re-arms only when
+	// output advances past it, so status flapping cannot re-fire the flag.
+	flaggedOutputAt time.Time
+	// deadProbes counts consecutive dead-pane probes of an interactive session.
+	deadProbes int
 }
 
 func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
@@ -413,7 +416,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 	timing := currentDriverTiming()
 	readyDeadline := time.Now().Add(timing.readyTimeout)
-	totalDeadline := time.Now().Add(driverTotalTimeout)
+	totalDeadline := driverTotalDeadline(inst, time.Now())
 
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
@@ -557,7 +560,7 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	case <-ticker.C:
 	}
 
-	if time.Now().After(totalDeadline) {
+	if !totalDeadline.IsZero() && time.Now().After(totalDeadline) {
 		return 0, 0, true
 	}
 
@@ -912,7 +915,6 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 		// Human response time is not agent inactivity; resumed work gets a fresh budget.
 		attempt.startedAt = now
 		attempt.nudgeSentAt = time.Time{}
-		attempt.stallFlagged = false
 		return false, false
 	}
 	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
@@ -934,8 +936,7 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 		graceTimeout = driverBacklogNudgeGrace
 	}
 	if idle > graceTimeout {
-		e := gatherStallEvidence(inst, true, idle, graceTimeout)
-		logStallDecision(inst, e, decideStall(e), policy, now)
+		logStallDecision(inst, gatherStallEvidence(inst, idle, graceTimeout), stallRestart, policy, now)
 		log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
 			"session", inst.Title,
 			"inactivity", idle.Round(time.Second),
@@ -951,23 +952,32 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 // killed and failed this way). A dead pane still takes the failure path; a
 // live one is flagged once per quiet episode.
 func handleInteractiveInactivity(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, idle time.Duration, now time.Time) (shouldContinue, shouldReturn bool) {
+	if out := inst.LastMeaningfulOutputTime(); out.After(attempt.flaggedOutputAt) {
+		attempt.flaggedOutputAt = time.Time{}
+	}
 	if idle <= driverInactivityTimeout {
-		attempt.stallFlagged = false
+		attempt.deadProbes = 0
 		return false, false
 	}
-	e := gatherStallEvidence(inst, false, idle, interactiveStallBudget(policy))
-	switch v := decideStall(e); v {
+	e := gatherStallEvidence(inst, idle, interactiveStallBudget(policy))
+	v := decideStall(e)
+	if v != stallPaneDead {
+		attempt.deadProbes = 0
+	}
+	switch v {
 	case stallPaneDead:
-		logStallDecision(inst, e, v, policy, now)
-		return handleDriverFailure(inst, allowedPath, policy, classifyFailureReason(inst), stop)
-	case stallNeedsAttention:
-		if !attempt.stallFlagged {
-			attempt.stallFlagged = true
-			logStallDecision(inst, e, v, policy, now)
-			flagInteractiveStall(inst, e)
+		// One failed probe can be transient; fail only on a second in a row.
+		attempt.deadProbes++
+		if attempt.deadProbes < 2 {
+			return false, false
 		}
-	default:
-		attempt.stallFlagged = false
+		logStallDecision(inst, e, v, policy, now)
+		return handleDriverFailure(inst, allowedPath, policy, "tmux_exited", stop)
+	case stallNeedsAttention:
+		if attempt.flaggedOutputAt.IsZero() && flagInteractiveStall(inst, e) {
+			attempt.flaggedOutputAt = inst.LastMeaningfulOutputTime()
+			logStallDecision(inst, e, v, policy, now)
+		}
 	}
 	return false, false
 }

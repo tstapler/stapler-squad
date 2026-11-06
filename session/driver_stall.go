@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
@@ -101,15 +102,15 @@ func interactiveStallBudget(policy RetryPolicy) time.Duration {
 	if policy.InteractiveStallTimeout > 0 {
 		return policy.InteractiveStallTimeout
 	}
-	return 30 * time.Minute
+	return config.RetryPolicyConfig{}.InteractiveStallTimeoutOrDefault()
 }
 
 // gatherStallEvidence reads the live signals. Only call once idle has passed
 // the cheapest threshold: PaneAlive costs a fresh tmux liveness check.
-func gatherStallEvidence(inst *Instance, autonomous bool, idle, budget time.Duration) stallEvidence {
+func gatherStallEvidence(inst *Instance, idle, budget time.Duration) stallEvidence {
 	status, controllerActive := inst.GetDetectedStatusInfo()
 	return stallEvidence{
-		Autonomous:       autonomous,
+		Autonomous:       isAutonomousSession(inst),
 		Status:           status,
 		ControllerActive: controllerActive,
 		PaneAlive:        inst.pm().HasLiveSessionNoCache(),
@@ -140,9 +141,11 @@ func logStallDecision(inst *Instance, e stallEvidence, v stallVerdict, policy Re
 // flagInteractiveStall surfaces a quiet interactive session without touching
 // its state: a ReasonStale review-queue entry plus a warning notification.
 // The caller edge-triggers it once per quiet episode.
-func flagInteractiveStall(inst *Instance, e stallEvidence) {
-	if inst.IsArchived() {
-		return
+// It reports whether a flag was raised: archived and hidden sessions are never
+// flagged (hidden ones mirror the review-queue determiner's stale suppression).
+func flagInteractiveStall(inst *Instance, e stallEvidence) bool {
+	if inst.IsArchived() || inst.Snapshot().Hidden {
+		return false
 	}
 	reason := fmt.Sprintf("stalled: no output for %s (detected status %s)", e.Idle.Round(time.Minute), e.Status)
 	markSessionNeedsAttention(inst, reason)
@@ -154,4 +157,16 @@ func flagInteractiveStall(inst *Instance, e stallEvidence) {
 			false, false,
 		)
 	}
+	return true
+}
+
+// driverTotalDeadline bounds a driver run. Only autonomous sessions get the
+// safety-net deadline: an interactive driver must outlive its stall budget
+// (30m, 60m while working) or the quiet flag could never fire. Interactive
+// drivers still end on stop, destroy, or pause. Zero means unbounded.
+func driverTotalDeadline(inst *Instance, start time.Time) time.Time {
+	if isAutonomousSession(inst) {
+		return start.Add(driverTotalTimeout)
+	}
+	return time.Time{}
 }
