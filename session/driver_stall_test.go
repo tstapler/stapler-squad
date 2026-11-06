@@ -143,8 +143,8 @@ func TestInteractiveStall_ControllerlessLivePaneIsNotFailed(t *testing.T) {
 	if got := f.inst.Snapshot().Status; got == PermanentlyFailed {
 		t.Fatal("controllerless live pane was marked permanently failed")
 	}
-	if sessions, failures := f.notifier.counts(); sessions != 1 || failures != 0 {
-		t.Fatalf("want one quiet-session warning and no gave-up notification, got %d/%d", sessions, failures)
+	if _, failures := f.notifier.counts(); f.attempt.stallFlags != 1 || failures != 0 {
+		t.Fatalf("want one quiet note and no gave-up notification, got %d/%d", f.attempt.stallFlags, failures)
 	}
 }
 
@@ -218,8 +218,8 @@ func TestInteractiveStall_FlagIsEdgeTriggeredAndRearmsOnOutput(t *testing.T) {
 	f.tick(policy, start)
 	f.tick(policy, start.Add(driverPollInterval))
 	f.tick(policy, start.Add(2*driverPollInterval))
-	if sessions, _ := f.notifier.counts(); sessions != 1 {
-		t.Fatalf("quiet flag must fire once per episode, fired %d times", sessions)
+	if f.attempt.stallFlags != 1 {
+		t.Fatalf("quiet flag must fire once per episode, fired %d times", f.attempt.stallFlags)
 	}
 
 	// Output resumes (still past the driver timeout, inside the budget), then
@@ -227,8 +227,8 @@ func TestInteractiveStall_FlagIsEdgeTriggeredAndRearmsOnOutput(t *testing.T) {
 	f.inst.SetLastMeaningfulOutput(start.Add(-driverInactivityTimeout - time.Minute))
 	f.tick(policy, start)
 	f.tick(policy, start.Add(2*interactiveStallBudget(policy)+time.Minute))
-	if sessions, _ := f.notifier.counts(); sessions != 2 {
-		t.Fatalf("a fresh quiet episode must re-flag, total notifications %d", sessions)
+	if f.attempt.stallFlags != 2 {
+		t.Fatalf("a fresh quiet episode must re-flag, total notes %d", f.attempt.stallFlags)
 	}
 }
 
@@ -239,13 +239,13 @@ func TestInteractiveStall_WorkingStatusGetsLongerBudget(t *testing.T) {
 
 	working := newStallFixture(t, stallScenario{status: detection.StatusExecuting})
 	working.tick(policy, pastBudget)
-	if sessions, _ := working.notifier.counts(); sessions != 0 {
+	if working.attempt.stallFlags != 0 {
 		t.Fatal("a working pane must not be flagged at the base budget")
 	}
 
 	unknown := newStallFixture(t, stallScenario{status: detection.StatusUnknown})
 	unknown.tick(policy, pastBudget)
-	if sessions, _ := unknown.notifier.counts(); sessions != 1 {
+	if unknown.attempt.stallFlags != 1 {
 		t.Fatal("a non-working quiet pane must be flagged at the base budget")
 	}
 }
@@ -256,11 +256,11 @@ func TestInteractiveStall_ConfiguredBudgetIsHonored(t *testing.T) {
 	policy.InteractiveStallTimeout = 12 * time.Minute
 	f := newStallFixture(t, stallScenario{status: detection.StatusUnknown})
 	f.tick(policy, stallTestNow.Add(11*time.Minute))
-	if sessions, _ := f.notifier.counts(); sessions != 0 {
+	if f.attempt.stallFlags != 0 {
 		t.Fatal("flagged before the configured budget")
 	}
 	f.tick(policy, stallTestNow.Add(12*time.Minute+time.Second))
-	if sessions, _ := f.notifier.counts(); sessions != 1 {
+	if f.attempt.stallFlags != 1 {
 		t.Fatal("not flagged after the configured budget")
 	}
 }
@@ -276,7 +276,10 @@ func TestInteractiveStall_DeadPaneStillFailsThroughRetryPolicy(t *testing.T) {
 
 	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
 	f.tick(policy, later)
-	_, ret := f.tick(policy, later)
+	if f.inst.Snapshot().Status == PermanentlyFailed {
+		t.Fatal("failed on the first dead probe")
+	}
+	_, ret := f.tick(policy, later.Add(deadPaneConfirmWindow))
 
 	if !ret || f.inst.Snapshot().Status != PermanentlyFailed {
 		t.Fatal("dead pane must still be marked permanently failed")
@@ -312,7 +315,7 @@ func TestInteractiveStall_OperatorWaitStillExempt(t *testing.T) {
 	for _, status := range []detection.DetectedStatus{detection.StatusIdle, detection.StatusSuccess, detection.StatusNeedsApproval} {
 		f := newStallFixture(t, stallScenario{status: status})
 		f.tick(retryEverything(), stallTestNow.Add(24*time.Hour))
-		if sessions, _ := f.notifier.counts(); sessions != 0 {
+		if f.attempt.stallFlags != 0 {
 			t.Fatalf("status %v waiting on the operator was flagged as quiet", status)
 		}
 	}
@@ -344,16 +347,16 @@ func TestInteractiveStall_TransientDeadProbeDoesNotFail(t *testing.T) {
 	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
 	pm := f.inst.processManager.(*livenessPM)
 
-	f.tick(policy, later) // dead probe 1
+	f.tick(policy, later) // dead since `later`
 	pm.alive = true
-	f.tick(policy, later) // alive: resets
+	f.tick(policy, later.Add(deadPaneConfirmWindow-time.Second)) // alive: resets the window
 	pm.alive = false
-	_, ret := f.tick(policy, later) // dead probe 1 again
-	if ret || f.inst.Snapshot().Status == PermanentlyFailed {
-		t.Fatal("non-consecutive dead probes must not fail the session")
+	f.tick(policy, later.Add(deadPaneConfirmWindow)) // dead again, window restarts here
+	if _, ret := f.tick(policy, later.Add(deadPaneConfirmWindow+time.Second)); ret || f.inst.Snapshot().Status == PermanentlyFailed {
+		t.Fatal("dead probes separated by an alive probe must not fail the session")
 	}
-	if _, ret = f.tick(policy, later); !ret {
-		t.Fatal("two consecutive dead probes must fail the session")
+	if _, ret := f.tick(policy, later.Add(2*deadPaneConfirmWindow)); !ret {
+		t.Fatal("a pane dead for the whole confirm window must fail the session")
 	}
 }
 
@@ -377,19 +380,8 @@ func TestInteractiveStall_StatusFlappingDoesNotRefireFlag(t *testing.T) {
 		set(detection.StatusExecuting)
 		f.tick(policy, now.Add(time.Duration(i)*time.Minute+interactiveStallBudget(policy)*workingStallMultiplier+time.Minute))
 	}
-	if sessions, _ := f.notifier.counts(); sessions != 1 {
-		t.Fatalf("flapping status re-fired the flag %d times", sessions)
-	}
-}
-
-func TestInteractiveStall_HiddenSessionIsNotFlagged(t *testing.T) {
-	t.Parallel()
-	f := newStallFixture(t, stallScenario{status: detection.StatusUnknown})
-	f.inst.Hidden = true
-	f.inst.SetLastMeaningfulOutput(stallTestNow) // republish snapshot with Hidden
-	f.tick(retryEverything(), stallTestNow.Add(3*time.Hour))
-	if sessions, _ := f.notifier.counts(); sessions != 0 {
-		t.Fatal("hidden session must not be flagged")
+	if f.attempt.stallFlags != 1 {
+		t.Fatalf("flapping status re-fired the flag %d times", f.attempt.stallFlags)
 	}
 }
 

@@ -251,9 +251,10 @@ type RetryPolicyConfig struct {
 	// opt in ahead of that integration landing without a later schema change.
 	StaleTriggersRetry *bool `json:"stale_triggers_retry,omitempty"`
 	// InteractiveStallMinutes is how long an interactive (non-backlog) session
-	// with a live pane may produce no meaningful output before it is flagged
-	// "stalled, needs attention". Interactive stalls never restart the pane or
-	// mark the session PermanentlyFailed. Default: 30.
+	// with a live pane may produce no meaningful output before the driver logs
+	// a "stall decision" for it. Interactive stalls never restart the pane or
+	// mark the session PermanentlyFailed; operator-facing alerts come from the
+	// review queue's stale badge and StaleSessionNotifier. Default: 30.
 	InteractiveStallMinutes int `json:"interactive_stall_minutes,omitempty"`
 }
 

@@ -86,7 +86,7 @@ type RetryPolicy struct {
 	MaxDelay     time.Duration
 	// InteractiveStallTimeout is the quiet period after which an interactive
 	// session is flagged for attention (never restarted). Zero means the driver
-	// default (see stallBudget).
+	// default (see interactiveStallBudget).
 	InteractiveStallTimeout time.Duration
 }
 

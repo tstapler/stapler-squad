@@ -1,7 +1,6 @@
 package session
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -138,35 +137,42 @@ func logStallDecision(inst *Instance, e stallEvidence, v stallVerdict, policy Re
 	)
 }
 
-// flagInteractiveStall surfaces a quiet interactive session without touching
-// its state: a ReasonStale review-queue entry plus a warning notification.
-// The caller edge-triggers it once per quiet episode.
-// It reports whether a flag was raised: archived and hidden sessions are never
-// flagged (hidden ones mirror the review-queue determiner's stale suppression).
-func flagInteractiveStall(inst *Instance, e stallEvidence) bool {
-	if inst.IsArchived() || inst.Snapshot().Hidden {
+// noteInteractiveStall logs a quiet interactive session once per quiet episode.
+// It deliberately raises no review-queue entry or notification: the review
+// queue's ReasonStale badge (acknowledgement-aware) and StaleSessionNotifier
+// already surface quiet active sessions and clear when output resumes, so a
+// third path here would duplicate them and ignore acknowledgement.
+func noteInteractiveStall(inst *Instance, e stallEvidence, policy RetryPolicy, now time.Time) {
+	logStallDecision(inst, e, stallNeedsAttention, policy, now)
+}
+
+// deadPaneConfirmWindow is how long an interactive pane must probe dead,
+// without an alive probe in between, before the session is failed.
+const deadPaneConfirmWindow = 30 * time.Second
+
+// interactiveDriverShouldEnd reports lifecycle states in which an interactive
+// driver has nothing left to watch. Ending lets a later start (e.g. after a
+// resume) launch a fresh driver instead of no-opping on a stale one.
+func interactiveDriverShouldEnd(inst *Instance) bool {
+	if inst.IsArchived() {
+		return true
+	}
+	switch inst.Snapshot().Status {
+	case Hibernated, Crashed:
+		return true
+	default:
 		return false
 	}
-	reason := fmt.Sprintf("stalled: no output for %s (detected status %s)", e.Idle.Round(time.Minute), e.Status)
-	markSessionNeedsAttention(inst, reason)
-	if n := inst.GetNotifier(); n != nil {
-		n.NotifySession(inst.UUID,
-			"Session is quiet",
-			fmt.Sprintf("%s has produced no output for %s (detected status %s). It was left running; check on it or dismiss.", inst.Title, e.Idle.Round(time.Minute), e.Status),
-			notificationTypeWarning,
-			false, false,
-		)
-	}
-	return true
 }
 
 // driverTotalDeadline bounds a driver run. Only autonomous sessions get the
 // safety-net deadline: an interactive driver must outlive its stall budget
 // (30m, 60m while working) or the quiet flag could never fire. Interactive
-// drivers still end on stop, destroy, or pause. Zero means unbounded.
+// drivers still end on stop, destroy, pause, archive, hibernate or crash (see
+// interactiveDriverShouldEnd). Zero means unbounded.
 func driverTotalDeadline(inst *Instance, start time.Time) time.Time {
 	if isAutonomousSession(inst) {
-		return start.Add(driverTotalTimeout)
+		return start.Add(currentDriverTiming().total())
 	}
 	return time.Time{}
 }

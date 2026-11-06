@@ -67,7 +67,7 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 			inst.processManager = &livenessPM{alive: false} // interactive: only a dead pane fails
 			late := now.Add(driverInactivityTimeout + time.Second)
 			handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late) // first dead probe
-			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late)
+			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late.Add(deadPaneConfirmWindow))
 			if !ret {
 				t.Fatal("genuine inactivity after resuming must still fail")
 			}
@@ -139,10 +139,12 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 			inst.SetLastMeaningfulOutput(tc.outputAt)
 			attempt := newDriverAttempt(inst, "task", tc.startedAt)
 			attempt.nudgeSentAt = tc.nudgeAt
-			if !tc.backlog { // interactive failure needs two consecutive dead-pane probes
+			tickAt := now
+			if !tc.backlog { // interactive failure needs the pane dead across the confirm window
 				handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+				tickAt = now.Add(deadPaneConfirmWindow)
 			}
-			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, tickAt)
 			if cont || ret != (tc.wantEscalation || tc.archived) {
 				t.Errorf("loop signal=(%v,%v), want (false,%v)", cont, ret, tc.wantEscalation || tc.archived)
 			}

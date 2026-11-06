@@ -43,6 +43,15 @@ var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
 // driverTiming is the pair of driver timings tests need to shrink.
 type driverTiming struct {
 	pollInterval, readyTimeout time.Duration
+	// totalTimeout overrides driverTotalTimeout; zero means the default.
+	totalTimeout time.Duration
+}
+
+func (t driverTiming) total() time.Duration {
+	if t.totalTimeout > 0 {
+		return t.totalTimeout
+	}
+	return driverTotalTimeout
 }
 
 // testDriverTiming overrides the production timings; nil means defaults. It is
@@ -109,12 +118,15 @@ type driverAttempt struct {
 	sentInitial         bool
 	initialPromptSentAt time.Time
 	nudgeSentAt         time.Time
-	// flaggedOutputAt is the last-output time when the interactive "quiet
-	// session" flag was raised; non-zero means flagged. It re-arms only when
-	// output advances past it, so status flapping cannot re-fire the flag.
+	// flaggedOutputAt is the last-output time when the interactive quiet note
+	// was raised; non-zero means raised. It re-arms only when output advances
+	// past it, so status flapping cannot re-fire it. Per driver run: a driver
+	// restart may note the same quiet episode once more (log-only, harmless).
 	flaggedOutputAt time.Time
-	// deadProbes counts consecutive dead-pane probes of an interactive session.
-	deadProbes int
+	stallFlags      int // how many quiet notes this run raised
+	// deadSince is when the pane was first probed dead in the current unbroken
+	// run of dead probes; zero when the last probe found it alive.
+	deadSince time.Time
 }
 
 func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
@@ -416,7 +428,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 	timing := currentDriverTiming()
 	readyDeadline := time.Now().Add(timing.readyTimeout)
-	totalDeadline := driverTotalDeadline(inst, time.Now())
+	runStart := time.Now()
+	totalDeadline := driverTotalDeadline(inst, runStart)
+	dialogDeadline := runStart.Add(timing.total())
 
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
@@ -509,7 +523,10 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			tailed = tailContent(output, statusDetectionTailBytes)
 		}
 
-		if hasOutput && isStartupDialog(tailed) {
+		// Auto-answering dialogs is scoped to the first driverTotalTimeout for
+		// interactive sessions: later on an operator may be at the keyboard.
+		dialogsOpen := isAutonomousSession(inst) || time.Now().Before(dialogDeadline)
+		if dialogsOpen && hasOutput && isStartupDialog(tailed) {
 			if handleStartupDialogTick(inst, tailed, &startupLatch, sendAnswerKey) {
 				continue
 			}
@@ -536,7 +553,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// After the initial prompt is sent, watch for NeedsApproval to handle
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
-		handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
+		if dialogsOpen {
+			handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
+		}
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
 		prURLLinked = scanAndLinkPRURL(inst, attempt.sentInitial, prURLLinked, previewErr, output)
@@ -572,6 +591,10 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
 	// or session happens to be using that env var's value next.
 	if inst.destroyed.Load() {
+		return 0, 0, true
+	}
+
+	if !isAutonomousSession(inst) && interactiveDriverShouldEnd(inst) {
 		return 0, 0, true
 	}
 
@@ -708,7 +731,7 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowed
 // tick — restoring Ready-detection, the inactivity-timeout escalation, and
 // the NeedsApproval check for ticks after the dialog has been answered or
 // abandoned. Without this, a dialogGaveUp session would silently wedge here
-// until driverTotalTimeout (25 min) with zero operator escalation.
+// until the driver ends (or its stall flag fires) with no operator escalation.
 //
 // Exhaustive switch (not a plain if) so a future 4th dialogLatchStatus value
 // can't silently fall through the implicit "unanswered" path and reintroduce
@@ -952,31 +975,36 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 // killed and failed this way). A dead pane still takes the failure path; a
 // live one is flagged once per quiet episode.
 func handleInteractiveInactivity(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, idle time.Duration, now time.Time) (shouldContinue, shouldReturn bool) {
-	if out := inst.LastMeaningfulOutputTime(); out.After(attempt.flaggedOutputAt) {
+	out := inst.LastMeaningfulOutputTime()
+	if out.After(attempt.flaggedOutputAt) {
 		attempt.flaggedOutputAt = time.Time{}
 	}
 	if idle <= driverInactivityTimeout {
-		attempt.deadProbes = 0
+		attempt.deadSince = time.Time{}
 		return false, false
 	}
 	e := gatherStallEvidence(inst, idle, interactiveStallBudget(policy))
 	v := decideStall(e)
 	if v != stallPaneDead {
-		attempt.deadProbes = 0
+		attempt.deadSince = time.Time{}
 	}
 	switch v {
 	case stallPaneDead:
-		// One failed probe can be transient; fail only on a second in a row.
-		attempt.deadProbes++
-		if attempt.deadProbes < 2 {
+		// A single failed probe can be transient (and the probe cannot tell an
+		// error from "dead"), so fail only once probes have been dead for a while.
+		if attempt.deadSince.IsZero() {
+			attempt.deadSince = now
+		}
+		if now.Sub(attempt.deadSince) < deadPaneConfirmWindow {
 			return false, false
 		}
 		logStallDecision(inst, e, v, policy, now)
 		return handleDriverFailure(inst, allowedPath, policy, "tmux_exited", stop)
 	case stallNeedsAttention:
-		if attempt.flaggedOutputAt.IsZero() && flagInteractiveStall(inst, e) {
-			attempt.flaggedOutputAt = inst.LastMeaningfulOutputTime()
-			logStallDecision(inst, e, v, policy, now)
+		if attempt.flaggedOutputAt.IsZero() {
+			attempt.flaggedOutputAt = out
+			attempt.stallFlags++
+			noteInteractiveStall(inst, e, policy, now)
 		}
 	}
 	return false, false
@@ -1258,7 +1286,7 @@ func markSessionNeedsAttention(inst *Instance, reason string) {
 		DetectedAt:   time.Now(),
 		Context:      reason, // "inactivity timeout" or "unexpected exit" or "restart error: ..."
 		Tags:         inst.GetTags(),
-		Path:         inst.Path,
+		Path:         inst.GetPath(),
 		Status:       inst.GetEffectiveStatus().String(),
 		LastActivity: inst.LastMeaningfulOutputTime(),
 	})
