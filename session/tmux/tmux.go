@@ -503,6 +503,18 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	return sessions, nil
 }
 
+// FormatSep separates fields in tmux -F formats whose output we parse. Never use a
+// tab: tmux 3.8 prints it as "_" when no UTF-8 locale is set (the launchd service has
+// none), silently fusing fields. '|' is printable ASCII and cannot occur in a session
+// name (see nonSafeTmuxNameChar), so splitting on it is unambiguous.
+const FormatSep = "|"
+
+// UTF8Env returns env with a UTF-8 LC_ALL appended so tmux does not mangle
+// non-ASCII/control characters in its output when the process has no locale.
+func UTF8Env(env []string) []string {
+	return append(env, "LC_ALL=en_US.UTF-8")
+}
+
 // PaneDeadStatus reports whether a pane's wrapped program has exited
 // (remain-on-exit placeholder), and its exit code/signal when it has.
 type PaneDeadStatus struct {
@@ -520,7 +532,7 @@ type PaneDeadStatus struct {
 // Returns ErrServerDown when the tmux server is not running.
 func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error) {
 	args := prependSocket(serverSocket, []string{"list-panes", "-a", "-F",
-		"#{session_name}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}"})
+		"#{session_name}" + FormatSep + "#{pane_dead}" + FormatSep + "#{pane_dead_status}" + FormatSep + "#{pane_dead_signal}"})
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
 	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
@@ -542,7 +554,7 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 4)
+		fields := strings.SplitN(line, FormatSep, 4)
 		if len(fields) != 4 {
 			continue
 		}
@@ -3000,7 +3012,7 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 		ctx, cancel := cmCtx()
 		defer cancel()
 		body, cmErr := t.sendCMCommand(ctx,
-			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_dead_status}\t#{pane_dead_signal}'")
+			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_dead_status}"+FormatSep+"#{pane_dead_signal}'")
 		if cmErr == nil {
 			if parsedCode, parsedSignal, parsedOK := parseExitStatus(body); parsedOK {
 				return parsedCode, parsedSignal, true
@@ -3010,7 +3022,7 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 		}
 	}
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
-		"#{pane_dead_status}\t#{pane_dead_signal}")
+		"#{pane_dead_status}"+FormatSep+"#{pane_dead_signal}")
 	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
@@ -3020,11 +3032,11 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 	return parseExitStatus(string(output))
 }
 
-// parseExitStatus parses the "<status>\t<signal>" body produced by
-// `display-message -p '#{pane_dead_status}\t#{pane_dead_signal}'`, whether it
+// parseExitStatus parses the "<status>|<signal>" body produced by
+// `display-message -p '#{pane_dead_status}|#{pane_dead_signal}'`, whether it
 // arrived via a CM command reply or raw subprocess output.
 func parseExitStatus(raw string) (code int, signal string, ok bool) {
-	parts := strings.SplitN(strings.TrimRight(raw, "\n"), "\t", 2)
+	parts := strings.SplitN(strings.TrimRight(raw, "\n"), FormatSep, 2)
 	statusStr := strings.TrimSpace(parts[0])
 	if statusStr == "" {
 		// Empty means the pane is still alive (or the format variables aren't

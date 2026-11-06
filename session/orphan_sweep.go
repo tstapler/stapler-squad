@@ -1,7 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -50,10 +55,100 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) 
 	// enumerate-and-kill sessions belonging to some other, currently-running
 	// stapler-squad process on the same machine. See tmux.ResolveSocket's doc
 	// comment for the incident history this closes.
-	socketArgs := tmux.ResolveSocket("").Args
+	socket := tmux.ResolveSocket("")
+	socketArgs := socket.Args
+	exec := func(ctx context.Context, args ...string) ([]byte, string, error) {
+		cmd := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs(args...)...)
+		cmd.Env = tmux.UTF8Env(os.Environ())
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return stdout.Bytes(), stderr.String(), err
+	}
+	run := newControlModeFirstRunner(controlModeSessionsOn(instances, socket.String()), exec)
+	reconcileOrphanedTmuxSessions(instances, minAge, run, time.Now)
+}
 
+// controlModeSessionsOn returns the live tmux sessions whose control-mode client is
+// attached to the server on socket, so the sweep can reuse them instead of forking.
+func controlModeSessionsOn(instances []*Instance, socket string) []*tmux.TmuxSession {
+	var out []*tmux.TmuxSession
+	for _, inst := range instances {
+		if ts := inst.GetTmuxSession(); ts != nil && ts.ServerSocket() == socket {
+			out = append(out, ts)
+		}
+	}
+	return out
+}
+
+// controlModeCommander is the slice of *tmux.TmuxSession the sweep needs.
+type controlModeCommander interface {
+	ServerCommand(ctx context.Context, args ...string) (string, error)
+}
+
+// newControlModeFirstRunner routes each tmux command over the first control-mode
+// client that accepts it and falls back to fallback (a subprocess) only when none is
+// available. A command that reached tmux and failed is returned as-is (never retried
+// through the fallback), so a failure stays fail-closed.
+func newControlModeFirstRunner[C controlModeCommander](clients []C, fallback tmuxRunFunc) tmuxRunFunc {
+	return func(ctx context.Context, args ...string) ([]byte, string, error) {
+		cmArgs, quoteErr := quoteControlModeArgs(args)
+		if quoteErr != nil {
+			return nil, "", quoteErr
+		}
+		for _, c := range clients {
+			body, err := c.ServerCommand(ctx, cmArgs...)
+			if errors.Is(err, tmux.ErrControlModeNotRunning) || errors.Is(err, tmux.ErrControlModeStopped) {
+				continue
+			}
+			if err != nil {
+				// Control mode reports tmux's error text as the error; surface it as stderr.
+				return nil, err.Error(), err
+			}
+			return []byte(body), "", nil
+		}
+		return fallback(ctx, args...)
+	}
+}
+
+var plainCMArgRe = regexp.MustCompile(`^[A-Za-z0-9_=.-]+$`)
+
+// quoteControlModeArgs single-quotes args for a control-mode command line, which
+// tmux re-parses (unlike exec argv): '#', ';' and spaces would otherwise be
+// comments, command separators or word breaks. An arg containing a single quote is
+// refused rather than escaped, keeping the sweep fail-closed.
+func quoteControlModeArgs(args []string) ([]string, error) {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch {
+		case plainCMArgRe.MatchString(a):
+			out[i] = a
+		case strings.ContainsAny(a, "'\n\\"):
+			return nil, fmt.Errorf("orphan sweep: refusing to send unquotable tmux argument %q over control mode", a)
+		default:
+			out[i] = "'" + a + "'"
+		}
+	}
+	return out, nil
+}
+
+// tmuxRunFunc runs one tmux command and returns its stdout, stderr and error.
+type tmuxRunFunc func(ctx context.Context, args ...string) (stdout []byte, stderr string, err error)
+
+const (
+	orphanListTimeout = 10 * time.Second
+	orphanStepTimeout = 5 * time.Second
+)
+
+// mangledSuffixRe matches the "_<unix-seconds>" tail produced when tmux prints the
+// list format's separator as "_" (no UTF-8 locale) and the created time fuses onto
+// the name.
+var mangledSuffixRe = regexp.MustCompile(`_\d{9,}$`)
+
+func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
+	keepalive := tmux.TmuxPrefix + "keepalive"
 	knownUUIDs := make(map[string]struct{}, len(instances))
-	knownTmuxNames := make(map[string]struct{}, len(instances))
+	knownTmuxNames := map[string]struct{}{keepalive: {}}
 	for _, inst := range instances {
 		if inst.UUID != "" {
 			knownUUIDs[inst.UUID] = struct{}{}
@@ -71,68 +166,92 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) 
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
 	// #{session_created} (unix seconds) rides along in the same call so the age
 	// check below needs no extra per-candidate subprocess round-trip.
-	out, err := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("list-sessions", "-F", "#{session_name}\t#{session_created}")...).Output()
+	listCtx, listCancel := context.WithTimeout(context.Background(), orphanListTimeout)
+	out, _, err := run(listCtx, "list-sessions", "-F", "#{session_name}"+tmux.FormatSep+"#{session_created}")
+	listCancel()
 	if err != nil {
-		// tmux not running or no sessions — nothing to sweep
+		// tmux not running, no sessions, or the call timed out — fail closed.
 		return
 	}
 
-	keepalive := tmux.TmuxPrefix + "keepalive"
-
 	killed := 0
 	skippedYoung := 0
+	skippedUnsure := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		sessionName, createdRaw, _ := strings.Cut(line, "\t")
+		// Split on the LAST separator so the created time is always the final field.
+		cut := strings.LastIndex(line, tmux.FormatSep)
+		if cut < 0 {
+			// Unparseable line (separator missing/mangled): never act on it.
+			skippedUnsure++
+			continue
+		}
+		sessionName, createdRaw := line[:cut], line[cut+len(tmux.FormatSep):]
 		if sessionName == "" || !strings.HasPrefix(sessionName, tmux.TmuxPrefix) {
 			continue
 		}
-		// Always preserve the keepalive sentinel session.
-		if sessionName == keepalive {
-			continue
-		}
-		// Session name matches a known DB session → re-adopted, leave alone.
+		// Session name matches a known DB session (or the keepalive sentinel) → leave alone.
 		if _, known := knownTmuxNames[sessionName]; known {
 			continue
 		}
-
-		// Grace period: never treat a session younger than minAge as an orphan —
-		// see the doc comment above for the registration-race this closes.
-		if minAge > 0 {
-			if createdUnix, parseErr := strconv.ParseInt(createdRaw, 10, 64); parseErr == nil {
-				age := time.Since(time.Unix(createdUnix, 0))
-				if age < minAge {
-					log.Debug("orphan sweep: skipping recently created session, still within grace period",
-						"session", sessionName, "age", age.Round(time.Second))
-					skippedYoung++
-					continue
-				}
+		// Round-trip guard: a name that is a known name plus a fused "_<epoch>" tail is
+		// a parsing artifact of a live session, not an orphan.
+		if base := mangledSuffixRe.ReplaceAllString(sessionName, ""); base != sessionName {
+			if _, known := knownTmuxNames[base]; known {
+				log.Warn("orphan sweep: skipping name that looks like a known session with a fused timestamp", "session", sessionName)
+				skippedUnsure++
+				continue
 			}
 		}
 
+		// Grace period: never treat a session younger than minAge as an orphan —
+		// see the doc comment above for the registration-race this closes. An
+		// unparseable creation time fails closed.
+		if minAge > 0 {
+			createdUnix, parseErr := strconv.ParseInt(createdRaw, 10, 64)
+			if parseErr != nil {
+				skippedUnsure++
+				continue
+			}
+			if age := now().Sub(time.Unix(createdUnix, 0)); age < minAge {
+				log.Debug("orphan sweep: skipping recently created session, still within grace period",
+					"session", sessionName, "age", age.Round(time.Second))
+				skippedYoung++
+				continue
+			}
+		}
+
+		target := "=" + sessionName // exact match; plain -t falls back to prefix/glob matching
+
 		// Try to match via STAPLER_SESSION_UUID from the tmux session environment.
-		envOut, envErr := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("show-environment", "-t", sessionName, "STAPLER_SESSION_UUID")...).Output()
-		if envErr == nil {
+		envCtx, envCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+		envOut, envStderr, envErr := run(envCtx, "show-environment", "-t", target, "STAPLER_SESSION_UUID")
+		envCancel()
+		switch {
+		case envErr == nil:
 			uuid := strings.TrimPrefix(strings.TrimSpace(string(envOut)), "STAPLER_SESSION_UUID=")
 			if _, known := knownUUIDs[uuid]; known {
 				// UUID matches a DB session that happened to be renamed or sanitized
 				// differently. Don't kill it.
 				continue
 			}
+		case strings.Contains(envStderr, "unknown variable"):
+			// Session exists but has no UUID (pre-UUID session): fall through to kill.
+		default:
+			// Timeout, vanished session, or any other failure: can't prove it's an orphan.
+			skippedUnsure++
+			continue
 		}
 
 		// No DB match by name or UUID — this is an orphan.
 		log.Info("orphan sweep: killing stale tmux session with no DB record", "session", sessionName)
-		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if killErr := safeexec.CommandContext(killCtx, tmux.Binary(), socketArgs("kill-session", "-t", sessionName)...).Run(); killErr != nil {
+		killCtx, killCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+		if _, _, killErr := run(killCtx, "kill-session", "-t", target); killErr != nil {
 			log.Warn("orphan sweep: failed to kill stale session", "session", sessionName, "err", killErr)
 		} else {
 			killed++
@@ -140,7 +259,8 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) 
 		killCancel()
 	}
 
-	if killed > 0 || skippedYoung > 0 {
-		log.Info("orphan sweep: complete", "killed", killed, "skipped_within_grace_period", skippedYoung)
+	if killed > 0 || skippedYoung > 0 || skippedUnsure > 0 {
+		log.Info("orphan sweep: complete", "killed", killed,
+			"skipped_within_grace_period", skippedYoung, "skipped_unsure", skippedUnsure)
 	}
 }
