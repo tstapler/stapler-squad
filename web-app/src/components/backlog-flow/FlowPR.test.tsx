@@ -27,6 +27,17 @@ const render3 = (estimated: string[], triggers: object[] = [], capture: Date | n
 
 beforeEach(() => onDrill.mockReset());
 
+describe("FlowPR estimated values", () => {
+  it("EstimatedValue_should_RenderMarkerAndSrOnlyText_When_MetricEstimated", () => {
+    render3(["pr_fix_dwell:combined"]);
+
+    const marker = screen.getByTitle("Combined PR-fix dwell; CI and conflict are not separable");
+    expect(marker).toHaveTextContent(/^~/);
+    const description = document.getElementById(marker.getAttribute("aria-describedby") as string);
+    expect(description).toHaveTextContent("Combined PR-fix dwell; CI and conflict are not separable");
+  });
+});
+
 describe("FlowPR", () => {
   it("FlowPR_should_ShowCombinedDwellAndNotYetRecording_When_NoCaptureAndNoOutcomes", () => {
     render3(["pr_fix_dwell:combined", "pr_fix_cause:unavailable"], [], null);

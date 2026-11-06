@@ -31,6 +31,16 @@ const tile = (name: string) => screen.getByTestId(`flow-tile-${name}`);
 
 beforeEach(() => onDrill.mockReset());
 
+describe("FlowTiles without color", () => {
+  it("NoColorOnly_should_UseTextPatternArrowUnderline_When_RenderedInGrayscale", () => {
+    const comparison = compareWith([{ name: "merged_items", unit: "items", state: "ok", a: 7, b: 9, delta: 2, nA: 7, nB: 9 }]);
+    render(<FlowTiles summary={summaryWith({ firstPassYield: { num: 3, den: 4, ratio: 0.75 } })} comparison={comparison} onDrill={onDrill} />);
+
+    expect(tile("throughput")).toHaveTextContent(/up \+2.*better/);
+    expect(tile("fpy")).toHaveTextContent("low sample");
+  });
+});
+
 describe("FlowTiles", () => {
   it("FlowTiles_should_ShowRatioWithCountFirstAndDrill_When_FpyPresent", () => {
     render(<FlowTiles summary={summaryWith()} comparison={null} onDrill={onDrill} />);

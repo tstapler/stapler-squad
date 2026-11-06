@@ -119,6 +119,30 @@ describe("FlowPage", () => {
     expect(mockClient.getFlowSummary).toHaveBeenCalledTimes(2);
   });
 
+  it("FlowPage_should_RenderAllSections_When_SuccessResponse", async () => {
+    await renderAt("/backlog/flow?window=30", <FlowPage />);
+
+    await screen.findByRole("group", { name: "Health summary" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    const sections = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(sections).toEqual(expect.arrayContaining(["Review gate", "Anomalies & thrash"]));
+    expect(sections.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("FlowPage_should_ShowWidenButtonAndDenominator_When_EmptyWindowAndZeroFails", async () => {
+    mockClient.getFlowSummary.mockResolvedValue(
+      respond({
+        tiles: { meta: { status: "empty" } },
+        review: { meta: { status: "ok" }, total: { value: 14 }, rawFail: { num: 0, den: 14, ratio: 0 }, adjustedFail: { num: 0, den: 14, ratio: 0 } },
+      }),
+    );
+    await renderAt("/backlog/flow?window=7", <FlowPage />);
+
+    expect(await screen.findByText("No items finished in the last 7 days")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Widen to 30d" })).toBeInTheDocument();
+    expect(screen.getByTestId("flow-review-rates")).toHaveTextContent("0/14 (0.0%)");
+  });
+
   it("FlowPage_should_ShowWidenButton_When_EmptyWindow", async () => {
     mockClient.getFlowSummary.mockResolvedValue(respond({ tiles: { meta: { status: "empty" } } }));
     await renderAt("/backlog/flow?window=7", <FlowPage />);
