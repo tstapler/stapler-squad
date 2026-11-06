@@ -474,6 +474,11 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
+	if update.RepoPath != nil && *update.RepoPath != existing.RepoPath {
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // the likely cause was just fixed
+	}
+
+
 	if associatePR {
 		prAssociation = prAssociationOutcome(updated, prNumber)
 		// Routed through the shared primary-write path — not a hand-rolled
@@ -1111,6 +1116,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
+	s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // an operator move obsoletes any spawn backoff
 
 	// override_reason set means this was a manual operator override (bypassing
 	// TransitionGuard, per session.TransitionGuard's override handling above),
