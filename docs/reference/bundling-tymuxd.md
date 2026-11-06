@@ -233,6 +233,32 @@ would be an upgrade or a downgrade; `ReplaceTymuxd` does it.
 - The embedded binary is extracted write-then-rename, so a newer build can replace the cached file
   while the old daemon still runs from it.
 
+## Debugging daemon churn: who stopped tymuxd, and why
+
+Every stop squad issues is logged at Warn before the first signal, and again when it ends
+(`session/tymux/stop_reason.go`). Search `staplersquad.log` for `stopping tymuxd`; an unattributed
+SIGTERM with no such line did not come from squad.
+
+| Field | Meaning |
+|---|---|
+| `pid`, `daemon_age` | The process being stopped and how long it had run (`ps -o etime=`; `unknown` if unreadable). A young age means a recent respawn loop. |
+| `reason_kind` | `monitor_recovery`, `squad_shutdown`, `version_replace`, `manual_stop`, `stale_daemon` (EnsureDaemonRunning clearing a dead predecessor), `failed_cold_start` (reaping a replacement that never became healthy). |
+| `reason` | Human text plus detail, for example `monitor recovery: 6 consecutive failed probes (threshold 6)` or `version upgrade rollout: from "1.12.0" to "1.13.1"`. |
+| `tcp_probe`, `unix_probe` | The last probe results the decision rested on: `healthy`, `degraded`, `busy`, `unhealthy`, `access_denied`, `no_socket_file`, `not_listening`, `not_probed` (the other transport answered first), or `unknown` (none recorded). |
+
+The follow-up line `tymuxd stop finished` carries `outcome` (`exited_after_sigterm`,
+`escalated_to_sigkill` after `ignored SIGTERM, escalating to SIGKILL`, `already_gone`,
+`signal_failed`) and `elapsed`. The last 50 stops are also kept in memory
+(`tymux.RecentDaemonStops()`); no `/actuator` endpoint exposes them yet.
+
+When EnsureDaemonRunning declines to kill a daemon whose listener is still up, the error names
+each dial: `TCP dial ... was refused and the Unix control socket accepts connections but does not
+answer` (`ErrTymuxdControlSocketUnresponsive`), `TCP dial ... accepts connections but nothing
+answered as tymuxd, and the Unix control socket is not listening` (`ErrTymuxdPortSquatted`), or
+`TCP dial ... and the Unix control socket both accept connections but neither answered`
+(`ErrTymuxdUnresponsive`). A dial only proves a connection was accepted, so "squatted" is claimed
+only when the control socket is not listening.
+
 ## Escape hatches
 
 Two environment variables let a developer bypass the normal binary
