@@ -129,7 +129,7 @@ func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status str
 	if sessionID == "" {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "the item has no work session to merge"), nil
 	}
-	resp, err := b.Merger.MergePR(ctx, connect.NewRequest(&sessionv1.MergePRRequest{Id: sessionID}))
+	resp, err := b.Merger.MergePR(ctx, connect.NewRequest(&sessionv1.MergePRRequest{Id: sessionID, MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_MERGE}))
 	if err != nil {
 		return mapTransitionError(err)
 	}
