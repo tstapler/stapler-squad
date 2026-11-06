@@ -27,14 +27,14 @@ function scenario<T>(name: string): T {
 describe("build.ts on the fixture app (minified default)", () => {
   const built = scenario<Built>("ok");
 
-  it("inlines the five NEXT_PUBLIC defines (undefined when unset) and NODE_ENV=production, leaving no process.env", () => {
-    expect(built.js).toContain("sentinel-reconnect");
+  it("inlines the four NEXT_PUBLIC defines (undefined when unset) and NODE_ENV=production, leaving no process.env", () => {
+    expect(built.js).toContain("sentinel-streaming");
     expect(built.js).toContain("sentinel-otel");
     expect(built.js).toContain('"production"');
     expect(built.js).not.toContain("process.env");
   });
 
-  it("derives the define list from src/, so a sixth NEXT_PUBLIC var fails here", () => {
+  it("derives the define list from src/, so a fifth NEXT_PUBLIC var fails here", () => {
     const found = execFileSync("grep", ["-rhoE", "--include=*.ts", "--include=*.tsx", "--exclude=*.test.*", "--exclude-dir=__tests__", "NEXT_PUBLIC_[A-Z0-9_]+", "src"], { cwd: WEB_APP, encoding: "utf8" });
     expect([...new Set(found.split("\n").filter(Boolean))].sort()).toEqual([...PUBLIC_ENV_VARS].sort());
   });
