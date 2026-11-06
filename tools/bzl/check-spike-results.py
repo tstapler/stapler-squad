@@ -17,8 +17,8 @@ VERDICTS = ("Pass", "FallbackWorkaround", "FallbackFork", "Fail")
 FALLBACKS = ("FallbackWorkaround", "FallbackFork")
 DEFAULT = "project_plans/bazel-conversion/implementation/spike-results.yaml"
 # Spike waivers mirror the P10 waiver policy of Task 7.5f (owner defaults waiver_expiry_days / waiver_reason_min_chars).
-# Only the remote-cache spikes may be waived; everything else must have a verdict.
-WAIVABLE = ("S10", "S10-redaction")
+# Only S6 (needs a quiet host) and the remote-cache spikes may be waived; everything else must have a verdict.
+WAIVABLE = ("S6", "S10", "S10-redaction")
 WAIVER_MAX_DAYS = 90
 WAIVER_MIN_REASON = 20
 MEASUREMENTS = "spike-measurements.json"  # beside the results file; its noisy_inputs map is display only

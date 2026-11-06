@@ -144,11 +144,11 @@ class CheckSpikeResults(unittest.TestCase):
         self.assertTrue(any("reason" in e for e in werrs))
 
     def test_non_waivable_id_rejected(self):
-        valid, werrs = csr.validate_waivers([self._waiver(spike="S6")], date(2026, 11, 6))
+        valid, werrs = csr.validate_waivers([self._waiver(spike="S5")], date(2026, 11, 6))
         self.assertEqual(valid, {})
         self.assertTrue(any("not waivable" in e for e in werrs))
-        per_id, _ = csr.check([r for r in good_rows() if r["spike"] != "S6"], valid)
-        self.assertEqual(per_id["S6"], "MISSING")
+        per_id, _ = csr.check([r for r in good_rows() if r["spike"] != "S5"], valid)
+        self.assertEqual(per_id["S5"], "MISSING")
 
     def test_over_90_days_rejected(self):
         _, werrs = csr.validate_waivers([self._waiver(expires="2027-03-01")], date(2026, 11, 6))

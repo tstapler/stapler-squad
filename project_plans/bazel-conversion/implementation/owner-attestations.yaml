@@ -8,6 +8,9 @@ economic_gate:
   reason: >-
     EG5 trips (RA2 0.987 > 0.60: e2e is ~1974 of 2601 s of the critical path). Owner chose to
     continue; Epic 12 (selective e2e, ADR-009, spike S14) is the answer to RA2 and S14 will measure it.
+    2026-11-06: owner also waived EG3 for now (first cold build 223 s > 168 s limit, measured at load 26-48);
+    rerun on a quiet host before trusting or acting on it.
+  criteria: EG3 EG5
   status: recorded
 lockfile_policy:
   decision: commit MODULE.bazel.lock + bazel-lockfile-merge driver + automatic regeneration
@@ -61,6 +64,12 @@ remote_cache_s10:
 # Not a pass: S10 and S10-redaction stay unmeasured. Written by an agent from the recorded remote_cache_s10 answer
 # above; owner reconfirmed both waivers in-session on 2026-11-06 (Task 7.5c environment approval still not applied).
 spike_waivers:
+  - spike: S6
+    reason: 'owner decision 2026-11-06 (in-session): "Waive S6 and EG3 for now" because the host never reached load <= 2.0 (measured at load 15-48)'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: owner-decided 2026-11-06
+    not_covered: no S6 verdict exists; the concurrent-RSS, queued-invocation and E1-E8 checks are unmeasured (tools exist in tools/bzl/s6measure); the one number taken, second-worktree median 35.3 s at load 15-48 vs 16.8 s limit, is indicative only; rerun on a quiet host before Epic 7.6 flips
   - spike: S10
     reason: 'owner decision 2026-11-03 (remote_cache_s10): "start with disk cache only; defer the onyx remote cache"'
     granted: 2026-11-06
