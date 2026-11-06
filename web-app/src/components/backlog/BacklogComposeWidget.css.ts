@@ -46,11 +46,7 @@ export const attachButton = style([
   { color: vars.color.textPrimary },
 ]);
 
-export const exploreToggle = style([
-  formStyles.attachButton,
-  touchTarget,
-  { color: vars.color.textPrimary },
-]);
+export const exploreToggle = attachButton;
 
 export const brainstormPanel = style({
   display: "flex",

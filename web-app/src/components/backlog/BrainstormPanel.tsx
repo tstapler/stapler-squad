@@ -1,12 +1,13 @@
 "use client";
 // +feature: backlog:compose-widget
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useBacklogService, type ParsedBacklogItemDraft } from "@/lib/hooks/useBacklogService";
 import * as formStyles from "./BacklogItemForm.css";
 import * as styles from "./BacklogComposeWidget.css";
 
 interface BrainstormTurn {
+  id: number;
   question: string;
   /** Null once the call finished without a usable draft. */
   draft: ParsedBacklogItemDraft | null;
@@ -24,23 +25,30 @@ export function BrainstormPanel({ draftText, knownRepoPaths }: BrainstormPanelPr
   const { parseBacklogItemIntent } = useBacklogService();
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<BrainstormTurn[]>([]);
+  const nextId = useRef(0);
 
   const ask = async () => {
     const q = question.trim();
     if (!q) return;
     setQuestion("");
-    setTurns((prev) => [...prev, { question: q, draft: null, pending: true }]);
+    const id = nextId.current++;
+    setTurns((prev) => [...prev, { id, question: q, draft: null, pending: true }]);
     const message = draftText.trim() ? `${q}\n\n${draftText.trim()}` : q;
     const draft = await parseBacklogItemIntent(message, knownRepoPaths);
     setTurns((prev) =>
-      prev.map((t) => (t.question === q && t.pending ? { ...t, draft, pending: false } : t))
+      prev.map((t) => (t.id === id ? { ...t, draft, pending: false } : t))
     );
   };
 
   return (
-    <div className={styles.brainstormPanel} data-testid="brainstorm-panel">
-      {turns.map((t, i) => (
-        <div key={i} className={styles.brainstormTurn} data-testid="brainstorm-turn">
+    <div
+      className={styles.brainstormPanel}
+      data-testid="brainstorm-panel"
+      aria-live="polite"
+      aria-busy={turns.some((t) => t.pending)}
+    >
+      {turns.map((t) => (
+        <div key={t.id} className={styles.brainstormTurn} data-testid="brainstorm-turn">
           <span className={styles.brainstormQuestion}>{t.question}</span>
           {t.pending && <span>Thinking…</span>}
           {!t.pending && !t.draft && <span>No suggestions — try rephrasing.</span>}
@@ -68,7 +76,7 @@ export function BrainstormPanel({ draftText, knownRepoPaths }: BrainstormPanelPr
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+            if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               e.stopPropagation();
               void ask();

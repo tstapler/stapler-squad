@@ -347,7 +347,7 @@ describe("Omnibar compose mode", () => {
   });
 
   it("enriches the item in the background when triage did not start", async () => {
-    const item = { id: "item-3", title: "idea", description: "idea" };
+    const item = { id: "item-3", title: "idea", description: "idea", acCriteria: [] };
     const parseBacklogItemIntent = jest.fn().mockResolvedValue({
       title: "Better title",
       description: "Better description",
@@ -397,7 +397,7 @@ describe("Omnibar compose mode", () => {
   });
 
   it("enrichment failure is silent and the update is skipped when the user edited the item", async () => {
-    const item = { id: "i", title: "T", description: "d" };
+    const item = { id: "i", title: "T", description: "d", acCriteria: [] };
     const updateBacklogItem = jest.fn();
     const parse = jest
       .fn()

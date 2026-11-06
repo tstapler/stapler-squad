@@ -323,11 +323,20 @@ export function Omnibar({
       const draft = await parseBacklogItemIntent(text, knownRepoPaths);
       if (!draft) return;
       const current = await getBacklogItem(item.id);
-      if (!current || current.title !== item.title || current.description !== item.description) return;
+      if (
+        !current ||
+        current.title !== item.title ||
+        current.description !== item.description ||
+        current.acCriteria.length !== item.acCriteria.length
+      ) {
+        return;
+      }
       const updated = await updateBacklogItem(item.id, {
         title: draft.title || item.title,
         description: draft.description || item.description,
-        acCriteria: draft.acceptanceCriteria.map((acText, index) => ({ index, text: acText, status: "pending" as const })),
+        ...(draft.acceptanceCriteria.length > 0 && {
+          acCriteria: draft.acceptanceCriteria.map((acText, index) => ({ index, text: acText, status: "pending" as const })),
+        }),
       });
       if (!updated) return;
       addNotification({
@@ -374,7 +383,7 @@ export function Omnibar({
         notificationType: "info",
         onView: () => router.push(`/backlog?item=${item.id}`),
       });
-      if (!triageTriggered) void enrichBacklogItemInBackground(item, text);
+      if (!triageTriggered) enrichBacklogItemInBackground(item, text).catch(() => {});
     },
     [createBacklogItemFromChat, trackItem, addNotification, router, enrichBacklogItemInBackground]
   );

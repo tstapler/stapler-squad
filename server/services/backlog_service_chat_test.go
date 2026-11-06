@@ -204,3 +204,18 @@ func TestCreateBacklogItemFromChat_should_NotTriggerTriage_When_RepoPathEmpty(t 
 	require.NoError(t, err)
 	assert.False(t, resp.Msg.TriageTriggered)
 }
+
+func TestCreateBacklogItemFromChat_should_KeepItemWithoutTriage_When_RepoPathUnresolvable(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(&fakeHeadlessPool{response: validTriageJSON()})
+
+	resp, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
+		Message:  "Add dark mode support",
+		RepoPath: "https://github.com/",
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.TriageTriggered)
+	assert.Empty(t, resp.Msg.Item.RepoPath)
+}
