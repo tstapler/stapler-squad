@@ -923,7 +923,7 @@ export function useTerminalStream({
     consecutiveTimeoutAbortsRef.current = 0;
     streamRefusedCountRef.current = 0;
     connectRef.current();
-  }, []);
+  }, [resetServerEnds]);
 
   return {
     output: metrics.output,
