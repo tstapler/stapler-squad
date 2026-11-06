@@ -1,0 +1,271 @@
+package flow
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+)
+
+const (
+	defaultListLimit = 10
+	maxListLimit     = 50
+	compactListLimit = 3
+)
+
+// listLimitFor resolves a requested top-N size: 0 means the default, Compact
+// forces 3, and a request above the maximum is clamped (truncated=true).
+func listLimitFor(requested int, compact bool) (limit int, truncated bool) {
+	switch {
+	case compact:
+		return compactListLimit, false
+	case requested <= 0:
+		return defaultListLimit, false
+	case requested > maxListLimit:
+		return maxListLimit, true
+	}
+	return requested, false
+}
+
+// pageOf returns the first limit entries of all with the totals every list carries.
+func pageOf[T any](all []T, limit int, truncated bool) ListPage[T] {
+	return pageRange(all, 0, limit, truncated)
+}
+
+// pageRange returns all[offset:offset+limit] with the totals.
+func pageRange[T any](all []T, offset, limit int, truncated bool) ListPage[T] {
+	offset = min(max(offset, 0), len(all))
+	end := min(offset+limit, len(all))
+	items := slices.Clone(all[offset:end])
+	return ListPage[T]{
+		Items:         items,
+		TotalCount:    len(all),
+		ReturnedCount: len(items),
+		HasMore:       end < len(all),
+		Truncated:     truncated,
+	}
+}
+
+// loaded memoizes one source read so several sections share it, including its error.
+type loaded[T any] struct {
+	done bool
+	v    T
+	err  error
+}
+
+func (l *loaded[T]) get(load func() (T, error)) (T, error) {
+	if !l.done {
+		l.v, l.err = load()
+		l.done = true
+	}
+	return l.v, l.err
+}
+
+// eventData is the collapsed view of the window's events.
+type eventData struct {
+	spans       []Span
+	ids         []ItemID
+	rawInWindow int
+	quality     DataQuality
+}
+
+// run is the state of one computation over one window: configuration, lazily
+// loaded source data and the derived pure results shared between sections.
+type run struct {
+	ctx   context.Context
+	a     *Aggregator
+	q     FlowQuery
+	w     FlowWindow
+	cfg   Config
+	asOf  time.Time
+	rows  RowCounts
+	fails []SectionFailure
+
+	events loaded[*eventData]
+	seeds  loaded[[]Event]
+	stages loaded[[]domain.BacklogStatus]
+	dwell  loaded[DwellResult]
+	stuck  loaded[[]StuckInterval]
+	vdata  loaded[*verdictData]
+
+	rework   *ReworkResult
+	lead     *LeadTimeResult
+	prfix    *PRFixDwellResult
+	estimate map[string]bool
+}
+
+func newRun(ctx context.Context, a *Aggregator, q FlowQuery, w FlowWindow) *run {
+	return &run{ctx: ctx, a: a, q: q, w: w, cfg: effectiveConfig(q.Config), asOf: a.clock.Now(), estimate: map[string]bool{}}
+}
+
+func (r *run) failure(name SectionName, err error) {
+	r.fails = append(r.fails, SectionFailure{Section: name, Err: err})
+}
+
+// loadEvents reads the padded window once, drops self-loops and collapses.
+func (r *run) loadEvents() (*eventData, error) {
+	return r.events.get(func() (*eventData, error) {
+		rng := EventRange{From: r.w.Start().Add(-r.cfg.CollapsePad()), To: r.w.End(), ItemIDs: r.q.ItemIDs}
+		raw, err := r.a.src.Events.Events(r.ctx, rng)
+		if err != nil {
+			return nil, fmt.Errorf("read events: %w", err)
+		}
+		r.rows.Events = len(raw)
+		d := &eventData{}
+		kept := make([]Event, 0, len(raw))
+		seen := map[ItemID]struct{}{}
+		for _, e := range raw {
+			if e.From == e.To {
+				d.quality.SelfLoops++
+				continue
+			}
+			kept = append(kept, e)
+			seen[e.ItemID] = struct{}{}
+			if r.w.Contains(e.At) {
+				d.rawInWindow++
+			}
+		}
+		slices.SortStableFunc(kept, compareEvents)
+		d.ids = sortedItems(seen)
+		d.spans = Collapse(kept, r.w, r.cfg)
+		return d, nil
+	})
+}
+
+func (r *run) loadStages() ([]domain.BacklogStatus, error) {
+	return r.stages.get(func() ([]domain.BacklogStatus, error) {
+		st, err := r.a.src.Items.Stages(r.ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read stages: %w", err)
+		}
+		return st, nil
+	})
+}
+
+// loadDwell seeds each item's status at window start and computes dwell.
+func (r *run) loadDwell() (DwellResult, error) {
+	return r.dwell.get(func() (DwellResult, error) {
+		ev, err := r.loadEvents()
+		if err != nil {
+			return DwellResult{}, err
+		}
+		seeds, err := r.seeds.get(func() ([]Event, error) {
+			if len(ev.ids) == 0 {
+				return nil, nil
+			}
+			s, err := r.a.src.Events.LastEventsBefore(r.ctx, r.w.Start(), ev.ids)
+			if err != nil {
+				return nil, fmt.Errorf("read window-start seeds: %w", err)
+			}
+			return s, nil
+		})
+		if err != nil {
+			return DwellResult{}, err
+		}
+		return Dwell(DwellInput{Spans: ev.spans, Seeds: seeds, Window: r.w, AsOf: r.asOf}), nil
+	})
+}
+
+// reworkResult, leadResult and prfixResult derive from the spans once.
+func (r *run) reworkResult(ev *eventData) *ReworkResult {
+	if r.rework == nil {
+		res := Rework(ev.spans, r.cfg)
+		r.rework = &res
+	}
+	return r.rework
+}
+
+func (r *run) leadResult(ev *eventData) *LeadTimeResult {
+	if r.lead == nil {
+		res := LeadTime(ev.spans, r.cfg)
+		r.lead = &res
+	}
+	return r.lead
+}
+
+func (r *run) prfixResult(ev *eventData) *PRFixDwellResult {
+	if r.prfix == nil {
+		res := PRFixDwell(ev.spans, r.w, r.asOf, r.cfg)
+		r.prfix = &res
+	}
+	return r.prfix
+}
+
+// itemMeta loads item metadata for ids keyed by id; a read failure returns the error.
+func (r *run) itemMeta(ids []ItemID) (map[ItemID]ItemMeta, error) {
+	out := make(map[ItemID]ItemMeta, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	items, err := r.a.src.Items.Items(r.ctx, ids)
+	if err != nil {
+		return out, fmt.Errorf("read items: %w", err)
+	}
+	r.rows.Items += len(items)
+	for _, it := range items {
+		out[it.ID] = it
+	}
+	return out, nil
+}
+
+func (r *run) noteEstimated(labels ...string) {
+	for _, l := range labels {
+		r.estimate[l] = true
+	}
+}
+
+// sectionRunner builds one section; on error the section is reset to its zero
+// value with Status=Failed so a half-built section is never returned.
+func runSection[T any](r *run, sel map[SectionName]bool, name SectionName, sec *T, meta func(*T) *SectionMeta, build func(*T) error) {
+	if !sel[name] {
+		meta(sec).Status = SectionSkipped
+		return
+	}
+	if err := build(sec); err != nil {
+		var zero T
+		*sec = zero
+		*meta(sec) = SectionMeta{Status: SectionFailed, Error: err.Error()}
+		r.failure(name, err)
+		return
+	}
+	r.noteEstimated(meta(sec).Estimated...)
+}
+
+// buildSections computes every selected section; the rest are Skipped.
+func (r *run) buildSections(sel map[SectionName]bool) *FlowSummary {
+	s := &FlowSummary{}
+	runSection(r, sel, SectionTiles, &s.Tiles, func(x *TilesSection) *SectionMeta { return &x.Meta }, r.tiles)
+	runSection(r, sel, SectionFunnel, &s.Funnel, func(x *FunnelSection) *SectionMeta { return &x.Meta }, r.funnel)
+	runSection(r, sel, SectionCauses, &s.Causes, func(x *CausesSection) *SectionMeta { return &x.Meta }, r.causes)
+	runSection(r, sel, SectionReview, &s.Review, func(x *ReviewSection) *SectionMeta { return &x.Meta }, r.review)
+	runSection(r, sel, SectionPR, &s.PR, func(x *PRSection) *SectionMeta { return &x.Meta }, r.pr)
+	runSection(r, sel, SectionStuck, &s.Stuck, func(x *StuckSection) *SectionMeta { return &x.Meta }, r.stuckSection)
+	runSection(r, sel, SectionAnomalies, &s.Anomalies, func(x *AnomaliesSection) *SectionMeta { return &x.Meta }, r.anomalies)
+	runSection(r, sel, SectionTrends, &s.Trends, func(x *TrendsSection) *SectionMeta { return &x.Meta }, r.trends)
+	runSection(r, sel, SectionNotes, &s.Notes, func(x *NotesSection) *SectionMeta { return &x.Meta }, r.notes)
+	return s
+}
+
+// meta assembles the response-level FlowMeta from what the sections reported.
+func (r *run) meta(sel map[SectionName]bool) FlowMeta {
+	if sel[SectionReview] {
+		r.noteEstimated(EstimatedDeadlockHeuristic)
+	}
+	est := make([]string, 0, len(r.estimate))
+	for l := range r.estimate {
+		est = append(est, l)
+	}
+	slices.Sort(est)
+	m := FlowMeta{
+		AsOf: r.asOf, WindowStart: r.w.Start(), WindowEnd: r.w.End(),
+		RowCounts: r.rows, Estimated: est, SlowPath: r.q.Window.AllTime,
+	}
+	if r.a.captureSince != nil {
+		if t, err := r.a.captureSince(r.ctx); err == nil {
+			m.CaptureSince = t.UTC()
+		}
+	}
+	return m
+}

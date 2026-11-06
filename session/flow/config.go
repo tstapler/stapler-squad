@@ -18,6 +18,10 @@ type Config struct {
 	LowSampleN int
 	// StalledAfter is how long a reviewing/working item may sit before it counts as stalled.
 	StalledAfter time.Duration
+	// MinCompareItems is the smallest per-item sample (in each window) a compared metric needs.
+	MinCompareItems int
+	// MinCompareVerdicts is the smallest verdict sample (in each window) a compared rate needs.
+	MinCompareVerdicts int
 }
 
 // DefaultConfig returns the plan defaults.
@@ -30,6 +34,8 @@ func DefaultConfig() Config {
 		DeadlockRepeatCriterion: 3,
 		LowSampleN:              5,
 		StalledAfter:            time.Hour,
+		MinCompareItems:         20,
+		MinCompareVerdicts:      30,
 	}
 }
 

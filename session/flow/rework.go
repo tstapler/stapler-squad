@@ -170,31 +170,49 @@ func reworkItem(id ItemID, spans []Span, res *ReworkResult) ItemRework {
 }
 
 func countRealRework(item *ItemRework, rs RealSpan, preMerge bool, res *ReworkResult) {
-	switch {
-	case rs.From() == domain.BacklogStatusReview && rs.To() == domain.BacklogStatusInProgress:
-		cause := ReworkBounce
-		if ClassifyNote(rs.Note()) == CauseReviewReopen {
-			cause = ReworkReviewFail
+	cause, ok := classifyReworkSpan(rs)
+	if !ok {
+		return
+	}
+	res.Causes[cause]++
+	switch cause {
+	case ReworkReviewFail, ReworkBounce:
+		if cause == ReworkReviewFail {
 			item.ReviewFail++
 		} else {
 			item.Bounce++
 		}
-		res.Causes[cause]++
 		res.Drill.add(reviewDrillKey(cause), item.Item)
 		if preMerge {
 			item.PreMergeBounces++
 		}
-	case rs.From() == domain.BacklogStatusPRPending && rs.To() == domain.BacklogStatusInProgress:
+	case ReworkPRFix:
 		item.PRFix++
-		res.Causes[ReworkPRFix]++
 		res.PRFixTriggers[PRFixTriggerUnknown]++
 		res.Drill.add(DrillReworkPRFix, item.Item)
 		if preMerge {
 			item.PreMergePRFix++
 		}
-	case rs.From() == domain.BacklogStatusDone && rs.To() != domain.BacklogStatusArchived:
-		res.Causes[ReworkOther]++
+	case ReworkOther:
 	}
+}
+
+// classifyReworkSpan says whether a real transition is rework and of which
+// cause: a review reopen (partitioned by note), a PR-fix reopen, or a reopen
+// out of done.
+func classifyReworkSpan(rs RealSpan) (ReworkCause, bool) {
+	switch {
+	case rs.From() == domain.BacklogStatusReview && rs.To() == domain.BacklogStatusInProgress:
+		if ClassifyNote(rs.Note()) == CauseReviewReopen {
+			return ReworkReviewFail, true
+		}
+		return ReworkBounce, true
+	case rs.From() == domain.BacklogStatusPRPending && rs.To() == domain.BacklogStatusInProgress:
+		return ReworkPRFix, true
+	case rs.From() == domain.BacklogStatusDone && rs.To() != domain.BacklogStatusArchived:
+		return ReworkOther, true
+	}
+	return 0, false
 }
 
 func reviewDrillKey(c ReworkCause) DrillKey {

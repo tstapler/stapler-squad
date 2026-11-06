@@ -409,12 +409,12 @@ type ItemTimelineQuery struct {
 
 // ItemTimeline is one item's spans, thrash collapsed, capped at 50 entries.
 type ItemTimeline struct {
-	Meta          FlowMeta
-	ItemID        ItemID
-	Title         string
-	Status        string
-	Entries       []TimelineEntry
-	TotalEntries  int
-	Truncated     bool
+	Meta           FlowMeta
+	ItemID         ItemID
+	Title          string
+	Status         string
+	Entries        []TimelineEntry
+	TotalEntries   int
+	Truncated      bool
 	ThrashEpisodes int
 }

@@ -157,7 +157,7 @@ func (c *Cache[V]) cacheable(q FlowQuery) bool {
 }
 
 func (c *Cache[V]) cacheKey(q FlowQuery) string {
-	return q.Window.CacheKey() + "|" + q.Cohort
+	return fmt.Sprintf("%s|%s|%v|%t|%d", q.Window.CacheKey(), q.Cohort, q.Sections, q.Compact, q.ListLimit)
 }
 
 // flightKey widens the key with the filters that make a query uncacheable so
