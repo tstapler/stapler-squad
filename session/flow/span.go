@@ -22,6 +22,7 @@ type RealSpan struct {
 	item     ItemID
 	from, to domain.BacklogStatus
 	at       time.Time
+	note     string
 }
 
 // NewRealSpan validates and builds a RealSpan; at is normalized to UTC.
@@ -50,14 +51,26 @@ func (s RealSpan) To() domain.BacklogStatus { return s.to }
 // At is the transition time (UTC).
 func (s RealSpan) At() time.Time { return s.at }
 
+// Note is the raw event note, kept so rework can partition review reopens.
+func (s RealSpan) Note() string { return s.note }
+
+// WithNote returns a copy carrying the raw event note.
+func (s RealSpan) WithNote(note string) RealSpan {
+	s.note = note
+	return s
+}
+
 func (RealSpan) isSpan() {}
 
 // ThrashSpanParams carries the fields of a ThrashSpan; a struct rather than a
 // positional pile of same-typed arguments.
 type ThrashSpanParams struct {
-	Item            ItemID
-	Pair            FlipPair
-	Count           int
+	Item  ItemID
+	Pair  FlipPair
+	Count int
+	// UnclippedCount is the episode size before clipping to the window; when
+	// set it satisfies the ThrashMinFlips check that a clipped Count may not.
+	UnclippedCount  int
 	First, Last     time.Time
 	NetStatus       domain.BacklogStatus
 	Cause           Cause
@@ -75,7 +88,7 @@ func NewThrashSpan(cfg Config, p ThrashSpanParams) (ThrashSpan, error) {
 	if p.Item == "" {
 		return ThrashSpan{}, errors.New("thrash span: empty item id")
 	}
-	if p.Count < cfg.ThrashMinFlips {
+	if max(p.Count, p.UnclippedCount) < cfg.ThrashMinFlips {
 		return ThrashSpan{}, fmt.Errorf("thrash span: count %d below ThrashMinFlips %d", p.Count, cfg.ThrashMinFlips)
 	}
 	if p.First.After(p.Last) {
@@ -87,6 +100,9 @@ func NewThrashSpan(cfg Config, p ThrashSpanParams) (ThrashSpan, error) {
 
 // Item implements Span.
 func (s ThrashSpan) Item() ItemID { return s.p.Item }
+
+// UnclippedCount is the episode size before window clipping (0 when not set).
+func (s ThrashSpan) UnclippedCount() int { return s.p.UnclippedCount }
 
 // Pair is the flip shape.
 func (s ThrashSpan) Pair() FlipPair { return s.p.Pair }
