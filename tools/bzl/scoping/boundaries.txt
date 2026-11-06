@@ -9,3 +9,5 @@ server/services/backlogsvc !server/web
 session/importer !server
 server/services/wsconn !server/web
 session/ptyio !server
+session/hostclaim !server
+session/cmdexec !server

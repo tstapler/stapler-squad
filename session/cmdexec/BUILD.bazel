@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "cmdexec",
+    srcs = [
+        "command_executor.go",
+        "command_history.go",
+        "command_queue.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/cmdexec",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/detection",
+        "//session/ptyio",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cmdexec",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cmdexec_test",
+    srcs = [
+        "command_executor_test.go",
+        "command_history_test.go",
+        "command_queue_test.go",
+        "command_testdoubles_test.go",
+    ],
+    embed = [":cmdexec"],
+    deps = [
+        "//session/detection",
+        "//session/ptyio",
+        "//testutil/wait",
+        "@com_github_linkdata_deadlock//:deadlock",
+    ],
+)

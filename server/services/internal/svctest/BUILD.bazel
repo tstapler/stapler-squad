@@ -53,6 +53,7 @@ go_library(
         "//session",
         "//session/domain",
         "//session/headless",
+        "//session/hostclaim",
         "//session/tmux",
         "//session/tokens",
         "//testutil/wait",
