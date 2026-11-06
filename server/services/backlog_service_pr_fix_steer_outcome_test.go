@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,13 +21,12 @@ func withPRNumber(t *testing.T, storage *session.Storage, itemID string, n int) 
 // outcomeValues returns the pr_fix_outcome marker values (and PR numbers) stored for itemID.
 func outcomeValues(t *testing.T, storage *session.Storage, itemID string) (values []string, prs []int) {
 	t.Helper()
-	rows, err := storage.GetEntClient().BacklogFlowMarker.Query().All(context.Background())
+	rows, err := storage.ListFlowMarkersForItem(context.Background(), itemID, session.FlowMarkerPRFixOutcome,
+		time.Unix(0, 0), time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	for _, m := range rows {
-		if m.ItemID.String() == itemID && m.Kind == string(session.FlowMarkerPRFixOutcome) {
-			values = append(values, m.Value)
-			prs = append(prs, m.PrNumber)
-		}
+		values = append(values, m.Value)
+		prs = append(prs, m.PRNumber)
 	}
 	return values, prs
 }

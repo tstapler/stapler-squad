@@ -1683,6 +1683,11 @@ func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind Flow
 	s.repo.RecordFlowMarker(ctx, itemID, kind, value, prNumber)
 }
 
+// ListFlowMarkersForItem passes through to EntRepository.ListFlowMarkersForItem.
+func (s *Storage) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+	return s.repo.ListFlowMarkersForItem(ctx, itemID, kind, since, until)
+}
+
 // ListActivityNotesForItem returns the full append-only activity-note history for
 // a backlog item, ordered by created_at ascending.
 func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
