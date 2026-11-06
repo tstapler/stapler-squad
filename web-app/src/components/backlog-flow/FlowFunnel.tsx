@@ -68,7 +68,7 @@ function StageRow({ stage, index, total, widest, ...rest }: { stage: FlowFunnelS
 function FunnelTable({ stages }: { stages: readonly FlowFunnelStageRow[] }) {
   return (
     <div className={srOnly}>
-      <table>
+      <table data-testid="flow-funnel-table">
         <caption>Funnel data (mirrors the bars)</caption>
         <thead>
           <tr>

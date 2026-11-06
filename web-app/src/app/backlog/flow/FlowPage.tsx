@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { AppLink } from "@/components/ui/AppLink";
+import { FlowDrilldownDrawer } from "@/components/backlog-flow/FlowDrilldownDrawer";
 import { FlowItemTimeline } from "@/components/backlog-flow/FlowItemTimeline";
 import { FlowSectionBody, NO_ARCHIVED_IDS } from "@/components/backlog-flow/FlowSectionBody";
 import { ThrashBanner } from "@/components/backlog-flow/ThrashBanner";
@@ -122,6 +123,7 @@ function useFlowUrl() {
     selectWindow: useCallback((window: FlowWindow) => navigate({ window }), [navigate]),
     selectCompare: useCallback((compare: FlowCompare) => navigate({ compare }), [navigate]),
     selectDrill: useCallback((drill: string) => navigate({ drill }), [navigate]),
+    closeDrill: useCallback(() => navigate({ drill: null }), [navigate]),
   };
 }
 
@@ -162,7 +164,16 @@ interface TimelineTarget {
 export function FlowPage() {
   const { announce } = useAnnounce();
   const now = useNow(CLOCK_TICK_MS);
-  const { url, notices, selectWindow, selectCompare, selectDrill } = useFlowUrl();
+  const { url, notices, selectWindow, selectCompare, selectDrill, closeDrill } = useFlowUrl();
+  // The drawer is open from the URL alone; the clicked number is remembered only to return focus to it.
+  const drillInvoker = useRef<HTMLElement | null>(null);
+  const openDrill = useCallback(
+    (key: string) => {
+      drillInvoker.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      selectDrill(key);
+    },
+    [selectDrill],
+  );
   const { openSections, jumpTo, toggleSection } = useSectionNav();
   const [timeline, setTimeline] = useState<TimelineTarget | null>(null);
   const viewEvents = useCallback((itemId: string, invoker: HTMLElement) => setTimeline({ itemId, invoker }), []);
@@ -230,13 +241,14 @@ export function FlowPage() {
                   onReload={reload}
                 >
                   {empty && <EmptyWindow window={url.window} onWiden={selectWindow} />}
-                  {summary && !empty && <FlowSectionBody id={def.id} summary={summary} comparison={flow.comparison} onDrill={selectDrill} onViewEvents={viewEvents} />}
+                  {summary && !empty && <FlowSectionBody id={def.id} summary={summary} comparison={flow.comparison} onDrill={openDrill} onViewEvents={viewEvents} />}
                 </FlowSection>
               );
             })}
           </div>
         )}
       </div>
+      {url.drill !== null && <FlowDrilldownDrawer drillKey={url.drill} window={url.window} returnFocusTo={drillInvoker.current} onClose={closeDrill} />}
       {timeline && <FlowItemTimeline itemId={timeline.itemId} window={url.window} returnFocusTo={timeline.invoker} onClose={closeTimeline} />}
     </div>
   );
