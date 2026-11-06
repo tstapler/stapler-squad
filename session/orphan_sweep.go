@@ -185,29 +185,166 @@ var safeSessionNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // still carries a separator.
 var mangledSuffixRe = regexp.MustCompile(`_\d{9,}$`)
 
-func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
-	keepalive := tmux.TmuxPrefix + "keepalive"
-	knownUUIDs := make(map[string]struct{}, len(instances))
-	knownTmuxNames := map[string]struct{}{keepalive: {}}
+// sweepVerdict is the decision for one candidate tmux session.
+type sweepVerdict int
+
+const (
+	verdictIgnore sweepVerdict = iota // not ours, or known: leave alone silently
+	verdictUnsure                     // can't prove it is an orphan: skip and count
+	verdictYoung                      // inside the grace period
+	verdictOrphan                     // proven orphan: eligible for the pre-kill recheck
+)
+
+// knownSessions is what the live instance set says exists.
+type knownSessions struct {
+	uuids map[string]struct{}
+	names map[string]struct{}
+}
+
+func collectKnownSessions(instances []*Instance) knownSessions {
+	k := knownSessions{
+		uuids: make(map[string]struct{}, len(instances)),
+		names: map[string]struct{}{tmux.TmuxPrefix + "keepalive": {}},
+	}
 	for _, inst := range instances {
 		if inst.UUID != "" {
-			knownUUIDs[inst.UUID] = struct{}{}
+			k.uuids[inst.UUID] = struct{}{}
 		}
 		if name := inst.GetTmuxSessionName(); name != "" {
-			knownTmuxNames[name] = struct{}{}
+			k.names[name] = struct{}{}
 		}
 		// Shells are independent sibling tmux sessions (see instance_shells.go) with
 		// no Instance-level identity of their own — without this, every shell is
 		// unconditionally treated as an orphan and killed on the next sweep/restart.
 		for _, shell := range inst.shells.List() {
 			if shell.TmuxSessionName != "" {
-				knownTmuxNames[shell.TmuxSessionName] = struct{}{}
+				k.names[shell.TmuxSessionName] = struct{}{}
 			}
 		}
 	}
+	return k
+}
+
+// sessionLine is one parsed list-sessions line.
+type sessionLine struct {
+	raw, name, createdRaw string
+}
+
+// parseSessionLine splits on the LAST separator so the created time is always the
+// final field. ok is false for a line that can't be parsed (separator missing/mangled).
+func parseSessionLine(line string) (sessionLine, bool) {
+	cut := strings.LastIndex(line, tmux.FormatSep)
+	if cut < 0 {
+		return sessionLine{}, false
+	}
+	return sessionLine{raw: line, name: line[:cut], createdRaw: line[cut+len(tmux.FormatSep):]}, true
+}
+
+// classifyByName applies the name-only rules: ours?, known?, fused-epoch artifact?
+func (k knownSessions) classifyByName(name string) sweepVerdict {
+	if name == "" || !strings.HasPrefix(name, tmux.TmuxPrefix) {
+		return verdictIgnore
+	}
+	if !safeSessionNameRe.MatchString(name) {
+		// Not a name this app creates (control chars, spaces, ...): never act on it.
+		return verdictUnsure
+	}
+	if _, known := k.names[name]; known {
+		return verdictIgnore
+	}
+	// Round-trip guard: a known name plus a fused "_<epoch>" tail is a parsing
+	// artifact of a live session, not an orphan.
+	if base := mangledSuffixRe.ReplaceAllString(name, ""); base != name {
+		if _, known := k.names[base]; known {
+			log.Warn("orphan sweep: skipping name that looks like a known session with a fused timestamp", "session", name)
+			return verdictUnsure
+		}
+	}
+	return verdictOrphan
+}
+
+// classifyByAge applies the grace period: a session younger than minAge is never an
+// orphan (see ReconcileOrphanedTmuxSessions' doc). An unparseable creation time fails
+// closed. minAge == 0 disables the check.
+func classifyByAge(name, createdRaw string, minAge time.Duration, now time.Time) sweepVerdict {
+	if minAge <= 0 {
+		return verdictOrphan
+	}
+	createdUnix, err := strconv.ParseInt(createdRaw, 10, 64)
+	if err != nil {
+		return verdictUnsure
+	}
+	if age := now.Sub(time.Unix(createdUnix, 0)); age < minAge {
+		log.Debug("orphan sweep: skipping recently created session, still within grace period",
+			"session", name, "age", age.Round(time.Second))
+		return verdictYoung
+	}
+	return verdictOrphan
+}
+
+// classifyByUUID reads STAPLER_SESSION_UUID from the session environment. Only an
+// explicit "unknown variable" reply means "no UUID"; any other failure is unsure.
+func (k knownSessions) classifyByUUID(run tmuxRunFunc, target string) sweepVerdict {
+	ctx, cancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+	defer cancel()
+	out, stderr, err := run(ctx, "show-environment", "-t", target, "STAPLER_SESSION_UUID")
+	switch {
+	case err == nil:
+		uuid, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "STAPLER_SESSION_UUID=")
+		if !ok || uuid == "" {
+			return verdictUnsure // success with an unexpected body
+		}
+		if _, known := k.uuids[uuid]; known {
+			// A DB session that was renamed or sanitized differently. Don't kill it.
+			return verdictIgnore
+		}
+		return verdictOrphan
+	case strings.Contains(stderr, "unknown variable: STAPLER_SESSION_UUID"):
+		return verdictOrphan // pre-UUID session
+	default:
+		return verdictUnsure // timeout, vanished session, or any other failure
+	}
+}
+
+// stillSameSession re-reads the target right before the kill: the name must still
+// exist with the same creation time (guards against a replaced session or stale list).
+func stillSameSession(run tmuxRunFunc, c sessionLine) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+	defer cancel()
+	out, _, err := run(ctx, "list-sessions", "-F", "#{session_name}"+tmux.FormatSep+"#{session_created}",
+		"-f", "#{==:#{session_name},"+c.name+"}")
+	return err == nil && strings.TrimSpace(string(out)) == c.raw
+}
+
+// killSession kills the session by exact-match target and reports success.
+func killSession(run tmuxRunFunc, name string) bool {
+	log.Info("orphan sweep: killing stale tmux session with no DB record", "session", name)
+	ctx, cancel := context.WithTimeout(context.Background(), orphanStepTimeout)
+	defer cancel()
+	if _, _, err := run(ctx, "kill-session", "-t", "="+name); err != nil {
+		log.Warn("orphan sweep: failed to kill stale session", "session", name, "err", err)
+		return false
+	}
+	return true
+}
+
+// decide runs every orphan test for one candidate in order; the first non-orphan
+// verdict wins. Only verdictOrphan lets the caller proceed to the recheck and kill.
+func (k knownSessions) decide(run tmuxRunFunc, c sessionLine, minAge time.Duration, now time.Time) sweepVerdict {
+	if v := k.classifyByName(c.name); v != verdictOrphan {
+		return v
+	}
+	if v := classifyByAge(c.name, c.createdRaw, minAge, now); v != verdictOrphan {
+		return v
+	}
+	return k.classifyByUUID(run, "="+c.name) // "=" targets the exact name; plain -t prefix/glob-matches
+}
+
+func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
+	known := collectKnownSessions(instances)
 
 	// #{session_created} (unix seconds) rides along in the same call so the age
-	// check below needs no extra per-candidate subprocess round-trip.
+	// check needs no extra per-candidate subprocess round-trip.
 	listCtx, listCancel := context.WithTimeout(context.Background(), orphanListTimeout)
 	out, _, err := run(listCtx, "list-sessions", "-F", "#{session_name}"+tmux.FormatSep+"#{session_created}")
 	listCancel()
@@ -217,108 +354,29 @@ func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, 
 		return
 	}
 
-	killed := 0
-	skippedYoung := 0
-	skippedUnsure := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	killed, skippedYoung, skippedUnsure := 0, 0, 0
+	for _, raw := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
 			continue
 		}
-		// Split on the LAST separator so the created time is always the final field.
-		cut := strings.LastIndex(line, tmux.FormatSep)
-		if cut < 0 {
-			// Unparseable line (separator missing/mangled): never act on it.
+		c, ok := parseSessionLine(raw)
+		if !ok {
+			skippedUnsure++ // unparseable line: never act on it
+			continue
+		}
+		switch known.decide(run, c, minAge, now()) {
+		case verdictUnsure:
 			skippedUnsure++
-			continue
-		}
-		sessionName, createdRaw := line[:cut], line[cut+len(tmux.FormatSep):]
-		if sessionName == "" || !strings.HasPrefix(sessionName, tmux.TmuxPrefix) {
-			continue
-		}
-		if !safeSessionNameRe.MatchString(sessionName) {
-			// Not a name this app creates (control chars, spaces, ...): never act on it.
-			skippedUnsure++
-			continue
-		}
-		// Session name matches a known DB session (or the keepalive sentinel) → leave alone.
-		if _, known := knownTmuxNames[sessionName]; known {
-			continue
-		}
-		// Round-trip guard: a name that is a known name plus a fused "_<epoch>" tail is
-		// a parsing artifact of a live session, not an orphan.
-		if base := mangledSuffixRe.ReplaceAllString(sessionName, ""); base != sessionName {
-			if _, known := knownTmuxNames[base]; known {
-				log.Warn("orphan sweep: skipping name that looks like a known session with a fused timestamp", "session", sessionName)
+		case verdictYoung:
+			skippedYoung++
+		case verdictOrphan:
+			if !stillSameSession(run, c) {
 				skippedUnsure++
-				continue
+			} else if killSession(run, c.name) {
+				killed++
 			}
 		}
-
-		// Grace period: never treat a session younger than minAge as an orphan —
-		// see the doc comment above for the registration-race this closes. An
-		// unparseable creation time fails closed.
-		if minAge > 0 {
-			createdUnix, parseErr := strconv.ParseInt(createdRaw, 10, 64)
-			if parseErr != nil {
-				skippedUnsure++
-				continue
-			}
-			if age := now().Sub(time.Unix(createdUnix, 0)); age < minAge {
-				log.Debug("orphan sweep: skipping recently created session, still within grace period",
-					"session", sessionName, "age", age.Round(time.Second))
-				skippedYoung++
-				continue
-			}
-		}
-
-		target := "=" + sessionName // exact match; plain -t falls back to prefix/glob matching
-
-		// Try to match via STAPLER_SESSION_UUID from the tmux session environment.
-		envCtx, envCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
-		envOut, envStderr, envErr := run(envCtx, "show-environment", "-t", target, "STAPLER_SESSION_UUID")
-		envCancel()
-		switch {
-		case envErr == nil:
-			uuid, hasUUID := strings.CutPrefix(strings.TrimSpace(string(envOut)), "STAPLER_SESSION_UUID=")
-			if !hasUUID || uuid == "" {
-				// Success with an unexpected body: can't prove it's an orphan.
-				skippedUnsure++
-				continue
-			}
-			if _, known := knownUUIDs[uuid]; known {
-				// UUID matches a DB session that happened to be renamed or sanitized
-				// differently. Don't kill it.
-				continue
-			}
-		case strings.Contains(envStderr, "unknown variable: STAPLER_SESSION_UUID"):
-			// Session exists but has no UUID (pre-UUID session): fall through to kill.
-		default:
-			// Timeout, vanished session, or any other failure: can't prove it's an orphan.
-			skippedUnsure++
-			continue
-		}
-
-		// Re-read the target right before the kill: the name must still exist with the
-		// same creation time (guards against a replaced session or a stale list).
-		recheckCtx, recheckCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
-		recheck, _, recheckErr := run(recheckCtx, "list-sessions", "-F", "#{session_name}"+tmux.FormatSep+"#{session_created}",
-			"-f", "#{==:#{session_name},"+sessionName+"}")
-		recheckCancel()
-		if recheckErr != nil || strings.TrimSpace(string(recheck)) != line {
-			skippedUnsure++
-			continue
-		}
-
-		// No DB match by name or UUID — this is an orphan.
-		log.Info("orphan sweep: killing stale tmux session with no DB record", "session", sessionName)
-		killCtx, killCancel := context.WithTimeout(context.Background(), orphanStepTimeout)
-		if _, _, killErr := run(killCtx, "kill-session", "-t", target); killErr != nil {
-			log.Warn("orphan sweep: failed to kill stale session", "session", sessionName, "err", killErr)
-		} else {
-			killed++
-		}
-		killCancel()
 	}
 
 	if killed > 0 || skippedYoung > 0 || skippedUnsure > 0 {
