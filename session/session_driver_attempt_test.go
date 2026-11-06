@@ -64,7 +64,10 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 				t.Fatal("resumed work must receive a fresh inactivity budget")
 			}
 			inst.RemoveTag(TagBacklogWork)
-			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(driverInactivityTimeout+time.Second))
+			inst.processManager = &livenessPM{alive: false} // interactive: only a dead pane fails
+			late := now.Add(driverInactivityTimeout + time.Second)
+			handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late) // first dead probe
+			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late.Add(deadPaneConfirmWindow))
 			if !ret {
 				t.Fatal("genuine inactivity after resuming must still fail")
 			}
@@ -115,7 +118,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 		{name: "inactivity boundary", startedAt: now.Add(-driverInactivityTimeout), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour)},
 		{name: "nudge delay boundary", startedAt: now.Add(-driverBacklogNudgeDelay), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour), backlog: true},
 		{name: "nudge grace boundary", startedAt: now.Add(-time.Hour), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour), nudgeAt: now.Add(-driverBacklogNudgeGrace), backlog: true},
-		{name: "eventual inactivity", startedAt: now.Add(-driverInactivityTimeout - time.Second), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour), wantEscalation: true},
+		{name: "eventual inactivity (dead pane)", startedAt: now.Add(-driverInactivityTimeout - time.Second), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour), wantEscalation: true},
 		{name: "newer output wins", startedAt: now.Add(-time.Hour), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Minute)},
 		{name: "new prompt wins", startedAt: now.Add(-time.Hour), promptAt: now.Add(-time.Minute), outputAt: now.Add(-time.Hour)},
 		{name: "newer nudge wins", startedAt: now.Add(-time.Hour), promptAt: now.Add(-time.Hour), outputAt: now.Add(-time.Hour), nudgeAt: now.Add(-time.Minute), backlog: true},
@@ -126,6 +129,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: tc.name, Status: Active, InitialPromptSentAt: tc.promptAt}
+			inst.processManager = &livenessPM{alive: false} // interactive escalation requires a dead pane
 			if tc.backlog {
 				inst.Tags = []string{TagBacklogWork}
 			}
@@ -135,7 +139,12 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 			inst.SetLastMeaningfulOutput(tc.outputAt)
 			attempt := newDriverAttempt(inst, "task", tc.startedAt)
 			attempt.nudgeSentAt = tc.nudgeAt
-			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+			tickAt := now
+			if !tc.backlog { // interactive failure needs the pane dead across the confirm window
+				handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+				tickAt = now.Add(deadPaneConfirmWindow)
+			}
+			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, tickAt)
 			if cont || ret != (tc.wantEscalation || tc.archived) {
 				t.Errorf("loop signal=(%v,%v), want (false,%v)", cont, ret, tc.wantEscalation || tc.archived)
 			}
