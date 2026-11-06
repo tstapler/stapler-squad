@@ -58,10 +58,10 @@ test.describe("alias-settings", () => {
   test("AC-04 add environment variable via Advanced section", async ({ page }) => {
     await settings.clickNewAlias();
     await settings.fillAliasName("e2e-envvar");
-    await page.getByLabel("Advanced options").check();
-    await page.getByRole("button", { name: "Add Variable" }).click();
-    await page.getByLabel("Environment variable 1 key").fill("E2E_VAR");
-    await page.getByLabel("Environment variable 1 value").fill("hello");
+    await page.getByLabel("Advanced").check();
+    await page.getByRole("button", { name: "Add variable" }).click();
+    await page.getByLabel("Environment variable key 1").fill("E2E_VAR");
+    await page.getByLabel("Environment variable value 1").fill("hello");
     await settings.saveAlias();
     await expect(page.getByTestId("alias-row-e2e-envvar")).toBeVisible();
   });

@@ -64919,55 +64919,6 @@
   {
    "spec": "route-focus-and-announce.spec.ts",
    "project": "chromium",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium",
    "title": "route focus and announcements (Next baseline) > the History nav item exposes aria-current=\"page\" on /history",
    "class": "pass",
    "runs": [
@@ -65251,55 +65202,6 @@
       {
        "retry": 0,
        "status": "passed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium-dom",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
       }
      ]
     }
