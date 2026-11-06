@@ -17,11 +17,14 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
-import type { ReviewItem } from "@/gen/session/v1/types_pb";
+import type { ReviewItem, SuggestedRuleProto } from "@/gen/session/v1/types_pb";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+import { makePr } from "@/lib/pr/__testUtils__/pullRequests";
 
 afterEach(() => {
   mockSearchParams = new URLSearchParams();
+  mockLiveSessions = [];
+  mockMultiPrUi = false;
 });
 
 // ---------------------------------------------------------------------------
@@ -37,6 +40,9 @@ const mockAcknowledgeSessions = jest.fn().mockResolvedValue({ failed: [] });
 let mockSearchParams = new URLSearchParams();
 const mockReplace = jest.fn();
 
+const mockTrack = jest.fn();
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: mockTrack }) }));
+
 jest.mock("@/lib/nav", () => ({
   ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
@@ -49,12 +55,15 @@ jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: jest.fn(),
 }));
 
+const mockApprove = jest.fn().mockResolvedValue(undefined);
+const mockDeny = jest.fn().mockResolvedValue(undefined);
+
 jest.mock("@/lib/contexts/ApprovalsContext", () => ({
   useApprovalsContext: () => ({
     pendingApprovals: [],
     resolveApproval: jest.fn(),
-    approve: jest.fn().mockResolvedValue(undefined),
-    deny: jest.fn().mockResolvedValue(undefined),
+    approve: mockApprove,
+    deny: mockDeny,
     clearForSession: jest.fn(),
     clearedSessions: new Set(),
   }),
@@ -65,12 +74,16 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
 const mockDraftPullRequest = jest.fn();
 const mockCreatePullRequest = jest.fn();
 
+let mockLiveSessions: unknown[] = [];
+let mockMultiPrUi = false;
 jest.mock("@/lib/contexts/SessionServiceContext", () => ({
   useSessionServiceContext: () => ({
     draftPullRequest: mockDraftPullRequest,
     createPullRequest: mockCreatePullRequest,
+    sessions: mockLiveSessions,
   }),
 }));
+jest.mock("@/lib/features/sessionMultiPr", () => ({ useSessionMultiPR: () => mockMultiPrUi }));
 
 // CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
 // stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
@@ -87,7 +100,7 @@ jest.mock("../CreatePullRequestModal", () => ({
   }) =>
     isOpen ? (
       <div data-testid="create-pr-modal" data-session-id={session.id}>
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{/* analytics-exempt */}Close</button>
       </div>
     ) : null,
 }));
@@ -110,7 +123,7 @@ const mockGenerate = jest.fn().mockResolvedValue(undefined);
 const mockClear = jest.fn();
 
 const mockGenerateRuleState = {
-  suggestions: [] as import("@/gen/session/v1/types_pb").SuggestedRuleProto[],
+  suggestions: [] as SuggestedRuleProto[],
   loading: false,
   error: null as Error | null,
   generate: mockGenerate,
@@ -133,8 +146,8 @@ jest.mock("../SuggestedRuleCard", () => ({
     loading?: boolean;
   }) => (
     <div data-testid="suggested-rule-card" data-loading={loading}>
-      <button onClick={() => onAccept({})}>Accept</button>
-      <button onClick={onDiscard}>Discard</button>
+      <button onClick={() => onAccept({})}>{/* analytics-exempt */}Accept</button>
+      <button onClick={onDiscard}>{/* analytics-exempt */}Discard</button>
     </div>
   ),
 }));
@@ -632,7 +645,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("shows SuggestedRuleCard when suggestion is available", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,
@@ -653,7 +666,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("closes modal and calls clear when Discard is clicked", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,
@@ -678,7 +691,7 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
   });
 
   it("shows rule-saved indicator and closes modal when rule accepted", () => {
-    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as SuggestedRuleProto;
     mockUseGenerateRule.mockReturnValue({
       suggestions: [fakeSuggestion],
       loading: false,
@@ -794,6 +807,23 @@ describe("ReviewQueuePanel — combinable filters", () => {
     renderPanel();
     openFilters();
 
+    fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("Has PR means any open PR when the multi-PR UI is on, not the item's legacy URL", () => {
+    mockMultiPrUi = true;
+    mockLiveSessions = [
+      { id: "s1", title: "S1", pullRequests: [makePr({ number: 1, state: "merged" }), makePr({ number: 2 })] },
+      { id: "s2", title: "S2", pullRequests: [makePr({ number: 3, state: "merged" })] },
+    ];
+    const items = ["s1", "s2"].map((id) => makeReviewItem({ sessionId: id, sessionName: id, githubPrUrl: "https://github.com/org/repo/pull/1" }));
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+    openFilters();
     fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
 
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
@@ -2009,6 +2039,29 @@ describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
     expect(screen.getByTestId("deny-session-approval")).toBeDisabled();
   });
 
+  it("approveDeny_should_NotRenderOrCallWithEmptyId_When_PendingApprovalIdEmpty", () => {
+    const item = makeApprovalItem({ metadata: { pending_approval_id: "" } });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("approve-session-approval")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("deny-session-approval")).not.toBeInTheDocument();
+    expect(mockApprove).not.toHaveBeenCalledWith("");
+    expect(mockDeny).not.toHaveBeenCalledWith("");
+  });
+
+  it("approveDeny_should_PassThePendingApprovalId_When_Clicked", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeApprovalItem()]));
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("approve-session-approval"));
+    fireEvent.click(screen.getByTestId("deny-session-approval"));
+
+    expect(mockApprove).toHaveBeenCalledWith("approval-123");
+    expect(mockDeny).toHaveBeenCalledWith("approval-123");
+  });
+
   it("renders a live (non-reconciled) row normally: no banner, actions enabled", () => {
     const item = makeApprovalItem();
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item], { autoResolvedRules: {} }));
@@ -2039,5 +2092,59 @@ describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
     rerender(<ReviewQueuePanel />);
 
     expect(screen.queryByTestId("review-item-session-approval")).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewQueuePanel — analytics events", () => {
+  const expectEvent = (name: string, labels?: Record<string, string>) =>
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name, category: "user_action", component: "ReviewQueuePanel", ...(labels ? { labels } : {}) }));
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("tracks opening the filter panel, a priority filter, the PR filter and clearing them", () => {
+    const urgent = makeReviewItem({ sessionId: "s-urgent", priority: Priority.URGENT });
+    const other = makeReviewItem({ sessionId: "s-other", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, other]));
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    expectEvent("review_queue_filters_toggled", { open: "true" });
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+    expectEvent("review_queue_filter_changed", { dimension: "priority" });
+    fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+    expectEvent("review_queue_pr_filter_changed", { value: "has-pr" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear active filter" }));
+    expectEvent("review_queue_filters_cleared");
+  });
+
+  it("tracks the sort direction toggle with the direction it switched to", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeReviewItem()]));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Sort direction/ }));
+    expectEvent("review_queue_sort_direction_changed", { direction: "desc" });
+  });
+
+  it("tracks the staleness Retry and a row open", () => {
+    const onSessionClick = jest.fn();
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "sess-a" })], { error: new Error("blip"), lastUpdatedAt: Date.now() - 65_000 })
+    );
+    render(<ReviewQueuePanel onSessionClick={onSessionClick} />);
+    fireEvent.click(within(screen.getByTestId("review-queue-staleness")).getByRole("button", { name: "Retry" }));
+    expectEvent("review_queue_refresh_retried");
+    fireEvent.click(screen.getByTestId("review-item-sess-a"));
+    expectEvent("review_queue_item_opened");
+    expect(onSessionClick).toHaveBeenCalledWith("sess-a");
+  });
+
+  it("tracks the manual refresh button with its source", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeReviewItem()]));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh review queue" }));
+    expectEvent("review_queue_refreshed", { source: "button" });
   });
 });

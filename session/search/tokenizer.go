@@ -92,6 +92,37 @@ func (t *Tokenizer) Tokenize(text string) []string {
 	return tokens
 }
 
+// identifierSeparators mark a whitespace-delimited field as an identifier worth
+// keeping whole: owner/repo#42, feat-b, docs/plans/x.md, a URL.
+const identifierSeparators = "/#-_.:"
+
+// identifierTrim strips the punctuation prose wraps around an identifier.
+const identifierTrim = "\"'`()[]{}<>,;!?"
+
+// TokenizeArtifact is Tokenize plus each identifier-shaped field kept whole
+// (lowercased). Splitting alone makes acme/app#42 and acme/app#43 share two of
+// three tokens and feat-a and feat-b identical; the whole token is rare, so BM25
+// ranks the exact artifact first. Used for artifact documents and their queries.
+func (t *Tokenizer) TokenizeArtifact(text string) []string {
+	tokens := t.Tokenize(text)
+	seen := make(map[string]struct{}, len(tokens))
+	for _, tok := range tokens {
+		seen[tok] = struct{}{}
+	}
+	for _, field := range strings.Fields(strings.ToLower(text)) {
+		id := strings.TrimRight(strings.Trim(field, identifierTrim), ".:")
+		if len(id) < 3 || !strings.ContainsAny(id, identifierSeparators) {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		tokens = append(tokens, id)
+	}
+	return tokens
+}
+
 // TokenizeWithPositions returns tokens along with their character positions.
 // This is useful for highlighting search results.
 func (t *Tokenizer) TokenizeWithPositions(text string) []TokenPosition {

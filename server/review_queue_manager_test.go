@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
@@ -1766,4 +1768,100 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			}
 		})
 	}
+}
+
+func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    session.PRState
+		head     string
+		wantRuns bool
+	}{
+		{"merged PR on an earlier branch lets a new one be created", session.PRStateMerged, "feat-a", true},
+		{"merged PR on this branch does not block either", session.PRStateMerged, "feat-b", true},
+		{"open PR on another branch does not block", session.PRStateOpen, "feat-a", true},
+		{"open PR on this branch short-circuits", session.PRStateOpen, "feat-b", false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+			fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
+			mgr.SetOneShotRunner(fake)
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title: "auto-create item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+			})
+			require.NoError(t, err)
+			sessionUUID := fmt.Sprintf("dddd1111-2222-3333-4444-55556666777%d", i)
+			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+			require.NoError(t, err)
+
+			inst := &session.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
+			ref, err := session.NewPRRef("", "acme", "widgets", 11)
+			require.NoError(t, err)
+			require.NoError(t, inst.AttachPR(ref, session.AttachSourceBranchDiscovery,
+				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
+			poller.SetInstances([]*session.Instance{inst})
+
+			mgr.OnItemAdded(&session.ReviewItem{
+				SessionID: "multi-pr-session", SessionName: "multi-pr-session",
+				Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now(),
+			})
+
+			if !tc.wantRuns {
+				assertNeverInvoked(t, fake, "an open PR on the current branch must short-circuit")
+				return
+			}
+			deadline := time.After(3 * time.Second)
+			for fake.callCount() == 0 {
+				select {
+				case <-deadline:
+					t.Fatal("timed out waiting for the one-shot PR runner")
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+		})
+	}
+}
+
+// autoCreatePRSessionWithOpenPR sets up an AutoCreatePR-enabled session whose
+// Branch is empty and which already holds an open PR for branch feature-x.
+func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *session.ReviewItem) {
+	t.Helper()
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title: "empty-branch item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	if gitInit {
+		repo, gerr := gogit.PlainInit(dir, false)
+		require.NoError(t, gerr)
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/feature-x")))
+	}
+	ref, err := session.NewPRRef("", "acme", "widgets", 1)
+	require.NoError(t, err)
+	inst := &session.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
+		PRs: []session.PRView{{Ref: ref, State: session.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
+	poller.SetInstances([]*session.Instance{inst})
+	return mgr, fake, &session.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now()}
+}
+
+func TestMaybeAutoCreatePR_ShouldFallBackToCheckedOutBranch_WhenSnapshotBranchEmpty(t *testing.T) {
+	mgr, fake, item := autoCreatePRSessionWithOpenPR(t, true, "eeee1111-2222-3333-4444-555566667777")
+	mgr.OnItemAdded(item)
+	mgr.wg.Wait()
+	require.Zero(t, fake.callCount(), "the open PR on the checked-out branch must be seen, not a duplicate created")
+}
+
+func TestMaybeAutoCreatePR_ShouldNotCreate_WhenBranchUnknownAndSessionHoldsPRs(t *testing.T) {
+	mgr, fake, item := autoCreatePRSessionWithOpenPR(t, false, "ffff1111-2222-3333-4444-555566667777")
+	mgr.OnItemAdded(item)
+	mgr.wg.Wait()
+	require.Zero(t, fake.callCount(), "an unknown branch cannot prove no PR exists: fail closed")
 }

@@ -385,7 +385,7 @@ var (
 			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
 				log.Info("Building core dependencies (phase 1/3)...")
 				var err error
-				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{})
+				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{RunPRMaintenance: true})
 				return err
 			})
 

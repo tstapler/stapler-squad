@@ -955,3 +955,71 @@ func TestIsApprovalPending_ReflectsStoreState(t *testing.T) {
 	require.NoError(t, store.Resolve("appr-pending-check", ApprovalDecision{Behavior: "allow"}))
 	assert.False(t, svc.IsApprovalPending("appr-pending-check"))
 }
+
+// ─── active PR drives the CI gate (multi-PR) ─────────────────────────────────
+
+func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...session.PRView) *session.Instance {
+	t.Helper()
+	return &session.Instance{
+		Title: sessionID, UUID: sessionID, PRs: prs, HasPRLinks: true,
+		GitHubPRNumber: 12, GitHubCheckConclusion: scalarConclusion,
+	}
+}
+
+func prViewFor(t *testing.T, number int, state session.PRState, conclusion string) session.PRView {
+	t.Helper()
+	ref, err := session.NewPRRef("", "acme", "app", number)
+	require.NoError(t, err)
+	return session.PRView{
+		Ref: ref, State: state, StoredTerminal: state.Terminal(), CheckConclusion: conclusion,
+		AttachedAt: time.Date(2026, 11, 1, 0, 0, number, 0, time.UTC),
+	}
+}
+
+func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(t *testing.T) {
+	withIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+
+	// The stale scalar says "success" (left by merged #11); the active PR #12 is red.
+	inst := multiPRInstance(t, "session-M", "success",
+		prViewFor(t, 11, session.PRStateMerged, "success"),
+		prViewFor(t, 12, session.PRStateOpen, ciConclusionFailure))
+
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+	require.NoError(t, store.Create(newTestPendingApproval("appr-active", "session-M", "Bash")))
+
+	_, err := svc.ResolveApproval(t.Context(), connect.NewRequest(&sessionv1.ResolveApprovalRequest{
+		ApprovalId: "appr-active", Decision: "allow",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T) {
+	withIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+
+	// The scalar still says "failure" from merged #11, but the active PR #12 is green.
+	inst := multiPRInstance(t, "session-N", ciConclusionFailure,
+		prViewFor(t, 11, session.PRStateMerged, ciConclusionFailure),
+		prViewFor(t, 12, session.PRStateOpen, "success"))
+
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+	require.NoError(t, store.Create(newTestPendingApproval("appr-green", "session-N", "Bash")))
+
+	_, err := svc.ResolveApproval(t.Context(), connect.NewRequest(&sessionv1.ResolveApprovalRequest{
+		ApprovalId: "appr-green", Decision: "allow",
+	}))
+	require.NoError(t, err)
+}
+
+func TestActivePRCIStatus_ShouldFallBackToScalars_WhenNoLinks(t *testing.T) {
+	inst := &session.Instance{GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure}
+	number, conclusion := activePRCIStatus(inst.Snapshot())
+	assert.Equal(t, 42, number)
+	assert.Equal(t, ciConclusionFailure, conclusion)
+}

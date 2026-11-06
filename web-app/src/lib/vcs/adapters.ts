@@ -6,10 +6,12 @@ import type {
   FileChangeSummary,
   FileChangeStatus,
   CommitSummary,
+  GithubPrEntry,
   GithubSummary,
   PrState,
   CheckConclusion,
 } from "./types";
+import { prRowState } from "@/lib/pr/pullRequests";
 
 // toPrState/toCheckConclusion are the only places a raw GitHub string (an
 // unconstrained proto `string` field) may be narrowed to PrState/CheckConclusion.
@@ -97,7 +99,36 @@ function fromSessionGithub(session?: Session): GithubSummary | null {
   };
 }
 
+function toPrEntries(session: Session | undefined, active: GithubSummary | null): GithubPrEntry[] | undefined {
+  if (!session || session.pullRequests.length < 2) return undefined;
+  return session.pullRequests.map((pr) => {
+    const state = prRowState(pr);
+    const isActive = pr.isActive;
+    // Only the active PR has the session-level check and review detail; the others carry their own summary.
+    const summary: GithubSummary =
+      isActive && active
+        ? active
+        : {
+            owner: pr.owner,
+            repo: pr.repo,
+            prUrl: pr.url,
+            prNumber: pr.number,
+            prState: toPrState(pr.state),
+            isDraft: pr.isDraft,
+            checkConclusion: toCheckConclusion(pr.checkConclusion),
+            approvedCount: pr.approvedCount,
+            changesReqCount: pr.changesRequestedCount,
+            mergeable: "unknown",
+            checks: [],
+            reviewFeedback: [],
+            lastCheckedAt: toDate(pr.lastPolledAt) ?? undefined,
+          };
+    return { summary, isActive, isOpen: state === "open" || state === "draft" };
+  });
+}
+
 export function fromSessionVcs(status: VCSStatus, session?: Session): VcsWidgetData {
+  const github = fromSessionGithub(session);
   const aggregateStats = status.aggregateDiffStat
     ? {
         filesChanged: status.aggregateDiffStat.filesChanged,
@@ -114,7 +145,8 @@ export function fromSessionVcs(status: VCSStatus, session?: Session): VcsWidgetD
     behindMain: status.behindBy,
     branchExists: true,
     commits: status.commits.map(toCommitSummary),
-    github: fromSessionGithub(session),
+    github,
+    githubPrs: toPrEntries(session, github),
     shipped: false,
     aggregateStats,
     statusAsOf: toDate(status.statusAsOf) ?? undefined,

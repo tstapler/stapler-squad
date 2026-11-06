@@ -360,6 +360,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
+| Graceful tymuxd handoff: upgrade/downgrade the daemon without killing panes (D1-D6, compat matrix, rollback, squad vs daemon) | `docs/explanation/graceful-tymuxd-handoff.md` |
 | Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
@@ -394,3 +395,5 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
 | Filesystem watchers: FSEvents-backed `internal/dirwatch`, `STAPLER_SQUAD_DIRWATCH=fsnotify` rollback, `fs.watches`/`fs.streams` gauges, stream cap, decision record | `docs/how-to/tune-fs-watchers.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
+| Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
+| Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |

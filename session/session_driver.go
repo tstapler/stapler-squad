@@ -441,10 +441,8 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		return driverPaneSnapshot(inst.IsRemote())
 	}, time.Now, driverPaneActivityGateEnabled)
 
-	// Once a PR URL is found in terminal output we stop scanning.
-	// Pre-seed from the current in-memory state so we don't re-scan for sessions
-	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
-	prURLLinked := inst.GitHubPRNumber > 0
+	// PR URLs from terminal output that the scan has already handled.
+	scannedURLs := scannedPRURLs{}
 
 	attempt := newDriverAttempt(inst, initialPrompt, time.Now())
 	if !attempt.sentInitial {
@@ -558,7 +556,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
-		prURLLinked = scanAndLinkPRURL(inst, attempt.sentInitial, prURLLinked, previewErr, output)
+		scanAndLinkPRURL(inst, attempt.sentInitial, scannedURLs, previewErr, output)
 	}
 }
 
@@ -1034,32 +1032,47 @@ func handleApprovalDialogTick(inst *Instance, hasOutput bool, tailed string, all
 	}
 }
 
-// scanAndLinkPRURL scans terminal output for a GitHub PR URL printed by git
-// push and auto-links it to the session so PRStatusPoller can track it
-// without relying on branch-name discovery (which fails when the omnibar
-// branch name differs from the PR head branch). It returns the prURLLinked
-// value the caller should keep for subsequent ticks.
-//
-// Republishes the snapshot after its raw write: GitHub()/CurrentBranch()
-// and instance_adapter.go's API responses read GitHubPRURL/GitHubPRNumber
-// via Snapshot(), which would otherwise never observe this write.
-func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previewErr error, output string) bool {
-	if prURLLinked || !sentInitial || inst.GitHubOwner == "" || previewErr != nil || output == "" {
-		return prURLLinked
+// scannedPRURLs holds the PR URLs the terminal scan has already handled, so a URL
+// that stays in the scrollback is not processed again on every tick.
+type scannedPRURLs map[string]struct{}
+
+// scanAndLinkPRURL scans terminal output for the PR URLs a git push or
+// `gh pr create` printed and attaches each one that belongs to the session's own
+// repository, so PRStatusPoller can track it without relying on branch-name
+// discovery (which fails when the omnibar branch name differs from the PR head
+// branch). Several URLs accumulate as separate links; seen remembers the ones
+// already handled.
+func scanAndLinkPRURL(inst *Instance, sentInitial bool, seen scannedPRURLs, previewErr error, output string) {
+	if !sentInitial || previewErr != nil || output == "" {
+		return
 	}
-	prURL, prNum := scanTerminalForPRURL(output)
-	if prURL == "" {
-		return prURLLinked
+	for _, prURL := range scanTerminalForPushedPRURLs(output) {
+		if _, done := seen[prURL]; done {
+			continue
+		}
+		seen[prURL] = struct{}{}
+		attachScannedPRURL(inst, prURL)
 	}
-	inst.mu.Lock()
-	inst.GitHubPRURL = prURL
-	inst.GitHubPRNumber = prNum
-	snap := buildSnapshot(inst)
-	inst.mu.Unlock()
-	inst.snapshot.Store(snap)
+}
+
+// attachScannedPRURL attaches prURL only when its host, owner and repo equal the
+// session's resolved ones; a session without a resolved repo attaches nothing.
+func attachScannedPRURL(inst *Instance, prURL string) {
+	parsed, err := ParseGitHubURL(prURL)
+	if err != nil {
+		return
+	}
+	gh := inst.Snapshot().GitHub
+	want, wantErr := NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, parsed.PRNumber)
+	got, gotErr := NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
+	if wantErr != nil || gotErr != nil || want != got {
+		log.Debug("SessionDriver: ignoring PR URL from terminal output that is not in the session's repository",
+			"session", inst.Title, "url", prURL, "session_repo", gh.GitHubOwner+"/"+gh.GitHubRepo)
+		return
+	}
+	inst.AttachScannedPR(prURL, parsed.PRNumber)
 	log.Info("SessionDriver: auto-linked PR from terminal push output",
-		"session", inst.Title, "pr", prNum, "url", prURL)
-	return true
+		"session", inst.Title, "pr", parsed.PRNumber, "url", prURL)
 }
 
 // submitInitialPrompt is a variable only so a test can force a lease-API error
@@ -1466,26 +1479,23 @@ func outputShowsConversationStarted(output string) bool {
 	return false
 }
 
-// scanTerminalForPRURL searches terminal scrollback output for a GitHub PR URL
-// of the form https://github.com/owner/repo/pull/NNN (as printed by git push).
-// Returns ("", 0) if not found.
-func scanTerminalForPRURL(output string) (string, int) {
+// scanTerminalForPushedPRURLs returns, oldest first, the GitHub PR URLs on the
+// last 30 lines of terminal output that git push (optionally "remote:"-prefixed)
+// or `gh pr create` printed on a line of their own. A URL mentioned inside other
+// text is not a push result and is ignored.
+func scanTerminalForPushedPRURLs(output string) []string {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0 && i >= len(lines)-30; i-- {
-		line := strings.TrimSpace(lines[i])
-		if !strings.Contains(line, "github.com/") || !strings.Contains(line, "/pull/") {
+	var urls []string
+	for _, line := range lines[max(0, len(lines)-30):] {
+		word := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "remote:"))
+		if strings.ContainsAny(word, " \t") || !strings.Contains(word, "github.com/") || !strings.Contains(word, "/pull/") {
 			continue
 		}
-		for _, word := range strings.Fields(line) {
-			word = strings.Trim(word, ".,;:\"'()")
-			if strings.Contains(word, "github.com/") && strings.Contains(word, "/pull/") {
-				if ref, err := ParseGitHubURL(word); err == nil && ref.PRNumber > 0 {
-					return word, ref.PRNumber
-				}
-			}
+		if ref, err := ParseGitHubURL(word); err == nil && ref.PRNumber > 0 {
+			urls = append(urls, word)
 		}
 	}
-	return "", 0
+	return urls
 }
 
 // parseJSONField extracts a string field value from a JSON blob.

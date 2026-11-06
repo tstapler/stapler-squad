@@ -48,9 +48,11 @@ type SessionArchiver interface {
 // without that synchronous call firing (pre-existing terminal items, a
 // race/crash mid-transition).
 type WorktreeCleaner interface {
-	// CleanupTerminalItem is best-effort: internal failures are logged, never
-	// returned, matching the RPC call site's existing contract.
-	CleanupTerminalItem(ctx context.Context, itemID string)
+	// CleanupTerminalItem is best-effort: failures are logged, never returned as
+	// errors. The outcome tells the sweep whether to settle the item: Done and a
+	// PR-held Blocked settle for the TTL, Failed retries on the TTL, and a
+	// live-only Blocked is retried every pass.
+	CleanupTerminalItem(ctx context.Context, itemID string) CleanupOutcome
 }
 
 // maxDoneAge is how long a backlog item remains in "done" status before the
@@ -124,8 +126,9 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
 		return
 	}
-	processed := 0
+	processed, ruleLUnsettled := 0, 0
 	now := l.sweepNow()
+	probe := l.ruleLProbe()
 	counts, countsOK := l.terminalSessionCounts(ctx)
 	for _, item := range items {
 		settleKey := terminalSweepKey("sessions", item, counts[item.ID])
@@ -138,6 +141,14 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			continue
 		}
 		clean := true
+		// RULE L: a live current-round work session keeps its pane and worktree; the
+		// item stays unsettled so the next 60 s pass retries it, not the TTL.
+		sessions, skippedLive := SplitLiveCurrentRound(ctx, probe, now, sessions)
+		if skippedLive {
+			clean = false
+			ruleLUnsettled++
+			liveWorkMetrics.count(LiveWorkResultRuleLSkip)
+		}
 		for _, is := range sessions {
 			if is.SessionUUID == "" || !IsTmuxBackedSessionRole(is.Role) {
 				continue
@@ -157,6 +168,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 		}
 	}
+	SetRuleLUnsettledItems(ruleLUnsettled)
 	if processed > 0 {
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work/review session(s) across %d terminal item(s)", processed, len(items))
 	}
@@ -203,10 +215,11 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		if countsOK && l.terminalSettled.isSettled(settleKey, now) {
 			continue
 		}
-		l.cleanupTerminalItemSync(ctx, item.ID)
-		// WorktreeCleaner is best-effort and reports nothing, so a failed cleanup is
-		// retried after the TTL rather than on the next tick.
-		if countsOK {
+		outcome := l.cleanupTerminalItemSync(WithCleanupPath(ctx, CleanupPathSweep), item.ID)
+		// A live-only block is the one outcome retried on the next tick; everything
+		// else waits for the TTL (a PR-held block is released promptly by the
+		// terminal listener, T5.4.3).
+		if countsOK && (outcome.Status != CleanupBlocked || !outcome.LiveOnly) {
 			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 		}
 	}

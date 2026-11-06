@@ -91,6 +91,9 @@ type SessionService struct {
 	reviewQueuePoller *session.ReviewQueuePoller
 	federation        *FederatedSessions // nil unless host gossip is running
 
+	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
+	prRefs prRefsSeams
+
 	// guardedSteer holds the per-session nudge guard and its test seams; see
 	// session_service_guarded_steer.go. The zero value is production-ready.
 	guardedSteer guardedSteerState
@@ -274,6 +277,9 @@ type SessionService struct {
 
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *CheckpointService
+
+	// artifactSvc handles RescanSessionArtifacts.
+	artifactSvc *ArtifactService
 
 	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
 	prCreationSvc *PRCreationService
@@ -988,6 +994,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		artifactSvc:                 &ArtifactService{},
 		featureFlagSvc:              NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
@@ -1027,6 +1034,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire CheckpointService's instance-load fallback to this service's own
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
+	svc.artifactSvc.findInstance = svc.findInstance
+	svc.artifactSvc.allInstances = svc.allInstances
 
 	// Construct prCreationSvc with the shared storage/eventBus and a bound
 	// findInstance method value (narrow dependency, not the whole SessionService —
@@ -1164,6 +1173,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
 	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
+	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built

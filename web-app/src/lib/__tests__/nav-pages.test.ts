@@ -1,4 +1,5 @@
 import {
+  BOTTOM_NAV_MORE,
   groupNavPages,
   NAV_PAGES,
   NAV_GROUP_LABELS,
@@ -18,6 +19,14 @@ describe("NAV_PAGES owner inbox", () => {
   it("registers the Owner Inbox in the work group", () => {
     const page = NAV_PAGES.find((p) => p.href === routes.ownerInbox);
     expect(page?.group).toBe("work");
+  });
+});
+
+describe("NAV_PAGES artifacts entry", () => {
+  it("lists Artifacts in the hamburger and the mobile More sheet but not the header row", () => {
+    const entry = NAV_PAGES.find((p) => p.href === routes.artifacts);
+    expect(entry).toMatchObject({ label: "Artifacts", group: "work", headerNav: false });
+    expect(BOTTOM_NAV_MORE).toContain(entry);
   });
 });
 

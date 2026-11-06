@@ -138,11 +138,13 @@ func (as *ApprovalService) resolveApproval(ctx context.Context, approvalID, deci
 			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 			// fields on its own goroutine under inst.mu (session/instance.go's mu doc
 			// comment mandates Snapshot() for reads outside the actor).
-			ghInfo := inst.Snapshot().GitHub
-			blocked := ghInfo.GitHubPRNumber > 0 && ghInfo.GitHubCheckConclusion == ciConclusionFailure
+			snap := inst.Snapshot()
+			ghInfo := snap.GitHub
+			prNumber, conclusion := activePRCIStatus(snap) // the active PR's conclusion, not a stale scalar
+			blocked := prNumber > 0 && conclusion == ciConclusionFailure
 			if blocked && overrideCIBlock {
 				log.Info("[ApprovalService] approved despite failing CI (override)",
-					"approval_id", approvalID, "session_id", sessionID, "ci_conclusion", ghInfo.GitHubCheckConclusion)
+					"approval_id", approvalID, "session_id", sessionID, "ci_conclusion", conclusion)
 			} else if blocked {
 				msg := "Approval blocked: CI is failing on this branch — review before approving."
 				if ghInfo.GitHubPRURL != "" {

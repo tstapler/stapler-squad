@@ -163,6 +163,7 @@ test.describe("backlog manual override", () => {
     // SetBacklogItemPRAndTransition moves review -> pr_pending atomically
     // with the PR fields — both must be visible together.
     await expect(page.getByTestId("stage-modifier-badge")).toHaveText("PR pending");
+    await expect(page.getByTestId("toast").getByText("PR #320 linked — item moved to pr_pending.")).toBeVisible();
     const prLink = page.getByRole("link", { name: "View GitHub Pull Request #320" });
     await expect(prLink).toHaveAttribute("href", "https://github.com/tstapler/stapler-squad/pull/320");
   });

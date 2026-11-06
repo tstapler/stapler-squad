@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // TestMigration_should_BeReversible_When_CreationFieldsAreAtZeroValues covers
@@ -68,4 +69,38 @@ func TestMigration_should_BeReversible_When_CreationFieldsAreAtZeroValues(t *tes
 		"failure_reason must round-trip its documented zero-value default of empty string")
 	assert.Nil(t, fetched.CreationProgressUpdatedAt,
 		"creation_progress_updated_at is Optional().Nillable(); a row that never sets it must read back nil, not a zero time.Time")
+}
+
+// TestMigration_should_CreatePRTrackingTables_When_SchemaIsApplied covers the
+// session-multi-pr-tracking tables: they are created additively, a bare row
+// round-trips its documented defaults, and the unique identity index rejects a
+// second row for the same canonical PR. Generated output is never committed, so
+// this runs against the schema the build just generated.
+func TestMigration_should_CreatePRTrackingTables_When_SchemaIsApplied(t *testing.T) {
+	repo := session.NewTestEntRepository(t)
+	client := repo.GetEntClient()
+	ctx := context.Background()
+
+	state, err := client.PullRequestState.Create().
+		SetHost("github.com").SetOwner("acme").SetRepo("app").SetNumber(12).Save(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", state.State)
+	assert.False(t, state.Terminal)
+	assert.Zero(t, state.PollFailCount)
+	assert.Nil(t, state.LastPolledAt)
+	assert.False(t, state.CreatedAt.IsZero())
+
+	err = client.PullRequestState.Create().
+		SetHost("github.com").SetOwner("acme").SetRepo("app").SetNumber(12).Exec(ctx)
+	assert.True(t, ent.IsConstraintError(err), "the canonical PRRef is unique, got %v", err)
+
+	link, err := client.SessionPR.Create().
+		SetPullRequestStateID(state.ID).SetSessionUUID("u1").SetAttachSource("manual").Save(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "primary", link.Role)
+	assert.False(t, link.Pinned)
+
+	err = client.SessionPR.Create().
+		SetPullRequestStateID(state.ID).SetSessionUUID("u2").SetRole("primary").SetAttachSource("bogus").Exec(ctx)
+	assert.True(t, ent.IsValidationError(err), "attach_source is an enum, got %v", err)
 }
