@@ -22,6 +22,8 @@ export function PullRequestUndoToast({ message, hint, onUndo, onDismiss, focusUn
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const paused = hovered || focused;
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
 
   useEffect(() => {
     if (focusUndoOnAppear) undoRef.current?.focus();
@@ -29,9 +31,9 @@ export function PullRequestUndoToast({ message, hint, onUndo, onDismiss, focusUn
 
   useEffect(() => {
     if (paused) return;
-    const timer = setTimeout(() => onDismiss(false), UNDO_TOAST_MS);
+    const timer = setTimeout(() => dismissRef.current(false), UNDO_TOAST_MS);
     return () => clearTimeout(timer);
-  }, [paused, onDismiss]);
+  }, [paused]);
 
   return (
     <div
