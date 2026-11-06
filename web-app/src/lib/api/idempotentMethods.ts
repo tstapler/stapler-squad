@@ -33,6 +33,13 @@ export const IDEMPOTENT_METHODS = {
     "GetReviewQueue",
     "GetSession",
     "ListStuckBacklogItems",
+    // BacklogFlowService reads: aggregates over a window, safe to share or re-send.
+    "GetFlowSummary",
+    "ListDeadlockCandidates",
+    "ListThrashEpisodes",
+    "GetItemFlowTimeline",
+    "CompareFlowWindows",
+    "ListFlowDrilldown",
   ],
   /** Safe to re-send after a transport failure. */
   replayable: [
@@ -54,6 +61,13 @@ export const IDEMPOTENT_METHODS = {
     "GetReviewQueue",
     "GetSession",
     "ListStuckBacklogItems",
+    // BacklogFlowService reads: aggregates over a window, safe to share or re-send.
+    "GetFlowSummary",
+    "ListDeadlockCandidates",
+    "ListThrashEpisodes",
+    "GetItemFlowTimeline",
+    "CompareFlowWindows",
+    "ListFlowDrilldown",
   ],
   /** May be sent over the unary WebSocket; must equal ws-unary-allowlist.json's wsUnaryAllowed. */
   wsEligible: [

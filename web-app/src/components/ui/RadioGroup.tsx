@@ -10,6 +10,8 @@ export interface RadioGroupOption<T extends string> {
   description?: string;
   /** Optional data-testid override for the option's button element. */
   dataTestId?: string;
+  /** Rendered `aria-disabled` and kept in the tab order; it cannot be selected, and arrow keys skip it. */
+  disabled?: boolean;
 }
 
 export interface RadioGroupProps<T extends string> {
@@ -56,16 +58,24 @@ export function RadioGroup<T extends string>({
   const hasSelection = currentIndex !== -1;
   const hintText = hintForValue?.(value);
 
-  function handleKeyDown(e: KeyboardEvent) {
+  function step(direction: 1 | -1) {
     const fromIndex = hasSelection ? currentIndex : 0;
+    for (let offset = 1; offset <= options.length; offset++) {
+      const candidate = options[(((fromIndex + direction * offset) % options.length) + options.length) % options.length];
+      if (!candidate.disabled) {
+        onChange(candidate.value);
+        return;
+      }
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault();
-      const next = (fromIndex + 1) % options.length;
-      onChange(options[next].value);
+      step(1);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
-      const prev = (fromIndex - 1 + options.length) % options.length;
-      onChange(options[prev].value);
+      step(-1);
     }
   }
 
@@ -86,9 +96,10 @@ export function RadioGroup<T extends string>({
             key={option.value}
             role="radio"
             aria-checked={value === option.value}
+            aria-disabled={option.disabled || undefined}
             tabIndex={value === option.value ? 0 : (!hasSelection && idx === 0 ? 0 : -1)}
             type="button"
-            onClick={() => onChange(option.value)}
+            onClick={() => !option.disabled && onChange(option.value)}
             data-testid={option.dataTestId}
             className={[radioBtn, value === option.value ? radioBtnActive : ""]
               .filter(Boolean)
