@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/metric"
@@ -164,7 +165,8 @@ func collectBrowseRows(vis visibleSet, f browseFilter) []*sessionv1.SessionArtif
 		if snap.Artifacts == nil {
 			continue
 		}
-		for _, r := range snap.Artifacts.Records {
+		// Redacted again here so blobs stored before redaction existed never leave the server.
+		for _, r := range artifacts.RedactedRecords(snap.Artifacts.Records) {
 			rec := adapters.ArtifactRecordToProto(r)
 			if rec == nil {
 				continue

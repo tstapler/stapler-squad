@@ -109,3 +109,14 @@ func TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState(t *testing.T) {
 	require.Len(t, resp.Msg.Rows, 1)
 	assert.Equal(t, "session_pr", resp.Msg.Rows[0].Source)
 }
+
+func TestListSessionArtifacts_ShouldRedactLegacyBlobs(t *testing.T) {
+	t.Parallel()
+	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(
+		artifacts.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret", FirstSeenAt: artifactT0},
+	)))
+	resp, err := svc.ListSessionArtifacts(context.Background(), browseReq(nil))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Rows, 1)
+	assert.Equal(t, "https://ci.example.com/runs/9?token=[redacted]", resp.Msg.Rows[0].GetRecord().GetCiLink().GetUrl())
+}

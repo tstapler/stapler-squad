@@ -98,7 +98,8 @@ func (x *ArtifactIndex) Update(sessionID string, blob *artifacts.SessionArtifact
 		return
 	}
 	var keys sessionKeys
-	for i, rec := range blob.Records {
+	// Indexed redacted: legacy blobs may predate redaction.
+	for i, rec := range artifacts.RedactedRecords(blob.Records) {
 		doc, ok := artifactDocument(rec)
 		if !ok {
 			continue
