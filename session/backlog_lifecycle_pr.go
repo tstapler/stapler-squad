@@ -1496,6 +1496,19 @@ func (l *BacklogLifecycleListener) conflictRetryNow() time.Time {
 	return time.Now()
 }
 
+// recordPRFixTrigger writes the pr_fix_trigger marker for a PR-fix decision,
+// best-effort and deduped by the repo's marker limiter; it never alters control flow.
+func recordPRFixTrigger(ctx context.Context, er *EntRepository, itemID string, prNumber int, trigger string) {
+	if er == nil {
+		return
+	}
+	if trigger == PRFixTriggerUnknown {
+		prFixTriggerUnknownCount.Add(1)
+		log.DebugLog().Printf("[BacklogLifecycle] pr_fix_trigger unknown item=%s pr=%d", itemID, prNumber)
+	}
+	er.RecordFlowMarker(ctx, itemID, FlowMarkerPRFixTrigger, trigger, prNumber)
+}
+
 // remediatePRFixWithBackoffGate wraps fixSpawner.AutoReopenForPRFix with the
 // shared remediation backoff gate (Storage.RemediationDue,
 // session/backlog_remediation.go) — the fix for the MAJOR bug flagged in
@@ -1832,6 +1845,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
+		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, PRFixTriggerUnknown)
 		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
@@ -1979,6 +1993,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 
 	conflictOnly := prStatus.HasConflicts && !prStatus.CIFailing && !prStatus.HasBlockingReviews && !hasNewFeedback
+	recordPRFixTrigger(ctx, er, item.ID.String(), item.PrNumber,
+		ClassifyPRFixTrigger(prStatus.CIFailing, prStatus.HasConflicts, prStatus.HasBlockingReviews, hasNewFeedback))
 	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, conflictOnly)
 	if fixErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)

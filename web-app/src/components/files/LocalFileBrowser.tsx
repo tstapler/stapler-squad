@@ -419,7 +419,8 @@ export function LocalFileBrowser() {
     setTerminalError(null);
     setOpeningTerminal(true);
     try {
-      const session = await createSession({ path: currentPath, sessionType: SessionType.DIRECTORY });
+      const title = currentPath.split("/").filter(Boolean).pop() ?? "root"; // server rejects an empty title
+      const session = await createSession({ title, path: currentPath, sessionType: SessionType.DIRECTORY });
       analytics.track({ name: "file_browser.open_terminal", category: "user_action", component: "LocalFileBrowser" });
       if (session) {
         router.push(`/?session=${session.id}`);
