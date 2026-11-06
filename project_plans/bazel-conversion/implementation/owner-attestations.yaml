@@ -76,3 +76,20 @@ defaults:
     waiver_reason_min_chars: 20
     cache_write_policy: bazel-cache-write only for main push and protected branches (D-PROTECT-WRITE)
     go_mod_bump_to_bazel_resolved_versions: allowed
+adr_009_e2e:
+  decision: Full e2e run
+  date: 2026-11-05
+  status: recorded
+  spikes: [S14]
+  note: >-
+    Owner choice via AskUserQuestion after spike S14 returned Fail: keep e2e as a full run in CI; no e2e
+    selection. ADR-009 is Accepted with this outcome; S14 stays Fail; T9f is N/A.
+adr_010_lower_package_criteria:
+  decision: >-
+    SC1 counts declarations relocated into the core (not callers' uses) and SC3 does not count a lower
+    package's natural callers as importers, for lower packages (packages the core session imports)
+  date: 2026-11-05
+  status: recorded
+  note: >-
+    Owner choice via AskUserQuestion; the option label was relayed as this description, not verbatim.
+    Amends ADR-010 Decision 2 (SC1, SC3) for lower packages only; upper clusters are unchanged.

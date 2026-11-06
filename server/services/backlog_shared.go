@@ -3,6 +3,7 @@ package services
 import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // flagGatedForeignClaimLookup makes a session.ForeignClaimLookup honor the
@@ -17,9 +18,9 @@ func NewFlagGatedForeignClaimLookup(inner session.ForeignClaimLookup) session.Fo
 	return flagGatedForeignClaimLookup{inner: inner}
 }
 
-func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (session.ClaimRecord, bool) {
+func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool) {
 	if !config.LoadConfig().GetFeatureFlag(CrossHostClaimDedupFlagName) {
-		return session.ClaimRecord{}, false
+		return hostclaim.ClaimRecord{}, false
 	}
 	return f.inner.ForeignClaim(externalURL)
 }

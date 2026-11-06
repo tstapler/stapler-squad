@@ -91,6 +91,30 @@ class CheckSpikeResults(unittest.TestCase):
     def test_no_attestations_no_deferral_line(self):
         self.assertIsNone(csr.owner_deferrals("/nonexistent/owner-attestations.yaml"))
 
+    def test_owner_accepted_fail_is_display_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "owner-attestations.yaml"), "w").write(
+                "adr_009_e2e:\n  decision: Full e2e run\n  date: 2026-11-05\n  status: recorded\n  spikes: [S14]\n")
+            rows = [dict(r, verdict="Fail") if r["spike"] == "S13" else r for r in good_rows()]
+            rows.append({"spike": "S14", "verdict": "Fail", "path": "p", "cost": "M"})
+            res = os.path.join(d, "spike-results.yaml")
+            open(res, "w").write("".join("- spike: %s\n  verdict: %s\n  path: p\n  cost: S\n" % (r["spike"], r["verdict"]) for r in rows))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = csr.main(["x", res])
+            text = out.getvalue()
+            self.assertIn("OWNER-ACCEPTED Fail (verdict stays Fail): S14 (Full e2e run, 2026-11-05)", text)
+            self.assertIn("BLOCKING (verdict Fail): S13", text)
+            self.assertIn("S14            Fail", text)
+            self.assertEqual(code, 0)
+
+    def test_owner_accepted_fail_requires_recorded_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "owner-attestations.yaml")
+            open(p, "w").write("adr_009_e2e:\n  decision: Full e2e run\n  spikes: [S14]\n")
+            self.assertIsNone(csr.owner_accepted_fails(p))
+            self.assertIsNone(csr.owner_accepted_fails(os.path.join(d, "missing.yaml")))
+
 
 if __name__ == "__main__":
     unittest.main()

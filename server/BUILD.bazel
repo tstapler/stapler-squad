@@ -104,6 +104,7 @@ go_library(
         "//session/domain",
         "//session/gitwiring",
         "//session/headless",
+        "//session/hostclaim",
         "//session/importer",
         "//session/memory",
         "//session/prpoller",

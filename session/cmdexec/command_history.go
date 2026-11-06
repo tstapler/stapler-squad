@@ -1,4 +1,4 @@
-package session
+package cmdexec
 
 import (
 	"encoding/json"

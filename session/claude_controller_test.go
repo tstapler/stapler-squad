@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/session/cmdexec"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/session/ptyio"
@@ -191,7 +192,7 @@ func TestClaudeController_SetExecutionOptions(t *testing.T) {
 		t.Fatalf("NewClaudeController() failed: %v", err)
 	}
 
-	newOpts := ExecutionOptions{
+	newOpts := cmdexec.ExecutionOptions{
 		Timeout:             30 * time.Second,
 		MaxOutputSize:       4096,
 		StatusCheckInterval: 500 * time.Millisecond,

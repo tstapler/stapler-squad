@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // EngineMode is how the selector uses the enforce composition.
@@ -177,7 +178,7 @@ type SwitchableWorkflowEngine struct {
 	Enf      EnforceAnswer
 	Modes    EngineModeSource
 	recorder ShadowRecorder
-	clock    Clock
+	clock    hostclaim.Clock
 
 	configLabel func() string
 	sampleRead  func() bool
@@ -207,7 +208,7 @@ func WithShadowRecorder(r ShadowRecorder) SelectorOption {
 }
 
 // WithSelectorClock sets the clock used for the fallback WARN rate limit.
-func WithSelectorClock(c Clock) SelectorOption {
+func WithSelectorClock(c hostclaim.Clock) SelectorOption {
 	return func(s *SwitchableWorkflowEngine) { s.clock = c }
 }
 
@@ -236,7 +237,7 @@ func NewSwitchableWorkflowEngine(def *DefaultWorkflowEngine, cfg *ConfiguredWork
 		Enf:         EnforceAnswer{def: def, cfg: cfg},
 		Modes:       modes,
 		recorder:    discardRecorder{},
-		clock:       RealClock{},
+		clock:       hostclaim.RealClock{},
 		configLabel: func() string { return "unlabeled" },
 		warnf:       func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
 		infof:       func(f string, a ...any) { log.InfoLog().Printf(f, a...) },
@@ -657,7 +658,7 @@ type FlagClassModeSource struct {
 var _ ClassModeSource = (*FlagClassModeSource)(nil)
 
 // NewFlagClassModeSource reads load() at most once per ttl per class.
-func NewFlagClassModeSource(load func() *config.Config, ttl time.Duration, clock Clock) *FlagClassModeSource {
+func NewFlagClassModeSource(load func() *config.Config, ttl time.Duration, clock hostclaim.Clock) *FlagClassModeSource {
 	f := &FlagClassModeSource{byClass: map[CallerClass]*CachedModeSource{}}
 	for _, c := range []CallerClass{ClassOperator, ClassAgent, ClassSystem} {
 		f.byClass[c] = NewCachedModeSource(func() EngineMode { return ModeForClassFlags(c, load()) }, ttl, clock)
@@ -740,7 +741,7 @@ func compareGateStatuses(def, enf []GateStatus) DivergenceClass {
 type CachedModeSource struct {
 	load  func() EngineMode
 	ttl   time.Duration
-	clock Clock
+	clock hostclaim.Clock
 	cur   atomic.Pointer[modeEntry]
 	group singleflight.Group
 }
@@ -751,9 +752,9 @@ type modeEntry struct {
 }
 
 // NewCachedModeSource wraps load with a ttl cache; a nil clock uses real time.
-func NewCachedModeSource(load func() EngineMode, ttl time.Duration, clock Clock) *CachedModeSource {
+func NewCachedModeSource(load func() EngineMode, ttl time.Duration, clock hostclaim.Clock) *CachedModeSource {
 	if clock == nil {
-		clock = RealClock{}
+		clock = hostclaim.RealClock{}
 	}
 	return &CachedModeSource{load: load, ttl: ttl, clock: clock}
 }

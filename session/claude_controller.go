@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/session/cmdexec"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
@@ -148,9 +149,9 @@ type ClaudeController struct {
 	rateLimitHandler atomic.Pointer[ratelimit.PTYConsumer]
 	statusDetector   atomic.Pointer[detection.StatusDetector]
 	idleDetector     atomic.Pointer[detection.IdleDetector]
-	queue            atomic.Pointer[CommandQueue]
-	executor         atomic.Pointer[CommandExecutor]
-	history          atomic.Pointer[CommandHistory]
+	queue            atomic.Pointer[cmdexec.CommandQueue]
+	executor         atomic.Pointer[cmdexec.CommandExecutor]
+	history          atomic.Pointer[cmdexec.CommandHistory]
 
 	_ [64]byte // cache-line padding: separates hot atomic slots from Locked fields below (Go #67764)
 
@@ -317,25 +318,25 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		}
 
 		// Create command queue with persistence
-		q, err := NewCommandQueueWithPersistence(cc.sessionName, getQueuePersistDir())
+		q, err := cmdexec.NewCommandQueueWithPersistence(cc.sessionName, getQueuePersistDir())
 		if err != nil {
 			startErr = fmt.Errorf("failed to create command queue: %w", err)
 			return
 		}
 
 		// Create command history with persistence
-		h, err := NewCommandHistoryWithPersistence(cc.sessionName, getHistoryPersistDir())
+		h, err := cmdexec.NewCommandHistoryWithPersistence(cc.sessionName, getHistoryPersistDir())
 		if err != nil {
 			startErr = fmt.Errorf("failed to create command history: %w", err)
 			return
 		}
 
 		// Create command executor
-		exec := NewCommandExecutor(cc.sessionName, pa, rs, sd, q)
+		exec := cmdexec.NewCommandExecutor(cc.sessionName, pa, rs, sd, q)
 
 		// Set up result callback to automatically add to history.
 		// Captures h directly — safe since h is never replaced after Start().
-		exec.SetResultCallback(func(result *ExecutionResult) {
+		exec.SetResultCallback(func(result *cmdexec.ExecutionResult) {
 			if err := h.AddFromResult(result); err != nil {
 				log.Error("failed to add execution result to history", "err", err)
 			}
@@ -516,12 +517,12 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 		return "", fmt.Errorf("controller not started")
 	}
 
-	cmd := &Command{
+	cmd := &cmdexec.Command{
 		ID:        generateCommandID(),
 		Text:      text,
 		Priority:  priority,
 		Timestamp: time.Now(),
-		Status:    CommandPending,
+		Status:    cmdexec.CommandPending,
 	}
 
 	if err := q.Enqueue(cmd); err != nil {
@@ -534,7 +535,7 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 }
 
 // SendCommandImmediate sends a command for immediate execution (bypasses queue).
-func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult, error) {
+func (cc *ClaudeController) SendCommandImmediate(text string) (*cmdexec.ExecutionResult, error) {
 	if !cc.started.Load() {
 		return nil, fmt.Errorf("controller not started")
 	}
@@ -544,12 +545,12 @@ func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult,
 		return nil, fmt.Errorf("controller not started")
 	}
 
-	cmd := &Command{
+	cmd := &cmdexec.Command{
 		ID:        generateCommandID(),
 		Text:      text,
 		Priority:  100, // High priority for immediate commands
 		Timestamp: time.Now(),
-		Status:    CommandPending,
+		Status:    cmdexec.CommandPending,
 	}
 
 	result, err := exec.ExecuteImmediate(cmd)
@@ -569,7 +570,7 @@ func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult,
 }
 
 // GetCommandStatus retrieves the current status of a command.
-func (cc *ClaudeController) GetCommandStatus(commandID string) (*Command, error) {
+func (cc *ClaudeController) GetCommandStatus(commandID string) (*cmdexec.Command, error) {
 	if exec := cc.executor.Load(); exec != nil {
 		if currentCmd := exec.GetCurrentCommand(); currentCmd != nil && currentCmd.ID == commandID {
 			return currentCmd, nil
@@ -601,7 +602,7 @@ func (cc *ClaudeController) CancelCommand(commandID string) error {
 }
 
 // GetCurrentCommand returns the currently executing command, if any.
-func (cc *ClaudeController) GetCurrentCommand() *Command {
+func (cc *ClaudeController) GetCurrentCommand() *cmdexec.Command {
 	if exec := cc.executor.Load(); exec != nil {
 		return exec.GetCurrentCommand()
 	}
@@ -609,7 +610,7 @@ func (cc *ClaudeController) GetCurrentCommand() *Command {
 }
 
 // GetQueuedCommands returns all commands currently in the queue.
-func (cc *ClaudeController) GetQueuedCommands() []*Command {
+func (cc *ClaudeController) GetQueuedCommands() []*cmdexec.Command {
 	if q := cc.queue.Load(); q != nil {
 		return q.List()
 	}
@@ -626,7 +627,7 @@ func (cc *ClaudeController) GetQueuedCommandsCount() int {
 }
 
 // GetCommandHistory returns recent command history.
-func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
+func (cc *ClaudeController) GetCommandHistory(limit int) []*cmdexec.HistoryEntry {
 	h := cc.history.Load()
 	if h == nil {
 		return nil
@@ -638,7 +639,7 @@ func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
 }
 
 // SearchHistory searches command history by text.
-func (cc *ClaudeController) SearchHistory(query string) []*HistoryEntry {
+func (cc *ClaudeController) SearchHistory(query string) []*cmdexec.HistoryEntry {
 	if h := cc.history.Load(); h != nil {
 		return h.Search(query)
 	}
@@ -646,11 +647,11 @@ func (cc *ClaudeController) SearchHistory(query string) []*HistoryEntry {
 }
 
 // GetHistoryStatistics returns statistics about command execution.
-func (cc *ClaudeController) GetHistoryStatistics() HistoryStatistics {
+func (cc *ClaudeController) GetHistoryStatistics() cmdexec.HistoryStatistics {
 	if h := cc.history.Load(); h != nil {
 		return h.GetStatistics()
 	}
-	return HistoryStatistics{}
+	return cmdexec.HistoryStatistics{}
 }
 
 // Subscribe creates a new subscription to the response stream.
@@ -948,18 +949,18 @@ func (cc *ClaudeController) GetInstance() InstanceContext {
 }
 
 // SetExecutionOptions updates command execution options.
-func (cc *ClaudeController) SetExecutionOptions(options ExecutionOptions) {
+func (cc *ClaudeController) SetExecutionOptions(options cmdexec.ExecutionOptions) {
 	if exec := cc.executor.Load(); exec != nil {
 		exec.SetOptions(options)
 	}
 }
 
 // GetExecutionOptions returns current execution options.
-func (cc *ClaudeController) GetExecutionOptions() ExecutionOptions {
+func (cc *ClaudeController) GetExecutionOptions() cmdexec.ExecutionOptions {
 	if exec := cc.executor.Load(); exec != nil {
 		return exec.GetOptions()
 	}
-	return DefaultExecutionOptions()
+	return cmdexec.DefaultExecutionOptions()
 }
 
 // ClearHistory removes all command history entries.

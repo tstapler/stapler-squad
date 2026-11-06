@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 const (
@@ -85,7 +86,7 @@ var (
 type ShadowLedgerRecorder struct {
 	class session.CallerClass // the class the unclassed ShadowRecorder methods record into
 	dir   string
-	clock session.Clock
+	clock hostclaim.Clock
 	warn  func(format string, args ...any)
 
 	base session.ShadowLedger // loaded at start; never mutated afterwards
@@ -145,7 +146,7 @@ func WithShadowClass(c session.CallerClass) ShadowRecorderOption {
 }
 
 // WithShadowClock sets the clock (a test seam).
-func WithShadowClock(c session.Clock) ShadowRecorderOption {
+func WithShadowClock(c hostclaim.Clock) ShadowRecorderOption {
 	return func(r *ShadowLedgerRecorder) { r.clock = c }
 }
 
@@ -165,7 +166,7 @@ func ShadowLedgerPath(dir string) string { return filepath.Join(dir, shadowLedge
 // starts fresh with a WARN) and records this binary's start time.
 func NewShadowLedgerRecorder(dir string, opts ...ShadowRecorderOption) *ShadowLedgerRecorder {
 	r := &ShadowLedgerRecorder{
-		class: session.ClassOperator, dir: dir, clock: session.RealClock{},
+		class: session.ClassOperator, dir: dir, clock: hostclaim.RealClock{},
 		warn: func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
 		live: map[session.CallerClass]*liveClass{},
 	}
@@ -564,9 +565,9 @@ func (r *ShadowLedgerRecorder) Run(ctx context.Context) {
 // live stage configuration hashes to SeedFingerprint, "edited" once it does
 // not, "unlabeled" when the fingerprint cannot be read. The result is cached
 // for labelerRefreshWindow so the call path never reads the database per call.
-func NewConfigLabeler(fingerprint func() (string, error), clock session.Clock) func() string {
+func NewConfigLabeler(fingerprint func() (string, error), clock hostclaim.Clock) func() string {
 	if clock == nil {
-		clock = session.RealClock{}
+		clock = hostclaim.RealClock{}
 	}
 	type entry struct {
 		label   string

@@ -7,6 +7,7 @@
 //	scoping deps      --dir D --decls a,b       same-package declarations a, b reference transitively (helper extraction)
 //	scoping leaves    --dir D [--min-loc N]  files nothing else in D uses, grouped into movable clusters
 //	scoping touch     [--commits N] [--files a,b|--per-file]  T9b gain of moving files (changes that touch only them)
+//	scoping criteria [--lower] --relocated N --uses N --importers a,b --natural a   SC1/SC3 verdicts (lower-package rule)
 //	scoping t9        [--commits N]              T9a-T9f PASS|FAIL|UNMEASURED against baseline.json
 //	scoping inversions [--json]                  exits 1 when a package's tests import a package that depends on it
 //	scoping budget    [--file F] [--base REF]   per-package size/import caps (ratchet); --init a,b prints caps from the tree
@@ -207,7 +208,7 @@ func runT9(args []string, stdout io.Writer) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if PrintT9(stdout, r, DefaultT9Targets) {
+	if PrintT9(stdout, r, DefaultT9Targets, T9fLine(*root)) {
 		return 0
 	}
 	return 1
@@ -335,6 +336,8 @@ func main() {
 		os.Exit(runLeaves(os.Args[2:], os.Stdout))
 	case "touch":
 		os.Exit(runTouch(os.Args[2:], os.Stdout))
+	case "criteria":
+		os.Exit(runCriteria(os.Args[2:], os.Stdout))
 	case "t9":
 		os.Exit(runT9(os.Args[2:], os.Stdout))
 	default:

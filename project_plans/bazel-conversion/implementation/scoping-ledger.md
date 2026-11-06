@@ -166,3 +166,14 @@ maps stay as measured above; `baseline.json` is unchanged (it is the pre-epic an
 Flakes seen: `TestUnaryWsBridge_should_CountConnectionOpenAndPeerClose` failed once while `go test` ran two packages at once under load, then passed three
 more times and under Bazel; `//server:server_test` failed once on `TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup`
 (TempDir cleanup "directory not empty", background sweeper) and passed twice with `--cache_test_results=no`.
+
+## Epic 13 owner decisions (branch `sdd/bazel-owner-decisions`, 2026-11-05)
+
+Owner decision (AskUserQuestion, 2026-11-05): for lower packages (packages `session` imports), SC1 counts declarations relocated into the core (not callers' uses) and SC3 does not count natural callers as importers (`scoping criteria --lower`; ADR-010 Decision 2). Under it the two moves the previous branch skipped were redone:
+
+| Step | Decision | T9a | T9b | T9c | `server/services` / `session` LOC | Criteria |
+|---|---|---|---|---|---|---|
+| parent | | 0.4213 | 0.5806 | 0.3695 | 69,543 / 74,306 | |
+| `session/hostclaim` (revert of d5d69307f, re-applies 6a28a742d) | executed | | | | not measured separately (see final) | SC1 (lower): about 1 relocated declaration (`RecordOwn` became a method); SC3 (lower): the 7 importers (`.`, `server`, `server/auth`, `server/services`, `server/services/backlogsvc`, `server/services/internal/svctest`, `session/backlog`) already imported `session`, so 0 new; SC6 passes (lib -0.43 pp measured on the previous branch) |
+| `session/cmdexec` (`command_executor/history/queue`, 3 files plus 4 test files; lower) | executed | | | | not measured separately (see final) | SC1 (lower): 0 relocated (its test now has a local `pipePTY` double); SC3: 1 importer (`session`); SC6 passes (lib -0.13 pp measured previously) |
+| final | `scoping t9` | 0.4158 | 0.5806 | 0.3637 | 69,546 / 71,252 | T9d PASS (session 71,252 <= 72,000), T9f N/A by owner decision (ADR-009 "Full e2e run") |
