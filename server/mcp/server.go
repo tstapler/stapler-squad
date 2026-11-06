@@ -16,6 +16,36 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
+// coreConfig holds the optional dependencies injected through CoreOption, so
+// adding one never grows the positional parameter lists below.
+type coreConfig struct {
+	flowSvc *services.BacklogFlowService
+}
+
+// CoreOption injects an optional dependency into NewCore, NewHTTPHandler or RunServer.
+type CoreOption func(*coreConfig)
+
+// WithFlowService enables the flow-observability tools. Without it they are
+// registered but return ErrUnavailable. The HTTP path passes the same instance
+// the RPC handler uses, so one aggregator cache serves both.
+func WithFlowService(svc *services.BacklogFlowService) CoreOption {
+	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// FlowServiceFromOptions returns the flow service the options carry, or nil.
+// It lets wiring tests prove two call sites hold the same instance.
+func FlowServiceFromOptions(opts ...CoreOption) *services.BacklogFlowService {
+	return newCoreConfig(opts).flowSvc
+}
+
+func newCoreConfig(opts []CoreOption) coreConfig {
+	var c coreConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return c
+}
+
 // NewCore creates an MCPServer with all tools registered.
 // Shared by the stdio path (RunServer) and the HTTP path (NewHTTPHandler).
 // storage is optional — when nil, backlog tools are not registered.
@@ -31,6 +61,7 @@ import (
 // return ErrUnavailable instead of panicking (e.g. the stdio fallback transport, ADR-001).
 // liveCheck is optional — nil treats every EndedAt==nil ItemSession row as live in
 // link_session_to_item's exclusivity check (pre-feature behavior).
+// opts carry optional dependencies (see CoreOption).
 func NewCore(
 	store session.InstanceStore,
 	svc *services.SessionService,
@@ -42,7 +73,9 @@ func NewCore(
 	autoReopener session.AutoReopenSpawner,
 	backlogSvc *services.BacklogService,
 	liveCheck func(sessionUUID string) bool,
+	opts ...CoreOption,
 ) *mcpserver.MCPServer {
+	cfg := newCoreConfig(opts)
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -99,6 +132,7 @@ func NewCore(
 		// so create_guidance_request can call h.resolveItemLink directly —
 		// see durable-guidance-request plan Epic 2.2.
 		registerGuidanceTools(s, h)
+		registerFlowTools(s, &flowHandlers{svc: cfg.flowSvc, enabledCheck: backlogEnabled})
 		// registerDiagnoseTools ("Diagnose & Nudge", backlog item 68964304)
 		// reuses the same liveFinder guard as registerTerminalTools above —
 		// diagnose_nudge_session needs live-instance lookup for the same
@@ -133,8 +167,9 @@ func NewHTTPHandler(
 	autoReopener session.AutoReopenSpawner,
 	backlogSvc *services.BacklogService,
 	liveCheck func(sessionUUID string) bool,
+	opts ...CoreOption,
 ) *mcpserver.StreamableHTTPServer {
-	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck)
+	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...)
 	log.InfoLog().Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
@@ -165,6 +200,7 @@ func RunServer(
 	autoReopener session.AutoReopenSpawner,
 	backlogSvc *services.BacklogService,
 	liveCheck func(sessionUUID string) bool,
+	opts ...CoreOption,
 ) error {
 	log.Info("mcp server starting on stdio transport")
 
@@ -175,7 +211,7 @@ func RunServer(
 		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

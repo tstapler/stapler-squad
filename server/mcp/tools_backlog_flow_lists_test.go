@@ -109,17 +109,14 @@ func TestListFlowThrashEpisodes_should_PageAndLabel_When_35ThrashItems(t *testin
 func TestListFlowThrashEpisodes_should_TruncateNotesTo300_When_800CharNote(t *testing.T) {
 	t.Parallel()
 	s := liveShapedSummary(flow.FlowQuery{})
-	s.Anomalies.Items.Items[0].Cause = injection + strings.Repeat("c", 800)
-	s.Anomalies.Items.Items[0].Pair = strings.Repeat("p", 800)
+	s.Anomalies.Meta = flow.SectionMeta{Status: flow.SectionPartial, Error: injection + strings.Repeat("c", 800)}
 	h := newFakeFlowHandlers(&fakeFlowAgg{summary: s})
 
 	text, m := callFlowTool(t, h.listFlowThrashEpisodes, map[string]any{"limit": float64(5)})
 
-	first := m["items"].(map[string]any)["items"].([]any)[0].(map[string]any)
-	for _, k := range []string{"cause", "pair"} {
-		v := first[k].(string)
-		assert.LessOrEqualf(t, len(v), flowLeafMaxLen+len(" [truncated]"), k)
-	}
+	errText := fieldPath(m, "status.error").(string)
+	assert.LessOrEqual(t, len(errText), flowLeafMaxLen+len(" [truncated]"), "an 800-char free-text leaf is cut to 300")
+	assert.True(t, strings.HasSuffix(errText, " [truncated]"), errText)
 	assert.NotContains(t, text, `\n`)
 	assert.NotContains(t, m, "summary", "the list response carries no aggregate sections or free-form notes")
 }

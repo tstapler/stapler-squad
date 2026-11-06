@@ -57,7 +57,7 @@ func liveShapedSummary(q flow.FlowQuery) *flow.FlowSummary {
 		thrash = append(thrash, flow.ThrashItemRow{
 			ItemID: flow.ItemID(fmt.Sprintf("th-%03d", i)), Title: fmt.Sprintf("Thrashing item number %d with a typical title", i),
 			Episodes: 1 + i%3, Events: 20 + i, FirstAt: week0, LastAt: week0.Add(48 * time.Hour),
-			Pair: "in_progress<->review", Cause: "dequeue_spawn_failed",
+			Pair: "ready<>in_progress", Cause: "dequeue_spawn_failed",
 		})
 	}
 

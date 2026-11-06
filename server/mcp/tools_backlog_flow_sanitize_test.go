@@ -146,7 +146,7 @@ func assertNoRawNewline(t *testing.T, path string, v any) {
 // isSafeJSONField mirrors flowSafeStringFields by JSON name.
 func isSafeJSONField(name string) bool {
 	switch name {
-	case "status", "estimated", "state", "kind":
+	case "status", "estimated", "state", "kind", "pair", "cause":
 		return true
 	}
 	return false

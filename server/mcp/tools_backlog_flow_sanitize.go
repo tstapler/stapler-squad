@@ -15,15 +15,19 @@ const (
 )
 
 // flowSafeStringFields are the string fields the server generates from closed
-// vocabularies (section status, heuristic codes, compare state, timeline
-// kind); every other string leaf is sanitized. A test fails if a string field
-// reachable from a flow response is added without a decision about it.
+// vocabularies (section status, heuristic codes, compare state, timeline kind,
+// rework cause, thrash status pair); every other string leaf is sanitized. The
+// thrash pair is allowlisted because its "a<>b" form would lose the "<>" to the
+// HTML-tag stripper. A test fails if an allowlisted field stops existing.
 var flowSafeStringFields = map[protoreflect.FullName]bool{
 	"session.v1.FlowSectionStatus.status":    true,
 	"session.v1.FlowSectionStatus.estimated": true,
 	"session.v1.FlowMeta.estimated":          true,
 	"session.v1.FlowCompareMetric.state":     true,
 	"session.v1.FlowTimelineEntry.kind":      true,
+	"session.v1.FlowTimelineEntry.cause":     true,
+	"session.v1.FlowThrashItemRow.cause":     true,
+	"session.v1.FlowThrashItemRow.pair":      true,
 }
 
 // sanitizeFlowLeaf flattens control characters and whitespace runs, strips
