@@ -165,10 +165,19 @@ func probeDaemon(ctx context.Context, cfg DaemonConfig) daemonProbeResult {
 func probeDaemonWithTCP(ctx context.Context, cfg DaemonConfig) (result, tcpResult daemonProbeResult, tcpProbed bool) {
 	path := unixSocketPath(cfg)
 	noSocketFile := false
+	summary := ProbeSummary{TCP: probeNotProbed, Unix: probeNotProbed}
+	defer func() {
+		if tcpProbed {
+			summary.TCP = tcpResult.String()
+		}
+		recordProbe(cfg.Addr, summary)
+	}()
 	if path != "" {
 		unix, unixHTTP := newUnixTransport(path)
 		defer unixHTTP.CloseIdleConnections()
-		switch unixResult := probeEndpoint(ctx, "unix", path, unix); unixResult {
+		unixResult := probeEndpoint(ctx, "unix", path, unix)
+		summary.Unix = unixResult.String()
+		switch unixResult {
 		case daemonProbeHealthy, daemonProbeBusy, daemonProbeAccessDenied:
 			return unixResult, 0, false // a silent or forbidden socket is inconclusive: never killed, TCP not consulted
 		case daemonProbeNoSocketFile:
@@ -647,17 +656,19 @@ func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason stri
 			) {
 				return TymuxdReady{}, nil
 			}
-			if listenersUp() {
-				if !portListeningFn(cfg) {
-					// Nothing listens on TCP and the control socket accepts but does not answer: the
-					// daemon may hold live panes, so it is reported, never killed.
-					log.Warn("[tymux] tymuxd TCP listener is down and its control socket does not answer; not killing it", "addr", cfg.Addr)
-					return TymuxdReady{}, fmt.Errorf("tymux: %w: nothing listens at %s and the control socket does not answer; not restarting it", ErrTymuxdControlSocketUnresponsive, cfg.Addr)
-				}
-				return TymuxdReady{}, fmt.Errorf("tymux: %w: something is listening at %s but does not answer as tymuxd; not restarting it", ErrTymuxdPortSquatted, cfg.Addr)
+			if tcpUp, unixUp := portListeningFn(cfg), unixListeningFn(cfg); tcpUp || unixUp {
+				// The daemon may hold live panes, so an unresponsive listener is reported, never killed.
+				err := unresponsiveListenersError(cfg, tcpUp, unixUp)
+				log.Warn("[tymux] tymuxd did not answer and has a live listener; not killing it", "addr", cfg.Addr, "tcp_dial_accepted", tcpUp, "unix_dial_accepted", unixUp, "err", err)
+				return TymuxdReady{}, err
 			}
 		}
-		if stopErr := stopTymuxdFn(); stopErr != nil {
+		staleReason, ok := stopReasonFrom(ctx)
+		if !ok {
+			staleReason = StopReason{Kind: StopStaleDaemon, Detail: "no listener answers a probe"}
+		}
+		staleReason.Probes = lastProbeFor(cfg.Addr)
+		if stopErr := stopTymuxdFn(staleReason); stopErr != nil {
 			if !errors.Is(stopErr, errTymuxdPIDUnverified) {
 				return TymuxdReady{}, fmt.Errorf("tymux: cannot safely stop unhealthy daemon: %w", stopErr)
 			}
@@ -695,12 +706,17 @@ func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason stri
 		// *os.Process handle -- StopTymuxd() already knows how to
 		// read the PID file startDaemonAttempt wrote, kill that PID, and
 		// remove the file, idempotently.
-		if stopErr := stopTymuxdFn(); stopErr != nil {
+		coldStartReason := StopReason{
+			Kind:   StopFailedColdStart,
+			Detail: fmt.Sprintf("replacement never became healthy after %d attempts", daemonStartAttempts),
+			Probes: lastProbeFor(cfg.Addr),
+		}
+		if stopErr := stopTymuxdFn(coldStartReason); stopErr != nil {
 			log.Warn("[tymux] failed to stop orphaned tymuxd after failed cold start", "err", stopErr)
 		}
 
 		if portListeningFn(cfg) {
-			return TymuxdReady{Spawned: true}, fmt.Errorf("tymux: %w: something is listening at %s but never answered after %d attempts", ErrTymuxdPortSquatted, cfg.Addr, daemonStartAttempts)
+			return TymuxdReady{Spawned: true}, fmt.Errorf("tymux: %w: TCP dial to %s still accepts connections after our replacement was stopped, but nothing answered as tymuxd in %d attempts", ErrTymuxdPortSquatted, cfg.Addr, daemonStartAttempts)
 		}
 		return TymuxdReady{Spawned: true}, fmt.Errorf("tymux: tymuxd at %s did not become healthy after %d attempts", cfg.Addr, daemonStartAttempts)
 	})
@@ -738,9 +754,9 @@ func validateTymuxdProcess(ctx context.Context, pid int, binary string) error {
 }
 
 // StopTymuxd stops the recorded daemon after verifying its executable identity.
-// A missing PID file is a no-op. Shutdown callers must first establish spawn
+// A missing PID file is a no-op. reason is logged and recorded (see RecentDaemonStops). Shutdown callers must first establish spawn
 // ownership; executable identity alone does not establish ownership.
-func StopTymuxd() error {
+func StopTymuxd(reason StopReason) error {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
@@ -778,7 +794,7 @@ func StopTymuxd() error {
 		return err
 	}
 
-	if err := terminateProcess(pid); err != nil {
+	if err := terminateProcess(pid, reason); err != nil {
 		return fmt.Errorf("failed to stop tymuxd process: %w", err)
 	}
 
@@ -792,25 +808,44 @@ func StopTymuxd() error {
 
 // terminateProcess sends SIGTERM (tymuxd flushes its session records on it), waits up to
 // daemonStopGracePeriod for pid to exit, then escalates to SIGKILL.
-func terminateProcess(pid int) error {
+func terminateProcess(pid int, reason StopReason) error {
+	attempt := beginStop(pid, reason)
 	if err := signalProcessFn(pid, syscall.SIGTERM); err != nil {
 		if processGone(err) {
+			attempt.finish(StopAlreadyGone, nil)
 			return nil
 		}
+		attempt.finish(StopSignalFailed, err)
 		return err
 	}
 	deadline := time.Now().Add(daemonStopGracePeriod)
 	for time.Now().Before(deadline) {
 		if processGone(signalProcessFn(pid, syscall.Signal(0))) {
+			attempt.finish(StopExitedAfterTerm, nil)
 			return nil
 		}
 		time.Sleep(daemonStopPollInterval)
 	}
-	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid)
+	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid, "reason_kind", string(reason.Kind))
 	if err := signalProcessFn(pid, syscall.SIGKILL); err != nil && !processGone(err) {
+		attempt.finish(StopSignalFailed, err)
 		return err
 	}
+	attempt.finish(StopEscalatedToKill, nil)
 	return nil
+}
+
+// unresponsiveListenersError names exactly what was observed: each dial only proves a connection
+// was accepted (or not refused), never that anything else is wrong with the daemon.
+func unresponsiveListenersError(cfg DaemonConfig, tcpUp, unixUp bool) error {
+	switch {
+	case tcpUp && unixUp:
+		return fmt.Errorf("tymux: %w: TCP dial to %s and the Unix control socket both accept connections but neither answered as tymuxd; the daemon looks wedged, not restarting it", ErrTymuxdUnresponsive, cfg.Addr)
+	case unixUp:
+		return fmt.Errorf("tymux: %w: TCP dial to %s was refused and the Unix control socket accepts connections but does not answer; not restarting it", ErrTymuxdControlSocketUnresponsive, cfg.Addr)
+	default:
+		return fmt.Errorf("tymux: %w: TCP dial to %s accepts connections but nothing answered as tymuxd, and the Unix control socket is not listening; not restarting it", ErrTymuxdPortSquatted, cfg.Addr)
+	}
 }
 
 func processGone(err error) bool {
