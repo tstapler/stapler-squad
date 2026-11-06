@@ -63,6 +63,13 @@ func classifyArtifactQuery(q string) classifiedQuery {
 	return classifiedQuery{kind: queryKindText}
 }
 
+// Bounds on a search query, so one request cannot fan out into an unbounded
+// number of index lookups.
+const (
+	maxArtifactQueryLen   = 256
+	maxArtifactQueryTerms = 16
+)
+
 // SearchSessionArtifacts finds sessions by what they produced.
 func (a *ArtifactService) SearchSessionArtifacts(
 	ctx context.Context,
@@ -75,6 +82,14 @@ func (a *ArtifactService) SearchSessionArtifacts(
 	if len([]rune(query)) < minArtifactQueryLen {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("query must be at least %d characters", minArtifactQueryLen))
+	}
+	if n := len([]rune(query)); n > maxArtifactQueryLen {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("query must be at most %d characters", maxArtifactQueryLen))
+	}
+	if n := len(strings.Fields(query)); n > maxArtifactQueryTerms {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("query must have at most %d terms", maxArtifactQueryTerms))
 	}
 	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
 	if err != nil {
