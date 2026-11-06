@@ -16,8 +16,10 @@ func TestResolveMergeMethod(t *testing.T) {
 		{"new rebase", &sessionv1.MergePRRequest{MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_REBASE}, "rebase"},
 		{"old only", &sessionv1.MergePRRequest{Method: strPtr("rebase")}, "rebase"},
 		{"both set, new wins", &sessionv1.MergePRRequest{Method: strPtr("rebase"), MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_SQUASH}, "squash"},
-		{"neither", &sessionv1.MergePRRequest{}, "merge"},
-		{"empty legacy", &sessionv1.MergePRRequest{Method: strPtr("")}, "merge"},
+		{"enum merge", &sessionv1.MergePRRequest{MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_MERGE}, "merge"},
+		{"enum unspecified", &sessionv1.MergePRRequest{MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_UNSPECIFIED}, "squash"},
+		{"neither defaults to squash", &sessionv1.MergePRRequest{}, "squash"},
+		{"empty legacy defaults to squash", &sessionv1.MergePRRequest{Method: strPtr("")}, "squash"},
 		{"invalid legacy passes through", &sessionv1.MergePRRequest{Method: strPtr("bogus")}, "bogus"},
 	}
 	for _, c := range cases {
