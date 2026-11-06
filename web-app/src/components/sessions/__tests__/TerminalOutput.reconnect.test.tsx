@@ -279,6 +279,24 @@ describe("TerminalOutput reconnect banner", () => {
     expect(epoch()).toBe((before as number) + 1);
   });
 
+  it("TerminalOutput_should_offerManualReconnectAfterFiveSeconds_When_connectionIsLost", () => {
+    const mockFn = useTerminalStream as jest.Mock;
+    mockFn.mockReturnValue(makeStreamMock({ isConnected: true }));
+    const { rerender } = renderTerminal();
+
+    mockFn.mockReturnValue(makeStreamMock({ isConnected: false }));
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
+    act(() => { jest.advanceTimersByTime(4900); });
+    expect(screen.queryByRole("button", { name: "Reconnect to terminal" })).not.toBeInTheDocument();
+
+    act(() => { jest.advanceTimersByTime(200); });
+    expect(screen.getByRole("button", { name: "Reconnect to terminal" })).toBeInTheDocument();
+
+    mockFn.mockReturnValue(makeStreamMock({ isConnected: true }));
+    rerender(withPool(<TerminalOutput sessionId="session-abc" baseUrl="/api" isVisible={false} />));
+    expect(screen.queryByRole("button", { name: "Reconnect to terminal" })).not.toBeInTheDocument();
+  });
+
   it("TerminalOutput_should_showServerUnreachableStateWithRetry_When_hookReportsUnreachable", () => {
     const connect = jest.fn();
     (useTerminalStream as jest.Mock).mockReturnValue(
@@ -286,7 +304,7 @@ describe("TerminalOutput reconnect banner", () => {
     );
     renderTerminal();
 
-    expect(screen.getByText(/Server unreachable, retrying every 30s/)).toBeInTheDocument();
+    expect(screen.getByText(/Server unreachable, retrying/)).toBeInTheDocument();
     expect(screen.queryByText(/Terminal unavailable/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect to terminal" }));
     expect(connect).toHaveBeenCalledTimes(1);

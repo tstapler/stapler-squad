@@ -5,9 +5,15 @@ import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import type { Session, Shell, CheckpointProto } from "@/gen/session/v1/types_pb";
-import { SessionStatus, NotificationPriority } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, Shell, NotificationPriority } from "@/gen/session/v1/types_pb";
 import {
+  CreateSessionRequest,
+  UpdateSessionRequest,
+  PromptHistoryEntry,
+  RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
+  SpawnShellRequest,
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
   UnarchiveSessionRequestSchema,
@@ -17,19 +23,12 @@ import {
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import type { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
+import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
 import { RefreshCoordinator } from "@/lib/utils/refreshCoordinator";
 import { useWatchStream, type WatchConnectionState } from "@/lib/hooks/useWatchStream";
-import type { ListSessionsResponse ,
-  CreateSessionRequest,
-  UpdateSessionRequest,
-  PromptHistoryEntry,
-  RunOneShotResponse,
-  DraftPullRequestResponse,
-  CreatePullRequestResponse,
-  SpawnShellRequest} from "@/gen/session/v1/session_pb";
+import type { ListSessionsResponse } from "@/gen/session/v1/session_pb";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -127,7 +126,7 @@ interface UseSessionServiceReturn {
   /** True once a session list (possibly empty) has been applied; a cold deep link waits on it. */
   hasLoadedOnce: boolean;
   error: Error | null;
-  connectionState: ConnectionState;
+  connectionState: import("@/lib/store/sessionsSlice").ConnectionState;
   /** System-wide memory usage percentage (0–100). Zero when unavailable. */
   systemMemoryPct: number;
 
@@ -164,7 +163,7 @@ interface UseSessionServiceReturn {
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
-  listCheckpoints: (sessionId: string) => Promise<CheckpointProto[]>;
+  listCheckpoints: (sessionId: string) => Promise<import("@/gen/session/v1/types_pb").CheckpointProto[]>;
   forkSession: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
 
   // Archive methods
@@ -323,8 +322,7 @@ export function useSessionService(
   // List sessions with retry logic
   const listSessions = useCallback(
     async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean; includeHidden?: boolean }) => {
-      const client = clientRef.current;
-      if (!client) return;
+      if (!clientRef.current) return;
 
       dispatch(setLoading(true));
       dispatch(setError(null));
@@ -332,7 +330,7 @@ export function useSessionService(
       try {
         await refreshCoordinatorRef.current.request(
           () =>
-            client.listSessions(
+            clientRef.current!.listSessions(
               {
                 category: listOptions?.category,
                 status: listOptions?.status,
@@ -1181,11 +1179,9 @@ export function useSessionService(
   // detection (see there).
   const subscribeSessions = useCallback(
     async function* (_afterSeq: bigint, signal: AbortSignal): AsyncGenerator<SessionEvent> {
-      const client = clientRef.current;
-      if (!client) throw new Error("session client is not initialised");
       await refreshCoordinatorRef.current.request(
         () =>
-          client.listSessions(
+          clientRef.current!.listSessions(
             {
               category: watchOptionsRef.current?.categoryFilter,
               status: watchOptionsRef.current?.statusFilter,
@@ -1197,7 +1193,7 @@ export function useSessionService(
         },
         { guarded: true }
       );
-      yield* client.watchSessions(
+      yield* clientRef.current!.watchSessions(
         {
           categoryFilter: watchOptionsRef.current?.categoryFilter,
           statusFilter: watchOptionsRef.current?.statusFilter,

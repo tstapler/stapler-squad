@@ -896,7 +896,7 @@ describe('useTerminalStream — auto-reconnect', () => {
   // { isAutoRetry: true }, which only the automatic-retry call site passes.
   // ---------------------------------------------------------------------------
 
-  it('connect_should_escalateDelayAndKeepRetrying_When_streamKeepsClosingCleanly', async () => {
+  it('connect_should_escalateDelayAndHardFail_When_serverKeepsEndingStreamCleanly', async () => {
     // Full-jitter delay is Math.random() * ceiling — pin Math.random() to 1 (the
     // supremum) so each cycle's delay is deterministically the per-attempt
     // ceiling (2000/4000/8000/16000/30000ms) instead of anywhere in [0, ceiling),
@@ -938,15 +938,15 @@ describe('useTerminalStream — auto-reconnect', () => {
       }
     }
 
-    // The 6th consecutive close (attempt === 5) is the "server unreachable" state, not a terminal
-    // failure: retries continue at the capped ceiling.
+    // A server that keeps ending the stream itself (error frame or clean EndStream) is a verdict, not
+    // an outage: the 6th consecutive close hard-fails and never shows "server unreachable".
     await act(async () => { streams[5].end(); });
-    await waitFor(() => expect(result.current.isServerUnreachable).toBe(true));
-    expect(result.current.isHardFailed).toBe(false);
+    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+    expect(result.current.isServerUnreachable).toBe(false);
 
-    const streamCountBefore = streams.length;
-    await act(async () => { jest.advanceTimersByTime(RECONNECT_CAP_MS); });
-    await waitFor(() => expect(streams.length).toBe(streamCountBefore + 1));
+    const streamCountAtHardFail = streams.length;
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(streams.length).toBe(streamCountAtHardFail);
   });
 
   it('connect_should_resetBackoffSequence_When_calledDirectlyMidAutomaticRetrySequence', async () => {
@@ -1422,7 +1422,8 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
     const timeoutWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('trigger=connect-timeout'));
     expect(timeoutWarnings.length).toBe(0);
-    expect(capturedSignal?.aborted).toBe(false);
+    // disconnect() itself aborts the in-flight attempt; that is not a timeout abort.
+    expect(capturedSignal?.aborted).toBe(true);
   });
 
   it('connect_should_clearConnectTimeout_When_synchronousThrowBeforeMessageLoopStarts', async () => {
@@ -2026,13 +2027,60 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
     expect(result.current.isHardFailed).toBe(false);
   });
 
+  it('connect_should_hardFailWithoutUnreachable_When_serverKeepsSendingNonDefinitiveErrorFrames', async () => {
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makePushStream<object>();
+      s.push(makeErrorMsg('internal hiccup', 'INTERNAL'));
+      s.end();
+      return s.iterable;
+    });
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+
+    await advanceSeconds(300);
+    expect(result.current.isHardFailed).toBe(true);
+    expect(result.current.isServerUnreachable).toBe(false);
+    const calls = mockStreamTerminal.mock.calls.length;
+    await advanceSeconds(120);
+    expect(mockStreamTerminal.mock.calls.length).toBe(calls);
+  });
+
+  it('connect_should_keepUnreachable_When_streamDiesSoonAfterFirstMessage', async () => {
+    randomSpy.mockReturnValue(1);
+    let serverUp = false;
+    const droppable: ReturnType<typeof makeDroppableStream>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      if (!serverUp) return failingStream('1006');
+      const s = makeDroppableStream();
+      droppable.push(s);
+      return s.iterable;
+    });
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+    await advanceSeconds(45);
+    expect(result.current.isServerUnreachable).toBe(true);
+
+    serverUp = true;
+    await act(async () => { result.current.handleManualReconnect(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await advanceSeconds(3);
+    await act(async () => { droppable[0].drop(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+    expect(result.current.isServerUnreachable).toBe(true); // no flicker on a short-lived attach
+
+    await act(async () => { jest.advanceTimersByTime(RECONNECT_CAP_MS); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await advanceSeconds(11); // stable: now it clears
+    expect(result.current.isServerUnreachable).toBe(false);
+  });
+
   describe('connect gate', () => {
     function trackSessions() {
       const order: string[] = [];
       const streams: ReturnType<typeof makePushStream<object>>[] = [];
-      mockStreamTerminal.mockImplementation((queue: { queue: Array<{ sessionId: string }> }) => {
+      mockStreamTerminal.mockImplementation((queue: { queue: Array<{ sessionId: string }> }, opts?: { signal?: AbortSignal }) => {
         order.push(queue.queue[0].sessionId);
-        const s = makePushStream<object>();
+        const s = makePushStream<object>(opts?.signal);
         streams.push(s);
         return s.iterable;
       });
@@ -2069,19 +2117,60 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
       expect(order[CONNECT_GATE_WIDTH]).toBe('foreground');
     });
 
-    it('connect_should_freeSlot_When_queuedPaneDisconnects', async () => {
-      const { order } = trackSessions();
+    async function fillGate(prefix: string) {
       const busy = Array.from({ length: CONNECT_GATE_WIDTH }, (_, i) =>
-        renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: `busy${i}` }))
+        renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: `${prefix}${i}` }))
       );
       await act(async () => { busy.forEach((h) => h.result.current.connect()); });
+      return busy;
+    }
+
+    it('connect_should_freeSlotForNextWaiter_When_queuedPaneDisconnects', async () => {
+      const { order } = trackSessions();
+      const busy = await fillGate('busy');
       const queued = renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: 'queued' }));
+      const next = renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: 'next' }));
       await act(async () => { queued.result.current.connect(); });
+      await act(async () => { next.result.current.connect(); });
       await act(async () => { await queued.result.current.disconnect(); });
 
+      // A real slot frees up: the cancelled waiter must not consume it, the next waiter must.
       await act(async () => { await busy[0].result.current.disconnect(); });
+      await waitFor(() => expect(order).toContain('next'));
+      expect(order).not.toContain('queued');
+    });
+
+    it('connect_should_notStartAGhostConnect_When_slotIsGrantedAroundDisconnect', async () => {
+      const { order } = trackSessions();
+      const busy = await fillGate('busy');
+      const queued = renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: 'queued' }));
+      await act(async () => { queued.result.current.connect(); });
+
+      await act(async () => {
+        const freed = busy[0].result.current.disconnect();
+        await queued.result.current.disconnect();
+        await freed;
+      });
       await advanceSeconds(2);
       expect(order).not.toContain('queued');
+    });
+
+    it('disconnect_should_abortAndHoldSlot_When_connectIsInFlightBeforeFirstMessage', async () => {
+      const signals: AbortSignal[] = [];
+      const order: string[] = [];
+      mockStreamTerminal.mockImplementation((queue: { queue: Array<{ sessionId: string }> }, opts?: { signal?: AbortSignal }) => {
+        order.push(queue.queue[0].sessionId);
+        if (opts?.signal) signals.push(opts.signal);
+        return makePushStream<object>(opts?.signal).iterable;
+      });
+      const busy = await fillGate('busy');
+      const waiting = renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: 'waiting' }));
+      await act(async () => { waiting.result.current.connect(); });
+      expect(order).toHaveLength(CONNECT_GATE_WIDTH);
+
+      await act(async () => { await busy[0].result.current.disconnect(); });
+      expect(signals[0].aborted).toBe(true); // the in-flight stream is really closed, not just forgotten
+      await waitFor(() => expect(order).toContain('waiting'));
     });
   });
 });

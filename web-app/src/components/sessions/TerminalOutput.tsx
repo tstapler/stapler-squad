@@ -1357,6 +1357,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [isConnected]);
 
+  // A pane that stays disconnected for 5s gets a manual Reconnect (the hook keeps retrying with
+  // backoff, which can be 10-30s between tries, so the user needs a way to retry now).
+  useEffect(() => {
+    if (isConnected) {
+      setShowReconnectButton(false);
+      return;
+    }
+    if (!hasEverConnectedRef.current) return;
+    const timer = setTimeout(() => setShowReconnectButton(true), 5000);
+    return () => clearTimeout(timer);
+  }, [isConnected]);
+
   // Clear loading overlay when max reconnect attempts reached
   useEffect(() => {
     if (connectionAttempts >= 5) {
@@ -1973,8 +1985,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
-          {isServerUnreachable && !isHardFailed && (
-            <span className={styles.statusText}> • Server unreachable, retrying every 30s</span>
+          {isServerUnreachable && !isConnected && !isHardFailed && (
+            <span className={styles.statusText}> • Server unreachable, retrying</span>
           )}
           {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
           <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} pulse={connectionPulse} />
@@ -2003,7 +2015,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
           )}
           {/* Reconnect always visible when needed, regardless of toolbar state */}
-          {(showReconnectButton || isServerUnreachable) && (
+          {(showReconnectButton || (isServerUnreachable && !isConnected)) && (
             <button
               className={styles.toolbarButton}
               onClick={handleManualReconnect}
@@ -2286,12 +2298,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </div>
           </div>
         )}
-        {!isLoadingInitialContent && (connectionAttempts >= 5 || isServerUnreachable) && (
+        {!isLoadingInitialContent && !isConnected && (connectionAttempts >= 5 || isServerUnreachable) && (
           <div className={styles.unavailableOverlay}>
             <div className={styles.unavailableIcon}>⚠</div>
             <div className={styles.unavailableText}>{isServerUnreachable ? "Server unreachable" : "Terminal unavailable"}</div>
             <div className={styles.unavailableSubtext}>
-              {isServerUnreachable ? "Retrying every 30 seconds" : "Could not connect to terminal session"}
+              {isServerUnreachable ? "Still retrying in the background" : "Could not connect to terminal session"}
             </div>
           </div>
         )}
