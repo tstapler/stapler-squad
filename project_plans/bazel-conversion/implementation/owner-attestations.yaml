@@ -57,6 +57,22 @@ remote_cache_s10:
   decision: start with disk cache only; defer the onyx remote cache
   status: recorded
   pending: S10 and S10-redaction have no verdict; EG1/EG2 are measured against the local disk cache until the remote tier exists
+# Waiver for the deferred remote cache, same policy as Task 7.5f (reason >= 20 chars, <= 90 days from granted).
+# Not a pass: S10 and S10-redaction stay unmeasured. Written by an agent from the recorded remote_cache_s10 answer
+# above; the owner has not separately attested this waiver (Task 7.5c environment approval not applied).
+spike_waivers:
+  - spike: S10
+    reason: 'owner decision 2026-11-03 (remote_cache_s10): "start with disk cache only; defer the onyx remote cache"'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: recorded-from-interview, needs-owner-reconfirm
+    not_covered: EG1/EG2 are measured against the local disk cache only; the remote tier needs its own S10 spike before it is enabled
+  - spike: S10-redaction
+    reason: 'owner decision 2026-11-03 (remote_cache_s10): "start with disk cache only; defer the onyx remote cache"'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: recorded-from-interview, needs-owner-reconfirm
+    not_covered: EG1/EG2 are measured against the local disk cache only; the remote tier needs its own S10-redaction spike before it is enabled
 adr_010_policy:
   decision: >-
     all tiers may be executed by agents; agents merge when CI passes, making sure there is proper test

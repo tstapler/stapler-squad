@@ -7,6 +7,7 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import date, datetime, timedelta
 
 REQUIRED = ["S-gomod", "S1", "S1-ts", "S2", "S3", "S4", "S5", "S6", "S7", "S8",
             "S9", "S10", "S10-redaction", "S11", "S12", "S13"]
@@ -14,6 +15,11 @@ OPTIONAL = ["S14", "S15", "S15b"]
 VERDICTS = ("Pass", "FallbackWorkaround", "FallbackFork", "Fail")
 FALLBACKS = ("FallbackWorkaround", "FallbackFork")
 DEFAULT = "project_plans/bazel-conversion/implementation/spike-results.yaml"
+# Spike waivers mirror the P10 waiver policy of Task 7.5f (owner defaults waiver_expiry_days / waiver_reason_min_chars).
+# Only the remote-cache spikes may be waived; everything else must have a verdict.
+WAIVABLE = ("S10", "S10-redaction")
+WAIVER_MAX_DAYS = 90
+WAIVER_MIN_REASON = 20
 ATTESTATIONS = "owner-attestations.yaml"  # beside the results file; display only, never changes the verdict
 
 
@@ -67,6 +73,55 @@ def owner_accepted_fails(path):
     return ids, found["decision"], found.get("date", "")
 
 
+def parse_spike_waivers(path):
+    """Return the raw `spike_waivers:` entries (dicts) from owner-attestations.yaml; [] if absent."""
+    if not os.path.exists(path):
+        return []
+    out, in_sec, cur = [], False, None
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip()
+            if re.match(r"^\S", line):
+                in_sec = line.split(":", 1)[0] == "spike_waivers"
+                cur = None
+            elif in_sec and line.strip() and not line.lstrip().startswith("#"):
+                body = line.strip()
+                if body.startswith("- "):
+                    cur = {}
+                    out.append(cur)
+                    body = body[2:]
+                if cur is not None and ":" in body:
+                    k, v = body.split(":", 1)
+                    cur[k.strip()] = _scalar(v)
+    return out
+
+
+def validate_waivers(waivers, today):
+    """Return (valid {spike: waiver}, errors). Valid = waivable id, reason >= 20 chars, <= 90 days, not expired."""
+    valid, errors = {}, []
+    for w in waivers:
+        sid = w.get("spike", "")
+        try:
+            granted = datetime.strptime(w.get("granted", ""), "%Y-%m-%d").date()
+            expires = datetime.strptime(w.get("expires", ""), "%Y-%m-%d").date()
+        except ValueError:
+            errors.append("waiver %s: granted/expires must be YYYY-MM-DD" % sid)
+            continue
+        if sid not in WAIVABLE:
+            errors.append("waiver %s: not waivable (only %s)" % (sid, ", ".join(WAIVABLE)))
+        elif len(w.get("reason", "").strip()) < WAIVER_MIN_REASON:
+            errors.append("waiver %s: reason shorter than %d chars" % (sid, WAIVER_MIN_REASON))
+        elif expires - granted > timedelta(days=WAIVER_MAX_DAYS):
+            errors.append("waiver %s: expires more than %d days after granted" % (sid, WAIVER_MAX_DAYS))
+        elif expires < today:
+            errors.append("waiver %s: expired %s" % (sid, expires))
+        elif sid in valid:
+            errors.append("waiver %s: duplicate" % sid)
+        else:
+            valid[sid] = w
+    return valid, errors
+
+
 def _scalar(v):
     v = v.strip()
     if v[:1] in "\"'":
@@ -97,8 +152,13 @@ def parse_rows(text):
     return rows
 
 
-def check(rows):
-    """Return (per_id, errors); per_id maps id -> status string."""
+def check(rows, waivers=None):
+    """Return (per_id, errors); per_id maps id -> status string.
+
+    `waivers` maps a waivable spike id to a validated waiver; it turns MISSING into WAIVED (no error).
+    A real verdict row always wins over a waiver.
+    """
+    waivers = waivers or {}
     errors, per_id = [], {}
     known = set(REQUIRED) | set(OPTIONAL)
     counts = Counter(r.get("spike", "") for r in rows)
@@ -109,6 +169,10 @@ def check(rows):
             errors.append("duplicate rows for %s (%d)" % (sid, n))
     for sid in REQUIRED + OPTIONAL:
         mine = [r for r in rows if r.get("spike") == sid]
+        if not mine and sid in waivers:
+            w = waivers[sid]
+            per_id[sid] = "WAIVED (expires %s: %s)" % (w["expires"], w["reason"])
+            continue
         if not mine:
             per_id[sid] = "MISSING" if sid in REQUIRED else "absent (optional)"
             if sid in REQUIRED:
@@ -140,11 +204,13 @@ def main(argv):
     except (OSError, ValueError) as e:
         print("ERROR: %s" % e)
         return 2
-    per_id, errors = check(rows)
+    attest_path = os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS)
+    waivers, waiver_errors = validate_waivers(parse_spike_waivers(attest_path), date.today())
+    per_id, errors = check(rows, waivers)
+    errors = errors + waiver_errors
     print("spike-results check: %s" % path)
     for sid in REQUIRED + OPTIONAL:
         print("  %-14s %s" % (sid, per_id[sid]))
-    attest_path = os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS)
     accepted = owner_accepted_fails(attest_path)
     accepted_ids = set(accepted[0]) if accepted else set()
     blocking = [s for s, v in per_id.items() if v == "Fail" and s not in accepted_ids]
@@ -158,6 +224,9 @@ def main(argv):
     missing = [s for s in REQUIRED if per_id[s] == "MISSING"]
     if missing:
         print("MISSING required ids: %s" % ", ".join(missing))
+    for sid, w in waivers.items():
+        if per_id[sid].startswith("WAIVED"):
+            print("WAIVED %s: status %s; not covered: %s" % (sid, w.get("status", "?"), w.get("not_covered", "")))
     deferred = owner_deferrals(attest_path)
     if deferred:
         print("owner-deferred: %s (%s, %s)" % (", ".join(deferred[0]), deferred[1], deferred[2]))
