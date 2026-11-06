@@ -26,7 +26,7 @@ func lifecycleDaemon(t *testing.T) (addr string, raw tymuxv1connect.TymuxService
 	bin := findTymuxdBinary(t)
 	envtest.NewIsolatedStateDir(t)
 	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 	require.NoError(t, err)
 	return cfg.Addr, newTymuxClient(udsdialer.DialTCPHTTPClient(), cfg.Addr)
 }

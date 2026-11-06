@@ -428,7 +428,7 @@ var (
 						// A daemon the monitor started has no startup OnStop hook; register one so
 						// it is stopped after the session close hooks (hooks run in reverse order).
 						onSpawn = func() {
-							a.OnStop("tymuxd", func(context.Context) error { return tymux.StopTymuxd() })
+							a.OnStop("tymuxd", func(context.Context) error { return tymux.StopTymuxd(shutdownStopReason) })
 						}
 					}
 					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
@@ -1039,7 +1039,7 @@ func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup,
 		// comment documents for tmux).
 		log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
 	case !keepServer:
-		registerStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
+		registerStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd(shutdownStopReason) })
 	default:
 		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
 	}
@@ -1966,3 +1966,6 @@ func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
 	}
 	_ = w.Flush()
 }
+
+// shutdownStopReason attributes a squad-exit stop of a daemon this process spawned.
+var shutdownStopReason = tymux.StopReason{Kind: tymux.StopSquadShutdown, Detail: "--tymuxd-keep-server=false"}
