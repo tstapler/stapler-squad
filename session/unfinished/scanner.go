@@ -17,6 +17,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -338,12 +339,21 @@ func (s *Scanner) Start(ctx context.Context) {
 	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
 	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
-	if w, err := fsnotify.NewWatcher(); err != nil {
-		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
-	} else {
-		s.mu.Lock()
-		s.fsWatcher = w
-		s.mu.Unlock()
+	s.mu.RLock()
+	injected := s.gitwatch.override != nil
+	s.mu.RUnlock()
+	if !injected {
+		// dirwatch uses FSEvents on macOS: kqueue would hold an fd per file in
+		// every linked-worktree admin dir (~5,000 fds at ~700 worktrees).
+		if w, err := dirwatch.New(dirwatch.WithName("scanner-git"), dirwatch.WithRootFunc(sharedWorktreesRoot)); err != nil {
+			log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
+		} else {
+			s.mu.Lock()
+			s.gitwatch.override = w
+			s.mu.Unlock()
+		}
+	}
+	if s.activeWatcher() != nil {
 		s.wg.Go(func() { s.fsnotifyLoop(ctx) })
 	}
 

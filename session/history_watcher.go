@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 )
@@ -23,7 +24,7 @@ import (
 type HistoryFileWatcher struct {
 	watchDir string
 	callback func(filePath string)
-	watcher  *fsnotify.Watcher
+	watcher  dirwatch.Watcher
 	stopped  chan struct{}
 	queue    *scanqueue.Queue
 	cancel   context.CancelFunc
@@ -113,7 +114,7 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		return nil
 	}
 
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := dirwatch.New(dirwatch.WithName("history"))
 	if err != nil {
 		close(w.stopped)
 		return err
@@ -132,7 +133,7 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		if walkErr != nil || !d.IsDir() || path == w.watchDir {
 			return nil
 		}
-		if skipHistoryDir(path) {
+		if w.skipHistoryDir(path) {
 			return filepath.SkipDir
 		}
 		_ = watcher.Add(path)
@@ -165,12 +166,12 @@ func (w *HistoryFileWatcher) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-w.watcher.Events:
+		case event, ok := <-w.watcher.Events():
 			if !ok {
 				return
 			}
 			w.handleEvent(event)
-		case err, ok := <-w.watcher.Errors:
+		case err, ok := <-w.watcher.Errors():
 			if !ok {
 				return
 			}
@@ -217,7 +218,7 @@ func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
 // arrive non-empty if Claude Code writes its transcript before this handler
 // gets to process the CREATE event for the directory itself.
 func (w *HistoryFileWatcher) watchNewDir(dir string) {
-	if skipHistoryDir(dir) {
+	if w.skipHistoryDir(dir) {
 		return
 	}
 	if err := w.watcher.Add(dir); err != nil {
@@ -242,11 +243,12 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 }
 
 // skipHistoryDir reports whether dir holds only files this watcher ignores. Claude Code
-// writes subagent transcripts (agent-*.jsonl, *.meta.json) under <session>/subagents/;
-// handleEvent drops them, but fsnotify's kqueue backend opens one fd per file in every
-// watched directory, so watching them cost ~8,000 fds on a long-lived instance.
-func skipHistoryDir(dir string) bool {
-	return filepath.Base(dir) == "subagents"
+// writes transcripts as <project>/<session>.jsonl; everything below a project dir
+// (<session>/subagents, <session>/tool-results, ...) is never consumed. On kqueue each
+// file in a watched dir costs an fd: subagents alone cost ~8,000 and tool-results
+// ~1,200 on a long-lived instance, so only the project dirs themselves are watched.
+func (w *HistoryFileWatcher) skipHistoryDir(dir string) bool {
+	return filepath.Dir(dir) != filepath.Clean(w.watchDir)
 }
 
 // Stop closes the watcher.

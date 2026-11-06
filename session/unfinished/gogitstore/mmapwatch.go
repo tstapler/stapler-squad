@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -47,7 +47,7 @@ func (s *SharedObjectStore) startPackWatchLocked() {
 	s.packWatchStarted = true
 
 	packDir := filepath.Join(s.commonDirAbs, "objects", "pack")
-	w, err := fsnotify.NewWatcher()
+	w, err := dirwatch.New(dirwatch.WithName("gogit-pack"))
 	if err != nil {
 		log.Warn("gogitstore: fsnotify unavailable, mmap index staleness will only be caught by Registry TTL eviction", "err", err)
 		return
@@ -67,7 +67,7 @@ func (s *SharedObjectStore) startPackWatchLocked() {
 // (mirrors session/unfinished/scanner.go's fsnotifyLoop goroutine-exit
 // convention, though this loop is otherwise independent of it — see package
 // doc above).
-func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{}) {
+func (s *SharedObjectStore) packWatchLoop(w dirwatch.Watcher, stop chan struct{}) {
 	defer func() { _ = w.Close() }()
 
 	var timer *time.Timer
@@ -82,7 +82,7 @@ func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{
 		select {
 		case <-stop:
 			return
-		case _, ok := <-w.Events:
+		case _, ok := <-w.Events():
 			if !ok {
 				return
 			}
@@ -97,7 +97,7 @@ func (s *SharedObjectStore) packWatchLoop(w *fsnotify.Watcher, stop chan struct{
 			if err := s.refreshIndexes(); err != nil {
 				log.Warn("gogitstore: refreshIndexes failed", "commonDir", s.commonDirAbs, "err", err)
 			}
-		case _, ok := <-w.Errors:
+		case _, ok := <-w.Errors():
 			if !ok {
 				return
 			}

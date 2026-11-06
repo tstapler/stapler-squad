@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"hash/fnv"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 
 // TestMain runs before all tests to set up the test environment
 func TestMain(m *testing.M) {
+	dirwatch.ForceFSNotify(true) // history/worktree tests need synchronous in-kernel event delivery
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
 
