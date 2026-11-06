@@ -52,8 +52,8 @@ var readHandoffGenerationFn = func(context.Context, DaemonConfig) (gen uint64, o
 }
 
 var (
-	handoffVerifyTimeout = 30 * time.Second
-	handoffVerifyPoll    = 250 * time.Millisecond
+	handoffVerifyTimeout = 30 * time.Second       //nolint:novartestseam // same package-var seam as daemonStopGracePeriod; threading a duration through ReplaceDaemon's signature would touch every caller
+	handoffVerifyPoll    = 250 * time.Millisecond //nolint:novartestseam // see handoffVerifyTimeout
 )
 
 // replaceViaHandoff swaps the running daemon for cfg.BinaryPath without ending any pane. The
