@@ -2,6 +2,14 @@
 //
 //	s6measure cold       first-worktree cold build, then N second-worktree builds against the warmed disk cache
 //	s6measure concurrent K worktrees building at the same time (peak combined RSS, wall time each)
+//	s6measure cost       Task 0.10a: five worktrees, wall/RSS/disk/external, in-worktree output-base variant
+//	s6measure queued     8 queued wrapper invocations + terminal-stream p99 on the manual instance
+//	s6measure diskconc   Task 0.10c: concurrent builds into one disk cache, integrity + GC race
+//	s6measure cross      Task 0.10e: E1-E4 cross-worktree sharing
+//	s6measure layout     Task 0.10f: E5 (GC), E6 (offline repo cache), E10 (reflink)
+//	s6measure containment Task 0.10g: E7 (cgroup alternatives), E11 (cold-start cost)
+//	s6measure workers    Task 0.10h: multiplex-worker inventory (non-gating)
+//	s6measure layering   Task 0.12f: E8 disk + remote cache layering on loopback
 //
 // Every build is gated on a quiet host (1-minute load <= 2.0) and records the load before and after.
 // -allow-noisy-host (or BZL_ALLOW_NOISY_HOST=1) is the owner-authorised override: the build starts at once
@@ -23,16 +31,14 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: s6measure cold|concurrent [flags]")
+		fmt.Fprintln(os.Stderr, "usage: s6measure cold|concurrent|cost|queued|diskconc|cross|layout|containment|workers|layering [flags]")
 		os.Exit(2)
 	}
+	run, ok := subcommands[os.Args[1]]
 	var err error
-	switch os.Args[1] {
-	case "cold":
-		err = runCold(os.Args[2:])
-	case "concurrent":
-		err = runConcurrent(os.Args[2:])
-	default:
+	if ok {
+		err = run(os.Args[2:])
+	} else {
 		err = fmt.Errorf("unknown subcommand %q", os.Args[1])
 	}
 	if err != nil {
@@ -58,7 +64,7 @@ func (c *common) flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.out, "out", "", "write result JSON here")
 	fs.Float64Var(&c.watchdogGB, "watchdog-gb", 20, "kill the builds if combined RSS exceeds this (host protection, not the 12 GB verdict bound)")
 	fs.BoolVar(&c.allowNoisy, "allow-noisy-host", false, "OWNER-AUTHORISED OVERRIDE: measure under load instead of waiting for a quiet host (also BZL_ALLOW_NOISY_HOST=1); results are marked not_quiet")
-	fs.StringVar(&c.update, "update", "", "cold only: merge s6_/mid_ first and second cold keys (and noisy_inputs) into this inputs JSON")
+	fs.StringVar(&c.update, "update", "", "cold only: merge cold: s6_/mid_ first and second cold keys; concurrent: s6_concurrent_* (and noisy_inputs) into this inputs JSON")
 	fs.DurationVar(&c.quietWait, "quiet-wait", 40*time.Minute, "max wait for a quiet host before a timed build")
 }
 
@@ -339,5 +345,14 @@ func runConcurrent(args []string) error {
 	for _, u := range us {
 		c.dropWT(u.wt, u.ob)
 	}
-	return writeOut(c.out, map[string]any{"builds": res, "peak_combined_rss_kb": peak, "peak_combined_rss_gb": float64(peak) / 1024 / 1024, "watchdog_fired": sampler.Fired, "not_quiet": AnyNoisy(res), "allow_noisy_host": c.allowNoisy})
+	gb := float64(peak) / 1024 / 1024
+	ok := gb <= 12 && !sampler.Fired && !AnyFailed(res) // PASS iff peak combined RSS is at most 12 GB
+	if c.update != "" && !AnyFailed(res) {
+		noisy := AnyNoisy(res)
+		kv := map[string]any{"s6_concurrent_peak_rss_gb": gb, "s6_concurrent_rss_ok": ok}
+		if err := UpdateInputs(c.update, kv, noisy, NoisyEntry(res, "s6measure concurrent")); err != nil {
+			return err
+		}
+	}
+	return writeOut(c.out, map[string]any{"builds": res, "rss_ok_12gb": ok, "peak_combined_rss_kb": peak, "peak_combined_rss_gb": float64(peak) / 1024 / 1024, "watchdog_fired": sampler.Fired, "not_quiet": AnyNoisy(res), "allow_noisy_host": c.allowNoisy})
 }
