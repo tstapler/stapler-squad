@@ -44,3 +44,46 @@ The 30-day cold number meets the 1 s SLO by about 14x.
 Writer latency with a concurrent reader: 5 alternating rounds of (all-time `Summary` running while a writer inserts one `backlog_status_events` row every 2 ms) and (a same-length period with no reader). Writer p99 per round with reader: 1.5, 6.2, 7.9, 8.7, 2.6 ms (median **6.2 ms**); without reader: 7.2, 9.6, 5.3, 6.2, 1.1 ms (median **6.2 ms**). Every write in every with-reader round stayed under the 100 ms assertion and none returned `SQLITE_BUSY`. The round-to-round spread (1-10 ms) exceeds any reader effect, so the result is "no measurable reader effect", not a tight bound. Under the concurrent writer the all-time read took a median 1.86 s (0.85-0.92 s alone): the writer slows the reader, not the reverse.
 
 The CI-resident proof that a read holds no writer connection is `TestFlowRead_should_NotBlockWriter_When_StreamEventsPausedOnBarrier`. Not measured here: partial-index build time (Phase 5).
+
+## Manual verification (PR-B, Story 6.1.1, 2026-11-06)
+
+Binary built from `f420fe03b` at `~/.stapler-squad/manual-builds/manual-2/stapler-squad`, run as `PORT=62873 STAPLER_SQUAD_INSTANCE=claude-manual-test2 --tmux-keep-server` on a `sqlite3 .backup` copy of the live workspace DB (live `:8543` and `make install-service` untouched). The instance read the copy: `row_counts.events` = 257,990 = `select count(*) from backlog_status_events` on the copy. The backlog flag was enabled in the instance config; the 6 non-archived items (2 idea, 3 ready, 1 review) were set to `archived` in the instance DB only, so the copy could not spawn triage or work sessions. Consequence: "open stuck" and open-item resolutions in the UI run read 0; all numbers below were taken before that edit via the RPC (backlog feature off), and the MCP and UI runs after it matched on every compared field (30-day tiles, thrash list, raw FAIL).
+
+| Check | Result |
+|---|---|
+| Raw recount (`sqlite3`, same day) | `in_progress>review` 636, `review>in_progress` 426, `pr_pending>done` 107; verdicts FAIL 186 / PARTIAL 82 / PASS 151 / UNVERIFIABLE 110 (529; plan had PASS 150) |
+| Timings (curl, ConnectRPC) | 7d 33 ms, 30d 46 ms, 90d 0.86 s, all-time 0.76 s cold then under 1 ms cached (`slow_path=true` on 90d and all-time). MCP: 30d 116 ms, all-time 1.05 s, compact all-time 1.07 s |
+| Thrash collapse, all-time | 61 episodes (35 items, 255,716 collapsed events); independent Python re-implementation (outside repo): 103 at M=0, 61 at 1h, 35 items, 255,716 events; by family at 1h 44/10/7 episodes on 26/8/3 items. Exact match to the plan's live figures |
+| Thrash, 30d | 13 items (18 episodes); `a90b99cb` 5 episodes, 8,597 events, last 2026-11-04, listed under anomalies; `d91477d5`/`8a53ce39` absent. All-time list has `d91477d5` 87,378 and `8a53ce39` 87,063 events; `0791f5b4` is a small offender (279 events in 30d) |
+| Judgment runs | Aggregator: 30 candidates (`total_count`, 10 shown with the weak-filter note in RPC and MCP). Python: 33 items with a judgment run of 3+, 29 with a second signal; the aggregator's 30 are those 29 plus `1828108a` (cap-exhausted). Plan reference 31/27; difference is data growth (529 vs 528 verdicts), not a rule gap |
+
+**Shipped-definition checkpoint baseline** (drill keys in brackets; N = den):
+
+| Metric | All-time | Last 30 days |
+|---|---|---|
+| First-pass yield (zero thrash, first `pr_pending>done`) [`fpy.first_pass`] | 30/106 (28.3%) | 3/26 (11.5%) |
+| Thrash-affected merged items [`fpy.thrash_affected`] | 16 | 9 |
+| Bounces per merged item [`causes.bounce_buckets`] | median 1 (40 of 106 zero; median among the 66 that bounced: 3); 28 bounce-cause rework events [`rework.bounce`] | median 1 (10 of 26 zero) |
+| Non-judgment share of non-PASS verdicts [`review.class.no_commits`, `.self_check_failed`, `.reviewer_degraded`] | 142/378 (37.6%) | 20/100 (20.0%) |
+| Raw / adjusted FAIL [`review.raw_fail`, `review.adjusted_fail`] | 186/529 (35.2%) / 89/364 (24.5%) | 15/154 / 13/125 |
+
+Delta to the rough `requirements.md` table (reasons are INFERRED from definitions, not separately re-run): first-pass 30/106 vs 48/137 because the denominator is merged items and thrash-affected items fail first-pass; median bounces 1 vs 2 because bounces exclude `ReviewReopen`-noted events and thrash; non-judgment share 37.6% vs 39.7% from the 2 extra verdict classes and verdict growth.
+
+**Owner actions, still OPEN (not faked):** (1) hand-label the top-10 deadlock candidates below (bar is 70%: below it the section stays "Review-fail streaks (heuristic)"); (2) first-render comprehension check on `/backlog/flow?window=30` (four questions, under 5 minutes); (3) screen-reader, grayscale and chart-mark contrast passes. Agent screenshots (`/tmp/flow-manual/flow-30d-{default,light,dark}.png`) were taken in a narrow viewport with the onboarding modal open, so they do not replace (3).
+
+Top-10 candidates (all-time, ranked by run length; F fail, R partial, U unverifiable, P pass; the first column is the item id prefix):
+
+| Item | Sequence | Run | Title |
+|---|---|---|---|
+| 5eaaa473 | FFFFFFFFFRUFRFFFFFFFFUFP | 15 | Auto-run ArgoCD CRD-client integration tests on preview deploy |
+| 0791f5b4 | FRUUURURRURRRP | 10 | feat: session federation, view and drive sessions from multiple instances |
+| c442abc7 | FRUFUUUURP | 7 | backlog page: unable to scroll |
+| 735dcbee | RRRRRRRPRRRR | 7 | gh-signal inbox follow-ups |
+| a90b99cb | FUUUFFUPRRRP | 7 | gh-signal: PR state reconciler (thrash item) |
+| eaf40918 | FUUUUPRFFFUUU | 7 | Fix data race, withShrunkIdleSettleTimers cleanup |
+| 0e775762 | FFFUFUURUPFF | 7 | Flaky: TestDeleteSession_PublishesDeletedEvent |
+| 8a53ce39 | FUUUUUFFRFFF | 6 | Fix TestWorkspace_UsesWorktreePath (thrash item) |
+| dc2c9bba | FFFUFFFRU | 6 | Fix TestCreateSession BeforePresetExtraArgs flake |
+| 2846ce8a | RRRPUUURU | 5 | Internal-only Kafka ingress bridge |
+
+Agent pre-fill (INFERRED from sequences only; owner confirms): `5eaaa473` real deadlock (15 fails, cap exhausted, human override); `0791f5b4` real deadlock; `eaf40918` real deadlock; `0e775762`, `dc2c9bba` agent gave up or noise (long U runs suggest reviewer trouble); `735dcbee`, `2846ce8a` reviewer too strict (PARTIAL-heavy); `a90b99cb`, `8a53ce39` noise (also thrash items); `c442abc7` unclear.
