@@ -36,9 +36,9 @@ Measured at commit `43933064f` (branch `sdd/bazel-wp2-ci`, from `sdd/bazel-epic0
 
 ```
 prs: 30
-misses_regex: 2
+misses_regex: 0
 misses_script: 1
-misses_paths: 1
+misses_paths: 0
 extra_regex: 0
 extra_script: 4
 extra_paths: 7

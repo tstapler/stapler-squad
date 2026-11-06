@@ -9,3 +9,6 @@ website/** website-ci
 web-app/.jscpd.json web-duplication
 server/middleware/testdata/** go-test
 .bun-version web-build,e2e
+.github/workflows/build.yml workflow-lint,go-test,web-build,e2e
+.github/workflows/_prepare.yml workflow-lint,go-test,web-build,e2e
+.github/workflows/mcp-integration.yml workflow-lint,mcp-integration
