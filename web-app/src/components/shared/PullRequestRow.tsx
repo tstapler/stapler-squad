@@ -6,6 +6,7 @@ import { PollError } from "@/gen/session/v1/types_pb";
 import { isTerminal, prRowState, prTarget } from "@/lib/pr/pullRequests";
 import { holdLine, isWarningHold, pollErrorText, reviewSummary, stateText, unverifiedLine } from "@/lib/pr/rowCopy";
 import { PrStateGlyph } from "./PrStateGlyph";
+import { usePopupMenu } from "./usePopupMenu";
 import * as s from "./PullRequestList.css";
 
 export type RowCommand = "merge" | "close" | "askToFix" | "pin" | "unpin" | "refresh" | "detach" | "copyLink";
@@ -41,26 +42,8 @@ function menuItems(pr: SessionPullRequest, canAskToFix: boolean, canAct: boolean
 
 function RowMenu({ pr, items, onCommand }: { pr: SessionPullRequest; items: MenuItem[]; onCommand: RowProps["onCommand"] }) {
   const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const { triggerRef, menuRef, onKeyDown } = usePopupMenu(open, setOpen);
   const target = prTarget(pr);
-
-  useEffect(() => {
-    if (!open) return;
-    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    const away = (e: Event) => { if (!menuRef.current?.contains(e.target as Node) && !triggerRef.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    const entries = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
-    const at = entries.indexOf(document.activeElement as HTMLElement);
-    if (e.key === "Escape") { e.stopPropagation(); setOpen(false); triggerRef.current?.focus(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); entries[(at + 1) % entries.length]?.focus(); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); entries[(at - 1 + entries.length) % entries.length]?.focus(); }
-    else if (e.key === "Tab") setOpen(false);
-  };
 
   return (
     <>

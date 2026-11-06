@@ -8,9 +8,9 @@ import * as styles from "./PRSessionChip.css";
 
 const sessionLabel = (s: Session) => s.title || s.id;
 
-function SessionLink({ session, className, children }: { session: Session; className: string; children: React.ReactNode }) {
+function SessionLink({ session, className, label, children }: { session: Session; className: string; label?: string; children: React.ReactNode }) {
   return (
-    <Link href={routes.sessionDetail(session.id)} className={className} aria-label={`Open session ${sessionLabel(session)}`}>
+    <Link href={routes.sessionDetail(session.id)} className={className} aria-label={label}>
       {children}
     </Link>
   );
@@ -71,7 +71,7 @@ export function PRSessionChip({ sessions }: { sessions: readonly Session[] }) {
         <ul id={menuId} className={styles.menu} aria-label="Sessions tracking this PR" data-testid="pr-session-chip-menu">
           {sessions.map((s) => (
             <li key={s.id}>
-              <SessionLink session={s} className={styles.menuLink}>{sessionLabel(s)}</SessionLink>
+              <SessionLink session={s} className={styles.menuLink} label={`Open session ${sessionLabel(s)}`}>{sessionLabel(s)}</SessionLink>
             </li>
           ))}
         </ul>

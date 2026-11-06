@@ -19,8 +19,9 @@ describe("PRSessionChip", () => {
 
   it("PRSessionChip_should_linkTheSession_When_ExactlyOne", () => {
     render(<PRSessionChip sessions={[s("a", "refactor-auth")]} />);
-    const link = screen.getByRole("link", { name: "Open session refactor-auth" });
+    const link = screen.getByRole("link", { name: "session: refactor-auth" });
     expect(link).toHaveTextContent("session: refactor-auth");
+    expect(link).not.toHaveAttribute("aria-label");
     expect(link).toHaveAttribute("href", "/?session=a");
   });
 

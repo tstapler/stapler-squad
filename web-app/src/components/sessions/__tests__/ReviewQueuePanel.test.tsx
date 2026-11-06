@@ -55,12 +55,15 @@ jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: jest.fn(),
 }));
 
+const mockApprove = jest.fn().mockResolvedValue(undefined);
+const mockDeny = jest.fn().mockResolvedValue(undefined);
+
 jest.mock("@/lib/contexts/ApprovalsContext", () => ({
   useApprovalsContext: () => ({
     pendingApprovals: [],
     resolveApproval: jest.fn(),
-    approve: jest.fn().mockResolvedValue(undefined),
-    deny: jest.fn().mockResolvedValue(undefined),
+    approve: mockApprove,
+    deny: mockDeny,
     clearForSession: jest.fn(),
     clearedSessions: new Set(),
   }),
@@ -2034,6 +2037,29 @@ describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
     // Approve/Deny are disabled, not hidden.
     expect(screen.getByTestId("approve-session-approval")).toBeDisabled();
     expect(screen.getByTestId("deny-session-approval")).toBeDisabled();
+  });
+
+  it("approveDeny_should_NotRenderOrCallWithEmptyId_When_PendingApprovalIdEmpty", () => {
+    const item = makeApprovalItem({ metadata: { pending_approval_id: "" } });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("approve-session-approval")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("deny-session-approval")).not.toBeInTheDocument();
+    expect(mockApprove).not.toHaveBeenCalledWith("");
+    expect(mockDeny).not.toHaveBeenCalledWith("");
+  });
+
+  it("approveDeny_should_PassThePendingApprovalId_When_Clicked", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([makeApprovalItem()]));
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("approve-session-approval"));
+    fireEvent.click(screen.getByTestId("deny-session-approval"));
+
+    expect(mockApprove).toHaveBeenCalledWith("approval-123");
+    expect(mockDeny).toHaveBeenCalledWith("approval-123");
   });
 
   it("renders a live (non-reconciled) row normally: no banner, actions enabled", () => {

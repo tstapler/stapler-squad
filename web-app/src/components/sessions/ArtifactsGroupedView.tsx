@@ -18,7 +18,14 @@ const safeHref = (url: string) => (/^https?:\/\//i.test(url) ? url : "#");
 function ItemRow({ item }: { item: ArtifactItem }) {
   const { announce } = useAnnounce();
   const copy = () => {
-    void navigator.clipboard?.writeText(item.copyValue ?? "").then(() => announce(`Copied ${item.kindLabel} ${item.title}`, "polite", "artifact-copy"));
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(item.copyValue ?? "");
+        announce(`Copied ${item.kindLabel} ${item.title}`, "polite", "artifact-copy");
+      } catch {
+        announce(`Couldn't copy ${item.kindLabel}`, "assertive", "artifact-copy");
+      }
+    })();
   };
   let control: ReactNode;
   if (item.redacted) control = <span className={s.value} data-testid="artifact-redacted">{REDACTED}</span>;

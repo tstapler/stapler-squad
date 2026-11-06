@@ -12,6 +12,7 @@ import { ConfirmPrDialog, MergeDialog, TrackPrDialog } from "./PullRequestDialog
 import * as s from "./PullRequestList.css";
 import { PullRequestRow, type RowCommand } from "./PullRequestRow";
 import { PullRequestUndoToast } from "./PullRequestUndoToast";
+import { usePopupMenu } from "./usePopupMenu";
 
 const PHONE = "(max-width: 480px)";
 const LOAD_TIMEOUT_MS = 10_000;
@@ -37,6 +38,15 @@ type FocusPlan = { key: string; index: number };
 
 const asTarget = (pr: SessionPullRequest): PrTarget => toRef(pr);
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The "Pull requests" section: every PR of a session, the held state of each, and per-PR actions. */
 export function PullRequestList(props: PullRequestListProps) {
   const { pullRequests, holds = [], actions, loading, loadError, onRetryLoad, fallbackUrl, onCreatePullRequest } = props;
@@ -50,7 +60,7 @@ export function PullRequestList(props: PullRequestListProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const headerMenuRef = useRef<HTMLButtonElement>(null);
+  const { triggerRef: headerMenuRef, menuRef: headerMenuPanelRef, onKeyDown: onHeaderMenuKeyDown } = usePopupMenu(menuOpen, setMenuOpen);
   const rowEls = useRef(new Map<string, HTMLLIElement>());
   const toastFocus = useRef<FocusPlan | null>(null);
   const dialogFocus = useRef<FocusPlan | null>(null);
@@ -139,7 +149,7 @@ export function PullRequestList(props: PullRequestListProps) {
         break;
       }
       case "copyLink":
-        void navigator.clipboard?.writeText(pr.url).then(() => setNote({ text: `Copied link to ${prTarget(pr)}.`, alert: false }));
+        void copyText(pr.url).then((ok) => setNote(ok ? { text: `Copied link to ${prTarget(pr)}.`, alert: false } : { text: "Couldn't copy link", alert: true }));
         break;
     }
   };
@@ -177,8 +187,8 @@ export function PullRequestList(props: PullRequestListProps) {
           <span aria-hidden="true">...</span>
         </button>
         {menuOpen && (
-          <div role="menu" className={s.menu} onKeyDown={(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
-            <button type="button" role="menuitem" className={s.menuItem} autoFocus data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); dialogFocus.current = null; setDialog({ kind: "track" }); }}>{/* analytics-exempt */}
+          <div ref={headerMenuPanelRef} role="menu" className={s.menu} onKeyDown={onHeaderMenuKeyDown}>
+            <button type="button" role="menuitem" className={s.menuItem} data-testid="pr-track-by-url" onClick={() => { setMenuOpen(false); dialogFocus.current = null; setDialog({ kind: "track" }); }}>{/* analytics-exempt */}
               Track a PR by URL
             </button>
           </div>
