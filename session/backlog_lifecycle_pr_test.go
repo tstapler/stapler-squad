@@ -625,7 +625,7 @@ func TestPrFixReopen_should_RecordTriggerOnce_When_PollerDecidesFix(t *testing.T
 	assert.Equal(t, []string{PRFixTriggerCI, PRFixTriggerConflict, PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
 }
 
-func TestPrFixReopen_should_RecordUnknownAndCountIt_When_FlagsDoNotClassify(t *testing.T) {
+func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -639,10 +639,8 @@ func TestPrFixReopen_should_RecordUnknownAndCountIt_When_FlagsDoNotClassify(t *t
 	})
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	before := PRFixTriggerUnknownCount()
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{PRFixTriggerUnknown}, triggerValuesFor(t, er, item.ID))
-	assert.Greater(t, PRFixTriggerUnknownCount(), before)
+	assert.Equal(t, []string{PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
 }
 
 func TestPrFixReopen_should_RecordUnknownTrigger_When_PRClosedWithoutMerge(t *testing.T) {
@@ -657,6 +655,8 @@ func TestPrFixReopen_should_RecordUnknownTrigger_When_PRClosedWithoutMerge(t *te
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}})
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
+	before := PRFixTriggerUnknownCount()
 	listener.ReconcilePRPending(ctx, er)
 	assert.Equal(t, []string{PRFixTriggerUnknown}, triggerValuesFor(t, er, item.ID))
+	assert.Greater(t, PRFixTriggerUnknownCount(), before)
 }
