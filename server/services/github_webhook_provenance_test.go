@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type countingCommentLister struct {
@@ -27,9 +28,9 @@ func (c *countingCommentLister) list(context.Context, github.RepoRef, int) ([]gi
 	return c.comments, c.err
 }
 
-func provenanceComments(t *testing.T) ([]github.PRComment, session.HostID) {
+func provenanceComments(t *testing.T) ([]github.PRComment, hostclaim.HostID) {
 	t.Helper()
-	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 	stamp := session.FormatPRProvenanceComment(identity.ID, "ssq://laptop/backlog/v1/bl_01J7QK0000000000000000000A")
 	return []github.PRComment{{Body: "lgtm"}, {Body: stamp}, {Body: "CI is red"}}, identity.ID
@@ -124,7 +125,7 @@ func TestPRProvenanceReader_should_CacheHitsAndMisses_ButRetryAfterErrors(t *tes
 func TestPRProvenanceReader_should_PreferNewestStamp_When_PRWasRestamped(t *testing.T) {
 	ref, err := github.NewRepoRef("tstapler", "stapler-squad")
 	require.NoError(t, err)
-	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 	older := session.FormatPRProvenanceComment(identity.ID, "ssq://a/backlog/v1/bl_OLD")
 	newer := session.FormatPRProvenanceComment(identity.ID, "ssq://a/backlog/v1/bl_NEW")

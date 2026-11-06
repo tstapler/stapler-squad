@@ -14,7 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // bkfFlagWriter returns a setter that writes a flag through the production RPC
@@ -92,8 +92,8 @@ func TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate(t *testing.
 // the only thing that can turn the answer off.
 type bkfForeignClaims struct{}
 
-func (bkfForeignClaims) ForeignClaim(string) (session.ClaimRecord, bool) {
-	return session.ClaimRecord{}, true
+func (bkfForeignClaims) ForeignClaim(string) (hostclaim.ClaimRecord, bool) {
+	return hostclaim.ClaimRecord{}, true
 }
 
 func TestConfigSurfaceProof_CrossHostClaimDedup_ChangesClaimLookup(t *testing.T) {

@@ -1,4 +1,4 @@
-package session
+package hostclaim
 
 import (
 	"bytes"
@@ -611,7 +611,7 @@ func TestADR002References_should_PointToCanonicalPath_When_CodeCommentsGrepped(t
 }
 
 func TestADR002PointerFile_should_ExistAtDocsAdrPath_When_RepoChecked(t *testing.T) {
-	pointer := filepath.Join("..", "docs", "adr", "ADR-002-workspace-host-registry-gossip.md")
+	pointer := filepath.Join("..", "..", "docs", "adr", "ADR-002-workspace-host-registry-gossip.md")
 	data, err := os.ReadFile(pointer)
 	if err != nil {
 		t.Fatalf("pointer file missing: %v", err)

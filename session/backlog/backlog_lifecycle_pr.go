@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -433,7 +434,7 @@ type PRFooterOrigin struct {
 	// BaseURL is a non-loopback http(s) address of the instance's web UI.
 	BaseURL string
 	// HostID is the instance's opaque host identity.
-	HostID session.HostID
+	HostID hostclaim.HostID
 	// Hostname is the name peers can use for this instance in an ssq:// link.
 	Hostname string
 }

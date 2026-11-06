@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/auth"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/internal/peeraddr"
 )
 
@@ -16,10 +16,10 @@ import (
 // convergenceNode it lives in the external test package so it can use
 // server/auth without a build cycle.
 type claimNode struct {
-	identity session.HostIdentity
-	registry *session.HostRegistry
-	index    *session.ClaimIndex
-	gossiper *session.ClaimGossiper
+	identity hostclaim.HostIdentity
+	registry *hostclaim.HostRegistry
+	index    *hostclaim.ClaimIndex
+	gossiper *hostclaim.ClaimGossiper
 	addr     string
 	srv      *httptest.Server
 }
@@ -29,15 +29,15 @@ func newClaimNode(t *testing.T) *claimNode {
 	peeraddr.AllowImplausible = true
 	t.Cleanup(func() { peeraddr.AllowImplausible = false })
 
-	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity: %v", err)
 	}
-	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(t.TempDir(), hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		t.Fatalf("NewHostRegistry: %v", err)
 	}
-	index, err := session.NewClaimIndex(t.TempDir(), registry)
+	index, err := hostclaim.NewClaimIndex(t.TempDir(), registry)
 	if err != nil {
 		t.Fatalf("NewClaimIndex: %v", err)
 	}
@@ -48,7 +48,7 @@ func newClaimNode(t *testing.T) *claimNode {
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
 	}
-	gossiper, err := session.NewClaimGossiper(identity, registry, index, []string{u.Host}, time.Minute)
+	gossiper, err := hostclaim.NewClaimGossiper(identity, registry, index, []string{u.Host}, time.Minute)
 	if err != nil {
 		t.Fatalf("NewClaimGossiper: %v", err)
 	}
@@ -61,7 +61,7 @@ func (n *claimNode) closeServer() { n.srv.Close() }
 
 func (n *claimNode) learn(t *testing.T, peer *claimNode) {
 	t.Helper()
-	ad := session.BuildAdvertisement(peer.identity, []string{peer.addr}, time.Now())
+	ad := hostclaim.BuildAdvertisement(peer.identity, []string{peer.addr}, time.Now())
 	if _, accepted, err := n.registry.Advertise(ad); err != nil || !accepted {
 		t.Fatalf("Advertise(peer) accepted=%v err=%v", accepted, err)
 	}
@@ -76,7 +76,7 @@ func TestClaimGossip_should_ReachHostBAndReGossipToHostC_When_HostABroadcastsOnc
 	c.learn(t, a) // C must know A to accept A's claim re-gossiped by B
 
 	const issue = "https://github.com/o/r/issues/1"
-	record := session.NewSignedClaimRecord(a.identity, issue, "ssq://hostA/backlog/v1/bl_01J", time.Now())
+	record := hostclaim.NewSignedClaimRecord(a.identity, issue, "ssq://hostA/backlog/v1/bl_01J", time.Now())
 	if err := a.gossiper.BroadcastOnce(t.Context(), record); err != nil {
 		t.Fatalf("BroadcastOnce() error = %v, want nil", err)
 	}

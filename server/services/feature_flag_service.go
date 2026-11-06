@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // piSupportFlagName mirrors config.FeaturePiSupport so knownFeatureFlags below
@@ -517,14 +518,14 @@ func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
 // cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *session.CachedModeSource {
 	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:
 // each class resolves its own enforce flag and the shared shadow flag from live
 // config, cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineClassModeSource(load func() *config.Config, clock session.Clock) *session.FlagClassModeSource {
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock hostclaim.Clock) *session.FlagClassModeSource {
 	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
 }
 

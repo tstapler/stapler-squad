@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // seedRegistryEntry writes a valid, signed advertisement for hostname/addr
@@ -18,13 +19,13 @@ import (
 // against the same stateDir observes it via LookupByHostname.
 func seedRegistryEntry(t *testing.T, stateDir string, addr string) {
 	t.Helper()
-	identity, err := session.LoadOrCreateHostIdentity(stateDir)
+	identity, err := hostclaim.LoadOrCreateHostIdentity(stateDir)
 	require.NoError(t, err)
 
-	registry, err := session.NewHostRegistry(stateDir, session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(stateDir, hostclaim.DefaultHostRegistryTTL)
 	require.NoError(t, err)
 
-	record := session.BuildAdvertisement(identity, []string{addr}, time.Now())
+	record := hostclaim.BuildAdvertisement(identity, []string{addr}, time.Now())
 	_, accepted, err := registry.Advertise(record)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -64,7 +65,7 @@ func (s stubHealthTransport) RoundTrip(req *http.Request) (*http.Response, error
 func registryResolverWithStubTransport(stateDir string, transport http.RoundTripper) *registryHostResolver {
 	return &registryHostResolver{
 		stateDir:        stateDir,
-		registryTTL:     session.DefaultHostRegistryTTL,
+		registryTTL:     hostclaim.DefaultHostRegistryTTL,
 		httpClient:      &http.Client{Transport: transport},
 		livenessTimeout: defaultLivenessTimeout,
 	}
@@ -237,7 +238,7 @@ func TestDeepLinkResolver_should_ReturnNotRegistered_When_HostnameHasNoRegistryE
 	storage := svctest.CreateTestStorage(t)
 	stateDir := t.TempDir()
 
-	resolver := NewDeepLinkResolver(storage, NewRegistryHostResolver(stateDir, session.DefaultHostRegistryTTL))
+	resolver := NewDeepLinkResolver(storage, NewRegistryHostResolver(stateDir, hostclaim.DefaultHostRegistryTTL))
 	resolver.ownHostname = fakeOwnHostname("myhost")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://unknownhost/backlog/v1/bl_01J0000000000000000000", nil)
