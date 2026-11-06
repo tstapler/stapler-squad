@@ -31,6 +31,9 @@ type PRFixEventRouter interface {
 // consumer, per the `interface-pollution-checklist` skill.
 type GitHubPollerInvalidator interface {
 	InvalidateForEvent(ctx context.Context, repoFullName string, prNumber int)
+	// InvalidateForReopened is InvalidateForEvent for pull_request.reopened, the only
+	// observation allowed to move a terminal row back to open.
+	InvalidateForReopened(ctx context.Context, repoFullName string, prNumber int)
 }
 
 // GitHubWebhookHandler handles POST /webhooks/github: GitHub push-event deliveries
@@ -112,6 +115,9 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	switch eventType := r.Header.Get("X-GitHub-Event"); {
 	case eventType == "" || eventType == "push":
 		// existing logic below, unchanged.
+	case eventType == "pull_request":
+		h.handlePullRequestEvent(w, r, payload, body)
+		return
 	case slices.Contains(prFixEventTypes, eventType):
 		h.handlePRFixEvent(w, r, payload, body, deliveryID, eventType)
 		return

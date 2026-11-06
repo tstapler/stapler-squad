@@ -366,12 +366,25 @@ type spyPollerInvalidator struct {
 		repoFullName string
 		prNumber     int
 	}
+	reopened []struct {
+		repoFullName string
+		prNumber     int
+	}
 }
 
 func (s *spyPollerInvalidator) InvalidateForEvent(_ context.Context, repoFullName string, prNumber int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, struct {
+		repoFullName string
+		prNumber     int
+	}{repoFullName, prNumber})
+}
+
+func (s *spyPollerInvalidator) InvalidateForReopened(_ context.Context, repoFullName string, prNumber int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reopened = append(s.reopened, struct {
 		repoFullName string
 		prNumber     int
 	}{repoFullName, prNumber})
@@ -778,4 +791,45 @@ func jsonBody(t *testing.T, v map[string]interface{}) []byte {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+func pullRequestEventBody(t *testing.T, action string) []byte {
+	t.Helper()
+	return jsonBody(t, map[string]interface{}{
+		"action":       action,
+		"pull_request": map[string]interface{}{"number": float64(189)},
+		"repository":   map[string]interface{}{"full_name": "tstapler/stapler-squad"},
+	})
+}
+
+func TestHandlePullRequestEvent_should_InvalidateForReopened_When_ReopenedDeliveryVerified(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	newGitHubPushWorkflow(t, infra, "gh-reopen-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	invalidator := &spyPollerInvalidator{}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, &fakePRFixEventRouter{}, invalidator)
+
+	body := pullRequestEventBody(t, "reopened")
+	rec := doPRFixEventRequest(t, h, "pull_request", body, "delivery-reopen", sign("s3cr3t", body))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, invalidator.reopened, 1)
+	assert.Equal(t, "tstapler/stapler-squad", invalidator.reopened[0].repoFullName)
+	assert.Equal(t, 189, invalidator.reopened[0].prNumber)
+	assert.Zero(t, invalidator.callCount(), "reopened must not go through the plain event path")
+}
+
+func TestHandlePullRequestEvent_should_NotInvalidate_When_BadSignatureOrOtherAction(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	newGitHubPushWorkflow(t, infra, "gh-reopen-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	invalidator := &spyPollerInvalidator{}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, &fakePRFixEventRouter{}, invalidator)
+
+	body := pullRequestEventBody(t, "reopened")
+	rec := doPRFixEventRequest(t, h, "pull_request", body, "d1", sign("wrong", body))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	other := pullRequestEventBody(t, "opened")
+	rec = doPRFixEventRequest(t, h, "pull_request", other, "d2", sign("s3cr3t", other))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, invalidator.reopened)
 }
