@@ -1168,7 +1168,11 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		acStatus = "in_progress"
 	}
 
-	if err := h.storage.UpdateAcCriterionStatus(ctx, itemID, criteriaIndex, acStatus, note); err != nil {
+	_, verified := verifiedCallerSessionUUID(ctx)
+	auditCtx := session.WithAcActor(ctx, session.AcActor{
+		Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
+	})
+	if err := h.storage.UpdateAcCriterionStatus(auditCtx, itemID, criteriaIndex, acStatus, note); err != nil {
 		if errors.Is(err, session.ErrAcCriterionWaived) {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d was waived by the owner and needs no further work", criteriaIndex), ""), nil
 		}

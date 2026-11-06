@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"reflect"
@@ -86,9 +87,19 @@ func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.H
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), passkeyAuthenticatedKey{}, true)))
 		})
 	}
+}
+
+type passkeyAuthenticatedKey struct{}
+
+// PasskeyAuthenticated reports whether Auth validated this request's passkey session cookie or
+// bearer token. It is false when auth is disabled or the path was exempt, so false never means
+// "agent" -- only "no proof of an operator".
+func PasskeyAuthenticated(ctx context.Context) bool {
+	v, _ := ctx.Value(passkeyAuthenticatedKey{}).(bool)
+	return v
 }
 
 // isExempt returns true for paths that must be accessible before login.

@@ -39,6 +39,8 @@ export interface AcCriterion {
   status: AcCriterionStatus;
   /** Owner's justification; set when status is "waived". */
   waiverReason?: string;
+  waivedBy?: string;
+  waivedAt?: string;
 }
 
 export interface TriageSuggestion {
@@ -477,6 +479,8 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
     text: c.text,
     status: (c.status || "pending") as AcCriterionStatus,
     waiverReason: c.waiverReason || undefined,
+    waivedBy: c.waivedBy || undefined,
+    waivedAt: c.waivedAt || undefined,
   };
 }
 
@@ -731,6 +735,8 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
     text: c.text,
     status: c.status,
     waiverReason: c.waiverReason ?? "",
+    waivedBy: c.waivedBy ?? "",
+    waivedAt: c.waivedAt ?? "",
   }));
 }
 

@@ -496,6 +496,10 @@ type AcCriterion struct {
 	Note   string   `json:"note,omitempty"`
 	// WaiverReason is the owner's mandatory justification when Status is waived.
 	WaiverReason string `json:"waiver_reason,omitempty"`
+	// WaivedBy and WaivedAt record who waived (AcActor.Label) and when (RFC 3339 UTC); display
+	// copies of the authoritative AcAuditEvent row.
+	WaivedBy string `json:"waived_by,omitempty"`
+	WaivedAt string `json:"waived_at,omitempty"`
 }
 
 // ParseAcCriteria deserializes acceptance criteria from a JSON string.

@@ -15,6 +15,21 @@ describe("AcCriteriaList waivers", () => {
     expect(screen.getByText("Waiver reason: no hardware")).toBeInTheDocument();
   });
 
+  it("shows who waived and when, with a fallback for legacy waivers", () => {
+    const { rerender } = render(<AcCriteriaList criteria={criteria} />);
+    expect(screen.getByTestId("ac-waived-by-2")).toHaveTextContent(
+      "Waived by unknown caller (recorded before audit trail) at unknown time"
+    );
+    rerender(
+      <AcCriteriaList
+        criteria={[{ ...criteria[2], waivedBy: "operator (authenticated)", waivedAt: "2026-11-05T12:00:00Z" }]}
+      />
+    );
+    const line = screen.getByTestId("ac-waived-by-2").textContent ?? "";
+    expect(line).toContain("Waived by operator (authenticated) at ");
+    expect(line).not.toContain("unknown time");
+  });
+
   it("offers Waive only on unmet criteria and requires a non-blank reason", async () => {
     const onWaive = jest.fn().mockResolvedValue(undefined);
     render(<AcCriteriaList criteria={criteria} onWaive={onWaive} />);

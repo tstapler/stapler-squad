@@ -1,0 +1,14 @@
+{
+  "id": "ListAcAuditEvents",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ListAcAuditEvents",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/ac_audit.go",
+  "tested": true,
+  "testIds": [
+    "TestListAcAuditEvents_should_ReturnTrailOldestFirst"
+  ],
+  "lastModified": "2026-11-05T19:09:36.615031054-08:00"
+}

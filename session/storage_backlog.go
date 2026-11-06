@@ -1428,7 +1428,7 @@ var ErrAcCriterionWaived = errors.New("acceptance criterion was waived by the ow
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
-	return r.mutateAcCriterion(ctx, itemID, criterionIndex, func(c *AcCriterion) error {
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *AcCriterion) error {
 		if c.Status == AcStatusWaived {
 			return ErrAcCriterionWaived
 		}
@@ -1453,16 +1453,30 @@ func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, cri
 	if reason == "" {
 		return ErrWaiverReasonRequired
 	}
-	return r.mutateAcCriterion(ctx, itemID, criterionIndex, func(c *AcCriterion) error {
+	actor := AcActorFrom(ctx)
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(AcStatusWaived), reason: reason}, func(c *AcCriterion) error {
+		if c.Status == AcStatusDone {
+			return ErrAcCriterionAlreadyDone
+		}
 		c.Status = AcStatusWaived
 		c.WaiverReason = reason
+		c.WaivedBy = actor.Label()
+		c.WaivedAt = time.Now().UTC().Format(time.RFC3339)
 		return nil
 	})
 }
 
+// acChange describes the requested status change so it can be audited whatever its outcome.
+type acChange struct {
+	newStatus string
+	reason    string
+}
+
 // mutateAcCriterion loads the item's criteria, applies mutate to the one at
-// criterionIndex, and persists the result.
-func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, mutate func(*AcCriterion) error) error {
+// criterionIndex, and persists the result together with an AcAuditEvent in one
+// transaction. A mutation that reaches an existing item but is refused still
+// leaves an audit row (outcome "rejected:...").
+func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, change acChange, mutate func(*AcCriterion) error) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -1471,7 +1485,13 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin AC update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	item, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
@@ -1484,12 +1504,29 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return fmt.Errorf("failed to parse AC criteria: %w", parseErr)
 	}
 
-	if criterionIndex < 0 || criterionIndex >= len(criteria) {
-		return fmt.Errorf("%w: index %d (len=%d)", ErrAcCriterionOutOfRange, criterionIndex, len(criteria))
+	audit := func(prev, outcome string) error {
+		return r.createAcAuditEvent(ctx, tx.AcAuditEvent.Create(), AcAuditEventData{
+			ItemID: parsedID.String(), CriterionIndex: criterionIndex, PreviousStatus: prev,
+			NewStatus: change.newStatus, Reason: change.reason, Outcome: outcome,
+		})
+	}
+	reject := func(prev string, cause error) error {
+		if err := audit(prev, "rejected:"+cause.Error()); err != nil {
+			return errors.Join(cause, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
 
+	if criterionIndex < 0 || criterionIndex >= len(criteria) {
+		return reject("", fmt.Errorf("%w: index %d (len=%d)", ErrAcCriterionOutOfRange, criterionIndex, len(criteria)))
+	}
+	prev := string(criteria[criterionIndex].Status)
+
 	if err := mutate(&criteria[criterionIndex]); err != nil {
-		return err
+		return reject(prev, err)
 	}
 
 	serialized, serErr := SerializeAcCriteria(criteria)
@@ -1497,20 +1534,20 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return fmt.Errorf("failed to serialize AC criteria: %w", serErr)
 	}
 
-	updated, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	updated, err := tx.BacklogItem.UpdateOneID(parsedID).
 		SetAcceptanceCriteria(string(serialized)).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to save AC criteria update for item %s: %w", itemID, err)
 	}
+	if err := audit(prev, "applied"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit AC update: %w", err)
+	}
 
-	// Best-effort publish: never blocks or fails the AC-status update itself.
-	// Found missing by the same Phase 5 spec-compliance sweep that found the
-	// ItemSessions eager-load regression above: this method drove the
-	// "N/M done" acceptance-criteria progress badge but never emitted a
-	// BacklogItemEvent at all, so live viewers never saw AC progress update
-	// until their next full poll/refresh — a real event-system bypass, not
-	// just a blanked field.
+	// Best-effort publish so live viewers see AC progress without a full refresh.
 	result := backlogItemToData(updated)
 	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,

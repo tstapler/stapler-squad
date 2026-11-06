@@ -10,6 +10,16 @@ interface AcCriterion {
   text: string;
   status: AcCriterionStatus;
   waiverReason?: string;
+  waivedBy?: string;
+  waivedAt?: string;
+}
+
+/** "Waived by <who> at <when>"; legacy waivers recorded before the audit trail have neither. */
+function waivedByLine(c: AcCriterion): string {
+  const who = c.waivedBy || "unknown caller (recorded before audit trail)";
+  const parsed = c.waivedAt ? new Date(c.waivedAt) : null;
+  const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleString() : "unknown time";
+  return `Waived by ${who} at ${when}`;
 }
 
 interface AcCriteriaListProps {
@@ -132,6 +142,11 @@ export function AcCriteriaList({ criteria, readonly = true, onWaive }: AcCriteri
             </div>
             {criterion.status === "waived" && criterion.waiverReason && (
               <p className={styles.waiverReason}>Waiver reason: {criterion.waiverReason}</p>
+            )}
+            {criterion.status === "waived" && (
+              <p className={styles.waiverReason} data-testid={`ac-waived-by-${criterion.index}`}>
+                {waivedByLine(criterion)}
+              </p>
             )}
             {onWaive && waivingIndex === criterion.index && (
               <WaiveForm
