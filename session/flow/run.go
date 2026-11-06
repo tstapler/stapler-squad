@@ -92,9 +92,14 @@ type run struct {
 	stuck  loaded[[]StuckInterval]
 	vdata  loaded[*verdictData]
 
+	captured loaded[time.Time]
+	markers  loaded[[]Marker]
+	mcap     loaded[MarkerCapture]
+
 	rework   *ReworkResult
 	lead     *LeadTimeResult
 	prfix    *PRFixDwellResult
+	join     *TriggerJoin
 	estimate map[string]bool
 }
 
@@ -215,7 +220,7 @@ func (r *run) loadDwell() (DwellResult, error) {
 // reworkResult, leadResult and prfixResult derive from the spans once.
 func (r *run) reworkResult(ev *eventData) *ReworkResult {
 	if r.rework == nil {
-		res := Rework(ev.spans, r.cfg)
+		res := ReworkWith(ev.spans, r.cfg, r.triggerJoin())
 		r.rework = &res
 	}
 	return r.rework
@@ -306,10 +311,61 @@ func (r *run) meta(sel map[SectionName]bool) FlowMeta {
 		AsOf: r.asOf, WindowStart: r.w.Start(), WindowEnd: r.w.End(),
 		RowCounts: r.rows, Estimated: est, SlowPath: r.q.Window.AllTime || r.streamed,
 	}
-	if r.a.captureSince != nil {
-		if t, err := r.a.captureSince(r.ctx); err == nil {
-			m.CaptureSince = t.UTC()
-		}
-	}
+	m.CaptureSince = r.captureSince()
 	return m
+}
+
+// captureSince is the earliest capture time (zero when none or unreadable),
+// read once per run.
+func (r *run) captureSince() time.Time {
+	t, _ := r.captured.get(func() (time.Time, error) { // load never errors; failures degrade to zero
+		if r.a.captureSince == nil {
+			return time.Time{}, nil
+		}
+		t, err := r.a.captureSince(r.ctx)
+		if err != nil {
+			return time.Time{}, nil
+		}
+		return t.UTC(), nil
+	})
+	return t
+}
+
+// loadMarkers reads the marker rows the window needs: trigger markers up to
+// TriggerJoinWindow before the window start (to join its first events) and
+// outcome markers inside it. An absent MarkerSource yields none.
+func (r *run) loadMarkers() ([]Marker, error) {
+	return r.markers.get(func() ([]Marker, error) {
+		if r.a.src.Markers == nil {
+			return nil, nil
+		}
+		all, err := r.a.src.Markers.Markers(r.ctx, r.w.Start().Add(-TriggerJoinWindow), r.w.End())
+		if err != nil {
+			return nil, wrapRead("flow markers", err)
+		}
+		if len(r.q.ItemIDs) == 0 {
+			return all, nil
+		}
+		return slices.DeleteFunc(slices.Clone(all), func(m Marker) bool { return !slices.Contains(r.q.ItemIDs, m.Item) }), nil
+	})
+}
+
+// triggerJoin builds the trigger join once; nil when no capture exists. A
+// marker read failure leaves the join empty (events stay unknown) and is
+// reported by the sections through markerFailure.
+func (r *run) triggerJoin() *TriggerJoin {
+	if r.join == nil && !r.captureSince().IsZero() {
+		markers, _ := r.loadMarkers() // error surfaces via markerFailure
+		r.join = NewTriggerJoin(markers, r.captureSince())
+	}
+	return r.join
+}
+
+// markerFailure marks the section Partial when markers could not be read, so
+// the unavailable split is visible rather than silently unknown.
+func (r *run) markerFailure(name SectionName, meta *SectionMeta) {
+	if r.markers.done && r.markers.err != nil {
+		meta.Status, meta.Error = SectionPartial, r.markers.err.Error()
+		r.failure(name, r.markers.err)
+	}
 }

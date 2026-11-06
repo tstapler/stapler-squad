@@ -70,4 +70,7 @@ type Sources struct {
 	Verdicts VerdictSource
 	Stuck    StuckSource
 	Items    ItemSource
+	// Markers is optional; nil means capture-dependent PR-fix metrics report
+	// "not yet recording" exactly as before markers existed.
+	Markers MarkerSource
 }

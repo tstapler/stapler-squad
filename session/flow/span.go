@@ -23,6 +23,7 @@ type RealSpan struct {
 	from, to domain.BacklogStatus
 	at       time.Time
 	note     string
+	by       string
 }
 
 // NewRealSpan validates and builds a RealSpan; at is normalized to UTC.
@@ -57,6 +58,16 @@ func (s RealSpan) Note() string { return s.note }
 // WithNote returns a copy carrying the raw event note.
 func (s RealSpan) WithNote(note string) RealSpan {
 	s.note = note
+	return s
+}
+
+// TriggeredBy is who wrote the event ("system", "agent", "user"), kept so the
+// PR-fix respawned count can be derived from system-written reopens.
+func (s RealSpan) TriggeredBy() string { return s.by }
+
+// WithTriggeredBy returns a copy carrying the event's actor.
+func (s RealSpan) WithTriggeredBy(by string) RealSpan {
+	s.by = by
 	return s
 }
 

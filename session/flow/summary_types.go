@@ -213,6 +213,18 @@ type PRSection struct {
 	Cycles    CountMetric
 	OpenCount int
 	Notes     []string
+	// Outcomes counts nudge outcomes recorded since capture.
+	Outcomes PROutcomes
+}
+
+// PROutcomes is the PR-fix outcome tally. Recording false means outcome
+// capture has not started; the counts are then zero and must not be shown.
+type PROutcomes struct {
+	Recording         bool
+	Steered           int
+	Respawned         int
+	SkippedActive     int
+	ResolvedWithin24h int
 }
 
 // StuckReasonRow is one stuck reason.

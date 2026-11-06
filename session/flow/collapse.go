@@ -88,7 +88,7 @@ func collapseItem(evs []Event, window FlowWindow, cfg Config) []Span {
 			continue
 		}
 		if rs, err := NewRealSpan(e.ItemID, e.From, e.To, e.At); err == nil {
-			out = append(out, rs.WithNote(e.Note))
+			out = append(out, rs.WithNote(e.Note).WithTriggeredBy(e.TriggeredBy))
 		}
 	}
 	for _, ep := range episodes {

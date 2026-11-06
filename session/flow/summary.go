@@ -106,6 +106,7 @@ func (r *run) causes(s *CausesSection) error {
 	if total == 0 && len(s.Notes) == 0 {
 		s.Meta.Status = SectionEmpty
 	}
+	r.markerFailure(SectionCauses, &s.Meta)
 	return nil
 }
 
@@ -150,8 +151,42 @@ func (r *run) pr(s *PRSection) error {
 	s.OpenCount = res.OpenCount
 	s.Notes = slices.Clone(res.Notes)
 	s.Meta.Estimated = slices.Clone(res.Estimated)
-	if len(res.Cycles) == 0 {
+	if err := r.prOutcomes(ev, s); err != nil {
+		return err
+	}
+	if len(res.Cycles) == 0 && !s.Outcomes.Recording {
 		s.Meta.Status = SectionEmpty
+	}
+	r.markerFailure(SectionPR, &s.Meta)
+	return nil
+}
+
+// prOutcomes fills the outcome tally; without a marker source or any captured
+// outcome it reports not-recording, never zeros.
+func (r *run) prOutcomes(ev *eventData, s *PRSection) error {
+	if r.a.src.Markers == nil {
+		return nil
+	}
+	mc, err := r.mcap.get(func() (MarkerCapture, error) {
+		c, err := r.a.src.Markers.MarkerCapture(r.ctx)
+		if err != nil {
+			return MarkerCapture{}, wrapRead("flow marker capture", err)
+		}
+		return c, nil
+	})
+	if err != nil {
+		s.Meta.Status, s.Meta.Error = SectionPartial, err.Error()
+		r.failure(SectionPR, err)
+		return nil
+	}
+	markers, _ := r.loadMarkers() // read error is reported by markerFailure
+	o := PRFixOutcomeCounts(PRFixOutcomeInput{Window: r.w, Spans: ev.spans, Markers: markers, Since: mc.FirstOutcome})
+	s.Outcomes = PROutcomes{
+		Recording: o.Recording, Steered: o.Steered, Respawned: o.Respawned,
+		SkippedActive: o.SkippedActive, ResolvedWithin24h: o.ResolvedWithin24,
+	}
+	if o.Recording {
+		s.Meta.Estimated = append(s.Meta.Estimated, EstimatedPRFixOutcomeSinceCapture)
 	}
 	return nil
 }

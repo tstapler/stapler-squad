@@ -80,6 +80,18 @@ describe("FlowPR", () => {
     expect(screen.getByTestId("flow-pr")).not.toHaveTextContent("not separable");
   });
 
+  it("FlowPR_should_ShowOutcomeCountsAsEstimated_When_Recording", () => {
+    const outcomes = { recording: true, steered: 5, respawned: 2, skippedActive: 1, resolvedWithin24h: 3 };
+    render3(["pr_fix_outcome:since_capture"], [], CAPTURE, pr({ outcomes }));
+
+    const box = screen.getByTestId("flow-pr-outcomes");
+    expect(box).toHaveTextContent("steered: ~5");
+    expect(box).toHaveTextContent("respawned: ~2");
+    expect(box).toHaveTextContent("skipped (session active): ~1");
+    expect(box).toHaveTextContent("resolved within 24h: ~3");
+    expect(box).not.toHaveTextContent("not yet recording");
+  });
+
   it("FlowPR_should_SayNoPrFixes_When_NothingInWindow", () => {
     render3([], [], CAPTURE, pr({ cycles: { value: 0 }, fixDwell: { n: 0 } }));
 

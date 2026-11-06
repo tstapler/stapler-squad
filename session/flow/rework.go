@@ -112,7 +112,7 @@ func (f FirstPassYield) Ratio() float64 {
 type ReworkResult struct {
 	// Causes totals every real rework event in the spans.
 	Causes map[ReworkCause]int
-	// PRFixTriggers splits the PRFix total by trigger (all unknown for now).
+	// PRFixTriggers splits the PRFix total by trigger; events before capture are unknown.
 	PRFixTriggers map[PRFixTrigger]int
 	Items         []ItemRework
 	MergedCount   int
@@ -125,6 +125,8 @@ type ReworkResult struct {
 	FPY           FirstPassYield
 	Estimated     []string
 	Drill         DrillSets
+
+	join *TriggerJoin
 }
 
 // Rework computes cause totals, the merged-cohort bounce distribution and
@@ -134,13 +136,25 @@ type ReworkResult struct {
 // is judged on its in-window merge. Thrash episodes count as episodes, never
 // as individual reopens.
 func Rework(spans []Span, cfg Config) ReworkResult {
+	return ReworkWith(spans, cfg, nil)
+}
+
+// ReworkWith is Rework with PR-fix reopens attributed to a trigger by join.
+// A nil or inactive join leaves every reopen unknown and labels the split
+// unavailable; an active one splits events at or after capture and labels it
+// since_capture (earlier events stay unknown).
+func ReworkWith(spans []Span, cfg Config, join *TriggerJoin) ReworkResult {
 	byItem, ids := groupByItem(spans)
 
 	res := ReworkResult{
 		Causes:        make(map[ReworkCause]int),
 		PRFixTriggers: make(map[PRFixTrigger]int),
-		Estimated:     []string{"pr_fix_cause:unavailable"},
+		Estimated:     []string{EstimatedPRFixCauseUnavailable},
 		Drill:         DrillSets{},
+		join:          join,
+	}
+	if join.Active() {
+		res.Estimated = []string{EstimatedPRFixCauseSinceCapture}
 	}
 	for _, id := range ids {
 		item := reworkItem(id, byItem[id], &res)
@@ -188,7 +202,7 @@ func countRealRework(item *ItemRework, rs RealSpan, preMerge bool, res *ReworkRe
 		}
 	case ReworkPRFix:
 		item.PRFix++
-		res.PRFixTriggers[PRFixTriggerUnknown]++
+		res.PRFixTriggers[res.join.TriggerFor(item.Item, rs.At())]++
 		res.Drill.add(DrillReworkPRFix, item.Item)
 		if preMerge {
 			item.PreMergePRFix++

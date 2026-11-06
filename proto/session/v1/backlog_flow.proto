@@ -302,6 +302,19 @@ message FlowPRSection {
   FlowCountMetric cycles = 3;
   int32 open_count = 4;
   repeated string notes = 5;
+  // outcomes counts PR-fix nudge outcomes recorded since capture.
+  FlowPROutcomes outcomes = 6;
+}
+
+// FlowPROutcomes counts PR-fix outcomes in the window. When recording is false
+// no outcome has ever been captured and the counts must not be shown as zeros.
+message FlowPROutcomes {
+  bool recording = 1;
+  int32 steered = 2;
+  int32 respawned = 3;
+  int32 skipped_active = 4;
+  // resolved_within_24h counts outcomes followed by a merge within 24 hours.
+  int32 resolved_within_24h = 5;
 }
 
 message FlowStuckReasonRow {

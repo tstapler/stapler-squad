@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogflowmarker"
+	"github.com/tstapler/stapler-squad/session/flow"
 )
 
 // markerLimiterFor lazily builds the repo's shared marker limiter.
@@ -97,4 +98,58 @@ func toFlowMarkerData(rows []*ent.BacklogFlowMarker) []FlowMarkerData {
 		})
 	}
 	return out
+}
+
+var _ flow.MarkerSource = (*EntFlowReader)(nil)
+
+// Markers implements flow.MarkerSource over the system-written marker table
+// only. It never reads notes, so agent text carrying marker-looking strings
+// cannot appear in it.
+func (r *EntFlowReader) Markers(ctx context.Context, from, to time.Time) ([]flow.Marker, error) {
+	rows, err := r.client.BacklogFlowMarker.Query().
+		Where(backlogflowmarker.CreatedAtGTE(from.UTC()), backlogflowmarker.CreatedAtLT(to.UTC())).
+		Order(ent.Asc(backlogflowmarker.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		if isMissingTableErr(err) {
+			return nil, nil
+		}
+		return nil, flowReadErr("flow_markers", err)
+	}
+	out := make([]flow.Marker, len(rows))
+	for i, m := range rows {
+		out[i] = flow.Marker{
+			Item: flow.ItemID(m.ItemID.String()), Kind: flow.MarkerKind(m.Kind), Value: m.Value,
+			PRNumber: m.PrNumber, At: m.CreatedAt.UTC(),
+		}
+	}
+	return out, nil
+}
+
+// MarkerCapture reports when each marker kind was first written; a missing
+// marker table reads as no capture.
+func (r *EntFlowReader) MarkerCapture(ctx context.Context) (flow.MarkerCapture, error) {
+	var c flow.MarkerCapture
+	var err error
+	if c.FirstOutcome, err = r.firstMarkerAt(ctx, FlowMarkerPRFixOutcome); err != nil {
+		return flow.MarkerCapture{}, err
+	}
+	if c.FirstTrigger, err = r.firstMarkerAt(ctx, FlowMarkerPRFixTrigger); err != nil {
+		return flow.MarkerCapture{}, err
+	}
+	return c, nil
+}
+
+func (r *EntFlowReader) firstMarkerAt(ctx context.Context, kind FlowMarkerKind) (time.Time, error) {
+	first, err := r.client.BacklogFlowMarker.Query().
+		Where(backlogflowmarker.Kind(string(kind))).
+		Order(ent.Asc(backlogflowmarker.FieldCreatedAt)).
+		First(ctx)
+	switch {
+	case ent.IsNotFound(err), err != nil && isMissingTableErr(err):
+		return time.Time{}, nil
+	case err != nil:
+		return time.Time{}, flowReadErr("flow_marker_capture", err)
+	}
+	return first.CreatedAt.UTC(), nil
 }

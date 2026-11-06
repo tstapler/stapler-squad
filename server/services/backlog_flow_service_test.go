@@ -58,7 +58,10 @@ func sampleFlowSummary() *flow.FlowSummary {
 		Meta: flow.FlowMeta{
 			AsOf: flowT0, WindowStart: flowT0.AddDate(0, 0, -30), WindowEnd: flowT0, QueryMs: 12,
 			RowCounts: flow.RowCounts{Events: 5, Verdicts: 3, StuckIntervals: 2, Items: 4},
-			Estimated: []string{flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable"},
+			Estimated: []string{
+				flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", flow.EstimatedPRFixCauseSinceCapture,
+				flow.EstimatedPRFixOutcomeSinceCapture,
+			},
 		},
 		Tiles: flow.TilesSection{
 			Merged:         flow.CountMetric{Value: 7, Drill: flow.DrillMerged},
@@ -138,7 +141,10 @@ func TestBacklogFlowService_should_EmitLegendForEveryEstimatedCode(t *testing.T)
 
 func TestBacklogFlowService_should_HaveLegendEntry_When_CodeInEstimatedVocabulary(t *testing.T) {
 	t.Parallel()
-	vocabulary := []string{flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", "pr_fix_dwell:combined", "stuck_history:lower_bound"}
+	vocabulary := []string{
+		flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", "pr_fix_dwell:combined", "stuck_history:lower_bound",
+		flow.EstimatedPRFixCauseSinceCapture, flow.EstimatedPRFixOutcomeSinceCapture,
+	}
 	for _, code := range vocabulary {
 		text, ok := flowEstimatedLegend[code]
 		assert.True(t, ok, code)
@@ -389,4 +395,16 @@ func TestBacklogFlowService_should_MapStuckNotesAndLegendDriftCode_When_Episodes
 	assert.Equal(t, []string{"open episodes differ from open stuck rows by 1"}, got.Stuck.Notes)
 	assert.NotEqual(t, flowUnknownLegend, got.Meta.EstimatedLegend["stuck_episode_drift:1"])
 	assert.NotEmpty(t, got.Meta.EstimatedLegend["stuck_episode_drift:1"])
+}
+
+func TestBacklogFlowService_should_MapPROutcomes_When_Present(t *testing.T) {
+	t.Parallel()
+	sum := sampleFlowSummary()
+	sum.PR.Outcomes = flow.PROutcomes{Recording: true, Steered: 5, Respawned: 2, SkippedActive: 1, ResolvedWithin24h: 3}
+	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sum}), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	require.NoError(t, err)
+
+	o := got.Pr.Outcomes
+	assert.True(t, o.Recording)
+	assert.EqualValues(t, []int32{5, 2, 1, 3}, []int32{o.Steered, o.Respawned, o.SkippedActive, o.ResolvedWithin_24H})
 }

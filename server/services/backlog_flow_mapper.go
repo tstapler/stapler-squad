@@ -28,10 +28,12 @@ func FlowJSONOptions() protojson.MarshalOptions {
 // flowEstimatedLegend explains every code the aggregator can emit in
 // FlowMeta.Estimated. A test pins it to that vocabulary.
 var flowEstimatedLegend = map[string]string{
-	flow.EstimatedDeadlockHeuristic: "deadlock candidates are a heuristic ranking of review-fail streaks, not a verdict",
-	"pr_fix_cause:unavailable":      "PR-fix trigger is not recorded for older events, so causes show as unknown",
-	"pr_fix_dwell:combined":         "PR-fix dwell is combined across triggers",
-	"stuck_history:lower_bound":     "stuck history is a lower bound: intervals before detection began are not recorded",
+	flow.EstimatedDeadlockHeuristic:        "deadlock candidates are a heuristic ranking of review-fail streaks, not a verdict",
+	"pr_fix_cause:unavailable":             "PR-fix trigger is not recorded for older events, so causes show as unknown",
+	flow.EstimatedPRFixCauseSinceCapture:   "PR-fix trigger split covers only events after capture began; earlier events stay unknown",
+	flow.EstimatedPRFixOutcomeSinceCapture: "PR-fix outcome counts cover only the period since outcome capture began",
+	"pr_fix_dwell:combined":                "PR-fix dwell is combined across triggers",
+	"stuck_history:lower_bound":            "stuck history is a lower bound: intervals before detection began are not recorded",
 }
 
 // flowEstimatedLegendPrefixes explains codes that carry a variable suffix.
@@ -246,6 +248,10 @@ func prToProto(s flow.PRSection) *sessionv1.FlowPRSection {
 	return &sessionv1.FlowPRSection{
 		Meta: sectionStatusToProto(s.Meta), FixDwell: durationMetric(s.FixDwell), Cycles: countMetric(s.Cycles),
 		OpenCount: flowI32(s.OpenCount), Notes: s.Notes,
+		Outcomes: &sessionv1.FlowPROutcomes{
+			Recording: s.Outcomes.Recording, Steered: flowI32(s.Outcomes.Steered), Respawned: flowI32(s.Outcomes.Respawned),
+			SkippedActive: flowI32(s.Outcomes.SkippedActive), ResolvedWithin_24H: flowI32(s.Outcomes.ResolvedWithin24h),
+		},
 	}
 }
 

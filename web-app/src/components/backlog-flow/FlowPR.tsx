@@ -81,18 +81,43 @@ function CauseBucket({ causes, estimated, captureSince, onDrill }: FlowPRProps) 
   );
 }
 
-/** Outcome capture is not part of the flow response yet, so this never invents numbers. */
-function Outcomes() {
+const OUTCOME_SINCE_CAPTURE = "pr_fix_outcome:since_capture";
+
+/** Counts are shown only when capture is recording; otherwise no numerals are invented. */
+function Outcomes({ pr, estimated }: Pick<FlowPRProps, "pr" | "estimated">) {
+  const o = pr.outcomes;
+  if (!o?.recording) {
+    return (
+      <p className={styles.muted} data-testid="flow-pr-outcomes">
+        Outcome tracking not yet recording
+      </p>
+    );
+  }
+  const counts = [
+    ["steered", o.steered],
+    ["respawned", o.respawned],
+    ["skipped (session active)", o.skippedActive],
+    ["resolved within 24h", o.resolvedWithin24h],
+  ] as const;
+  const marked = estimated.includes(OUTCOME_SINCE_CAPTURE);
   return (
-    <p className={styles.muted} data-testid="flow-pr-outcomes">
-      Outcome tracking not yet recording
-    </p>
+    <div className={styles.block} data-testid="flow-pr-outcomes">
+      <span className={styles.secondary}>Nudge outcomes since capture began</span>
+      <ul className={styles.row}>
+        {counts.map(([label, value]) => (
+          <li key={label}>
+            {label}:{" "}
+            {marked ? <EstimatedValue title="Outcomes are counted only since capture began">{formatInt(value)}</EstimatedValue> : formatInt(value)}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
 export function FlowPR(props: FlowPRProps) {
   const { pr, onDrill } = props;
-  const none = (pr.cycles?.value ?? 0) === 0 && (pr.fixDwell?.n ?? 0) === 0;
+  const none = (pr.cycles?.value ?? 0) === 0 && (pr.fixDwell?.n ?? 0) === 0 && !pr.outcomes?.recording;
   if (none) return <p>No PR fixes in this window</p>;
   return (
     <div className={styles.block} data-testid="flow-pr">
@@ -104,7 +129,7 @@ export function FlowPR(props: FlowPRProps) {
       </p>
       <CombinedDwell {...props} />
       <CauseBucket {...props} />
-      <Outcomes />
+      <Outcomes pr={pr} estimated={props.estimated} />
     </div>
   );
 }
