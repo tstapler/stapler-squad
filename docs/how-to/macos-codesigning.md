@@ -141,6 +141,9 @@ Not recorded yet (owner: replace this line with the `designated =>` line).
 3. Compare requirements, and read the TCC guidance it prints:
    `bazel run //tools/bzl/codesigndiff -- -make-bin ./stapler-squad -bazel-bin /path/stable/stapler-squad-bazel`
    (exit 0 and `IDENTICAL`).
+   Also run `scripts/verify-bazel-codesign.sh /path/stable/stapler-squad-bazel ./stapler-squad`: it checks the
+   signature, the `StaplerSquadDev` authority and a certificate-anchored (not `cdhash`) requirement, and that the
+   requirement equals the make-built binary's. It exits 2 with a message anywhere but macOS.
 4. With the make-built binary's TCC grants in place, replace it with the Bazel-built signed binary and relaunch. PASS
    only if macOS shows no new permission prompt. Do not run `make tcc-reset`.
 5. Record the result below and in the PR.
@@ -149,3 +152,15 @@ Not recorded yet (owner: replace this line with the `designated =>` line).
 |---|---|---|---|
 | arm64 | not run | | |
 | amd64 | not run | | |
+
+### Owner sign-off (OWNER-RUN, unverified by agents)
+
+Agents cannot run any of this: it needs a Mac, the login keychain with `StaplerSquadDev`, and live TCC state. The
+script's non-macOS exit and its pass/fail logic against a stub `codesign` are tested in
+`scripts/verify-bazel-codesign_test.sh`; the real `codesign` output format is not.
+
+- [ ] arm64: step 1-3 of the checklist, `scripts/verify-bazel-codesign.sh` exits 0
+- [ ] arm64: step 4, no new permission prompt after swapping in the signed Bazel binary
+- [ ] amd64 (`--config=darwin_amd64`): the same two items
+- [ ] The `designated =>` block above is recorded, so `verifybin -codesign` no longer fails closed
+- [ ] Results entered in the table above and in the PR

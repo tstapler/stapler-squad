@@ -15,6 +15,8 @@ on:
     branches: [ main ]
     paths:
       - '.goreleaser.yaml'
+      - 'Formula/**'
+      - 'tools/bzl/checkformula/**'
       - '.github/workflows/goreleaser-check.yml'
       - '**.go'
       - 'go.mod'
@@ -23,6 +25,8 @@ on:
     branches: [ main ]
     paths:
       - '.goreleaser.yaml'
+      - 'Formula/**'
+      - 'tools/bzl/checkformula/**'
       - '.github/workflows/goreleaser-check.yml'
       - '**.go'
       - 'go.mod'
@@ -146,3 +150,16 @@ jobs:
             echo "::error::tools/list did not return a tools array on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
             exit 1
           }
+
+      # Task 3.7c: the Homebrew formula is goreleaser-owned (ADR-005). Render it
+      # from a snapshot release and assert its asset names, URLs and sha256
+      # values equal the release assets of that same snapshot.
+      - name: "Formula dry run: render snapshot formula and check it against the release assets"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          goreleaser release --snapshot --skip=publish --clean --parallelism 1
+          ruby -c dist/homebrew/Formula/stapler-squad.rb
+          go run ./tools/bzl/checkformula -dist dist
