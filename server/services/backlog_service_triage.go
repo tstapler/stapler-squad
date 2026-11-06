@@ -1298,7 +1298,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree row pointing at this exact path — cleaning it up here would delete the
 	// directory the session spawned above just started using.
 	if isReopen {
-		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
+		// Only PR clauses may hold prior rounds' worktrees: the session just spawned
+		// is live by construction and is not in priorSessions.
+		s.cleanupWorktrees(session.WithCleanupPath(ctx, session.CleanupPathRework), priorSessions, worktreePath, session.GateOptions{IgnoreLive: true})
 		// Archive the superseded prior-round work session(s) now that the new
 		// session has replaced them — otherwise every rework round piles up a
 		// fresh work session that's never cleaned up until the item eventually
@@ -1346,11 +1348,15 @@ func (s *BacklogService) spawnSessionAfterGates(
 // Best-effort: failures are logged, not returned — a leftover live session is a
 // known, already-recoverable condition (hasActiveWorkSession blocks the next
 // spawn until it's cleared), not a reason to fail the caller's transition.
-func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) {
+//
+// It is an intentionally ungated explicit operator action (path inventory row 14), so
+// instead of blocking it returns one line per stopped session that links an open or
+// unknown PR, and logs them in one structured line.
+func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) (openPRWarnings []string) {
 	sessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.Warn("[stopLiveWorkAndReviewSessions] failed to list sessions", "item", itemID, "error", err)
-		return
+		return nil
 	}
 	for _, itemSession := range sessions {
 		if itemSession.EndedAt != nil {
@@ -1358,6 +1364,9 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 		}
 		if itemSession.Role != string(session.SessionRoleWork) && itemSession.Role != string(session.SessionRoleReview) {
 			continue
+		}
+		if w := s.openPRWarning(ctx, itemSession.SessionUUID); w != "" {
+			openPRWarnings = append(openPRWarnings, w)
 		}
 		if s.sessionStopper != nil {
 			if stopErr := s.sessionStopper.StopSessionByUUID(ctx, itemSession.SessionUUID); stopErr != nil {
@@ -1369,6 +1378,43 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 			log.Warn("[stopLiveWorkAndReviewSessions] failed to mark session ended", "session", itemSession.SessionUUID, "item", itemID, "error", endErr)
 		}
 	}
+	if len(openPRWarnings) > 0 {
+		log.Warn("[stopLiveWorkAndReviewSessions] stopped sessions that link open or unknown PRs", "item", itemID, "warnings", openPRWarnings)
+		s.publishOpenPRWarning(itemID, openPRWarnings)
+	}
+	return openPRWarnings
+}
+
+// openPRWarning names the open or unknown PRs a session links ("" when none or unreadable).
+func (s *BacklogService) openPRWarning(ctx context.Context, sessionUUID string) string {
+	gate := s.CleanupGate()
+	if gate == nil || sessionUUID == "" {
+		return ""
+	}
+	refs, err := gate.OpenPRsOfSession(ctx, sessionUUID)
+	if err != nil || len(refs) == 0 {
+		return ""
+	}
+	names := make([]string, len(refs))
+	for i, r := range refs {
+		names[i] = r.String()
+	}
+	return fmt.Sprintf("session %s links PR(s) not yet merged or closed: %s", sessionUUID, strings.Join(names, ", "))
+}
+
+// publishOpenPRWarning raises a visible warning for an ungated explicit stop.
+func (s *BacklogService) publishOpenPRWarning(itemID string, warnings []string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		derivePriority(false, true),
+		"Stopped sessions with open PRs",
+		strings.Join(warnings, "; "),
+		map[string]string{"item_id": itemID},
+	))
 }
 
 // prPendingScopedStuckReasons are the stuck reasons that only describe a pr_pending item.
@@ -3682,7 +3728,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	// otherwise lingers indefinitely and can later be found "missing" by a session that
 	// still references it.
 	if len(freed) > 0 {
-		s.cleanupItemWorktrees(ctx, freed)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathTombstone), freed)
 	}
 }
 

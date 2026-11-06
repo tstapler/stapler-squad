@@ -292,6 +292,8 @@ type backlogHandlers struct {
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+	// multiPRBacklog replaces the reader:backlog flag lookup (tests); nil reads config.
+	multiPRBacklog func() bool
 	// waitTimeouts counts consecutive wait_for_backlog_event timeouts per
 	// session+item so a session that keeps re-waiting is parked; see waitCapKey.
 	waitMu       sync.Mutex
@@ -311,6 +313,9 @@ type backlogHandlers struct {
 	// avoid real network calls.
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
 	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
+
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
 
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
@@ -554,7 +559,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
 		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
-		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
+		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary for each PR you open, as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -3144,6 +3149,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("summary",
 				mcpgo.Description("What changed and why (max 1000 chars) — shown to the reviewer/operator alongside the PR link so they see why the PR exists, not just a bare link"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithNumber("replaces_pr_number",
+				mcpgo.Description("Only for a correction: the number of the item's currently tracked PR that this PR replaces (e.g. you closed a bad PR and opened a clean one). Must equal the tracked PR number. Omit it when reporting an additional PR."),
+				mcpgo.Min(1),
 			),
 			mcpgo.WithString("override_reason",
 				mcpgo.Description("Only required when the PR's actual head branch (per GitHub) differs from this item's tracked branch — e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead. Explain why in one sentence; it is recorded in the server log as an audit trail. Omit when the PR's head branch matches the tracked branch. The PR must also have been authored by this same GitHub identity — the override path cannot attach a PR someone/something else opened, even with a reason."),

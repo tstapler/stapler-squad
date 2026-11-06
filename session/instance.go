@@ -387,6 +387,25 @@ type Instance struct {
 	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
+	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
+	// siblings. Written only by the PR setters (instance_pr_set.go) and load
+	// hydration; never serialized from here (links live in their own table).
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
+	// prPersistMu serializes this session's PR persists; prPersister is the
+	// storage seam (nil until injected); prPersistPending marks a PR set change
+	// the next full save must write. See instance_pr_set.go.
+	prPersistMu sync.Mutex
+	prPersister prSetPersister
+	// prActions is the GitHub client the PR actions use; nil means the real one.
+	prActions        prActionClient
+	prPersistPending atomic.Bool
+	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
+	prLegacyPathLogged atomic.Bool
+	// terminalClearPending marks a failed immediate clear of the stored terminal
+	// flag; the next full save writes false (guarded by prPersistMu).
+	terminalClearPending atomic.Bool
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
@@ -1219,8 +1238,6 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},
 		// GitHub integration fields
-		GitHubPRNumber:  opts.GitHubPRNumber,
-		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubHost:      opts.GitHubHost,
@@ -1299,6 +1316,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance.initCDPManager(cfg)
 
 	finishInstanceConstruction(instance)
+	if opts.GitHubPRNumber > 0 {
+		// Created from a PR URL: the PR joins the set (its write is deferred to the
+		// first full save, see persistPRAttach).
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+	}
 	return instance, nil
 }
 

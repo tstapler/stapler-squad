@@ -23,6 +23,9 @@ var ErrConflict = errors.New("conflict")
 // PR to a different PR number without a valid PRReassignmentGuard.
 var ErrPRReassignmentNotAllowed = errors.New("PR reassignment not allowed")
 
+// ErrPRDetached is returned when a writer tries to attach a PR the owner detached.
+var ErrPRDetached = errors.New("PR was detached from this owner")
+
 // PRReassignmentGuard carries the caller-verified preconditions required
 // before SetBacklogItemPRAndTransition (session/storage.go) will accept a
 // reassignment — a call where the observed item is already pr_pending with

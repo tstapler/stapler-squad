@@ -447,7 +447,9 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
 	}
 
+	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
 	if associatePR {
+		prAssociation = prAssociationOutcome(updated, prNumber)
 		// Routed through the shared primary-write path — not a hand-rolled
 		// field write — so the status transition (review -> pr_pending) and
 		// the PR fields land as one atomic UPDATE, same as report_pr_created.
@@ -478,7 +480,7 @@ func (s *BacklogService) UpdateBacklogItem(
 			Caller:      session.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
-		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note})
+		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: session.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
@@ -507,8 +509,20 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		Item:          backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		PrAssociation: prAssociation,
 	}), nil
+}
+
+// prAssociationOutcome says what the PR association write will do, read from the
+// item as it stood before the write: pr_pending on the same PR number is the
+// idempotent no-op (setPRAndTransition), anything else that succeeds is a first
+// link from review. Failures never reach a response, so they need no value.
+func prAssociationOutcome(before *session.BacklogItemData, prNumber int) sessionv1.PrAssociationResult {
+	if before.Status == string(session.BacklogStatusPRPending) && before.PrNumber == prNumber {
+		return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_ALREADY_TRACKED
+	}
+	return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_LINKED_AND_MOVED
 }
 
 // --- ArchiveBacklogItem ---
@@ -542,7 +556,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	// Best-effort: clean up git worktrees for work sessions on archive.
 	if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-		s.cleanupItemWorktrees(ctx, sessions)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathArchiveRPC), sessions)
 	}
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
@@ -1023,7 +1037,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
 	if session.IsTerminalStatus(to) {
-		s.CleanupTerminalItem(ctx, req.Msg.ItemId)
+		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 
 	// Backward to idea/refining: reset planning approval so triage must re-run.

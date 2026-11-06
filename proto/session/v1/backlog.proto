@@ -317,6 +317,10 @@ message BacklogItem {
   // claiming_host_id is the HostID of the host that created this item from an
   // external issue. Empty for items without an external_url.
   string claiming_host_id = 46;
+  // pull_requests is the item's derived PR set (item-direct plus current round).
+  repeated SessionPullRequest pull_requests = 47;
+  // pr_holds explains cleanup holds. Detail responses only, never list responses.
+  repeated PrHold pr_holds = 48;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency
@@ -746,8 +750,20 @@ message UpdateBacklogItemRequest {
   optional double cost_budget_threshold_usd = 21;
 }
 
+// PrAssociationResult says what the pr_url/pr_number part of an
+// UpdateBacklogItem call did. Without pr_url/pr_number it is UNSPECIFIED.
+enum PrAssociationResult {
+  PR_ASSOCIATION_RESULT_UNSPECIFIED = 0;
+  // The item was in review: pr_url/pr_number were written and the item moved
+  // to pr_pending in one atomic update.
+  PR_ASSOCIATION_RESULT_LINKED_AND_MOVED = 1;
+  // The item was already pr_pending on this PR number: nothing was written.
+  PR_ASSOCIATION_RESULT_ALREADY_TRACKED = 2;
+}
+
 message UpdateBacklogItemResponse {
   BacklogItem item = 1;
+  PrAssociationResult pr_association = 2;
 }
 
 message ArchiveBacklogItemRequest {
@@ -2258,6 +2274,11 @@ message StuckBacklogItem {
   // diagnose_nudge_count is how many Diagnose & Nudge slots this open row has
   // used (BacklogStuckState.DiagnoseNudgeCount); 0 when none.
   int32 diagnose_nudge_count = 23;
+  // pr_count / pr_merged_count size the item's derived PR set ("k of N merged").
+  // Both stay 0 unless the multi-PR backlog scope is on, so 0 means "not
+  // computed" as well as "no PRs"; show the pair only when pr_count > 1.
+  int32 pr_count = 24;
+  int32 pr_merged_count = 25;
 }
 
 // AutoMergeLookupStatus is the outcome of the per-repo auto-merge setting lookup.

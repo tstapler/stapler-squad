@@ -50,12 +50,14 @@ import { DependenciesSection } from "./detail/DependenciesSection";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
+import { useItemPullRequestActions } from "@/lib/hooks/useItemPullRequestActions";
 import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
 import { PlanVerdictBox } from "./PlanVerdictBox";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import { prAssociationToast } from "@/lib/backlog/prAssociationToast";
 import { resolveJulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
@@ -145,6 +147,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
+    associatePullRequest,
     listPipelineModes,
     lastError,
   } = useBacklogService();
@@ -1307,13 +1310,8 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
       const toastKey = `${item.id}:manual_associate_pr`;
       setActionLoading("manual_associate_pr");
       try {
-        const updated = await updateBacklogItem(item.id, { ...currentFlags(), prUrl, prNumber });
-        if (!updated) {
-          const msg = lastError?.message ?? "Failed to link PR — please try again.";
-          showActionToast(msg, "error", toastKey);
-          throw new Error(msg);
-        }
-        showActionToast(`PR #${prNumber} linked — item moved to pr_pending.`, "success", toastKey);
+        const { association } = await associatePullRequest(item.id, { ...currentFlags(), prUrl, prNumber });
+        showActionToast(prAssociationToast(association, prNumber), "success", toastKey);
         await load();
       } catch (e) {
         showActionToast(getErrorMessage(e, "PR association failed."), "error", toastKey);
@@ -1322,8 +1320,14 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, updateBacklogItem, lastError, load, currentFlags, showActionToast]
+    [item, associatePullRequest, load, currentFlags, showActionToast]
   );
+
+  const itemPrActions = useItemPullRequestActions({
+    itemId: item?.id ?? "",
+    associate: handleManualAssociatePR,
+    onChanged: load,
+  });
 
   const handleGateSkip = useCallback(async () => {
     if (!item) return;
@@ -1826,15 +1830,14 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             <LastReviewResultSection item={item} defaultExpanded={lastReviewResultExpanded} />
           )}
 
-          {item.status === "pr_pending" && (
-            <PullRequestSection
-              item={item}
-              actionLoading={actionLoading}
-              onMarkDone={() => handleAction("mark_done")}
-              readOnly={terminalState !== null}
-              stuckReasons={stuckItemGroup.map((i) => i.reason)}
-            />
-          )}
+          <PullRequestSection
+            item={item}
+            actionLoading={actionLoading}
+            onMarkDone={() => handleAction("mark_done")}
+            readOnly={terminalState !== null}
+            stuckReasons={stuckItemGroup.map((i) => i.reason)}
+            prActions={itemPrActions}
+          />
 
           <GroupLabel>Reference</GroupLabel>
           {item.externalUrl && (

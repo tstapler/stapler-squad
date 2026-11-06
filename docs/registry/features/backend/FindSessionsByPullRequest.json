@@ -1,0 +1,16 @@
+{
+  "id": "FindSessionsByPullRequest",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "FindSessionsByPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_delegates.go",
+  "tested": true,
+  "testIds": [
+    "TestFindSessionsByPullRequest_ShouldOrderTrackedFirstThenByActivityThenTitle_U151",
+    "TestFindSessionsByPullRequest_ShouldFilterOrphans_AndNeverSeedFromThem",
+    "TestFindSessionsByPullRequest_ShouldTreatCaseVariantsAsOnePR"
+  ],
+  "lastModified": "2026-11-05T00:18:34.432750447-08:00"
+}

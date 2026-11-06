@@ -26,7 +26,7 @@ func (s *prwatchSnapshots) Snapshot(sessionUUID string) (prwatch.PRSnapshot, err
 		}
 		gh := sn.GitHub
 		return prwatch.PRSnapshot{
-			CheckConclusion:  gh.GitHubCheckConclusion,
+			CheckConclusion:  sn.ActiveCheckConclusion(),
 			ChangesRequested: gh.GitHubChangesReqCount,
 			Terminal:         gh.GitHubPRStatusTerminal,
 			CheckedAt:        gh.LastPRStatusCheck,

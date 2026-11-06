@@ -13,6 +13,7 @@ export const routeTable = {
   "/": { load: () => import("./page") },
   "/account": { load: () => import("./account/page") },
   "/analytics/escape": { load: () => import("./analytics/escape/page") },
+  "/artifacts": { load: () => import("./artifacts/page") },
   "/backlog": { load: () => import("./backlog/page") },
   "/backlog/board": { load: () => import("./backlog/board/page") },
   "/changelog": { load: () => import("./changelog/page") },

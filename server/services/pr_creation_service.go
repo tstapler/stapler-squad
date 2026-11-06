@@ -161,12 +161,11 @@ func (s *PRCreationService) DraftPullRequest(
 	}
 
 	// Existing-PR short-circuit (AC4): skip all diff/draft work below entirely.
-	snap := inst.Snapshot()
-	if snap.GitHub.GitHubPRURL != "" {
-		// #nosec G115 -- GitHubPRNumber is a GitHub PR number, far below int32 range.
+	if existingURL, existingNumber, found := session.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName()); found {
+		// #nosec G115 -- existingNumber is a GitHub PR number, far below int32 range.
 		return connect.NewResponse(&sessionv1.DraftPullRequestResponse{
-			ExistingPrUrl:    snap.GitHub.GitHubPRURL,
-			ExistingPrNumber: int32(snap.GitHub.GitHubPRNumber),
+			ExistingPrUrl:    existingURL,
+			ExistingPrNumber: int32(existingNumber),
 		}), nil
 	}
 
@@ -272,15 +271,11 @@ func (s *PRCreationService) CreatePullRequest(
 	// PR at the gh/findExistingPR level when it does run, but from this
 	// handler's perspective that's still a "create" attempt, not a cache hit,
 	// so don't expect perfect create-vs-reuse fidelity from a single gh race.
-	snap := inst.Snapshot()
-	var prURL string
-	var prNumber int
-	var alreadyExisted bool
-	if snap.GitHub.GitHubPRURL != "" && snap.GitHub.GitHubPRNumber > 0 {
-		prURL = snap.GitHub.GitHubPRURL
-		prNumber = snap.GitHub.GitHubPRNumber
-		alreadyExisted = true
-	} else {
+	prURL, prNumber, alreadyExisted := session.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName())
+	if alreadyExisted && prNumber <= 0 {
+		alreadyExisted = false
+	}
+	if !alreadyExisted {
 		prURL, prNumber, err = wt.CreatePR(git.PRCreateOptions{
 			Title:      req.Msg.Title,
 			Body:       req.Msg.Body,

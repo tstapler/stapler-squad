@@ -32,13 +32,18 @@ type SessionRetentionSweeper struct {
 	storage *session.Storage
 	cfg     *config.Config
 	svc     *SessionService
+	// prSource supplies the per-cycle PR evidence; tests substitute a fake.
+	prSource sweepPRSource
+	// now is the clock; tests inject one.
+	now   func() time.Time
+	holds itemHoldTracker
 }
 
 // NewSessionRetentionSweeper constructs a sweeper. svc is used to perform the actual
 // deletion via its existing DeleteSession RPC handler, so tmux/worktree/DB cleanup
 // logic is not duplicated here.
 func NewSessionRetentionSweeper(storage *session.Storage, cfg *config.Config, svc *SessionService) *SessionRetentionSweeper {
-	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc}
+	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage, now: time.Now}
 }
 
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled.
@@ -95,13 +100,27 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 		}
 	}
 
+	pr, err := loadSweepPRData(ctx, s.prSource, expiredUUIDs(dataSlice, cutoff))
+	if err != nil {
+		log.Error("session retention sweeper: PR evidence unavailable, deleting nothing this cycle", "err", err)
+		return
+	}
+
+	s.surfaceItemPRHolds(dataSlice, pr, cutoff)
+
 	for _, d := range dataSlice {
 		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
 			continue
 		}
 
-		if safe, reason := s.sessionSafeToDelete(ctx, d, byUUID, cutoff); !safe {
+		if safe, reason := s.sessionSafeToDelete(ctx, d, byUUID, pr, cutoff); !safe {
 			log.Debug("session retention sweeper: skipping session, not safe to delete",
+				"session", d.Title, "reason", reason)
+			continue
+		}
+
+		if safe, reason := s.stillPREligible(ctx, d); !safe {
+			log.Info("session retention sweeper: PR evidence changed since cycle load, skipping delete",
 				"session", d.Title, "reason", reason)
 			continue
 		}
@@ -116,21 +135,59 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 	}
 }
 
+// stillPREligible re-reads one session's PR evidence immediately before its
+// delete, since the cycle load can be minutes old (a PR attached mid-cycle must
+// win). The cycle load stays as the prefilter.
+func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session.InstanceData) (bool, string) {
+	if d.UUID == "" {
+		return true, ""
+	}
+	fresh, err := loadSweepPRData(ctx, s.prSource, []string{d.UUID})
+	if err != nil {
+		return false, "PR evidence re-read failed: " + err.Error()
+	}
+	return fresh.prEligible(d)
+}
+
+// surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
+func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []session.InstanceData, pr *sweepPRData, cutoff time.Time) {
+	days := s.cfg.SessionRetention.RetentionDaysOrDefault()
+	var holds []ItemPRHold
+	for _, d := range all {
+		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
+			continue
+		}
+		holds = append(holds, pr.itemHolds(d, d.ArchivedAt.AddDate(0, 0, days))...)
+	}
+	s.holds.observe(holds, s.now())
+}
+
+// expiredUUIDs lists the uuids of archived sessions past the cutoff: the only
+// ones baseSafeToDelete ever asks PR questions about, siblings included.
+func expiredUUIDs(all []session.InstanceData, cutoff time.Time) []string {
+	var uuids []string
+	for _, d := range all {
+		if d.UUID != "" && d.ArchivedAt != nil && d.ArchivedAt.Before(cutoff) {
+			uuids = append(uuids, d.UUID)
+		}
+	}
+	return uuids
+}
+
 // baseSafeToDelete applies the safety checks that depend only on d itself: past the
 // retention window, no open/unmerged PR, no uncommitted worktree changes. It deliberately
 // does NOT check worktree sharing with siblings — sessionSafeToDelete calls this both for
 // the top-level candidate and, in its own sibling loop, to test each sibling's own
 // eligibility — the sharing check must not recurse into itself.
-func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, cutoff time.Time) (safe bool, reason string) {
+func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
 	if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
 		return false, "not archived, or not yet past the retention window"
 	}
 
-	// PR check: GitHubPRStatusTerminal is maintained by PRStatusPoller and is only
-	// true once the PR is merged or closed — reuse it rather than making a fresh
-	// GitHub API call from the sweep.
-	if d.GitHubPRNumber != 0 && !d.GitHubPRStatusTerminal {
-		return false, "open or unmerged PR"
+	// PR check: every linked PR must be terminal (prEligible fails closed on any
+	// missing or ambiguous evidence); see the decision list there.
+	if safe, why := pr.prEligible(d); !safe {
+		return false, why
 	}
 
 	// Dirty-worktree check: only meaningful when a worktree is actually recorded and
@@ -187,8 +244,8 @@ func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, cutof
 //
 // Mirrors the sibling-lookup pattern backlog_service.go's cleanupItemWorktreesExcept
 // already uses for the same underlying reason (shared worktree across reopens).
-func (s *SessionRetentionSweeper) sessionSafeToDelete(ctx context.Context, d session.InstanceData, byUUID map[string]session.InstanceData, cutoff time.Time) (safe bool, reason string) {
-	safe, reason = s.baseSafeToDelete(d, cutoff)
+func (s *SessionRetentionSweeper) sessionSafeToDelete(ctx context.Context, d session.InstanceData, byUUID map[string]session.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
+	safe, reason = s.baseSafeToDelete(d, pr, cutoff)
 	if !safe {
 		return false, reason
 	}
@@ -224,7 +281,7 @@ func (s *SessionRetentionSweeper) sessionSafeToDelete(ctx context.Context, d ses
 			// earlier in this same sweep pass) -- nothing left to protect.
 			continue
 		}
-		if sibSafe, _ := s.baseSafeToDelete(sibData, cutoff); !sibSafe {
+		if sibSafe, _ := s.baseSafeToDelete(sibData, pr, cutoff); !sibSafe {
 			return false, "worktree shared with another session on the same backlog item that is not yet independently eligible for deletion"
 		}
 	}

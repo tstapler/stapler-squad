@@ -1,7 +1,8 @@
-import { OmnibarAction } from "./types";
-import { OmnibarSessionData } from "@/components/sessions/Omnibar";
-import { ThemeName } from "@/lib/contexts/ThemeContext";
+import type { OmnibarAction } from "./types";
+import type { OmnibarSessionData } from "@/components/sessions/Omnibar";
+import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
+import { prSearchHref } from "../findSessionsForPr";
 
 // NOTE: dispatchOmnibarAction has no production caller — Omnibar.tsx's real
 // input/submit handling (including the "backlog: " trigger's ChatBacklogItem
@@ -27,6 +28,8 @@ export interface ActionDeps {
   runWorkflow?: (slug: string, arg: string) => void;
   /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
   analytics?: Pick<AnalyticsProvider, "track">;
+  /** Opens an in-app URL (find_sessions_for_pr emits /artifacts?pr=...). Optional: absent dep silently no-ops. */
+  navigateToHref?: (href: string) => void;
   /** Creates a backlog item from a free-text chat message, then navigates to the Backlog page */
   createBacklogItemFromChat: (text: string) => Promise<void>;
 }
@@ -124,6 +127,11 @@ export function dispatchOmnibarAction(
     case "chat_backlog_item":
       if (track) track({ name: "omnibar.chat_backlog_item", category: "user_action" });
       void deps.createBacklogItemFromChat(action.text);
+      deps.close();
+      return;
+    case "find_sessions_for_pr":
+      if (track) track({ name: "omnibar.find_sessions_for_pr", category: "user_action" });
+      deps.navigateToHref?.(prSearchHref(action));
       deps.close();
       return;
     case "fan_out":

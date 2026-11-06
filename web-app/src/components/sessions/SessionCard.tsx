@@ -11,7 +11,10 @@ import { RetryBadge } from "./RetryBadge";
 import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { SessionPullRequestBadge } from "@/components/shared/SessionPullRequestBadge";
+import { openPullRequestsAnchor } from "@/lib/pr/anchor";
+import { displayedPullRequest } from "@/lib/pr/legacyPullRequest";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { TagEditor } from "./TagEditor";
@@ -216,6 +219,8 @@ const CARD_PATH_MAX_LEN = Infinity;
 export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
+  /** Opens the session on its Info tab, where the "Pull requests" section is (the chip's "+N"). Falls back to `onClick`. */
+  onOpenInfo?: () => void;
   onOpenInNewPane?: () => void;
   onDelete?: () => Promise<void> | void;
   onPause?: () => void;
@@ -262,6 +267,7 @@ function SessionCardInner({
   session,
   onClick,
   onOpenInNewPane,
+  onOpenInfo,
   onDelete,
   onPause,
   onResume,
@@ -508,6 +514,14 @@ function SessionCardInner({
   const sourceTerminal = session.externalMetadata?.sourceTerminal || "External";
   const muxEnabled = session.externalMetadata?.muxEnabled || false;
 
+  const shownPr = displayedPullRequest(session, useSessionMultiPR());
+
+  // "+N" stops its click, so it opens the session itself, then points the URL at the PR section.
+  const openPullRequests = () => {
+    (onOpenInfo ?? onClick)?.();
+    openPullRequestsAnchor();
+  };
+
   const handleCardClick = (e: React.MouseEvent) => {
     if (selectMode && onToggleSelect) {
       e.stopPropagation();
@@ -719,21 +733,7 @@ function SessionCardInner({
                 </span>
               );
             })()}
-            <GitHubBadge
-              prNumber={session.githubPrNumber}
-              prUrl={session.githubPrUrl}
-              owner={session.githubOwner}
-              repo={session.githubRepo}
-              sourceRef={session.githubSourceRef}
-              host={session.githubHost}
-              prPriority={session.githubPrPriority}
-              prState={session.githubPrState}
-              isDraft={session.githubPrIsDraft}
-              approvedCount={session.githubApprovedCount}
-              changesRequestedCount={session.githubChangesReqCount}
-              checkConclusion={session.githubCheckConclusion}
-              compact={true}
-            />
+            <SessionPullRequestBadge session={session} onOpenPullRequests={openPullRequests} />
             <BacklogOriginBadge entry={backlogEntry} compact={true} />
             {reviewItem && (
               <ReviewQueueBadge
@@ -1107,19 +1107,19 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.githubPrNumber > 0 && session.githubPrUrl && (
+          {shownPr && (
             <div className={infoRow}>
               <span className={label}>Pull Request:</span>
               <span className={value}>
                 <a
-                  href={session.githubPrUrl}
+                  href={shownPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
                   className={githubLink}
-                  aria-label={`Pull request #${session.githubPrNumber} on ${session.githubOwner}/${session.githubRepo}, opens in new tab`}
+                  aria-label={`Pull request #${shownPr.number} on ${shownPr.owner}/${shownPr.repo}, opens in new tab`}
                 >{/* analytics-exempt */}
-                  #{session.githubPrNumber}
+                  #{shownPr.number}
                 </a>
               </span>
             </div>

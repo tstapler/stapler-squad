@@ -34,3 +34,16 @@ func TestPRSnapshotAdapter_should_ReturnError_When_SessionUnknown(t *testing.T) 
 	_, err := a.Snapshot("missing")
 	assert.Error(t, err)
 }
+
+func TestPRSnapshotAdapter_should_UseActivePRCheckConclusion_When_SessionHoldsSeveralPRs(t *testing.T) {
+	sn := prSnap("a", session.Active)
+	sn.GitHub.GitHubCheckConclusion = "success" // stale scalar left by a merged PR
+	merged := session.PRView{State: session.PRStateMerged, StoredTerminal: true, CheckConclusion: "success", AttachedAt: time.Unix(1, 0)}
+	open := session.PRView{State: session.PRStateOpen, CheckConclusion: "failure", AttachedAt: time.Unix(2, 0)}
+	sn.GitHub.PRs = []session.PRView{merged, open}
+	a := newPRWatchSnapshots(func() []*session.InstanceSnapshot { return []*session.InstanceSnapshot{sn} })
+
+	got, err := a.Snapshot("a")
+	require.NoError(t, err)
+	assert.Equal(t, "failure", got.CheckConclusion, "the active PR's conclusion, not the legacy scalar")
+}

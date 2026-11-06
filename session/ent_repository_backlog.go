@@ -1711,6 +1711,10 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		}
 	}
 
+	if err := deleteOwnerPRRows(ctx, tx, ItemPROwner(parsedID.String())); err != nil {
+		return fmt.Errorf("delete backlog item: %w", err)
+	}
+
 	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -2009,7 +2013,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
 // (see the `interface-pollution-checklist` skill).
-func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string, link *itemPRLinkWrite) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -2023,7 +2027,16 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
-	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	// The item UPDATE and the item-direct link write share one transaction, so a
+	// failure of either leaves neither (BUG-058 narrowed). Only tx is used until
+	// commit or rollback: a second connection would deadlock a single-writer sqlite.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transition with PR fields: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	update := tx.BacklogItem.Update().Where(backlogitem.ID(parsedID))
 	if precondition != nil {
 		if precondition.ExpectedStatus != "" {
 			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
@@ -2047,6 +2060,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		// The row either no longer exists or the precondition no longer holds —
 		// re-fetch to report which. Mirrors TransitionBacklogItemStatus's
 		// identical affected==0 handling.
+		_ = tx.Rollback()
 		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
@@ -2058,6 +2072,12 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
 		}
 		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
+	if err := link.writeTx(ctx, tx, parsedID.String(), r.afterPRLinkHook); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("transition with PR fields: commit: %w", err)
 	}
 
 	item, err := r.client.BacklogItem.Get(ctx, parsedID)

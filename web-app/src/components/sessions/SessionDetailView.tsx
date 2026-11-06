@@ -33,6 +33,7 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { GoalPanel } from "./GoalPanel";
+import { SessionPullRequestsSection } from "./SessionPullRequestsSection";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { HandoffSummarySection } from "./HandoffSummarySection";
@@ -1590,18 +1591,8 @@ export function SessionDetailView({
                   </span>
                 </div>
               )}
-              {/* GitHub PR */}
-              {session.githubPrUrl && (
-                <div className={styles.infoItem}>
-                  <span className={styles.infoLabel}>GitHub PR:</span>
-                  <span className={styles.infoValue}>
-                    <a href={session.githubPrUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-link, #3b82f6)' }}>
-                      #{session.githubPrNumber} {session.githubPrState && `(${session.githubPrState})`}
-                      {session.githubPrIsDraft && " [Draft]"}
-                    </a>
-                  </span>
-                </div>
-              )}
+              {/* GitHub PR(s): the Pull requests list, or the legacy single link with the flag off */}
+              <SessionPullRequestsSection session={session} />
               {session.githubOwner && session.githubRepo && (
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>GitHub Repo:</span>

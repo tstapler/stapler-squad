@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -83,6 +85,14 @@ type InstanceData struct {
 	GitHubCheckConclusion  string    `json:"github_check_conclusion,omitempty"`
 	GitHubPRStatusTerminal bool      `json:"github_pr_status_terminal,omitempty"`
 	LastPRStatusCheck      time.Time `json:"last_pr_status_check,omitempty"`
+	// Multi-PR link set carried through full saves (never JSON-serialized: the
+	// links table is the store). See Instance.PRs.
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
+	// TerminalClearPending asks the full save to write terminal=false even for a
+	// session without links, whose normal save only ever sets the flag.
+	TerminalClearPending bool `json:"-"`
 	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
 	AutonomousMode bool `json:"autonomous_mode,omitempty"`
 
@@ -296,6 +306,9 @@ type Storage struct {
 	// gate is the engine and denial reporter GatedTransition decides with; nil
 	// means unwired and every caller gets the legacy (Off) answer.
 	gate atomic.Pointer[transitionGate]
+
+	// prMaintenance is the lifecycle of RunPRStartupMaintenance (service bootstrap only).
+	prMaintenance prMaintenanceState
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -384,23 +397,34 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		if !inst.Started() {
 			continue
 		}
-		data := inst.ToInstanceData()
-		log.Debug("SaveInstances: converting instance",
-			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
-			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-		s.saved.persist(data, func(skip updateSkip) bool {
-			if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
-				// Not found → create it
-				if createErr := s.repo.Create(ctx, data); createErr != nil {
-					log.Error("SaveInstances: failed to upsert instance",
-						"session", data.Title, "update_err", err, "create_err", createErr)
-					return false
-				}
-			}
-			return true
-		})
+		s.saveInstanceToRepo(ctx, inst)
 	}
 	return nil
+}
+
+// saveInstanceToRepo upserts one started instance. It holds the instance's PR
+// persist lock across snapshotting and writing so a concurrent AttachPR persist
+// (which snapshots under the same lock) cannot land an older mirror after this save.
+func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
+	inst.prPersistMu.Lock()
+	defer inst.prPersistMu.Unlock()
+	data := inst.ToInstanceData()
+	log.Debug("SaveInstances: converting instance",
+		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
+		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
+	s.saved.persist(data, func(skip updateSkip) bool {
+		if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
+			// Not found → create it
+			if createErr := s.repo.Create(ctx, data); createErr != nil {
+				log.Error("SaveInstances: failed to upsert instance",
+					"session", data.Title, "update_err", err, "create_err", createErr)
+				return false
+			}
+		}
+		inst.clearPRPersistPending()
+		inst.terminalClearPending.Store(false)
+		return true
+	})
 }
 
 // SaveInstancesSync saves instances synchronously (same as SaveInstances for the repo backend).
@@ -415,6 +439,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
+	s.hydrateSessionPRs(ctx, dataSlice)
 	instances := make([]*Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
@@ -428,6 +453,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		// Inject shell repository so shell operations can persist to the DB.
 		inst.SetShellRepository(s.repo)
 		inst.SetInitialPromptRepository(s.repo)
+		inst.SetPRPersister(s)
 		instances = append(instances, inst)
 	}
 
@@ -494,6 +520,70 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	}
 
 	return instances, nil
+}
+
+// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// the Instance (and so its first snapshot) is built: one bulk read of links+states
+// (and one of tombstones) instead of a query per session. A legacy PR number with
+// neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
+// leave the legacy columns alone. If the bulk read fails, every legacy number is
+// treated as unrepresented (protected) rather than guessed at.
+func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
+	uuids := make([]string, 0, len(rows))
+	for i := range rows {
+		if rows[i].UUID != "" {
+			uuids = append(uuids, rows[i].UUID)
+		}
+	}
+	var links map[string][]PRView
+	var tombs map[string][]PRRef
+	var loadErr error
+	if len(uuids) > 0 {
+		if links, loadErr = s.repo.ListBySessionUUIDs(ctx, uuids); loadErr == nil {
+			tombs, loadErr = s.repo.ListSessionTombstonesByUUIDs(ctx, uuids)
+		}
+		if loadErr != nil {
+			log.Warn("LoadInstances: failed to bulk-load session PR links; protecting legacy PR numbers", "err", loadErr)
+		}
+	}
+	for i := range rows {
+		d := &rows[i]
+		if loadErr == nil {
+			d.PRs = sortedByAttach(links[d.UUID])
+			d.HasPRLinks = len(d.PRs) > 0
+		}
+		d.LegacyPRUnrepresented = legacyPRUnrepresented(*d, tombs[d.UUID], loadErr != nil)
+	}
+}
+
+// legacyPRUnrepresented: the session's scalar number is neither a link nor tombstoned.
+// An unbuildable ref (no owner/repo) can never become a link, so it stays protected.
+func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) bool {
+	if d.GitHubPRNumber <= 0 {
+		return false
+	}
+	if unknown {
+		return true
+	}
+	ref, err := sessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
+	if err != nil {
+		return true
+	}
+	if containsRef(tombstones, ref) {
+		return false
+	}
+	for _, v := range d.PRs {
+		if v.Ref == ref {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedByAttach(prs []PRView) []PRView {
+	out := slices.Clone(prs)
+	slices.SortStableFunc(out, func(a, b PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
+	return out
 }
 
 // ListInstanceData returns raw InstanceData from the repository without constructing
@@ -680,6 +770,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	// Inject shell repository so shell operations can persist to the DB.
 	instance.SetShellRepository(s.repo)
 	instance.SetInitialPromptRepository(s.repo)
+	instance.SetPRPersister(s)
 	return nil
 }
 
@@ -793,12 +884,122 @@ func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, ter
 	})
 }
 
+// UpdateGitHubPRStatusTerminal writes the stored terminal flag of one session by
+// title. Unlike UpdateInstancePRStatus it also writes false, which the terminal
+// scan needs to clear a merged PR's flag that would otherwise ride onto a new PR.
+func (s *Storage) UpdateGitHubPRStatusTerminal(title string, terminal bool) error {
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
+	})
+}
+
 // UpdateInstancePRNumber persists the discovered PR number for a session so it
 // survives restarts and avoids repeated branch-name lookups in PRStatusPoller.
 func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 	return s.writeRow(title, func() error {
 		return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
 	})
+}
+
+// AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
+// session's legacy mirror columns in a single transaction, keyed by session uuid.
+// See EntRepository.AttachSessionPR for the error contract.
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+	res, err := s.repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
+	if err == nil {
+		s.saved.reset() // the row changed behind the save fingerprints
+	}
+	return res, err
+}
+
+// PersistPRMirror writes (or clears) the legacy scalar PR columns of one session.
+func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal bool) error {
+	err := s.repo.PersistPRMirror(context.Background(), sessionUUID, PRMirror{URL: url, Number: number, Terminal: terminal})
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// DetachSessionPR deletes the session's link to ref and writes its tombstone in
+// one transaction (the user's "Not mine").
+func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	_, err := s.repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// AttachItemPR writes an item-direct PR link (agent-reported, Jules, manual). A
+// tombstoned PR is not attached (PRLinkResult.Tombstoned).
+func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, link PRLink) (PRLinkResult, error) {
+	if itemID == "" {
+		return PRLinkResult{}, ErrInvalidPROwner
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, link)
+	if err == nil {
+		s.saved.reset()
+	}
+	return res, err
+}
+
+// DetachItemPR deletes the item-direct link to ref and writes the item's
+// tombstone in one transaction; it reports whether a link existed. Session links
+// are untouched.
+func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (bool, error) {
+	if itemID == "" {
+		return false, ErrInvalidPROwner
+	}
+	found, err := s.repo.DeleteSessionPR(ctx, ItemPROwner(itemID), ref)
+	if err == nil {
+		s.saved.reset()
+	}
+	return found, err
+}
+
+// SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
+func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	err := s.repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
+	if err == nil {
+		s.saved.reset()
+	}
+	return err
+}
+
+// ClearSessionPRTombstone removes the session's tombstone for ref, if any.
+func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error {
+	if sessionUUID == "" {
+		return ErrNoSessionUUID
+	}
+	return s.repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
+}
+
+// ListPRMirrors returns the stored legacy PR columns by session uuid.
+func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
+	return s.repo.ListPRMirrors(ctx)
+}
+
+// UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
+// the PR status poller is its only production caller.
+func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {
+	return s.repo.UpdatePullRequestState(ctx, ref, obs)
+}
+
+// ListPollableStates is the PR poller's work list (see EntRepository.ListPollableStates).
+func (s *Storage) ListPollableStates(ctx context.Context) ([]PRView, error) {
+	return s.repo.ListPollableStates(ctx)
+}
+
+// GetPullRequestState returns the state columns of one PR.
+func (s *Storage) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+	return s.repo.GetPullRequestState(ctx, ref)
 }
 
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
@@ -1241,6 +1442,9 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
+	if pr.Additive && observed.Status == string(BacklogStatusPRPending) {
+		return s.attachAdditivePR(ctx, observed, pr)
+	}
 	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
 		return fmt.Errorf("%w: expected status %q or %q, got %q", ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
 	}
@@ -1291,7 +1495,15 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+	var replaced *PRRef
+	if isReassignment {
+		if old, perr := ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
+			replaced = &old
+		}
+	}
+	// The item-direct link is written for every item PR writer, flag on or off, in the
+	// same transaction as the pr_number write.
+	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -1321,6 +1533,43 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		}
 	}
 
+	return nil
+}
+
+// SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
+func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source AttachSource) error {
+	return s.repo.SetItemPRFieldsWithLink(ctx, itemID, prURL, prNumber, source)
+}
+
+// attachAdditivePR records pr as a follow-up PR of an item already in pr_pending: it
+// adds the item-direct link (tombstone-checked), then lets the item's pr_number/pr_url
+// mirror follow the derived active PR. The status never changes and no override_reason
+// or reassignment guard applies. If the mirror recompute fails, the next
+// ReconcilePRPending pass repairs it.
+func (s *Storage) attachAdditivePR(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+	ref, err := ParseItemPRRef(pr.URL, pr.Number)
+	if err != nil {
+		return fmt.Errorf("additive PR: %w", err)
+	}
+	src := pr.Source
+	if src == "" {
+		src = AttachSourceReportPRCreated
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, PRLink{
+		Role: PRRoleFollowup, Source: src, Initial: PRInitial{State: PRStateOpen, URL: pr.URL},
+	})
+	if err != nil {
+		return fmt.Errorf("additive PR: record link: %w", err)
+	}
+	if res.Tombstoned {
+		return fmt.Errorf("%w: %s was detached from this item earlier; re-attach it from the UI first", ErrPRDetached, ref)
+	}
+	if _, mirrorErr := s.repo.RecomputeItemPRMirror(ctx, observed.ID); mirrorErr != nil {
+		log.WarningLog().Printf("[Storage] additive PR: mirror recompute item=%s: %v", observed.ID, mirrorErr)
+	}
+	if noteErr := s.AppendProgressNote(ctx, observed.ID, -1, pr.Summary, "pr_added"); noteErr != nil {
+		log.WarningLog().Printf("[Storage] additive PR: progress note item=%s: %v", observed.ID, noteErr)
+	}
 	return nil
 }
 
@@ -1461,6 +1710,64 @@ func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []stri
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// ListSessionPRViewsByUUIDs returns each session's PR links joined to their
+// states as row data (no live Instance needed). Sessions without links are absent.
+func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+	return s.repo.ListBySessionUUIDs(ctx, uuids)
+}
+
+// SessionUUIDsByPR returns the sessions holding a link to ref (see EntRepository.SessionUUIDsByPR).
+func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+	return s.repo.SessionUUIDsByPR(ctx, ref)
+}
+
+// AttachItemPRLink upserts an item-direct link (state row plus link) for prURL.
+// It reports attached=false, with no error, when the item carries a tombstone for
+// that PR, so a re-poll cannot undo a detach.
+func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (bool, error) {
+	n, err := ParsePRNumberFromURL(prURL)
+	if err != nil {
+		return false, err
+	}
+	ref, err := ParseItemPRRef(prURL, n)
+	if err != nil {
+		return false, err
+	}
+	existing, err := s.repo.ListByItem(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("attach item pr link: list links: %w", err)
+	}
+	res, err := s.repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, PRLink{
+		Role: AssignRole(existing, ""), Source: source,
+		Initial: PRInitial{State: PRStateOpen, URL: strings.TrimSpace(prURL)},
+	})
+	if err != nil {
+		return false, fmt.Errorf("attach item pr link %s: %w", ref, err)
+	}
+	return !res.Tombstoned, nil
+}
+
+// ItemPRs returns the item's derived PR set (see PRSetReader).
+func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]PRView, error) {
+	return s.repo.ItemPRsByID(ctx, itemID)
+}
+
+// ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
+// from one data path; see ItemGuardView.
+func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {
+	return s.repo.ListItemGuardViews(ctx, itemIDs)
+}
+
+// ListLinkOwnersByStateIDs returns the session uuids and item ids linking the states.
+func (s *Storage) ListLinkOwnersByStateIDs(ctx context.Context, stateIDs []int) (sessionUUIDs, itemIDs []string, err error) {
+	return s.repo.ListLinkOwnersByStateIDs(ctx, stateIDs)
+}
+
+// ListItemIDsBySessionUUIDs returns every item id of each session uuid.
+func (s *Storage) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
+	return s.repo.ListItemIDsBySessionUUIDs(ctx, uuids)
 }
 
 // ListItemSessionsBySessionUUIDs batches GetItemSessionBySessionUUID: one query for all UUIDs.
