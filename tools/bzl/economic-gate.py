@@ -27,6 +27,7 @@ midpoint: mid_t1_ratio, mid_second_cold_s, mid_first_cold_s,
 mid_edit_test_s, baseline_edit_test_s.
 """
 import argparse
+import datetime
 import json
 import os
 import re
@@ -35,12 +36,15 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IMPL = os.path.join(HERE, "..", "..", "project_plans", "bazel-conversion", "implementation")
 MEASURED = os.path.join(HERE, "baseline", "measured.json")
-VERIFIED_CU_M = 30.50  # plan.md header: verified total
+VERIFIED_CU_M = 38.36  # plan.md header: verified total after the x1.75 verification multiplier (owner-confirmed 2026-11-06; was 30.50 before ADR-009/010)
 TARGETS = os.path.join(HERE, "baseline", "targets.yaml")
 # Defaults are the plan's proposal values; targets.yaml `economic_gate_factors` overrides them.
 EG1_X, EG2_X, EG3_FIRST_X, EG3_SECOND_X, EG4_X, EG5_LIMIT = 1.10, 1.5, 3.0, 2.0, 1.25, 0.60
 
 UNMEASURED = "UNMEASURED"
+WAIVED = "WAIVED"
+WAIVABLE = ("EG1", "EG2")  # only the criteria that need the deferred remote-cache spike S10
+WAIVER_MAX_DAYS, WAIVER_MIN_REASON = 90, 20
 ATTESTATIONS = os.path.join(IMPL, "owner-attestations.yaml")
 DECISION_EXIT = {"re-plan": 5, "pause": 6, "revert": 7}
 
@@ -71,6 +75,58 @@ def load_decision(path):
     listed = re.findall(r"EG\d", block.get("criteria", ""))
     covers = set(listed or re.findall(r"EG\d", block.get("reason", "")))
     return {"decision": decision, "date": block.get("date", "unknown"), "covers": covers}
+
+
+def load_gate_waivers(path, today=None):
+    """Read `economic_gate_waivers:` from owner-attestations.yaml; return ({criterion: waiver}, errors). Valid = waivable id,
+    reason >= 20 chars, expires within 90 days of granted, not expired."""
+    today = today or datetime.date.today()
+    out, errors, cur, in_sec = [], [], None, False
+    if os.path.exists(path):
+        with open(path) as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if re.match(r"^\S", line):
+                    in_sec, cur = line.startswith("economic_gate_waivers:"), None
+                elif in_sec and line.strip() and not line.lstrip().startswith("#"):
+                    body = line.strip()
+                    if body.startswith("- "):
+                        cur = {}
+                        out.append(cur)
+                        body = body[2:]
+                    if cur is not None and ":" in body:
+                        k, v = body.split(":", 1)
+                        cur[k.strip()] = v.strip().strip("\"'")
+    valid = {}
+    for w in out:
+        cid = w.get("criterion", "")
+        try:
+            granted = datetime.date.fromisoformat(w.get("granted", ""))
+            expires = datetime.date.fromisoformat(w.get("expires", ""))
+        except ValueError:
+            errors.append("waiver %s: granted/expires must be YYYY-MM-DD" % cid)
+            continue
+        if cid not in WAIVABLE:
+            errors.append("waiver %s: not waivable (only %s)" % (cid, ", ".join(WAIVABLE)))
+        elif len(w.get("reason", "")) < WAIVER_MIN_REASON:
+            errors.append("waiver %s: reason shorter than %d chars" % (cid, WAIVER_MIN_REASON))
+        elif (expires - granted).days > WAIVER_MAX_DAYS:
+            errors.append("waiver %s: expires more than %d days after granted" % (cid, WAIVER_MAX_DAYS))
+        elif expires < today:
+            errors.append("waiver %s: expired %s" % (cid, expires))
+        else:
+            valid[cid] = w
+    return valid, errors
+
+
+def apply_gate_waivers(results, waivers):
+    """UNMEASURED -> WAIVED for criteria with a valid waiver. A measured result is never changed."""
+    for r in results:
+        w = waivers.get(r["id"])
+        if w and r["status"] == UNMEASURED:
+            r["status"] = WAIVED
+            r["detail"] = "waived until %s: %s" % (w["expires"], w["reason"])
+    return results
 
 
 def load_factors(path):
@@ -257,6 +313,9 @@ def verdict(results):
         return 3, "ECONOMIC GATE: OWNER DECISION " + ", ".join(tripped)
     if unmeasured:
         return 4, "ECONOMIC GATE: INCOMPLETE (UNMEASURED " + ", ".join(unmeasured) + "); not CLEAR"
+    waived = [r["id"] for r in results if r["status"] == WAIVED]
+    if waived:
+        return 0, "ECONOMIC GATE: CLEAR with owner waivers (" + ", ".join(waived) + "); not measured"
     return 0, "ECONOMIC GATE: CLEAR"
 
 
@@ -299,17 +358,22 @@ def main(argv=None):
     m = load_json(a.measured, True)
     i = load_json(a.inputs, False)
     results = evaluate(m, i, a.midpoint)
+    waivers, waiver_errors = load_gate_waivers(a.attestations)
+    results = apply_gate_waivers(results, waivers)
+    for e in waiver_errors:
+        print("ERROR: " + e)
     noisy = {}
     for r in results:
-        keys = noisy_keys(i, r["id"]) if r["status"] != UNMEASURED else []
+        keys = noisy_keys(i, r["id"]) if r["status"] not in (UNMEASURED, WAIVED) else []
         if keys:
             noisy[r["id"]] = keys
         print("  %-3s %-10s %s%s" % (r["id"], r["status"], r["detail"], "  [NOISY: measured under load, owner-authorised; inputs " + ", ".join(keys) + "]" if keys else ""))
-    evaluable = [r["id"] for r in results if r["status"] != UNMEASURED]
+    evaluable = [r["id"] for r in results if r["status"] not in (UNMEASURED, WAIVED)]
     unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
+    waived_ids = [r["id"] for r in results if r["status"] == WAIVED]
     if noisy:
         print("NOISY: %d of %d evaluated criteria derive from inputs measured under load (%s); not quiet-host numbers" % (len(noisy), len(evaluable), ", ".join(sorted(noisy))))
-    print("evaluable: %s; unmeasured: %s" % (", ".join(evaluable) or "none", ", ".join(unmeasured) or "none"))
+    print("evaluable: %s; waived: %s; unmeasured: %s" % (", ".join(evaluable) or "none", ", ".join(waived_ids) or "none", ", ".join(unmeasured) or "none"))
     code, headline = verdict(results)
     if not a.midpoint:
         code, decided = apply_decision(code, results, load_decision(a.attestations))

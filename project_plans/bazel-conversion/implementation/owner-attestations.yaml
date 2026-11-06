@@ -118,3 +118,14 @@ adr_010_lower_package_criteria:
   note: >-
     Owner choice via AskUserQuestion; the option label was relayed as this description, not verbatim.
     Amends ADR-010 Decision 2 (SC1, SC3) for lower packages only; upper clusters are unchanged.
+# Waivers for economic-gate criteria that need the deferred remote-cache spike S10 (same policy as spike_waivers: reason >= 20 chars, <= 90 days).
+# Not a pass: EG1/EG2 stay unmeasured against the remote tier; today's numbers would be disk-cache only.
+economic_gate_waivers:
+  - criterion: EG1
+    reason: 'owner decision 2026-11-06 (in-session): waive EG1/EG2 because S10 (remote cache) is deferred, disk cache first (remote_cache_s10)'
+    granted: 2026-11-06
+    expires: 2027-02-04
+  - criterion: EG2
+    reason: 'owner decision 2026-11-06 (in-session): waive EG1/EG2 because S10 (remote cache) is deferred, disk cache first (remote_cache_s10)'
+    granted: 2026-11-06
+    expires: 2027-02-04

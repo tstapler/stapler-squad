@@ -171,9 +171,9 @@ economic_gate_factors:
     computed_limit_second: 67.248  # seconds, 2.0 x (0.60 x 56.04)
     source: "plan.md Task 0.14e"
   - id: EG4
-    formula: "re-costed CU total > factor x verified total (30.50M)"
+    formula: "re-costed CU total > factor x verified total (38.36M, plan.md header after x1.75; owner-updated 2026-11-06 from 30.50M)"
     target_value: 1.25
-    computed_limit: 38.125  # M CU, 1.25 x 30.50
+    computed_limit: 47.95  # M CU, 1.25 x 38.36
     source: "plan.md Task 0.14e"
   - id: EG5
     formula: "RA1 median fan-out > limit, or RA2 (post-selection projection) > limit"

@@ -77,7 +77,7 @@ class OwnerDecision(unittest.TestCase):
         self.assertEqual(out.splitlines()[-1], "ECONOMIC GATE: TRIPPED (EG5) - owner decision recorded: continue (2026-11-03)")
 
     def test_continue_does_not_cover_other_trip(self):
-        code, out = run(self.M, dict(self.TRIP, recosted_cu_m=39.0), *self.att("continue"))
+        code, out = run(self.M, dict(self.TRIP, recosted_cu_m=48.5), *self.att("continue"))
         self.assertEqual((code, "OWNER DECISION EG4, EG5" in out), (3, True))
 
     def test_criteria_list_overrides_reason(self):
@@ -133,7 +133,7 @@ class EconomicGate(unittest.TestCase):
         self.assertEqual((code, "OWNER DECISION EG3" in out), (3, True))
 
     def test_eg4(self):
-        code, out = self.trip(recosted_cu_m=39.0)
+        code, out = self.trip(recosted_cu_m=48.5)
         self.assertEqual((code, "OWNER DECISION EG4" in out), (3, True))
 
     def test_eg5_ra2(self):
@@ -222,6 +222,41 @@ class Noisy(unittest.TestCase):
     def test_unmeasured_criterion_is_never_tagged(self):
         _, out = run(MEASURED, {"noisy_inputs": self.SIDE})
         self.assertNotIn("[NOISY", out)
+
+
+class GateWaivers(unittest.TestCase):
+    def _att(self, d, criterion="EG1", granted="2026-11-06", expires="2027-02-04", reason="owner waived because S10 is deferred"):
+        path = os.path.join(d, "att.yaml")
+        with open(path, "w") as f:
+            f.write("economic_gate_waivers:\n  - criterion: %s\n    reason: '%s'\n    granted: %s\n    expires: %s\n" % (criterion, reason, granted, expires))
+        return path
+
+    def test_waiver_turns_unmeasured_into_waived(self):
+        with tempfile.TemporaryDirectory() as d:
+            valid, errs = eg.load_gate_waivers(self._att(d), eg.datetime.date(2026, 11, 6))
+            self.assertEqual(errs, [])
+            res = eg.apply_gate_waivers([{"id": "EG1", "status": eg.UNMEASURED, "detail": ""}], valid)
+            self.assertEqual(res[0]["status"], eg.WAIVED)
+
+    def test_waiver_never_changes_a_measured_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            valid, _ = eg.load_gate_waivers(self._att(d), eg.datetime.date(2026, 11, 6))
+            res = eg.apply_gate_waivers([{"id": "EG1", "status": "TRIP", "detail": "x"}], valid)
+            self.assertEqual(res[0]["status"], "TRIP")
+
+    def test_invalid_waivers_rejected(self):
+        today = eg.datetime.date(2026, 11, 6)
+        with tempfile.TemporaryDirectory() as d:
+            for kw, msg in ((dict(criterion="EG3"), "not waivable"), (dict(reason="short"), "reason shorter"),
+                            (dict(expires="2027-06-01"), "more than 90"), (dict(expires="2026-11-01", granted="2026-10-01"), "expired")):
+                valid, errs = eg.load_gate_waivers(self._att(d, **kw), today)
+                self.assertEqual(valid, {}, kw)
+                self.assertTrue(any(msg in e for e in errs), (kw, errs))
+
+    def test_all_waived_headline_is_clear_with_waivers(self):
+        code, head = eg.verdict([{"id": "EG1", "status": eg.WAIVED, "detail": ""}, {"id": "EG4", "status": "CLEAR", "detail": ""}])
+        self.assertEqual(code, 0)
+        self.assertIn("waivers", head)
 
 
 if __name__ == "__main__":
