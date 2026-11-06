@@ -45,6 +45,12 @@ type StuckSource interface {
 	StuckIntervals(ctx context.Context) ([]StuckInterval, error)
 }
 
+// StuckCaptureSource is optionally implemented by a StuckSource that records
+// episodes; the aggregator uses it to report open-count drift.
+type StuckCaptureSource interface {
+	StuckCapture(ctx context.Context) (StuckCapture, error)
+}
+
 // ItemMeta is the item data the aggregator needs. Title is raw text.
 type ItemMeta struct {
 	ID     ItemID

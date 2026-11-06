@@ -63,6 +63,11 @@ export function FlowStuck({ stuck, estimated, captureSince, onDrill }: FlowStuck
           <EstimatedValue title={LOWER_BOUND_TITLE}>estimated</EstimatedValue>
         </p>
       )}
+      {stuck.notes.map((note) => (
+        <p key={note} className={styles.muted} role="note">
+          Warning: {note}
+        </p>
+      ))}
       {stuck.reasons.length > 0 && (
         <div className={styles.scrollRegion} role="region" aria-label="Stuck reasons" tabIndex={0}>
           <table className={styles.table}>

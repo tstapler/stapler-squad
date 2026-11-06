@@ -34,16 +34,29 @@ var flowEstimatedLegend = map[string]string{
 	"stuck_history:lower_bound":     "stuck history is a lower bound: intervals before detection began are not recorded",
 }
 
+// flowEstimatedLegendPrefixes explains codes that carry a variable suffix.
+var flowEstimatedLegendPrefixes = map[string]string{
+	flow.EstimatedStuckEpisodeDriftPrefix: "open stuck episodes disagree with open stuck rows by the number shown",
+}
+
 const flowUnknownLegend = "heuristic metric with no description"
+
+func legendText(code string) string {
+	if text, ok := flowEstimatedLegend[code]; ok {
+		return text
+	}
+	for prefix, text := range flowEstimatedLegendPrefixes {
+		if strings.HasPrefix(code, prefix) {
+			return text
+		}
+	}
+	return flowUnknownLegend
+}
 
 func estimatedLegend(codes []string) map[string]string {
 	out := make(map[string]string, len(codes))
 	for _, c := range codes {
-		if text, ok := flowEstimatedLegend[c]; ok {
-			out[c] = text
-		} else {
-			out[c] = flowUnknownLegend
-		}
+		out[c] = legendText(c)
 	}
 	return out
 }
@@ -238,7 +251,7 @@ func prToProto(s flow.PRSection) *sessionv1.FlowPRSection {
 
 func stuckToProto(s flow.StuckSection) *sessionv1.FlowStuckSection {
 	return &sessionv1.FlowStuckSection{
-		Meta: sectionStatusToProto(s.Meta), Open: flowI32(s.Open),
+		Meta: sectionStatusToProto(s.Meta), Open: flowI32(s.Open), Notes: s.Notes,
 		Reasons: mapSlice(s.Reasons, func(r flow.StuckReasonRow) *sessionv1.FlowStuckReasonRow {
 			return &sessionv1.FlowStuckReasonRow{
 				Reason: r.Reason, DistinctItems: countMetric(r.DistinctItems), Open: flowI32(r.Open),

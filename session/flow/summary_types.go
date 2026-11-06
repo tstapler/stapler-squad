@@ -229,6 +229,7 @@ type StuckSection struct {
 	Meta    SectionMeta
 	Open    int
 	Reasons []StuckReasonRow
+	Notes   []string
 }
 
 // ThrashItemRow is one thrashing item.

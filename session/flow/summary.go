@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -196,10 +197,29 @@ func (r *run) stuckSection(s *StuckSection) error {
 		})
 	}
 	s.Meta.Estimated = slices.Clone(sum.Estimated)
+	r.noteStuckDrift(s)
 	if len(ivs) == 0 {
 		s.Meta.Status = SectionEmpty
 	}
 	return nil
+}
+
+// noteStuckDrift surfaces open episodes disagreeing with open stuck rows. A
+// source that cannot report capture, or a failed read, adds nothing.
+func (r *run) noteStuckDrift(s *StuckSection) {
+	src, ok := r.a.src.Stuck.(StuckCaptureSource)
+	if !ok {
+		return
+	}
+	c, err := src.StuckCapture(r.ctx)
+	if err != nil {
+		r.a.logger.Warn("flow stuck capture read failed", "error", err.Error())
+		return
+	}
+	if d := c.Drift(); d > 0 {
+		s.Meta.Estimated = append(s.Meta.Estimated, fmt.Sprintf("%s%d", EstimatedStuckEpisodeDriftPrefix, d))
+		s.Notes = append(s.Notes, fmt.Sprintf("open episodes differ from open stuck rows by %d", d))
+	}
 }
 
 func (r *run) anomalies(s *AnomaliesSection) error {

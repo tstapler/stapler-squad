@@ -377,3 +377,16 @@ func TestBacklogFlowService_should_ServeEmptySummary_When_BuiltFromStorage(t *te
 	assert.Equal(t, "skipped", got.Funnel.Meta.Status)
 	assert.EqualValues(t, 0, got.Tiles.Merged.Value)
 }
+
+func TestBacklogFlowService_should_MapStuckNotesAndLegendDriftCode_When_EpisodesDrift(t *testing.T) {
+	t.Parallel()
+	sum := sampleFlowSummary()
+	sum.Meta.Estimated = append(sum.Meta.Estimated, "stuck_episode_drift:1")
+	sum.Stuck.Notes = []string{"open episodes differ from open stuck rows by 1"}
+	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sum}), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"open episodes differ from open stuck rows by 1"}, got.Stuck.Notes)
+	assert.NotEqual(t, flowUnknownLegend, got.Meta.EstimatedLegend["stuck_episode_drift:1"])
+	assert.NotEmpty(t, got.Meta.EstimatedLegend["stuck_episode_drift:1"])
+}

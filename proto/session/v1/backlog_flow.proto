@@ -316,6 +316,7 @@ message FlowStuckSection {
   FlowSectionStatus meta = 1;
   int32 open = 2;
   repeated FlowStuckReasonRow reasons = 3;
+  repeated string notes = 4;
 }
 
 // FlowThrashItemRow is one thrashing item keyed by item.

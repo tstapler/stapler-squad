@@ -37,6 +37,18 @@ describe("FlowStuck", () => {
     expect(screen.getAllByText(/^~/).length).toBeGreaterThan(0);
   });
 
+  it("FlowStuck_should_ShowDriftWarning_When_OpenEpisodesDifferFromOpenRows", () => {
+    view(["stuck_episode_drift:1"], stuck({ notes: ["open episodes differ from open stuck rows by 1"] }));
+
+    expect(screen.getByRole("note")).toHaveTextContent("Warning: open episodes differ from open stuck rows by 1");
+  });
+
+  it("FlowStuck_should_ShowNoWarning_When_NoDriftNotes", () => {
+    view([]);
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("FlowStuck_should_NotClaimLowerBound_When_NotEstimated", () => {
     view([]);
 

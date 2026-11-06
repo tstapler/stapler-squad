@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -123,4 +124,73 @@ func TestStuckStats_should_ClampNegativeDuration_When_OpenRowStartsAfterAsOf(t *
 		StuckOptions{AsOf: stuckAsOf, LowSampleN: 5})
 
 	assert.Zero(t, stuckByReason(t, got, "bouncing").Duration.Max)
+}
+
+func episodeOf(iv StuckInterval) StuckInterval {
+	iv.Episode = true
+	return iv
+}
+
+func TestStuckStats_should_FlagLowerBoundOnlyForReasonsWithLegacyRows_When_EpisodesMixed(t *testing.T) {
+	t.Parallel()
+	base := stuckAsOf.Add(-48 * time.Hour)
+	got := StuckStats([]StuckInterval{
+		episodeOf(closedStuck("i1", "bouncing", base, time.Hour)),
+		closedStuck("i2", "autonomous_stuck", base, time.Hour),
+		episodeOf(closedStuck("i3", "autonomous_stuck", base, time.Hour)),
+	}, StuckOptions{AsOf: stuckAsOf, LowSampleN: 5})
+
+	assert.False(t, stuckByReason(t, got, "bouncing").LowerBound)
+	assert.True(t, stuckByReason(t, got, "autonomous_stuck").LowerBound)
+	assert.Equal(t, []string{"stuck_history:lower_bound"}, got.Estimated)
+}
+
+func TestStuckStats_should_OmitLowerBoundEstimate_When_AllIntervalsAreEpisodes(t *testing.T) {
+	t.Parallel()
+	got := StuckStats([]StuckInterval{
+		episodeOf(closedStuck("i1", "bouncing", stuckAsOf.Add(-5*time.Hour), time.Hour)),
+	}, StuckOptions{AsOf: stuckAsOf, LowSampleN: 5})
+
+	assert.False(t, stuckByReason(t, got, "bouncing").LowerBound)
+	assert.Empty(t, got.Estimated)
+}
+
+type captureStuckSrc struct {
+	*fakeSrc
+	capture StuckCapture
+	err     error
+}
+
+func (c captureStuckSrc) StuckCapture(context.Context) (StuckCapture, error) { return c.capture, c.err }
+
+func stuckSectionFor(t *testing.T, c captureStuckSrc) StuckSection {
+	t.Helper()
+	f := c.fakeSrc
+	src := f.sources()
+	src.Stuck = c
+	agg := NewAggregator(src, fixtureClock)
+	s, err := agg.Summary(context.Background(), FlowQuery{Window: WindowSpec{Days: 30}, Sections: []SectionName{SectionStuck}})
+	require.NoError(t, err)
+	return s.Stuck
+}
+
+func TestStuckReader_should_ReportEpisodeDrift_When_OpenEpisodesDifferFromOpenStuckRows(t *testing.T) {
+	t.Parallel()
+	f := newFakeSrc()
+	f.stuck = []StuckInterval{episodeOf(openStuck("i1", "bouncing", fixtureClock.T.Add(-time.Hour)))}
+	capture := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+
+	drifted := stuckSectionFor(t, captureStuckSrc{fakeSrc: f, capture: StuckCapture{CaptureSince: capture, OpenEpisodes: 3, OpenStateRows: 4}})
+	assert.Contains(t, drifted.Meta.Estimated, "stuck_episode_drift:1")
+	assert.Equal(t, []string{"open episodes differ from open stuck rows by 1"}, drifted.Notes)
+
+	equal := stuckSectionFor(t, captureStuckSrc{fakeSrc: f, capture: StuckCapture{CaptureSince: capture, OpenEpisodes: 4, OpenStateRows: 4}})
+	assert.Empty(t, equal.Notes)
+	for _, e := range equal.Meta.Estimated {
+		assert.NotContains(t, e, "stuck_episode_drift")
+	}
+
+	failed := stuckSectionFor(t, captureStuckSrc{fakeSrc: f, err: assert.AnError})
+	assert.Empty(t, failed.Notes, "a failed capture read adds nothing and does not fail the section")
+	assert.Equal(t, SectionOK, failed.Meta.Status)
 }
