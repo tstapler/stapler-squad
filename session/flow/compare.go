@@ -222,12 +222,15 @@ func (a *Aggregator) Compare(ctx context.Context, q CompareQuery) (*CompareResul
 		return nil, err
 	}
 	sel, _ := selectSections(compareSections)
-	fq := FlowQuery{Cohort: q.Cohort, Config: q.Config}
-	sumA, err := a.computeSummary(ctx, fq, winA, sel)
+	specA, specB := compareSpecs(q, winA, winB)
+	fq := FlowQuery{Cohort: q.Cohort, Config: q.Config, Sections: compareSections}
+	fqA, fqB := fq, fq
+	fqA.Window, fqB.Window = specA, specB
+	sumA, err := a.cachedSummary(ctx, fqA, winA, sel)
 	if err != nil {
 		return nil, err
 	}
-	sumB, err := a.computeSummary(ctx, fq, winB, sel)
+	sumB, err := a.cachedSummary(ctx, fqB, winB, sel)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +255,16 @@ func (a *Aggregator) Compare(ctx context.Context, q CompareQuery) (*CompareResul
 		res.Metrics = append(res.Metrics, cc.compareMetric(d))
 	}
 	return res, nil
+}
+
+// compareSpecs names each resolved window as a clock-free spec so equal compares
+// share cache entries: day offsets stay offsets (their bounds drift with now),
+// explicit bounds are pinned.
+func compareSpecs(q CompareQuery, winA, winB FlowWindow) (specA, specB WindowSpec) {
+	if q.hasBounds() {
+		return WindowSpec{Start: winA.Start(), End: winA.End()}, WindowSpec{Start: winB.Start(), End: winB.End()}
+	}
+	return WindowSpec{Days: q.ADays, OffsetDays: q.BOffsetDays + q.BDays}, WindowSpec{Days: q.BDays, OffsetDays: q.BOffsetDays}
 }
 
 func unionSorted(lists ...[]string) []string {

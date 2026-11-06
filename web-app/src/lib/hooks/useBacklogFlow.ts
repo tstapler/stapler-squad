@@ -45,6 +45,8 @@ export interface UseBacklogFlowReturn {
   phase: "loading" | "ready" | "error" | "too-large";
   summary: FlowSummary | null;
   comparison: CompareFlowWindowsResponse | null;
+  /** Why the requested comparison is missing (e.g. window too large); the summary still shows. */
+  compareError: string | null;
   /** Server message for `phase === "error"`, or for a failed refresh while `summary` is retained. */
   error: string | null;
   tooLarge: FlowTooLarge | null;
@@ -60,6 +62,7 @@ interface FlowState {
   phase: UseBacklogFlowReturn["phase"];
   summary: FlowSummary | null;
   comparison: CompareFlowWindowsResponse | null;
+  compareError: string | null;
   error: string | null;
   tooLarge: FlowTooLarge | null;
   lastSuccessAt: number | null;
@@ -71,6 +74,7 @@ const INITIAL_STATE: FlowState = {
   phase: "loading",
   summary: null,
   comparison: null,
+  compareError: null,
   error: null,
   tooLarge: null,
   lastSuccessAt: null,
@@ -117,10 +121,17 @@ export function useBacklogFlow({ window: flowWindow, compare, onSettled }: UseBa
         const comparisonRequest = wantCompare
           ? create(CompareFlowWindowsRequestSchema, { aDays: windowDays, bDays: windowDays, bOffsetDays: 0 })
           : null;
-        // The comparison is an add-on: its failure must not hide a summary that loaded.
+        // The comparison is an add-on: its failure must not hide a summary that loaded,
+        // but it is surfaced as `compareError` so the missing delta is explained.
+        let compareError: string | null = null;
         const [summaryResponse, comparison] = await Promise.all([
           client.getFlowSummary(summaryRequest),
-          comparisonRequest ? client.compareFlowWindows(comparisonRequest).catch(() => null) : null,
+          comparisonRequest
+            ? client.compareFlowWindows(comparisonRequest).catch((err: unknown) => {
+                compareError = getErrorMessage(err, "Comparison unavailable");
+                return null;
+              })
+            : null,
         ]);
         if (sequence !== sequenceRef.current) return;
         const summary = summaryResponse.summary ?? null;
@@ -128,6 +139,7 @@ export function useBacklogFlow({ window: flowWindow, compare, onSettled }: UseBa
           phase: "ready",
           summary,
           comparison,
+          compareError,
           error: null,
           tooLarge: null,
           lastSuccessAt: Date.now(),
@@ -190,6 +202,7 @@ export function useBacklogFlow({ window: flowWindow, compare, onSettled }: UseBa
     phase: state.phase,
     summary: state.summary,
     comparison: state.comparison,
+    compareError: state.compareError,
     error: state.error,
     tooLarge: state.tooLarge,
     isRefreshing: state.isRefreshing,

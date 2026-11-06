@@ -26,19 +26,26 @@ func (a *Aggregator) ItemTimeline(ctx context.Context, q ItemTimelineQuery) (*It
 	if err != nil {
 		return nil, err
 	}
-	r := newRun(ctx, a, FlowQuery{Window: spec, ItemIDs: []ItemID{q.ItemID}, Config: q.Config}, w)
+	fq := FlowQuery{Window: spec, ItemIDs: []ItemID{q.ItemID}, Config: q.Config}
+	return a.timelineCache.Do(ctx, fq, func(ctx context.Context) (*ItemTimeline, error) {
+		return a.computeTimeline(ctx, fq, w, q.ItemID)
+	})
+}
+
+func (a *Aggregator) computeTimeline(ctx context.Context, fq FlowQuery, w FlowWindow, id ItemID) (*ItemTimeline, error) {
+	r := newRun(ctx, a, fq, w)
 	ev, err := r.loadEvents()
 	if err != nil {
 		return nil, err
 	}
-	meta, err := r.itemMeta([]ItemID{q.ItemID})
+	meta, err := r.itemMeta([]ItemID{id})
 	if err != nil {
 		return nil, err
 	}
-	entries, episodes := timelineEntries(ev.spans, q.ItemID)
+	entries, episodes := timelineEntries(ev.spans, id)
 	out := &ItemTimeline{
-		Meta: r.meta(map[SectionName]bool{}), ItemID: q.ItemID,
-		Title: meta[q.ItemID].Title, Status: string(meta[q.ItemID].Status),
+		Meta: r.meta(map[SectionName]bool{}), ItemID: id,
+		Title: meta[id].Title, Status: string(meta[id].Status),
 		TotalEntries: len(entries), ThrashEpisodes: episodes,
 	}
 	if len(entries) > maxTimelineEntries {

@@ -66,6 +66,21 @@ describe("FlowPage", () => {
     await waitFor(() => expect(screen.queryByTestId("flow-stale-banner")).toBeNull());
   });
 
+  it("FlowPage_should_ShowCompareError_When_CompareFailsButSummaryLoads", async () => {
+    mockClient.compareFlowWindows.mockRejectedValue(resourceExhausted("window too large (900000 rows, limit 500000)"));
+    await renderAt("/backlog/flow?window=90&compare=prev", <FlowPage />);
+
+    const note = await screen.findByTestId("flow-compare-error");
+    expect(note).toHaveTextContent("Previous-period comparison unavailable: window too large");
+    expect(screen.getByTestId("flow-section-tiles")).toBeInTheDocument();
+  });
+
+  it("FlowPage_should_NotShowCompareError_When_CompareSucceeds", async () => {
+    await renderAt("/backlog/flow?window=30&compare=prev", <FlowPage />);
+    await waitFor(() => expect(mockClient.compareFlowWindows).toHaveBeenCalled());
+    expect(screen.queryByTestId("flow-compare-error")).toBeNull();
+  });
+
   it("FlowPage_should_BeStaleAt121sNotAt119s_When_PollsFailWithFakeClock", async () => {
     expect(FLOW_POLL_INTERVAL_MS).toBe(60_000);
     await renderAt("/backlog/flow", <FlowPage />);

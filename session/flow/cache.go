@@ -28,6 +28,9 @@ type CacheOptions struct {
 	// DefaultConfig identifies the cacheable Config; queries with any other
 	// non-zero Config bypass the cache.
 	DefaultConfig Config
+	// slot, when set, is the limiter shared with other caches so every kind of
+	// uncached compute serializes through one slot.
+	slot chan struct{}
 }
 
 // Cache decorates an aggregation compute with a bounded TTL/LRU cache,
@@ -60,10 +63,13 @@ func NewCache[V any](clock Clock, opts CacheOptions) *Cache[V] {
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = defaultCacheEntries
 	}
+	if opts.slot == nil {
+		opts.slot = make(chan struct{}, 1)
+	}
 	return &Cache[V]{
 		clock:   clock,
 		opts:    opts,
-		slot:    make(chan struct{}, 1),
+		slot:    opts.slot,
 		entries: make(map[string]*list.Element),
 		lru:     list.New(),
 	}

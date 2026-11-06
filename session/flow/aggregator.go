@@ -70,6 +70,10 @@ type Aggregator struct {
 	cacheOpts    CacheOptions
 	limits       ReaderLimits
 	cache        *Cache[*FlowSummary]
+	drillCache   *Cache[*DrilldownPage]
+	// timelineCache never stores (ItemIDs makes queries uncacheable); it only
+	// coalesces and routes timelines through the shared compute slot.
+	timelineCache *Cache[*ItemTimeline]
 }
 
 // NewAggregator builds an Aggregator reading time only from clock.
@@ -80,7 +84,10 @@ func NewAggregator(src Sources, clock Clock, opts ...AggregatorOption) *Aggregat
 	}
 	a.limits = a.limits.withDefaults()
 	a.cacheOpts.DefaultConfig = DefaultConfig()
+	a.cacheOpts.slot = make(chan struct{}, 1)
 	a.cache = NewCache[*FlowSummary](clock, a.cacheOpts)
+	a.drillCache = NewCache[*DrilldownPage](clock, a.cacheOpts)
+	a.timelineCache = NewCache[*ItemTimeline](clock, a.cacheOpts)
 	return a
 }
 
@@ -139,6 +146,12 @@ func (a *Aggregator) Summary(ctx context.Context, q FlowQuery) (*FlowSummary, er
 	if err != nil {
 		return nil, err
 	}
+	return a.cachedSummary(ctx, q, w, sel)
+}
+
+// cachedSummary serves q through the cache, coalescing and compute slot; w must
+// be the resolution of q.Window.
+func (a *Aggregator) cachedSummary(ctx context.Context, q FlowQuery, w FlowWindow, sel map[SectionName]bool) (*FlowSummary, error) {
 	computed := false
 	s, err := a.cache.Do(ctx, q, func(ctx context.Context) (*FlowSummary, error) {
 		computed = true

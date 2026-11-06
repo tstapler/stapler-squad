@@ -218,6 +218,11 @@ export function FlowPage() {
             {NOTICE_TEXT[notice]}
           </p>
         ))}
+        {flow.compareError && (
+          <p className={styles.notice} role="status" data-testid="flow-compare-error">
+            Previous-period comparison unavailable: {flow.compareError}
+          </p>
+        )}
         {flow.isStale && <StaleBanner since={asOf ?? new Date(flow.lastSuccessAt ?? now)} onRetry={reload} />}
         {flow.phase === "ready" && (
           <ThrashBanner anomalies={summary?.anomalies} archivedIds={NO_ARCHIVED_IDS} onView={() => jumpTo("anomalies")} onReload={reload} />

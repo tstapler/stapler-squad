@@ -141,9 +141,10 @@ func (r *run) funnelDrill(sets DrillSets) error {
 	return nil
 }
 
-// drillSets builds every set whose family loads; failed families are reported
-// so a key from a failed family returns that error instead of "unknown key".
-func (r *run) drillSets() (DrillSets, map[drillFamily]error) {
+// drillSets builds the sets of family fam (every family for familyUnknown, so
+// the unknown-key error can list all valid keys). A family that fails to load
+// is reported so its keys return that error instead of "unknown key".
+func (r *run) drillSets(fam drillFamily) (DrillSets, map[drillFamily]error) {
 	sets := DrillSets{}
 	for _, k := range staticDrillKeys {
 		sets[k] = nil
@@ -152,11 +153,15 @@ func (r *run) drillSets() (DrillSets, map[drillFamily]error) {
 		sets[DrillVerdictClass(c)] = nil
 	}
 	failed := map[drillFamily]error{}
-	for fam, build := range map[drillFamily]func(DrillSets) error{
+	builders := map[drillFamily]func(DrillSets) error{
 		familyEvents: r.eventDrill, familyFunnel: r.funnelDrill, familyReview: r.reviewDrill, familyStuck: r.stuckDrill,
-	} {
+	}
+	for f, build := range builders {
+		if fam != familyUnknown && f != fam {
+			continue
+		}
 		if err := build(sets); err != nil {
-			failed[fam] = err
+			failed[f] = err
 		}
 	}
 	return sets, failed
@@ -179,16 +184,27 @@ func (a *Aggregator) Drilldown(ctx context.Context, q DrilldownQuery) (*Drilldow
 	if err != nil {
 		return nil, err
 	}
+	limit, truncated := listLimitFor(q.Limit, false)
+	// The page identity rides in the cache key via Sections and ListLimit.
+	cq := q.Query
+	cq.Sections = []SectionName{SectionName(fmt.Sprintf("drill:%s:%d", q.Key, q.Offset))}
+	cq.ListLimit = limit
+	return a.drillCache.Do(ctx, cq, func(ctx context.Context) (*DrilldownPage, error) {
+		return a.computeDrilldown(ctx, q, w, limit, truncated)
+	})
+}
+
+func (a *Aggregator) computeDrilldown(ctx context.Context, q DrilldownQuery, w FlowWindow, limit int, truncated bool) (*DrilldownPage, error) {
 	r := newRun(ctx, a, q.Query, w)
-	sets, failed := r.drillSets()
-	if err, bad := failed[familyOf(q.Key)]; bad {
+	fam := familyOf(q.Key)
+	sets, failed := r.drillSets(fam)
+	if err, bad := failed[fam]; bad {
 		return nil, fmt.Errorf("drill %q: %w", q.Key, err)
 	}
 	ids, ok := sets[q.Key]
 	if !ok {
 		return nil, fmt.Errorf("unknown drill key %q; valid keys: %s", q.Key, validKeys(sets))
 	}
-	limit, truncated := listLimitFor(q.Limit, false)
 	page := pageRange(ids, q.Offset, limit, truncated)
 	meta, err := r.itemMeta(page.Items)
 	if err != nil {

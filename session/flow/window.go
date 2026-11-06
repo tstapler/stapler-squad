@@ -56,12 +56,20 @@ type WindowSpec struct {
 	Days       int
 	OffsetDays int
 	AllTime    bool
+	// Start and End, when set, pin absolute half-open bounds (explicit compare
+	// windows) and take precedence over Days/OffsetDays.
+	Start, End time.Time
 }
+
+func (s WindowSpec) hasBounds() bool { return !s.Start.IsZero() || !s.End.IsZero() }
 
 // CacheKey is a stable key, distinct for AllTime and for every Days/OffsetDays pair.
 func (s WindowSpec) CacheKey() string {
 	if s.AllTime {
 		return "all"
+	}
+	if s.hasBounds() {
+		return fmt.Sprintf("b%d-%d", s.Start.UnixNano(), s.End.UnixNano())
 	}
 	return fmt.Sprintf("d%d+o%d", s.Days, s.OffsetDays)
 }
@@ -71,6 +79,9 @@ func (s WindowSpec) CacheKey() string {
 func (s WindowSpec) Window(clock Clock) (FlowWindow, error) {
 	if s.AllTime {
 		return NewAllTimeWindow(clock)
+	}
+	if s.hasBounds() {
+		return NewFlowWindowBounds(s.Start, s.End)
 	}
 	if s.Days < 1 {
 		return FlowWindow{}, errors.New("flow window spec: days must be >= 1 unless AllTime is set")
