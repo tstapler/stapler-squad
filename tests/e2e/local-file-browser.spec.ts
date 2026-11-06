@@ -38,7 +38,7 @@ test.describe('local-file-browser', () => {
 
     await page.locator('[data-testid="file-browser-entry"]', { hasText: 'link-to-subdir/' }).click();
 
-    await expect(page.getByTestId('file-browser-path-input')).toHaveValue(subDir);
+    await expect(page.getByTestId('file-browser-path-input')).toHaveValue(path.join(rootDir, 'link-to-subdir')); // the server keeps the symlink path; it only resolves isDir
     await expect(page.locator('[data-testid="file-browser-entry"]', { hasText: 'inside.txt' })).toBeVisible();
   });
 
