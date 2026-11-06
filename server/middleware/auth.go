@@ -122,6 +122,10 @@ var exemptPeerPaths = map[string]struct{}{
 	"/internal/host-advertisement":  {},
 	"/internal/claim-advertisement": {},
 	"/internal/claim-lookup":        {},
+	// /internal/session-federation/sessions requires a signed request from an
+	// enrolled host (HostRegistry.AuthorizePeerRequest) and is read-only.
+	"/internal/session-federation/sessions": {},
+	"/internal/session-federation/terminal": {},
 }
 
 func isExempt(r *http.Request) bool {
