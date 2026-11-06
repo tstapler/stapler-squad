@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { AppLink } from "@/components/ui/AppLink";
+import { FlowSectionBody } from "@/components/backlog-flow/FlowSectionBody";
 import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
@@ -118,6 +119,7 @@ function useFlowUrl() {
     notices,
     selectWindow: useCallback((window: FlowWindow) => navigate({ window }), [navigate]),
     selectCompare: useCallback((compare: FlowCompare) => navigate({ compare }), [navigate]),
+    selectDrill: useCallback((drill: string) => navigate({ drill }), [navigate]),
   };
 }
 
@@ -153,7 +155,7 @@ function useSectionNav() {
 export function FlowPage() {
   const { announce } = useAnnounce();
   const now = useNow(CLOCK_TICK_MS);
-  const { url, notices, selectWindow, selectCompare } = useFlowUrl();
+  const { url, notices, selectWindow, selectCompare, selectDrill } = useFlowUrl();
   const { openSections, jumpTo, toggleSection } = useSectionNav();
 
   const onSettled = useCallback(
@@ -215,6 +217,7 @@ export function FlowPage() {
                   onReload={reload}
                 >
                   {empty && <EmptyWindow window={url.window} onWiden={selectWindow} />}
+                  {summary && !empty && <FlowSectionBody id={def.id} summary={summary} comparison={flow.comparison} onDrill={selectDrill} />}
                 </FlowSection>
               );
             })}
