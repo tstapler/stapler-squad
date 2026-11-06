@@ -1283,6 +1283,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       // On reconnect (not first connect), append a separator so the user can see where
       // the reconnection happened. showReconnectBanner being true means we disconnected.
+      if (hasEverConnectedRef.current) bumpConnectionEpoch(); // resets gesture/paging state, as the old retry path did
       if (hasEverConnectedRef.current && showReconnectBanner) {
         const terminal = xtermRef.current?.terminal;
         if (terminal && terminal.buffer.active.length > 0) {
@@ -1321,13 +1322,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       // New session: don't drop the spinner before first content arrives.
       if (isInitialScrollbackDoneRef.current) {
         setIsLoadingInitialContent(false);
-      }
-      if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (!isConnected) {
-            setShowReconnectButton(true);
-          }
-        }, 5000);
       }
     }
 
@@ -1494,29 +1488,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       scrollEl?.removeEventListener('wheel', onWheel);
     };
   }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, xtermRef]);
-
-  // Auto-reconnect with exponential backoff
-  useEffect(() => {
-    if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
-    // Must not fire once the hook has hard-failed (e.g. a non-retriable WS
-    // close code): the hook already set shouldReconnectRef.current = false
-    // in that case, but calling connect() below unconditionally resets it
-    // back to true (see useTerminalStream.ts's connect()), silently
-    // reconnecting right through the hard-fail and hiding the Retry banner.
-    if (isHardFailed) return;
-    if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
-      const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
-      console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
-
-      const timeout = setTimeout(() => {
-        console.log("[TerminalOutput] Attempting reconnection...");
-        bumpConnectionEpoch();
-        connect();
-      }, backoffDelay);
-
-      return () => clearTimeout(timeout);
-    }
-  }, [isConnected, error, connectionAttempts, connect, isHardFailed, bumpConnectionEpoch]);
 
   // Starts the connection for a session: pre-size from cache, then session-switch
   // connect, then post-disconnect connect. The effects inside run in that fixed

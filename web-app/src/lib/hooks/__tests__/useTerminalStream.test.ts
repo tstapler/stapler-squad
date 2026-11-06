@@ -32,6 +32,7 @@ jest.mock('@connectrpc/connect', () => {
   return {
     createClient: () => ({ streamTerminal: mockStreamTerminal }),
     ConnectError,
+    Code: { Unauthenticated: 16, NotFound: 5, FailedPrecondition: 9 },
   };
 });
 
@@ -426,14 +427,13 @@ describe('useTerminalStream — scrollback decoder isolation', () => {
 // Phase 3 — Auto-reconnect (Stories 3.1.1 / 3.1.2 / 3.1.3)
 // ---------------------------------------------------------------------------
 
-describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () => {
+describe('useTerminalStream — auto-reconnect', () => {
   const RECONNECT_OPTIONS = {
     ...BASE_OPTIONS,
     autoConnect: false,
   };
 
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_RECONNECT_V2 = 'true';
     jest.useFakeTimers();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -444,7 +444,6 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
   });
 
   afterEach(() => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -490,35 +489,8 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     expect(reconnectSpy).not.toHaveBeenCalled();
   });
 
-  it('connect_should_notScheduleReconnect_When_featureFlagAbsent', async () => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
-
-    const stream = makePushStream<object>();
-    let callCount = 0;
-    mockStreamTerminal.mockImplementation(() => {
-      callCount++;
-      return stream.iterable;
-    });
-
-    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
-
-    await act(async () => { result.current.connect(); });
-    await act(async () => { stream.push(makeOutputMsg()); });
-    await waitFor(() => expect(result.current.isConnected).toBe(true));
-
-    const callCountBeforeEnd = callCount;
-    await act(async () => { stream.end(); });
-    await waitFor(() => expect(result.current.isConnected).toBe(false));
-
-    // Advance timers — no reconnect should fire since flag is absent
-    await act(async () => { jest.advanceTimersByTime(35000); });
-
-    expect(callCount).toBe(callCountBeforeEnd);
-  });
-
-  it('connect_should_surfaceError_When_serverEndsStreamCleanlyAndFlagAbsent', async () => {
-    // Without V2 the only reconnect trigger is the `error` TerminalOutput watches.
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+  it('connect_should_surfaceError_When_serverEndsStreamCleanly', async () => {
+    // The surfaced error drives the pane's "Reconnecting (attempt n/5)" status.
     const stream = makePushStream<object>();
     mockStreamTerminal.mockReturnValue(stream.iterable);
     const onError = jest.fn();
@@ -536,7 +508,6 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
   });
 
   it('connect_should_stopSurfacingErrors_When_streamsKeepEndingCleanlyRightAfterConnecting', async () => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     mockStreamTerminal.mockImplementation(() => {
       const s = makePushStream<object>();
       s.end();
@@ -555,7 +526,6 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
   });
 
   it('connect_should_notSurfaceError_When_shellStreamEndsCleanly', async () => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     const stream = makePushStream<object>();
     mockStreamTerminal.mockReturnValue(stream.iterable);
     const onError = jest.fn();
@@ -572,7 +542,6 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
   });
 
   it('disconnect_should_notSurfaceError_When_streamEndsAfterUserDisconnect', async () => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     const stream = makePushStream<object>();
     mockStreamTerminal.mockReturnValue(stream.iterable);
     const onError = jest.fn();
@@ -1318,7 +1287,6 @@ describe('useTerminalStream — foreground connect-timeout', () => {
   };
 
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_RECONNECT_V2 = 'true';
     jest.useFakeTimers();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1329,7 +1297,6 @@ describe('useTerminalStream — foreground connect-timeout', () => {
   });
 
   afterEach(() => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -1554,23 +1521,6 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
     const timeoutWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('trigger=connect-timeout'));
     expect(timeoutWarnings.length).toBe(0);
-    expect(capturedSignal?.aborted).toBe(false);
-  });
-
-  it('connect_should_notScheduleConnectTimeout_When_reconnectV2FlagDisabled', async () => {
-    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
-    let capturedSignal: AbortSignal | undefined;
-    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
-      capturedSignal = opts?.signal;
-      return makePushStream(opts?.signal).iterable;
-    });
-
-    const { result } = renderHook(() =>
-      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
-    );
-
-    await act(async () => { result.current.connect(); });
-    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS + 1000); }); // well past both timeouts
     expect(capturedSignal?.aborted).toBe(false);
   });
 
@@ -1852,5 +1802,165 @@ describe('useTerminalStream — handshake zero-size guard (Task 3.1.2d)', () => 
 
     expect(handshakeOf(0)).toMatchObject({ targetCols: 120, targetRows: 40 });
     stream.end();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared mux socket drop — the reconnect is unconditional (ADR-023)
+// ---------------------------------------------------------------------------
+
+/** A stream that delivers one output frame, then fails with the pool's `mux socket closed` error when dropped. */
+function makeDroppableStream() {
+  let rejectNext: (err: Error) => void = () => {};
+  let delivered = false;
+  const iterable: AsyncIterable<object> = {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<object>> {
+          if (!delivered) {
+            delivered = true;
+            return { value: makeOutputMsg(), done: false };
+          }
+          return new Promise((_resolve, reject) => { rejectNext = reject; });
+        },
+      };
+    },
+  };
+  const drop = () => {
+    const { ConnectError } = require('@connectrpc/connect');
+    const err = new ConnectError('WebSocket read error: mux socket closed');
+    err.metadata = new Headers({ 'ws-close-code': '1006' });
+    rejectNext(err);
+  };
+  return { iterable, drop };
+}
+
+describe('useTerminalStream — reconnect after the shared mux socket drops', () => {
+  const OPTIONS = { ...BASE_OPTIONS, autoConnect: false };
+  let randomSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    mockStreamTerminal.mockReset();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  function trackDroppableStreams() {
+    const droppable: ReturnType<typeof makeDroppableStream>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makeDroppableStream();
+      droppable.push(s);
+      return s.iterable;
+    });
+    return droppable;
+  }
+
+  it('connect_should_reconnectAfterBackoff_When_streamDropsWithMuxSocketClosed1006', async () => {
+    const droppable = trackDroppableStreams();
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { droppable[0].drop(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+    expect(result.current.terminalState).toBe('DISCONNECTED');
+    expect(result.current.isHardFailed).toBe(false);
+    expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+
+    // First retry delay = random(0.5) * 1000ms; nothing may fire earlier.
+    await act(async () => { jest.advanceTimersByTime(499); });
+    expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await waitFor(() => expect(mockStreamTerminal).toHaveBeenCalledTimes(2));
+
+    // disconnected -> reconnecting -> connected
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+  });
+
+  it('connect_should_staggerRetries_When_manyStreamsDropTogether', async () => {
+    const droppable = trackDroppableStreams();
+    const hooks = ['a', 'b', 'c'].map((sessionId) => renderHook(() => useTerminalStream({ ...OPTIONS, sessionId })));
+    for (const h of hooks) {
+      await act(async () => { h.result.current.connect(); });
+      await waitFor(() => expect(h.result.current.isConnected).toBe(true));
+    }
+    expect(droppable).toHaveLength(3);
+    const callsBeforeDrop = mockStreamTerminal.mock.calls.length;
+
+    const randoms = [0.1, 0.5, 0.9];
+    randomSpy.mockImplementation(() => randoms.shift() ?? 0.5);
+    await act(async () => { droppable.forEach((d) => d.drop()); });
+    await waitFor(() => hooks.forEach((h) => expect(h.result.current.isConnected).toBe(false)));
+
+    const retried = () => mockStreamTerminal.mock.calls.length - callsBeforeDrop;
+    await act(async () => { jest.advanceTimersByTime(99); });
+    expect(retried()).toBe(0);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    expect(retried()).toBe(1); // 0.1 * 1000ms
+    await act(async () => { jest.advanceTimersByTime(400); });
+    expect(retried()).toBe(2); // 0.5 * 1000ms
+    await act(async () => { jest.advanceTimersByTime(400); });
+    expect(retried()).toBe(3); // 0.9 * 1000ms
+  });
+
+  it.each(['4001', '4004'])('connect_should_notReconnect_When_dropIsDefinitive_%s', async (code) => {
+    const { ConnectError } = require('@connectrpc/connect');
+    mockStreamTerminal.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        async next() {
+          const err = new ConnectError('gone');
+          err.metadata = new Headers({ 'ws-close-code': code });
+          throw err;
+        },
+      }),
+    }));
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('connect_should_resetBackoff_When_streamStaysUpBeforeEachDrop', async () => {
+    // Six drops far apart must each retry within the first-attempt window instead of
+    // accumulating toward the 5-attempt hard-fail cap.
+    randomSpy.mockReturnValue(0.99);
+    const droppable = trackDroppableStreams();
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    for (let i = 0; i < 6; i++) {
+      await act(async () => { jest.advanceTimersByTime(10_000); }); // stable attach
+      await act(async () => { droppable[i].drop(); });
+      await waitFor(() => expect(result.current.isConnected).toBe(false));
+      expect(result.current.isHardFailed).toBe(false);
+      await act(async () => { jest.advanceTimersByTime(1000); }); // ceiling of attempt 0
+      await waitFor(() => expect(result.current.isConnected).toBe(true));
+    }
+    expect(mockStreamTerminal).toHaveBeenCalledTimes(7);
+  });
+
+  it('connect_should_logWillReconnectTrue_When_dropScheduledARetry', async () => {
+    const droppable = trackDroppableStreams();
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await act(async () => { droppable[0].drop(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    const line = (console.warn as jest.Mock).mock.calls.map((c) => String(c[0])).find((m) => m.includes('[stream-disconnect]'));
+    expect(line).toContain('willReconnect=true');
   });
 });

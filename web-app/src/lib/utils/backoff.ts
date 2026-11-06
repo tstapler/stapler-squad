@@ -140,7 +140,7 @@ export function isWorktreeMissingError(err: unknown): err is ConnectError {
  * Fast connect-timeout for the first FOREGROUND_FAST_ATTEMPTS attempts since a
  * terminal became foreground. Unvalidated starting guess (herdr-web's real value
  * isn't inspectable) — validate against real p95/p99 connect-to-first-message
- * latency on VPN/high-RTT links before enabling NEXT_PUBLIC_RECONNECT_V2 broadly.
+ * latency on VPN/high-RTT links (it applies to every automatic reconnect now).
  */
 export const FOREGROUND_CONNECT_TIMEOUT_MS = 1200;
 

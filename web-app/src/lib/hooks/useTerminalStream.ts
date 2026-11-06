@@ -99,10 +99,7 @@ interface UseTerminalStreamOptions {
   onInputDropped?: (count: number) => void;
   /**
    * True when this terminal is the one currently selected/visible to the user
-   * (drives fast connect-timeout). Only affects the NEXT_PUBLIC_RECONNECT_V2-gated
-   * auto-reconnect path below — the pre-flag legacy reconnect path in
-   * TerminalOutput.tsx has no automatic retry loop to attach a connect-timeout
-   * to and is out of scope.
+   * (drives the fast connect-timeout of the automatic reconnect path).
    */
   foreground?: boolean;
 }
@@ -247,7 +244,6 @@ export function useTerminalStream({
   useEffect(() => {
     const wasForeground = foregroundRef.current;
     foregroundRef.current = foreground;
-    if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return; // same gate as the rest of this file's auto-reconnect logic
     if (!wasForeground && foreground) {
       terminalBackoffRef.current.reset();
       foregroundConnectAttemptRef.current = 0;
@@ -366,22 +362,18 @@ export function useTerminalStream({
       connectTimeoutAbortedRef.current = false;
       const foregroundAtSchedule = foregroundRef.current;
       const timeoutMs = connectTimeoutMs(foregroundAtSchedule, foregroundConnectAttemptRef.current);
-      // Counted unconditionally (even with the flag off) since it's cheap and inert
-      // when nothing schedules a connect-timeout to consume it.
       foregroundConnectAttemptRef.current += 1;
       const attemptNumber = foregroundConnectAttemptRef.current;
-      if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") {
-        connectTimeoutRef.current = setTimeout(() => {
-          connectTimeoutRef.current = null;
-          // Race guard (pre-mortem Failure #3, P2): re-check firstMessageRef
-          // immediately before aborting, so a message that already landed and
-          // was processed is not retroactively aborted.
-          if (!firstMessageRef.current) return;
-          console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundAtSchedule} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
-          connectTimeoutAbortedRef.current = true;
-          attemptController.abort();
-        }, timeoutMs);
-      }
+      connectTimeoutRef.current = setTimeout(() => {
+        connectTimeoutRef.current = null;
+        // Race guard (pre-mortem Failure #3, P2): re-check firstMessageRef
+        // immediately before aborting, so a message that already landed and
+        // was processed is not retroactively aborted.
+        if (!firstMessageRef.current) return;
+        console.warn(`[reconnect] stream=terminal trigger=connect-timeout foreground=${foregroundAtSchedule} attempt=${attemptNumber} timeoutMs=${timeoutMs}`);
+        connectTimeoutAbortedRef.current = true;
+        attemptController.abort();
+      }, timeoutMs);
       messageQueueRef.current = new MessageQueue();
 
       // Send initial handshake with dimensions
@@ -565,8 +557,8 @@ export function useTerminalStream({
             }
           }
           // The server ended the stream without an error (e.g. a hub eviction or teardown,
-          // sent as a clean EndStream). Surface it as a lost connection: with
-          // NEXT_PUBLIC_RECONNECT_V2 off, TerminalOutput's auto-reconnect is driven by `error`.
+          // sent as a clean EndStream). Surface it as a lost connection so the pane's
+          // "Reconnecting (attempt n/5)" status reflects it; the retry itself is scheduled in `finally`.
           // Shell tabs end normally when the shell exits, and an error frame was already surfaced.
           if (myGeneration === connectionGenerationRef.current
               && !shellId
@@ -610,9 +602,13 @@ export function useTerminalStream({
         } finally {
           if (myGeneration === connectionGenerationRef.current) {
             // A superseded generation is a deliberate reconnect; reaching here means this stream ended on its own.
+            const livedMs = Date.now() - connectStartedAt;
+            // Reflects the retry gate below; disconnect() clears shouldReconnectRef first, so the
+            // raw flag alone reads false for a deliberate disconnect-then-connect (e.g. resync recovery).
+            const willReconnect = shouldReconnectRef.current && !isDisconnectingRef.current && !isHardFailedRef.current;
             console.warn(
-              `[stream-disconnect] session=${sessionId} shell=${shellId ?? ""} livedMs=${Date.now() - connectStartedAt} ` +
-              `foreground=${foregroundRef.current} visibility=${document.visibilityState} willReconnect=${shouldReconnectRef.current} ` +
+              `[stream-disconnect] session=${sessionId} shell=${shellId ?? ""} livedMs=${livedMs} ` +
+              `foreground=${foregroundRef.current} visibility=${document.visibilityState} willReconnect=${willReconnect} ` +
               `hardFailed=${isHardFailedRef.current} connectTimeoutAbort=${connectTimeoutAbortedRef.current}`,
             );
             isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
@@ -631,9 +627,10 @@ export function useTerminalStream({
             // CURRENT generation's pending connect-timeout timer (connectTimeoutRef is
             // shared across the hook's lifetime, not per-generation).
             clearConnectTimeout();
-            if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
-                && shouldReconnectRef.current
-                && !isDisconnectingRef.current) {
+            if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+              // A stream that stayed up is a successful attach: restart the backoff so drops
+              // hours apart never accumulate toward the hard-fail cap.
+              if (livedMs >= STABLE_STREAM_MS) terminalBackoffRef.current.reset();
               if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current);
                 reconnectTimerRef.current = null;
@@ -770,8 +767,6 @@ export function useTerminalStream({
 
   // Story 3.1.3 — reconnect on tab visibility or network online event
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") return;
-
     const handleVisibilityOrOnline = (ev: Event) => {
       if (document.visibilityState !== "visible" && ev.type !== "online") return;
       if (terminalDebounceTimerRef.current) clearTimeout(terminalDebounceTimerRef.current);

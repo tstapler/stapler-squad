@@ -44,7 +44,7 @@ There is no per-session ACL to check: authorization in stapler-squad is a single
 
 ## Failure behaviour
 
-A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
+A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream` treats like any WebSocket loss. Its reconnect is unconditional (no env flag): full-jitter exponential backoff (1 s base, 30 s cap), so streams sharing the dropped socket retry at spread-out times and the pool reopens one mux socket for the first of them; the backoff restarts after a stream stayed up 10 s, gives up after 5 consecutive failures (the pane shows a Retry banner), and never retries auth failure (4001/`Unauthenticated`), session gone (4004/`NotFound`) or a missing worktree. While reconnecting the pane shows `Reconnecting terminal…`. the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
 
 ## Metrics
 
