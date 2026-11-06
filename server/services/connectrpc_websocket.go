@@ -1140,6 +1140,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	shellID := terminalData.ShellId
 	log.Info("StreamTerminal called", "session", sessionID, "shell", shellID)
 
+	if fid := session.ParseFederatedSessionID(sessionID); !fid.IsLocal() {
+		return h.streamFederatedTerminal(stream, fid, sessionID)
+	}
+
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
 	instance, isExternal := h.resolveSession(sessionID)

@@ -391,6 +391,17 @@ message Session {
   // archived, hidden, or a tymux session that is not ACTIVE. Computed by
   // session.TerminalInputBlock, the same predicate the terminal stream uses.
   bool terminal_read_only = 100;
+
+  // Session federation: owning host of a session mirrored from a peer
+  // instance. Empty for sessions that live on this instance.
+  string host_id = 110;
+
+  // Human-readable label of the owning host (first advertised address).
+  string host_display_name = 111;
+
+  // True when the owning peer is currently unreachable and this entry is the
+  // last snapshot received from it.
+  bool host_stale = 112;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
