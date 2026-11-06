@@ -61,10 +61,16 @@ export const textButton = style({
   ":hover": { background: vars.color.hoverBackground },
 });
 
+// Plain primary fails 4.5:1 on cardBackground in the light theme (4.32:1); blending toward the text color fixes it in every theme.
+const linkColor = `color-mix(in srgb, ${vars.color.primary} 85%, ${vars.color.textPrimary})`;
+
 export const linkButton = style({
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "24px",
   padding: 0,
   fontSize: vars.fontSize.sm,
-  color: vars.color.primary,
+  color: linkColor,
   background: "none",
   border: "none",
   textDecoration: "underline",
@@ -81,7 +87,12 @@ export const jumpList = style({
 });
 
 export const jumpLink = style({
-  color: vars.color.primary,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: "24px",
+  minHeight: "24px",
+  color: linkColor,
 });
 
 export const notice = style({

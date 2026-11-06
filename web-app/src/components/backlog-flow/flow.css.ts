@@ -1,6 +1,9 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// Plain primary fails 4.5:1 on cardBackground in the light theme (4.32:1); blending toward the text color fixes it in every theme.
+const linkColor = `color-mix(in srgb, ${vars.color.primary} 85%, ${vars.color.textPrimary})`;
+
 const plainButton = {
   padding: 0,
   font: "inherit",
@@ -14,7 +17,7 @@ const plainButton = {
 export const drillButton = style({
   ...plainButton,
   fontWeight: vars.fontWeight.semibold,
-  color: vars.color.primary,
+  color: linkColor,
   textDecoration: "underline",
 });
 
@@ -67,7 +70,10 @@ export const lowSample = style({
 });
 
 export const link = style({
-  color: vars.color.primary,
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "24px",
+  color: linkColor,
   fontSize: vars.fontSize.sm,
 });
 

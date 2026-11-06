@@ -1,7 +1,11 @@
 import { style, styleVariants } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// The visually hidden data table is absolutely positioned and a table ignores width:1px, so without this
+// containing block it widens the page past a 320px viewport.
 export const figure = style({
+  position: "relative",
+  overflowX: "clip",
   margin: 0,
   display: "flex",
   flexDirection: "column",
@@ -50,9 +54,12 @@ export const legendItem = style({
 
 export const toggle = style({
   alignSelf: "flex-start",
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "24px",
   padding: 0,
   fontSize: vars.fontSize.sm,
-  color: vars.color.primary,
+  color: `color-mix(in srgb, ${vars.color.primary} 85%, ${vars.color.textPrimary})`,
   background: "none",
   border: "none",
   textDecoration: "underline",
