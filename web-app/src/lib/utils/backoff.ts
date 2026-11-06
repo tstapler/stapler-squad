@@ -165,6 +165,9 @@ export const RECONNECT_BASE_MS = 2000;
 export const RECONNECT_CAP_MS = 30_000;
 /** Consecutive connection failures after which the pane shows "Server unreachable" (retries continue). */
 export const GAVE_UP_AFTER_ATTEMPTS = 5;
+/** Server-ended closes (error frame, clean EndStream) hard-fail only after this much continuous time:
+ * squad answers that way while loading sessions after a restart, which can take minutes. */
+export const SERVER_END_GIVE_UP_MS = 10 * 60_000;
 /** Close code the mux server sends when it refuses a stream (admission control); retriable, no budget used. */
 export const STREAM_REFUSED_CLOSE_CODE = 1013;
 

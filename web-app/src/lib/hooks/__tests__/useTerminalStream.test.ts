@@ -8,9 +8,21 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import {
   FOREGROUND_CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS, FOREGROUND_FAST_ATTEMPTS, CONNECT_TIMEOUT_ABORT_CAP,
-  RECONNECT_BASE_MS, RECONNECT_CAP_MS, GAVE_UP_AFTER_ATTEMPTS,
+  RECONNECT_BASE_MS, RECONNECT_CAP_MS, GAVE_UP_AFTER_ATTEMPTS, SERVER_END_GIVE_UP_MS,
 } from '@/lib/utils/backoff';
-import { CONNECT_GATE_WIDTH, resetConnectGateForTests } from '@/lib/utils/connectGate';
+import {
+  CONNECT_GATE_WIDTH, queueForConnectSlot, resetConnectGateForTests, tryAcquireConnectSlot,
+} from '@/lib/utils/connectGate';
+
+// Wrapped so individual tests can script the gate; beforeEach restores the real implementation.
+jest.mock('@/lib/utils/connectGate', () => {
+  const actual = jest.requireActual('@/lib/utils/connectGate');
+  return {
+    ...actual,
+    queueForConnectSlot: jest.fn(actual.queueForConnectSlot),
+    tryAcquireConnectSlot: jest.fn(actual.tryAcquireConnectSlot),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock heavy infrastructure before any hook import
@@ -134,7 +146,12 @@ import { useTerminalStream } from '../useTerminalStream';
 import { defined } from "@/lib/utils/defined";
 
 // The connect gate is module-level state shared by every hook instance in this file.
-beforeEach(() => { resetConnectGateForTests(); });
+beforeEach(() => {
+  const actual = jest.requireActual('@/lib/utils/connectGate');
+  (queueForConnectSlot as jest.Mock).mockReset().mockImplementation(actual.queueForConnectSlot);
+  (tryAcquireConnectSlot as jest.Mock).mockReset().mockImplementation(actual.tryAcquireConnectSlot);
+  resetConnectGateForTests();
+});
 
 // ---------------------------------------------------------------------------
 // Controllable stream factory
@@ -896,7 +913,7 @@ describe('useTerminalStream — auto-reconnect', () => {
   // { isAutoRetry: true }, which only the automatic-retry call site passes.
   // ---------------------------------------------------------------------------
 
-  it('connect_should_escalateDelayAndHardFail_When_serverKeepsEndingStreamCleanly', async () => {
+  it('connect_should_escalateDelayToCapAndKeepRetrying_When_serverKeepsEndingStreamCleanly', async () => {
     // Full-jitter delay is Math.random() * ceiling — pin Math.random() to 1 (the
     // supremum) so each cycle's delay is deterministically the per-attempt
     // ceiling (2000/4000/8000/16000/30000ms) instead of anywhere in [0, ceiling),
@@ -938,15 +955,14 @@ describe('useTerminalStream — auto-reconnect', () => {
       }
     }
 
-    // A server that keeps ending the stream itself (error frame or clean EndStream) is a verdict, not
-    // an outage: the 6th consecutive close hard-fails and never shows "server unreachable".
+    // Server-ended closes keep retrying at the capped ceiling (the server may still be loading after a
+    // restart); they never show "server unreachable" and do not hard-fail until the give-up window ends.
     await act(async () => { streams[5].end(); });
-    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+    expect(result.current.isHardFailed).toBe(false);
     expect(result.current.isServerUnreachable).toBe(false);
-
-    const streamCountAtHardFail = streams.length;
-    await act(async () => { jest.advanceTimersByTime(60_000); });
-    expect(streams.length).toBe(streamCountAtHardFail);
+    await act(async () => { jest.advanceTimersByTime(RECONNECT_CAP_MS); });
+    await waitFor(() => expect(streams.length).toBe(7));
   });
 
   it('connect_should_resetBackoffSequence_When_calledDirectlyMidAutomaticRetrySequence', async () => {
@@ -2027,7 +2043,7 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
     expect(result.current.isHardFailed).toBe(false);
   });
 
-  it('connect_should_hardFailWithoutUnreachable_When_serverKeepsSendingNonDefinitiveErrorFrames', async () => {
+  it('connect_should_hardFailWithoutUnreachable_When_serverKeepsSendingErrorFramesPastTheGiveUpWindow', async () => {
     mockStreamTerminal.mockImplementation(() => {
       const s = makePushStream<object>();
       s.push(makeErrorMsg('internal hiccup', 'INTERNAL'));
@@ -2037,7 +2053,7 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
     const { result } = renderHook(() => useTerminalStream(OPTIONS));
     await act(async () => { result.current.connect(); });
 
-    await advanceSeconds(300);
+    await advanceSeconds(SERVER_END_GIVE_UP_MS / 1000 + RECONNECT_CAP_MS / 1000);
     expect(result.current.isHardFailed).toBe(true);
     expect(result.current.isServerUnreachable).toBe(false);
     const calls = mockStreamTerminal.mock.calls.length;
@@ -2072,6 +2088,92 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
     await waitFor(() => expect(result.current.isConnected).toBe(true));
     await advanceSeconds(11); // stable: now it clears
     expect(result.current.isServerUnreachable).toBe(false);
+  });
+
+  it('connect_should_surviveTenMinuteRestartWindow_When_serverAnswersErrorFramesWhileLoading', async () => {
+    randomSpy.mockReturnValue(1);
+    const loadedAt = Date.now() + 8 * 60_000;
+    mockStreamTerminal.mockImplementation(() => {
+      if (Date.now() >= loadedAt) return makeDroppableStream().iterable;
+      const s = makePushStream<object>();
+      s.push(makeErrorMsg('sessions still loading', 'UNAVAILABLE'));
+      s.end();
+      return s.iterable;
+    });
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+
+    await advanceSeconds(10 * 60);
+    expect(result.current.isHardFailed).toBe(false);
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+  });
+
+  it('connect_should_notShowUnreachable_When_firstTransportFailureFollowsManyServerEndedCloses', async () => {
+    randomSpy.mockReturnValue(1);
+    let calls = 0;
+    mockStreamTerminal.mockImplementation(() => {
+      calls++;
+      if (calls <= GAVE_UP_AFTER_ATTEMPTS) {
+        const s = makePushStream<object>();
+        s.push(makeErrorMsg('loading', 'UNAVAILABLE'));
+        s.end();
+        return s.iterable;
+      }
+      return failingStream('1006');
+    });
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+
+    await advanceSeconds(120);
+    expect(calls).toBeGreaterThan(GAVE_UP_AFTER_ATTEMPTS);
+    // Transport failures have their own attempt count, so a handful of them is not yet "unreachable".
+    expect(result.current.isServerUnreachable).toBe(calls - GAVE_UP_AFTER_ATTEMPTS >= GAVE_UP_AFTER_ATTEMPTS);
+  });
+
+  it('connect_should_notHardFail_When_serverFlapsBetweenErrorFramesAndStableAttaches', async () => {
+    randomSpy.mockReturnValue(1);
+    let n = 0;
+    const droppable: ReturnType<typeof makeDroppableStream>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      n++;
+      if (n % 2 === 1) {
+        const s = makePushStream<object>();
+        s.push(makeErrorMsg('loading', 'UNAVAILABLE'));
+        s.end();
+        return s.iterable;
+      }
+      const d = makeDroppableStream();
+      droppable.push(d);
+      return d.iterable;
+    });
+    const { result } = renderHook(() => useTerminalStream(OPTIONS));
+    await act(async () => { result.current.connect(); });
+
+    // A stable attach every other attempt resets the server-ended clock, so it never expires.
+    for (let i = 0; i < 40 && !result.current.isHardFailed; i++) {
+      await advanceSeconds(30);
+      if (result.current.isConnected) {
+        await advanceSeconds(11);
+        await act(async () => { droppable[droppable.length - 1].drop(); });
+      }
+    }
+    expect(result.current.isHardFailed).toBe(false);
+    expect(n).toBeGreaterThan(20);
+  });
+
+  it('connect_should_surfaceError_When_timeoutAbortsExceedCap', async () => {
+    const onError = jest.fn();
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => makePushStream(opts?.signal).iterable);
+    const { result } = renderHook(() => useTerminalStream({ ...OPTIONS, onError }));
+    await act(async () => { result.current.connect(); });
+
+    for (let i = 0; i < CONNECT_TIMEOUT_ABORT_CAP; i++) {
+      await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
+      await advanceSeconds(6);
+    }
+    expect(onError).not.toHaveBeenCalled(); // within the cap the abort stays invisible
+    await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
   });
 
   describe('connect gate', () => {
@@ -2171,6 +2273,126 @@ describe('useTerminalStream — reconnect after the shared mux socket drops', ()
       await act(async () => { await busy[0].result.current.disconnect(); });
       expect(signals[0].aborted).toBe(true); // the in-flight stream is really closed, not just forgotten
       await waitFor(() => expect(order).toContain('waiting'));
+    });
+
+    describe('queued connect races', () => {
+      function scriptedGate({ cancelResolves }: { cancelResolves: boolean }) {
+        let resolveSlot: (r: (() => void) | null) => void = () => {};
+        const release = jest.fn();
+        const cancel = jest.fn(() => { if (cancelResolves) resolveSlot(null); });
+        (tryAcquireConnectSlot as jest.Mock).mockReturnValueOnce(null);
+        (queueForConnectSlot as jest.Mock).mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => { resolveSlot = resolve; }),
+          cancel,
+        }));
+        return { grant: () => resolveSlot(release), release, cancel };
+      }
+
+      it('connect_should_notStartStream_When_slotIsGrantedAfterDisconnectFinished', async () => {
+        const gate = scriptedGate({ cancelResolves: false });
+        const { result } = renderHook(() => useTerminalStream(OPTIONS));
+        await act(async () => { result.current.connect(); });
+        await act(async () => { await result.current.disconnect(); });
+
+        await act(async () => { gate.grant(); });
+        expect(mockStreamTerminal).not.toHaveBeenCalled();
+        expect(gate.release).toHaveBeenCalledTimes(1);
+        expect(result.current.terminalState).toBe('DISCONNECTED');
+      });
+
+      it('connect_should_notStartStream_When_slotIsGrantedInTheSameTickAsDisconnect', async () => {
+        const gate = scriptedGate({ cancelResolves: false });
+        const { result } = renderHook(() => useTerminalStream(OPTIONS));
+        await act(async () => { result.current.connect(); });
+        await act(async () => {
+          gate.grant();
+          await result.current.disconnect();
+        });
+        expect(mockStreamTerminal).not.toHaveBeenCalled();
+        expect(gate.release).toHaveBeenCalledTimes(1);
+      });
+
+      it('connect_should_ignoreStaleGrant_When_aNewerConnectOwnsTheFlags', async () => {
+        trackSessions();
+        const gate = scriptedGate({ cancelResolves: false });
+        const { result } = renderHook(() => useTerminalStream(OPTIONS));
+        await act(async () => { result.current.connect(); }); // queued, generation 1
+        await act(async () => { await result.current.disconnect(); });
+        await act(async () => { result.current.connect(); }); // gets a real slot, generation 2
+        expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+
+        await act(async () => { gate.grant(); }); // generation 1 is granted late
+        expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+        expect(gate.release).toHaveBeenCalledTimes(1);
+        expect(result.current.terminalState).toBe('CONNECTING'); // not clobbered by the stale attempt
+      });
+
+      it('disconnect_should_settleToDisconnected_When_aQueuedAttemptIsCancelled', async () => {
+        const gate = scriptedGate({ cancelResolves: true });
+        const { result } = renderHook(() => useTerminalStream(OPTIONS));
+        await act(async () => { result.current.connect(); });
+        expect(result.current.terminalState).toBe('CONNECTING');
+
+        await act(async () => { await result.current.disconnect(); });
+        expect(gate.cancel).toHaveBeenCalledTimes(1);
+        expect(result.current.terminalState).toBe('DISCONNECTED');
+        expect(mockStreamTerminal).not.toHaveBeenCalled();
+      });
+    });
+
+    it('connect_should_connect_When_calledRightAfterDisconnectOfAQueuedPane', async () => {
+      const { order } = trackSessions();
+      const busy = await fillGate('busy');
+      const pane = renderHook(() => useTerminalStream({ ...OPTIONS, sessionId: 'queued' }));
+      await act(async () => { pane.result.current.connect(); });
+
+      await act(async () => {
+        void pane.result.current.disconnect();
+        void pane.result.current.connect();
+      });
+      expect(pane.result.current.terminalState).toBe('CONNECTING');
+
+      await act(async () => { await busy[0].result.current.disconnect(); });
+      await waitFor(() => expect(order.filter((id) => id === 'queued')).toHaveLength(1));
+    });
+
+    it('connect_should_connectNewSession_When_sessionSwitchesWhileFirstConnectIsInFlight', async () => {
+      const { order } = trackSessions();
+      const { rerender } = renderHook(
+        (props: { sessionId: string }) => useTerminalStream({ ...OPTIONS, autoConnect: true, sessionId: props.sessionId }),
+        { initialProps: { sessionId: 'a' } }
+      );
+      await waitFor(() => expect(order).toEqual(['a']));
+
+      await act(async () => { rerender({ sessionId: 'b' }); });
+      await waitFor(() => expect(order).toEqual(['a', 'b']));
+    });
+
+    it('connect_should_connectNewSession_When_sessionSwitchesWhileFirstConnectIsQueued', async () => {
+      const { order } = trackSessions();
+      const busy = await fillGate('busy');
+      const { rerender } = renderHook(
+        (props: { sessionId: string }) => useTerminalStream({ ...OPTIONS, autoConnect: true, sessionId: props.sessionId }),
+        { initialProps: { sessionId: 'a' } }
+      );
+      await act(async () => { rerender({ sessionId: 'b' }); });
+
+      await act(async () => { await busy[0].result.current.disconnect(); });
+      await waitFor(() => expect(order).toContain('b'));
+      expect(order).not.toContain('a');
+    });
+
+    it('connect_should_startSecondStream_When_connectFollowsDisconnectOfAnInFlightAttempt', async () => {
+      const { order } = trackSessions();
+      const { result } = renderHook(() => useTerminalStream(OPTIONS));
+      await act(async () => { result.current.connect(); });
+      expect(order).toHaveLength(1);
+
+      await act(async () => {
+        void result.current.disconnect();
+        void result.current.connect();
+      });
+      await waitFor(() => expect(order).toHaveLength(2));
     });
   });
 });
