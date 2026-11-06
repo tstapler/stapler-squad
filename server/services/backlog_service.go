@@ -911,10 +911,11 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 		return input, nil
 	}
 	if !session.IsGitHubURL(input) {
-		// A URL that isn't a recognized GitHub repo (e.g. a bare host) must not be
-		// stored as a filesystem path; triage would later fail on it.
-		if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
-			return "", fmt.Errorf("repo_path %q is not a recognized GitHub repository URL", input)
+		// "scheme://" input no recognizer accepts (e.g. "https://github.com/") is
+		// never a usable filesystem path. Configured GHE URLs still pass through
+		// unchanged, as before.
+		if strings.Contains(input, "://") && !s.isEnterpriseGitHubURL(input) {
+			return "", fmt.Errorf("repo_path %q is not a local path or a recognized GitHub URL", input)
 		}
 		return input, nil
 	}
@@ -923,6 +924,13 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 		return "", fmt.Errorf("failed to resolve GitHub URL %q: %w", input, err)
 	}
 	return localPath, nil
+}
+
+func (s *BacklogService) isEnterpriseGitHubURL(input string) bool {
+	if s.cfg == nil {
+		return false
+	}
+	return session.IsGitHubURLWithHosts(input, s.EnterpriseHosts())
 }
 
 // itemSessionToProto converts an ItemSessionSummary to its proto representation.

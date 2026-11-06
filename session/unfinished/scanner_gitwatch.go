@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
@@ -29,6 +30,9 @@ func (f fsnotifyWatcher) Events() <-chan fsnotify.Event { return f.w.Events }
 func (f fsnotifyWatcher) Errors() <-chan error          { return f.w.Errors }
 func (f fsnotifyWatcher) Close() error                  { return f.w.Close() }
 
+// watchResyncDelay covers FSEvents streams that deliver their first event late (see dirwatch).
+const watchResyncDelay = 15 * time.Second
+
 // worktreeTarget says what a change in one linked worktree's admin gitdir
 // (<common>/.git/worktrees/<name>) invalidates: that worktree's cache, then a
 // rescan of repoRoot, whose ListWorktrees scan covers it.
@@ -39,6 +43,10 @@ type worktreeTarget struct{ repoRoot, worktree string }
 type gitwatchState struct {
 	// override replaces the watcher derived from Scanner.fsWatcher (tests).
 	override gitWatcher
+	// ownsOverride marks override as created by Start (not injected by a test).
+	ownsOverride bool
+	// resyncDelay is how long after AddRepo a tracked repo is re-enqueued once (0: never).
+	resyncDelay time.Duration
 	// watchWorktreeGitdirs gates every Tier A behaviour (linked gitdir watches,
 	// Rename events, overflow rescans); set it before Start.
 	watchWorktreeGitdirs bool

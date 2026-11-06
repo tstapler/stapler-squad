@@ -3,11 +3,13 @@ package session
 import (
 	"context"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -43,7 +45,7 @@ type WorktreeChangeDetector struct {
 	mu       sync.Mutex
 	onChange []func()
 
-	gitWatcher *fsnotify.Watcher // nil if unavailable or Add() failed
+	gitWatcher dirwatch.Watcher // nil if unavailable or Add() failed
 	cancel     context.CancelFunc
 	stopped    chan struct{} // closed when both goroutines have exited (or immediately if neither started)
 }
@@ -128,16 +130,22 @@ func (d *WorktreeChangeDetector) Start() {
 		log.Debug("worktree change detector: initial fingerprint read failed", "worktreePath", d.worktreePath, "err", err)
 	}
 
-	watcher, err := fsnotify.NewWatcher()
+	var watcher dirwatch.Watcher
 	gitWatchStarted := false
-	if err != nil {
+	gitDir := filepath.Join(d.worktreePath, ".git")
+	if fi, statErr := os.Stat(gitDir); statErr == nil && !fi.IsDir() {
+		// A linked worktree's .git is a pointer file that never changes; the real
+		// HEAD/index live in the admin dir, which the scanner's watcher covers.
+		log.Debug("worktree change detector: .git is a pointer file, periodic-check-only for this worktree", "worktreePath", d.worktreePath)
+	} else if w, err := dirwatch.New(dirwatch.WithName("worktree-detector")); err != nil {
 		log.Warn("worktree change detector: fsnotify unavailable, falling back to periodic-check-only for this worktree", "worktreePath", d.worktreePath, "err", err)
-	} else if addErr := watcher.Add(filepath.Join(d.worktreePath, ".git")); addErr != nil {
+	} else if addErr := w.Add(gitDir); addErr != nil {
 		log.Warn("worktree change detector: .git fsnotify watch failed to start, falling back to periodic-check-only for this worktree", "worktreePath", d.worktreePath, "err", addErr)
-		_ = watcher.Close()
+		_ = w.Close()
 	} else {
+		watcher = w
 		d.mu.Lock()
-		d.gitWatcher = watcher
+		d.gitWatcher = w
 		d.mu.Unlock()
 		gitWatchStarted = true
 	}
@@ -192,7 +200,7 @@ func (d *WorktreeChangeDetector) periodicLoop(ctx context.Context, wg *sync.Wait
 // gitWatchLoop mirrors session/unfinished/watcher.go's fsnotifyLoop shape.
 // No debounce: each fire() call is a cheap, idempotent invalidate, so a
 // burst of raw fsnotify events firing repeatedly costs nothing.
-func (d *WorktreeChangeDetector) gitWatchLoop(ctx context.Context, wg *sync.WaitGroup, watcher *fsnotify.Watcher) {
+func (d *WorktreeChangeDetector) gitWatchLoop(ctx context.Context, wg *sync.WaitGroup, watcher dirwatch.Watcher) {
 	defer wg.Done()
 	defer func() { _ = watcher.Close() }()
 
@@ -200,7 +208,7 @@ func (d *WorktreeChangeDetector) gitWatchLoop(ctx context.Context, wg *sync.Wait
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-watcher.Events:
+		case event, ok := <-watcher.Events():
 			if !ok {
 				return
 			}
@@ -213,7 +221,7 @@ func (d *WorktreeChangeDetector) gitWatchLoop(ctx context.Context, wg *sync.Wait
 			// Remove() on an already-gone path is at best a no-op and at
 			// worst risks the PR#73 deadlock. Stop() (context cancellation)
 			// is the only teardown path for this watcher.
-		case _, ok := <-watcher.Errors:
+		case _, ok := <-watcher.Errors():
 			if !ok {
 				return
 			}
