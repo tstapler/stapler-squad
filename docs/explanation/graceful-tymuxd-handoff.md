@@ -47,8 +47,10 @@ exit hangs up every pane; its release notes say to restart the server after an u
    renamed binary) until the same pid reports the target version with at least as many live sessions
    as before. Any mismatch is reported, never "fixed" by killing. A transport error from the real
    `PrepareHandoff` call is verified the same way, since the daemon execs mid-request. Squad does not
-   check `handoff_generation` yet, so a handoff to the version already running is refused rather than
-   falsely verified.
+   check `handoff_generation` once the daemon exposes it; the counter advancing (same pid) is the
+   proof of a handoff, so a same-version handoff (re-exec the same binary to pick up config, fd-limit
+   or state changes) is supported. Until the daemon advertises the counter, a same-version or
+   unknown-version handoff is refused rather than falsely verified (fail closed).
 
 Verified by prototype (design.md section 9): the pty master survives `exec` only when CLOEXEC is
 cleared, the child never sees SIGHUP, output buffered during the gap arrives gapless, and a client
@@ -65,6 +67,7 @@ use the same rule, so a downgrade works exactly as far as the older binary can r
 | Running daemon | Target binary | Result |
 |---|---|---|
 | No `graceful_handoff` (all current releases, e.g. 1.13.1) | any | Lossy replace. Squad refuses while panes are live; `allowInterrupt` is the explicit operator override. This is the D2 one-time loss. |
+| Handoff-capable | same version (same or new binary file) | Graceful handoff, verified by `handoff_generation` advancing; refused until the daemon exposes it. |
 | Handoff-capable | newer, schemas intersect | Graceful handoff. |
 | Handoff-capable | older but handoff-capable, schemas intersect | Graceful handoff (downgrade). |
 | Handoff-capable | older or newer, schemas do not intersect | `REFUSED` at preflight; daemon untouched; squad never kills it while panes are live. |
@@ -110,7 +113,7 @@ are the tymux design (ADR 0008), not behavior this repo can check; they are trac
 | Decide if a handoff is safe | Validate path, preflight, schema intersection, freeze handshake | Gate on `graceful_handoff`; dry run first |
 | Move the panes | Freeze, export, clear CLOEXEC, `exec`, adopt, commit, rollback exec | Nothing; never signals the daemon during a handoff |
 | Install the binary | Reads the path it is given | Atomic rename install; keep the previous binary until success |
-| Verify | Increment `handoff_generation`, keep pid | Same pid, target version, same live count |
+| Verify | Increment `handoff_generation`, keep pid | Same pid, generation advanced (or target version when no counter), no fewer live sessions |
 | Clients | Send `Reconnect{HANDOFF}`; keep seq and replay buffer | Reconnect loop treats it as not-an-exit |
 | Failure policy | Roll back or keep serving | Never kill a daemon with live panes; operator override only |
 
@@ -118,6 +121,8 @@ are the tymux design (ADR 0008), not behavior this repo can check; they are trac
 
 Done in the linked PRs:
 
+- First rollout: the first move onto a handoff-capable daemon is lossy (D2). The owner decided this is
+  release-note-only: the first handoff-capable tymux tag's release note says all panes restart; no UI warning.
 - tymux: pane adopt primitives (reader freeze, `export_handoff`, `Pane::from_adopted`, adopted
   master/child), with a real-`exec` test (`crates/tymux-core/tests/handoff_exec.rs`). The
   `graceful_handoff` capability is deliberately not advertised yet.

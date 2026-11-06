@@ -216,7 +216,7 @@ func TestReplaceDaemon_UnverifiedHandoffNeverFallsBackEvenWithOperatorOverride(t
 	assert.Zero(t, s.spawns)
 }
 
-func TestReplaceDaemon_HandoffToTheSameVersionIsRefusedNotFalselyVerified(t *testing.T) {
+func TestReplaceDaemon_SameVersionHandoffFailsClosedWithoutGeneration(t *testing.T) {
 	s := installHandoffStubs(t, "1.14.0", "1.14.0", 3)
 
 	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
@@ -224,6 +224,40 @@ func TestReplaceDaemon_HandoffToTheSameVersionIsRefusedNotFalselyVerified(t *tes
 	require.ErrorIs(t, err, ErrHandoffRefused)
 	assert.Empty(t, s.reqs, "no request may be sent when completion cannot be verified")
 	assert.Zero(t, s.signals)
+}
+
+func TestReplaceDaemon_SameVersionHandoffVerifiedByGeneration(t *testing.T) {
+	s := installHandoffStubs(t, "1.14.0", "1.14.0", 3)
+	gen := uint64(4)
+	orig := readHandoffGenerationFn
+	t.Cleanup(func() { readHandoffGenerationFn = orig })
+	readHandoffGenerationFn = func(context.Context, DaemonConfig) (uint64, bool, error) { return gen, true, nil }
+	s.reply = func(r handoffRequest) (handoffReply, error) {
+		if !r.DryRun {
+			gen++ // the new image committed
+		}
+		return handoffReply{}, nil
+	}
+
+	after, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, 4242, after.PID)
+	assert.Len(t, s.reqs, 2)
+	assert.Zero(t, s.signals)
+}
+
+func TestReplaceDaemon_SameVersionHandoffWithUnchangedGenerationIsUnverified(t *testing.T) {
+	s := installHandoffStubs(t, "1.14.0", "1.14.0", 3)
+	orig := readHandoffGenerationFn
+	t.Cleanup(func() { readHandoffGenerationFn = orig })
+	readHandoffGenerationFn = func(context.Context, DaemonConfig) (uint64, bool, error) { return 4, true, nil }
+
+	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
+
+	require.ErrorIs(t, err, ErrHandoffVerifyFailed)
+	assert.Zero(t, s.signals)
+	assert.Zero(t, s.spawns)
 }
 
 func TestReplaceDaemon_ExtraSessionsCreatedDuringHandoffAreNotAFailure(t *testing.T) {
