@@ -9,7 +9,7 @@
 - Fix: `git -C third_party/tmux fetch origin 7f2a35ad...` then `git -C third_party/tmux checkout --detach 7f2a35ad...`. An interim attempt that touched `.tmux-build-3.8.stamp` was discarded (its result is not counted); the stamp was removed and `make ci` rerun.
 
 ## E3 — `bun run lint:duplicates` (STILL BROKEN locally)
-- `cd web-app && bun run lint:duplicates` -> `Error: Cannot find module '@jscpd/finder'` (corrupt Bun cache; `bun install --force` did not help). It has NOT run green here.
+- `cd web-app && bun run lint:duplicates` -> `Error: Cannot find module '@jscpd/finder'` (`bun install --force`, and `bun pm cache rm` + `bun install --force`, did not help; `make ci` does not run this gate, so its green result says nothing about it). It has NOT run green here.
 - Substitute evidence only: `jscpd@4.0.9` installed cleanly with npm outside the repo, run as `node .../jscpd/bin/jscpd src` in `web-app/` with its `.jscpd.json` (threshold 0.14): 7 clones, 0.05% lines / 0.06% tokens, exit 0.
 
 ## Results (all from actual runs)
