@@ -579,6 +579,7 @@ func (s *SessionService) ClearConversationState(
 }
 
 // RescanSessionArtifacts resets a session's transcript scan position and queues a scan.
+// +api: RescanSessionArtifacts
 func (s *SessionService) RescanSessionArtifacts(
 	ctx context.Context,
 	req *connect.Request[sessionv1.RescanSessionArtifactsRequest],
