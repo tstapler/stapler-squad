@@ -4,7 +4,7 @@ Status: decisions D1-D6 accepted by the owner on 2026-11-04. The squad-side gate
 (`session/tymux/handoff.go`); the daemon side is in progress in tymux. This page is the squad-facing
 summary. The full evaluation (options, tmux prior art, prototype, test plan) lives in tymux:
 `project_plans/graceful-handoff/design.md` and `docs/adr/0008-graceful-daemon-handoff.md`
-(carried by the tymux draft PR linked from the squad PR).
+(carried by tymux draft PR https://github.com/tstapler/tymux/pull/85).
 
 ## Problem
 

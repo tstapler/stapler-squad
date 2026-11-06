@@ -92,7 +92,7 @@ func verifyHandoff(ctx context.Context, cfg DaemonConfig, before DaemonVersionIn
 	for {
 		if si, err := serverInfoFn(ctx, cfg); err == nil {
 			lastSeen = fmt.Sprintf("pid %d version %q", si.GetPid(), si.GetVersion())
-			if int(si.GetPid()) == before.PID && si.GetVersion() == target {
+			if int(si.GetPid()) == before.PID && CompareVersions(si.GetVersion(), target) == VersionSame {
 				n, lerr := liveSessionsFn(ctx, cfg)
 				switch {
 				case lerr != nil:

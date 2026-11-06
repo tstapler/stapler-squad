@@ -234,3 +234,39 @@ func TestReplaceDaemon_ExtraSessionsCreatedDuringHandoffAreNotAFailure(t *testin
 
 	require.NoError(t, err)
 }
+
+func TestReplaceDaemon_HandoffVerifyFailureWithOverrideAndRealRefusalNeverKillAfterSwap(t *testing.T) {
+	t.Run("pane count drops after the swap, override set", func(t *testing.T) {
+		s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+		s.liveNow = func() int {
+			if len(s.reqs) == 2 {
+				return 1
+			}
+			return s.live
+		}
+
+		_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
+
+		require.ErrorIs(t, err, ErrHandoffVerifyFailed)
+		assert.Zero(t, s.signals)
+		assert.Zero(t, s.spawns)
+	})
+	t.Run("context cancelled mid-verify", func(t *testing.T) {
+		s := installHandoffStubs(t, "1.13.1", "1.14.0", 3)
+		s.noSwap = true
+		handoffVerifyTimeout = time.Minute
+		ctx, cancel := context.WithCancel(context.Background())
+		prev := prepareHandoffFn
+		prepareHandoffFn = func(c context.Context, cfg DaemonConfig, r handoffRequest) (handoffReply, error) {
+			if !r.DryRun {
+				cancel()
+			}
+			return prev(c, cfg, r)
+		}
+
+		_, err := ReplaceDaemon(ctx, DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
+
+		require.ErrorIs(t, err, ErrHandoffVerifyFailed)
+		assert.Zero(t, s.signals)
+	})
+}
