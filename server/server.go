@@ -607,6 +607,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
+	// Register BacklogFlowService handler (backlog flow observability).
+	if deps.BacklogFlowService != nil {
+		flowPath, flowHandler := sessionv1connect.NewBacklogFlowServiceHandler(deps.BacklogFlowService, ConnectOptions(deps.ErrorRegistry)...)
+		flowAPIPath := "/api" + flowPath
+		srv.RegisterConnectHandler(flowAPIPath, http.StripPrefix("/api", flowHandler))
+		log.Info("Registered BacklogFlowService handler", "path", flowAPIPath)
+	}
+
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
 	if deps.GitHubUserService != nil {
 		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)

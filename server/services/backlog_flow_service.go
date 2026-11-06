@@ -41,14 +41,15 @@ func NewBacklogFlowService(agg FlowAggregator) *BacklogFlowService {
 
 // NewFlowServiceFromStorage builds the reader and its own aggregator from
 // storage (the stdio-fallback path). A nil storage or ent client yields a
-// service whose handlers return FailedPrecondition.
-func NewFlowServiceFromStorage(storage *session.Storage) *BacklogFlowService {
+// service whose handlers return FailedPrecondition. opts configure the
+// aggregator (the server passes flow.WithObserver(NewFlowObserver())).
+func NewFlowServiceFromStorage(storage *session.Storage, opts ...flow.AggregatorOption) *BacklogFlowService {
 	if storage == nil || storage.GetEntClient() == nil {
 		return &BacklogFlowService{}
 	}
 	reader := session.NewEntFlowReader(storage.GetEntClient())
 	src := flow.Sources{Events: reader, Verdicts: reader, Stuck: reader, Items: reader}
-	return &BacklogFlowService{agg: flow.NewAggregator(src, flow.SystemClock{})}
+	return &BacklogFlowService{agg: flow.NewAggregator(src, flow.SystemClock{}, opts...)}
 }
 
 func (s *BacklogFlowService) ready() error {
@@ -84,10 +85,22 @@ func flowError(err error) error {
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	case errors.Is(err, flow.ErrCompareAllTime), isFlowInputError(err.Error()):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, flow.ErrWindowTooLarge):
+		return connect.NewError(connect.CodeResourceExhausted, windowTooLargeError(err))
 	case errors.Is(err, flow.ErrBusy):
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	}
 	return connect.NewError(connect.CodeInternal, err)
+}
+
+// windowTooLargeError names the refused row count and the ceiling when the
+// aggregator reported them, and tells the caller how to narrow the window.
+func windowTooLargeError(err error) error {
+	var wl *flow.WindowTooLargeError
+	if errors.As(err, &wl) {
+		return fmt.Errorf("window too large (%d rows, limit %d); use a shorter window", wl.Rows, wl.Limit)
+	}
+	return fmt.Errorf("window too large; use a shorter window")
 }
 
 // isFlowInputError recognises the aggregator's validation messages, which are

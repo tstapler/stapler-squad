@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
@@ -109,6 +110,9 @@ type ServerDependencies struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
+	// BacklogFlowService is the single flow-observability service; the RPC handler and
+	// the HTTP MCP core both use it so they share one aggregator cache.
+	BacklogFlowService *services.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -234,6 +238,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		GitHubUserService:              rt.GitHubUserService,
 		InsightsService:                rt.InsightsService,
 		BacklogService:                 rt.BacklogService,
+		BacklogFlowService:             rt.BacklogFlowService,
 		QuotaGate:                      rt.QuotaGate,
 		SyncLoop:                       rt.SyncLoop,
 		WorkflowEngine:                 rt.WorkflowEngine,
@@ -546,6 +551,9 @@ type RuntimeDeps struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
+	// BacklogFlowService is the single flow-observability service; the RPC handler and
+	// the HTTP MCP core both use it so they share one aggregator cache.
+	BacklogFlowService *services.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -1610,6 +1618,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
+	backlogFlowSvc := services.NewFlowServiceFromStorage(storage, flow.WithObserver(services.NewFlowObserver()))
 	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
 		return nil, gateErr
 	}
@@ -2101,6 +2111,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		GitHubUserService:              githubUserSvc,
 		InsightsService:                insightsSvc,
 		BacklogService:                 backlogSvc,
+		BacklogFlowService:             backlogFlowSvc,
 		QuotaGate:                      quotaGate,
 		SyncLoop:                       nil, // managed by BacklogController
 		WorkflowEngine:                 workflowEngine,

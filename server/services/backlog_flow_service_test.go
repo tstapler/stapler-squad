@@ -327,6 +327,16 @@ func TestBacklogFlowService_should_SelectSectionLists(t *testing.T) {
 	assert.EqualValues(t, 9, th.Msg.Items.Items[0].Events)
 }
 
+func TestBacklogFlowService_should_MapWindowTooLargeToResourceExhaustedWithCounts(t *testing.T) {
+	t.Parallel()
+	svc := NewBacklogFlowService(&fakeFlowAgg{err: fmt.Errorf("summary: %w", &flow.WindowTooLargeError{Rows: 123456, Limit: 100000})})
+	_, err := callSummary(t, svc, &sessionv1.GetFlowSummaryRequest{AllTime: true})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "123456")
+	assert.Contains(t, err.Error(), "100000")
+}
+
 func TestBacklogFlowService_should_EmitSnakeCaseJSONWithDrillKeys(t *testing.T) {
 	t.Parallel()
 	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sampleFlowSummary()}), &sessionv1.GetFlowSummaryRequest{WindowDays: 30})
