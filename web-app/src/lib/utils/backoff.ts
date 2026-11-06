@@ -137,29 +137,47 @@ export function isWorktreeMissingError(err: unknown): err is ConnectError {
 // ---------------------------------------------------------------------------
 
 /**
- * Fast connect-timeout for the first FOREGROUND_FAST_ATTEMPTS attempts since a
- * terminal became foreground. Unvalidated starting guess (herdr-web's real value
- * isn't inspectable) — validate against real p95/p99 connect-to-first-message
- * latency on VPN/high-RTT links before enabling NEXT_PUBLIC_RECONNECT_V2 broadly.
+ * Fast connect-timeout, used only for the first FOREGROUND_FAST_ATTEMPTS reconnects after a
+ * terminal is foregrounded or the tab/network resumes, where a half-open socket is the likely
+ * cause. Unvalidated starting guess: it can misfire on a slow socket open (VPN, load, a
+ * 20-pane reattach), which is why initial and background connects use CONNECT_TIMEOUT_MS and
+ * every timeout abort is retried with escalating jittered delay and a cap (see below).
  */
 export const FOREGROUND_CONNECT_TIMEOUT_MS = 1200;
 
-/** Normal connect-timeout: background attempts, and foreground attempts beyond FOREGROUND_FAST_ATTEMPTS. */
-export const CONNECT_TIMEOUT_MS = 3500;
+/** Timeout for initial connects, background panes, and resume attempts beyond FOREGROUND_FAST_ATTEMPTS. */
+export const CONNECT_TIMEOUT_MS = 8000;
 
-/** Number of connect attempts (since the most recent foreground transition) eligible for the fast timeout. */
+/** Number of resume reconnects (since the most recent foreground/resume) eligible for the fast timeout. */
 export const FOREGROUND_FAST_ATTEMPTS = 2;
 
+/** Consecutive connect-timeout aborts retried on their own schedule before falling into the normal backoff. */
+export const CONNECT_TIMEOUT_ABORT_CAP = 5;
+
+/** Delay before retrying after a connect-timeout abort: full jitter, 0.5 s doubling to 5 s. */
+export function connectTimeoutAbortDelay(consecutiveAborts: number): number {
+  return jitteredDelay(500, 5000, Math.max(0, consecutiveAborts - 1));
+}
+
+/** First-retry jitter window (2 s) spreads a mux-drop reattach storm; doubles to the cap. */
+export const RECONNECT_BASE_MS = 2000;
+/** Retry ceiling for a long outage (server restart): retry forever, never slower than this. */
+export const RECONNECT_CAP_MS = 30_000;
+/** Consecutive connection failures after which the pane shows "Server unreachable" (retries continue). */
+export const GAVE_UP_AFTER_ATTEMPTS = 5;
+/** Server-ended closes (error frame, clean EndStream) hard-fail only after this much continuous time:
+ * squad answers that way while loading sessions after a restart, which can take minutes. */
+export const SERVER_END_GIVE_UP_MS = 10 * 60_000;
+/** Close code the mux server sends when it refuses a stream (admission control); retriable, no budget used. */
+export const STREAM_REFUSED_CLOSE_CODE = 1013;
+
 /**
- * Returns the connect-timeout (ms) for a reconnect attempt: the maximum time
- * to wait for the first stream message before abandoning the attempt.
- * Foreground terminals get a shorter timeout for their first
- * FOREGROUND_FAST_ATTEMPTS attempts since becoming foreground; all other
- * attempts (background, or foreground beyond the fast window) use the
- * normal timeout.
+ * Returns the connect-timeout (ms) for an attempt: the maximum time to wait for the first
+ * stream message. `resumeForeground` is true only for a foreground pane reconnecting after a
+ * foreground/visibility/online resume; everything else uses the normal timeout.
  */
-export function connectTimeoutMs(foreground: boolean, attemptsSinceForeground: number): number {
-  if (foreground && attemptsSinceForeground < FOREGROUND_FAST_ATTEMPTS) {
+export function connectTimeoutMs(resumeForeground: boolean, attemptsSinceForeground: number): number {
+  if (resumeForeground && attemptsSinceForeground < FOREGROUND_FAST_ATTEMPTS) {
     return FOREGROUND_CONNECT_TIMEOUT_MS;
   }
   return CONNECT_TIMEOUT_MS;
