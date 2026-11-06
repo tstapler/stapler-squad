@@ -261,6 +261,14 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"AskSessionToFixPullRequest": "session:ask-to-fix-pr",
 	"DetachItemPullRequest":      "session:detach-item-pr",
 	"RefreshSessionPullRequests": "session:refresh-prs",
+	// Registry files predate these entries and carry the method name as their
+	// feature ID; mapping to the same string keeps those IDs stable.
+	"ListSessionArtifacts":      "ListSessionArtifacts",
+	"RescanSessionArtifacts":    "RescanSessionArtifacts",
+	"SearchSessionArtifacts":    "SearchSessionArtifacts",
+	"FindSessionsByPullRequest": "FindSessionsByPullRequest",
+	"GetTCCEnrichmentStatus":    "GetTCCEnrichmentStatus",
+	"ContinueTCCEnrichment":     "ContinueTCCEnrichment",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",
