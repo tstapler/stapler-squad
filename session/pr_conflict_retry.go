@@ -13,6 +13,10 @@ const conflictRetryInterval = time.Hour
 // session can fix would respawn hourly forever.
 const conflictRetryMaxAttempts = 6
 
+// conflictRetryMaxRefunds bounds how many failed-to-start attempts per item are refunded;
+// later failures spend the budget, so a spawn that can never succeed exhausts and notifies.
+const conflictRetryMaxRefunds = 3
+
 type conflictRetryDecision int
 
 const (
@@ -24,6 +28,7 @@ const (
 type conflictRetryState struct {
 	last              time.Time
 	grants            int
+	refunds           int
 	exhaustedNotified bool
 	rowAttempts       int32 // the pr_needs_fix row's attempt counter at the last take
 }
@@ -56,7 +61,7 @@ func (g *conflictRetryLedger) take(itemID string, now time.Time, interval time.D
 	switch {
 	case s.grants >= conflictRetryMaxAttempts:
 		return conflictRetryExhausted
-	case s.grants > 0 && now.Sub(s.last) < interval:
+	case !s.last.IsZero() && now.Sub(s.last) < interval:
 		return conflictRetryThrottled
 	}
 	s.grants++
@@ -78,12 +83,14 @@ func (g *conflictRetryLedger) markExhaustedNotified(itemID string) bool {
 }
 
 // refund returns a grant whose fix attempt failed to start, keeping the hourly throttle
-// so the next try waits for the next interval. An attempt that returns nil without
+// (keyed on last, not grants, so refunding the only grant cannot lift it). At most
+// conflictRetryMaxRefunds are returned per item. An attempt that returns nil without
 // spawning cannot be told apart from one that did, so it is not refunded.
 func (g *conflictRetryLedger) refund(itemID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if s := g.items[itemID]; s != nil && s.grants > 0 {
+	if s := g.items[itemID]; s != nil && s.grants > 0 && s.refunds < conflictRetryMaxRefunds {
+		s.refunds++
 		s.grants--
 	}
 }
