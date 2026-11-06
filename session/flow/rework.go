@@ -134,15 +134,7 @@ type ReworkResult struct {
 // is judged on its in-window merge. Thrash episodes count as episodes, never
 // as individual reopens.
 func Rework(spans []Span, cfg Config) ReworkResult {
-	byItem := make(map[ItemID][]Span)
-	for _, s := range spans {
-		byItem[s.Item()] = append(byItem[s.Item()], s)
-	}
-	ids := make([]ItemID, 0, len(byItem))
-	for id := range byItem {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
+	byItem, ids := groupByItem(spans)
 
 	res := ReworkResult{
 		Causes:        make(map[ReworkCause]int),

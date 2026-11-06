@@ -195,3 +195,18 @@ func SpanTotals(spans []Span) (real, collapsed int) {
 	}
 	return real, collapsed
 }
+
+// groupByItem buckets spans by item and returns the item ids sorted, so callers
+// iterate deterministically.
+func groupByItem(spans []Span) (map[ItemID][]Span, []ItemID) {
+	byItem := make(map[ItemID][]Span)
+	for _, s := range spans {
+		byItem[s.Item()] = append(byItem[s.Item()], s)
+	}
+	ids := make([]ItemID, 0, len(byItem))
+	for id := range byItem {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return byItem, ids
+}

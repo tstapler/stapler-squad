@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"slices"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,15 +20,7 @@ type LeadTimeResult struct {
 // inside thrash episodes are not real transitions, so an item that only
 // thrashed into in_progress before merging is excluded.
 func LeadTime(spans []Span, cfg Config) LeadTimeResult {
-	byItem := make(map[ItemID][]Span)
-	for _, s := range spans {
-		byItem[s.Item()] = append(byItem[s.Item()], s)
-	}
-	ids := make([]ItemID, 0, len(byItem))
-	for id := range byItem {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
+	byItem, ids := groupByItem(spans)
 
 	res := LeadTimeResult{Drill: DrillSets{}}
 	var samples []time.Duration
