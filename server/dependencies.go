@@ -728,12 +728,31 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		})
 	})
 	enricherConfig := session.WorktreeEnricherConfig{}
-	if cfg.TCCEnrichmentConsentEnabled() {
+	// Isolated test/e2e instances never hit real protected roots: gate is not_needed.
+	tccGateEnabled := cfg.TCCEnrichmentConsentEnabled() && !config.IsIsolatedInstance()
+	if cfg.TCCEnrichmentConsentEnabled() && !tccGateEnabled {
+		log.Info("TCC enrichment consent gate off: isolated/test instance")
+	}
+	gate.SetDeniedStore(cfg.TCCEnrichmentDenied, func(id string, denied bool) error {
+		return config.UpdateConfig(func(c *config.Config) error {
+			if c.TCCEnrichmentDenied == nil {
+				c.TCCEnrichmentDenied = map[string]bool{}
+			}
+			if denied {
+				c.TCCEnrichmentDenied[id] = true
+			} else {
+				delete(c.TCCEnrichmentDenied, id)
+			}
+			return nil
+		})
+	})
+	enricherConfig.OnResult = gate.ObserveResult
+	if tccGateEnabled {
 		enricherConfig.Ready = gate.Ready
 		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
 	}
 	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
-	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
+	sessionService.SetTCCEnrichment(gate, enricher, tccGateEnabled)
 
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()

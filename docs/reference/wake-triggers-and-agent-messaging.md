@@ -95,6 +95,11 @@ credential gets `identity_unverified` and nothing is written.
 | `schedule_wake`, `cancel_wake`, `answer_help` | work sessions |
 | `list_wakes`, `request_help` | work, triage, review, diagnose |
 
+`report_pr_created` (a backlog tool) is registered through the same gate with a
+work-only row in `identityGatedTools`, so it too ignores the unverified
+`X-Stapler-Session-UUID` claim: it records a PR on a backlog item, which a
+forged UUID could otherwise do for another session's item.
+
 Typed failures an agent can switch on: `identity_unverified`, `flag_off`
 (`error.reason` is the flag scope), `cap_exceeded` (`error.limit`),
 `unavailable`, `no_reconcile_predicate`, `rejected` (`error.reason`:

@@ -94,6 +94,27 @@ describe("LocalFileBrowser — navigation", () => {
   });
 });
 
+describe("LocalFileBrowser — open terminal", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+    createSession.mockReset();
+  });
+
+  it("creates a directory session titled after the directory (the server requires a title)", async () => {
+    mockListingOnce({ path: "/home/user", parent: "/home", total: 0, has_more: false, entries: [] });
+    createSession.mockResolvedValue({ id: "s1" });
+
+    render(<LocalFileBrowser />);
+    fireEvent.click(await screen.findByTestId("file-browser-open-terminal"));
+
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "user", path: "/home/user" })
+      )
+    );
+  });
+});
+
 describe("LocalFileBrowser — filter", () => {
   beforeEach(() => {
     global.fetch = jest.fn();

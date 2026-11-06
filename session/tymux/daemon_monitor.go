@@ -2,6 +2,7 @@ package tymux
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -261,7 +262,8 @@ func (m daemonMonitor) run(ctx context.Context, cfg DaemonConfig) {
 			continue
 		}
 		log.Warn("[tymux] daemon unhealthy, attempting recovery", "addr", cfg.Addr, "consecutive_failures", failures)
-		ready, err := m.ensure(ctx, cfg)
+		recoverCtx := withStopReason(ctx, StopReason{Kind: StopMonitorRecovery, Detail: fmt.Sprintf("%d consecutive failed probes (threshold %d)", failures, m.threshold)})
+		ready, err := m.ensure(recoverCtx, cfg)
 		if ready.Spawned && !owned {
 			owned = true
 			if m.onSpawn != nil {

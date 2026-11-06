@@ -139,7 +139,7 @@ func TestReplaceDaemon_RecordsReplaceRestart(t *testing.T) {
 	spawned := false
 	startDaemonAttemptFn = func(DaemonConfig) (*os.Process, error) { spawned = true; return &os.Process{}, nil }
 	checkDaemonHealthyFn = func(context.Context, DaemonConfig) bool { return spawned }
-	stopTymuxdFn = func() error { return nil }
+	stopTymuxdFn = func(StopReason) error { return nil }
 	before := counterByLabel(t, "tymux_daemon_restarts_total", "reason", "replace")
 	coldBefore := counterByLabel(t, "tymux_daemon_restarts_total", "reason", "cold_start")
 

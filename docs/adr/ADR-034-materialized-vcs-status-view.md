@@ -146,3 +146,5 @@ A module-level `vcsFeedStore` (`useSyncExternalStore`) owns the single stream, w
 ## Verification plan (Step 3)
 
 Deterministic unit tests with injected `Clock` and fake `ChangeSource` (debounce, max-wait, coalescing, priority, overflow rescan, resume, eviction, archived and paused mapping); `go test -race`; jest with fake timers for the feed store; one Playwright spec per `tests/e2e` conventions. Before/after on a throwaway instance (ports 62877+, unique `STAPLER_SQUAD_INSTANCE` and `STAPLER_SQUAD_TMUX_SOCKET`, binary under `~/.stapler-squad/manual-builds/manual-7/`): `GetVCSStatus` calls per minute and p95 with N panes open, and the time from `git commit` in a worktree to the pane update.
+
+> Update 2026-11-05: the kqueue gitdir watches this ADR flagged were replaced by `internal/dirwatch` (FSEvents, shared roots, kqueue fallback past a stream budget); see `docs/how-to/tune-fs-watchers.md`.

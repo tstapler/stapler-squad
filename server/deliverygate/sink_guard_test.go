@@ -68,9 +68,10 @@ var reviewedAppendCallers = map[finding]string{}
 // non-test server code. The legacy per-site notification checks were removed
 // in Story 2.9; a new entry needs a reason that is not "notification".
 var reviewedRawHiddenReads = map[finding]string{
-	"hidden: " + modulePath + "/server/services.ListSessions":        "session-list include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.WatchSessions":       "session-stream include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.isAutomationSession": "automation-session classification",
+	"hidden: " + modulePath + "/server/services.instanceMatchesListFilters": "session-list include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services.externalMatchesListFilters": "session-list include_hidden filtering for external sessions, not notification delivery",
+	"hidden: " + modulePath + "/server/services.WatchSessions":              "session-stream include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services.isAutomationSession":        "automation-session classification",
 }
 
 // scanResult holds the findings of one scan, by category.

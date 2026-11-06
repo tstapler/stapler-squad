@@ -260,7 +260,8 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 		if live > 0 && !allowInterrupt {
 			return before, fmt.Errorf("%w (%d live)", ErrLiveSessionsWouldBeInterrupted, live)
 		}
-		if err := stopListener(before.PID, cfg); err != nil {
+		reason := StopReason{Kind: StopVersionReplace, Detail: fmt.Sprintf("from %q to %q (binary %s)", before.RunningVersion, before.InstalledVersion, cfg.BinaryPath), Probes: lastProbeFor(cfg.Addr)}
+		if err := stopListener(before.PID, cfg, reason); err != nil {
 			return before, err
 		}
 	}
@@ -273,20 +274,27 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 
 // stopListener SIGTERMs pid (tymuxd flushes its session records on SIGTERM), waits for
 // the port to free, then escalates to SIGKILL.
-func stopListener(pid int, cfg DaemonConfig) error {
+func stopListener(pid int, cfg DaemonConfig, reason StopReason) error {
+	attempt := beginStop(pid, reason)
 	if err := signalProcessFn(pid, syscall.SIGTERM); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGTERM pid %d: %w", pid, err)
 	}
 	if waitPortFree(cfg, daemonStopGracePeriod) {
+		attempt.finish(StopExitedAfterTerm, nil)
 		return nil
 	}
-	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid)
+	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid, "reason_kind", string(reason.Kind))
 	if err := signalProcessFn(pid, syscall.SIGKILL); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGKILL pid %d: %w", pid, err)
 	}
 	if !waitPortFree(cfg, daemonStopGracePeriod) {
-		return fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		err := fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		attempt.finish(StopSignalFailed, err)
+		return err
 	}
+	attempt.finish(StopEscalatedToKill, nil)
 	return nil
 }
 

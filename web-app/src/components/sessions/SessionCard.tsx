@@ -1059,6 +1059,15 @@ function SessionCardInner({
               <span className={value}>{session.program}</span>
             </div>
           )}
+          {session.hostId && (
+            <div className={infoRow} data-testid="session-host">
+              <span className={label}>Host:</span>
+              <span className={value} title={session.hostStale ? "Host unreachable; showing last known state" : undefined}>
+                {session.hostDisplayName || session.hostId}
+                {session.hostStale ? " (offline)" : ""}
+              </span>
+            </div>
+          )}
           {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>

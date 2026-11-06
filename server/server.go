@@ -524,7 +524,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"programs:cli-flag-probe",
 			services.ProgramCLIFlagProbeEnabled,
 			services.ProgramCLIFlagProbeGatedMethod,
-		)),
+		), interceptors.NewFederatedSessionGuard()),
 	)
 	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
 	_ = streamhub.DefaultTapRegistry()

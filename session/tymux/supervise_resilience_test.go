@@ -374,7 +374,7 @@ func TestStopTymuxd_UnverifiablePID_DropsPIDFileWithoutKilling(t *testing.T) {
 				return nil
 			}
 
-			err := StopTymuxd()
+			err := StopTymuxd(StopReason{Kind: StopManual})
 
 			require.ErrorIs(t, err, errTymuxdPIDUnverified)
 			require.NoFileExists(t, filepath.Join(dir, tymuxdPIDFileName))
@@ -400,7 +400,7 @@ func TestTerminateProcess_SigtermFirstThenKillAfterGrace(t *testing.T) {
 			}
 			return nil
 		}
-		require.NoError(t, terminateProcess(4242))
+		require.NoError(t, terminateProcess(4242, StopReason{Kind: StopManual}))
 		return sent
 	}
 
@@ -428,7 +428,7 @@ func TestTerminateProcess_SpawnedDaemonIsReapedPromptly(t *testing.T) {
 	t.Cleanup(func() { _ = syscall.Kill(proc.Pid, syscall.SIGKILL) })
 
 	start := time.Now()
-	require.NoError(t, terminateProcess(proc.Pid))
+	require.NoError(t, terminateProcess(proc.Pid, StopReason{Kind: StopManual}))
 	require.Less(t, time.Since(start), 2*time.Second, "exited child must read as gone, not wait for SIGKILL")
 }
 

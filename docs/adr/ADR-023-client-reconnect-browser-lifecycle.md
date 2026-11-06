@@ -1,6 +1,6 @@
 # ADR-023: Client Reconnect via Browser Lifecycle APIs
 
-**Status**: Proposed
+**Status**: Accepted. The `NEXT_PUBLIC_RECONNECT_V2` flag was removed; the reconnect path is unconditional (see `docs/reference/terminal-ws-pool.md`).
 **Date**: 2026-06-23
 **Authors**: Tyler Stapler
 **Relates to**: Requirements `project_plans/client-reconnect/requirements.md`
@@ -59,9 +59,9 @@ Rejected because: the two streams have fundamentally different reconnect payload
    - In the `finally` block of the `connect()` IIFE, add jittered reconnect loop gated on `shouldReconnectRef` and `isRetriableCloseCode`.
    - Add `visibilitychange` + `online` listeners (same 200 ms debounce) that call `connect()` with `backoffState.reset()`.
 
-6. **`TerminalOutput.tsx`**: add a 2-second debounced reconnecting banner overlay. Append dim `"--- reconnected ---"` separator after successful reconnect. Guard existing component-level reconnect `useEffect` behind `!NEXT_PUBLIC_RECONNECT_V2` so it is only active when the feature flag is off.
+6. **`TerminalOutput.tsx`**: add a 2-second debounced reconnecting banner overlay. Append dim `"--- reconnected ---"` separator after successful reconnect. The old component-level reconnect `useEffect` was removed with the flag.
 
-7. **Feature flag**: `NEXT_PUBLIC_RECONNECT_V2=true`. Absent = current behaviour. Present = all of the above. Removed after 1-week burn-in.
+7. **Feature flag** (historical): `NEXT_PUBLIC_RECONNECT_V2=true` gated all of the above. It was never set in the Bun build, so the hook-level path stayed dead; the flag is now removed and the path is always on. Review changes: the 1.2 s connect-timeout is limited to foreground resumes (8 s otherwise) because it can misfire on slow socket opens, timeout aborts back off with jitter and are capped, and connection-level failures retry forever instead of hard-failing after 5 attempts (a squad restart outlasts 15 s).
 
 ---
 
@@ -80,7 +80,6 @@ Rejected because: the two streams have fundamentally different reconnect payload
 ### Negative / Trade-offs
 
 - Small duplication (~40 lines) between `useSessionService` and `useTerminalStream` reconnect loops. Accepted: the loops have different payloads and a shared abstraction would obscure the payload differences.
-- `NEXT_PUBLIC_RECONNECT_V2` guard must be removed in a follow-up PR or it becomes permanent dead code.
 - `watch-ws-transport.ts` now throws `ConnectError` (not `null`) on non-clean WS close, which changes the error shape seen by the hook. The hook already handles `ConnectError` in the `catch` block; this is additive not breaking.
 
 ### Neutral
