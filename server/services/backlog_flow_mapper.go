@@ -71,6 +71,10 @@ func sanitizeFlowText(s string, maxRunes int) string {
 	return string(out)
 }
 
+// SanitizeFlowText is sanitizeFlowText for transports outside this package
+// (the MCP adapter), so both flatten text the same way.
+func SanitizeFlowText(s string, maxRunes int) string { return sanitizeFlowText(s, maxRunes) }
+
 func flowTime(t time.Time) *timestamppb.Timestamp {
 	if t.IsZero() {
 		return nil
