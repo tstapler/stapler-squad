@@ -45,9 +45,9 @@ var ErrTymuxdUnreachable = errors.New("tymux: tymuxd unreachable")
 // (research/pitfalls.md §2/§4's shared mitigation).
 var ErrTymuxdPortSquatted = errors.New("tymux: tymuxd port squatted by another process")
 
-// ErrTymuxdControlSocketUnresponsive means tymuxd's TCP listener is down and its Unix control
-// socket accepts connections but never answers, so neither transport can reach the daemon. It is
-// reported and the daemon is not killed (it may hold live panes). Distinct from
+// ErrTymuxdControlSocketUnresponsive means tymuxd's Unix control socket accepts connections but
+// never answers and its TCP fallback listener is down, so neither transport can reach the daemon.
+// It is reported and the daemon is not killed (it may hold live panes). Distinct from
 // ErrTymuxdPortSquatted: nothing is listening on the TCP port.
 var ErrTymuxdControlSocketUnresponsive = errors.New("tymux: tymuxd control socket unresponsive")
 
