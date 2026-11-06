@@ -163,7 +163,7 @@ func TestBacklogFlowService_should_AcceptMixedPRFixTrigger(t *testing.T) {
 	fake := &fakeFlowAgg{summary: sampleFlowSummary()}
 	got, err := callSummary(t, NewBacklogFlowService(fake), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
 	require.NoError(t, err)
-	var triggers []string
+	triggers := make([]string, 0, len(got.Causes.PrFixTriggers))
 	for _, r := range got.Causes.PrFixTriggers {
 		triggers = append(triggers, r.Trigger)
 		assert.Equal(t, "rework.pr_fix", r.DrillKey)
@@ -313,6 +313,7 @@ func TestBacklogFlowService_should_MapDrilldownAndTimeline(t *testing.T) {
 func TestBacklogFlowService_should_SelectSectionLists(t *testing.T) {
 	t.Parallel()
 	fake := &fakeFlowAgg{summary: sampleFlowSummary()}
+	fake.summary.Review.WeakFilter = "heuristic banner"
 	svc := NewBacklogFlowService(fake)
 
 	dl, err := svc.ListDeadlockCandidates(context.Background(), connect.NewRequest(&sessionv1.ListDeadlockCandidatesRequest{WindowDays: 30, Limit: 7}))
@@ -320,6 +321,7 @@ func TestBacklogFlowService_should_SelectSectionLists(t *testing.T) {
 	assert.Equal(t, []flow.SectionName{flow.SectionReview}, fake.gotSummary.Sections)
 	assert.Equal(t, 7, fake.gotSummary.ListLimit)
 	assert.EqualValues(t, 41, dl.Msg.Deadlocks.TotalCount)
+	assert.Equal(t, "heuristic banner", dl.Msg.WeakFilter, "the list carries the same weak-filter banner as the review section")
 
 	th, err := svc.ListThrashEpisodes(context.Background(), connect.NewRequest(&sessionv1.ListThrashEpisodesRequest{AllTime: true}))
 	require.NoError(t, err)

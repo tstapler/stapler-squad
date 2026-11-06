@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -50,6 +51,7 @@ func liveShapedSummary(q flow.FlowQuery) *flow.FlowSummary {
 			DiffUnchangedPairs: 1, AgentClaimedDone: i%2 == 0, LastVerdictAt: week0.Add(time.Duration(i) * time.Hour),
 		})
 	}
+	sort.SliceStable(deadlocks, func(i, j int) bool { return deadlocks[i].RunLength > deadlocks[j].RunLength })
 	thrash := make([]flow.ThrashItemRow, 0, liveThrashItems)
 	for i := 0; i < liveThrashItems; i++ {
 		thrash = append(thrash, flow.ThrashItemRow{

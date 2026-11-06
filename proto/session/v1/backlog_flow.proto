@@ -427,6 +427,9 @@ message ListDeadlockCandidatesResponse {
   FlowMeta meta = 1;
   FlowSectionStatus status = 2;
   FlowDeadlockPage deadlocks = 3;
+  // Same banner as FlowReviewSection.weak_filter: candidates are a heuristic
+  // ranking of review-fail streaks, not confirmed deadlocks.
+  string weak_filter = 4;
 }
 
 message ListThrashEpisodesResponse {

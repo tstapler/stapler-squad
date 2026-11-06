@@ -111,4 +111,7 @@ func registerFlowTools(s *mcpserver.MCPServer, h *flowHandlers) {
 	s.AddTool(getFlowSummaryTool(), h.getFlowSummary)
 	s.AddTool(compareFlowWindowsTool(), h.compareFlowWindows)
 	s.AddTool(listFlowDrilldownTool(), h.listFlowDrilldown)
+	s.AddTool(listFlowDeadlockCandidatesTool(), h.listFlowDeadlockCandidates)
+	s.AddTool(listFlowThrashEpisodesTool(), h.listFlowThrashEpisodes)
+	s.AddTool(getItemFlowTimelineTool(), h.getItemFlowTimeline)
 }

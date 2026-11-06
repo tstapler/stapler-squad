@@ -56,7 +56,7 @@ func (s *BacklogFlowService) ready() error {
 	if s.agg == nil {
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("flow aggregator is not available"))
 	}
-	if v := reflect.ValueOf(s.agg); v.Kind() == reflect.Ptr && v.IsNil() {
+	if v := reflect.ValueOf(s.agg); v.Kind() == reflect.Pointer && v.IsNil() {
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("flow aggregator is not available"))
 	}
 	return nil
@@ -160,7 +160,7 @@ func (s *BacklogFlowService) ListDeadlockCandidates(
 	}
 	return connect.NewResponse(&sessionv1.ListDeadlockCandidatesResponse{
 		Meta: flowMetaToProto(sum.Meta), Status: sectionStatusToProto(sum.Review.Meta),
-		Deadlocks: deadlockPage(sum.Review.Deadlocks),
+		Deadlocks: deadlockPage(sum.Review.Deadlocks), WeakFilter: sum.Review.WeakFilter,
 	}), nil
 }
 

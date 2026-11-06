@@ -141,11 +141,19 @@ func sanitizeFlowError(msg string) string {
 	return fmt.Sprintf(`%s%s"; valid keys: %s`, unknownDrillKeyPrefix, sanitizeFlowKeyEcho(key), valid)
 }
 
-// flowResult sanitizes and marshals a service response, or maps its error.
-func flowResult(msg proto.Message, err error) *mcpgo.CallToolResult {
+// flowReply turns a service response or error into the tool result.
+func flowReply[M any, PM interface {
+	*M
+	proto.Message
+}](resp *connect.Response[M], err error) *mcpgo.CallToolResult {
 	if err != nil {
 		return flowErrorResult(err)
 	}
+	return flowResult(PM(resp.Msg))
+}
+
+// flowResult sanitizes and marshals a service response.
+func flowResult(msg proto.Message) *mcpgo.CallToolResult {
 	sanitizeFlowMessage(msg)
 	raw, merr := services.FlowJSONOptions().Marshal(msg)
 	if merr != nil {
@@ -173,10 +181,7 @@ func (h *flowHandlers) getFlowSummary(ctx context.Context, req mcpgo.CallToolReq
 		WindowDays: days, AllTime: allTime, Sections: flowStringListArg(args, "sections"),
 		Compact: compact, ListLimit: int32(max(limit, 0)),
 	}))
-	if err != nil {
-		return flowResult(nil, err), nil
-	}
-	return flowResult(resp.Msg, nil), nil
+	return flowReply(resp, err), nil
 }
 
 func (h *flowHandlers) listFlowDrilldown(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -197,10 +202,7 @@ func (h *flowHandlers) listFlowDrilldown(ctx context.Context, req mcpgo.CallTool
 	resp, err := h.svc.ListFlowDrilldown(ctx, connect.NewRequest(&sessionv1.ListFlowDrilldownRequest{
 		Key: key, WindowDays: days, AllTime: allTime, Limit: int32(max(limit, 0)), Offset: int32(max(offset, 0)),
 	}))
-	if err != nil {
-		return flowResult(nil, err), nil
-	}
-	return flowResult(resp.Msg, nil), nil
+	return flowReply(resp, err), nil
 }
 
 const (
@@ -248,8 +250,5 @@ func (h *flowHandlers) compareFlowWindows(ctx context.Context, req mcpgo.CallToo
 		return compareFormError("both forms were given"), nil
 	}
 	resp, err := h.svc.CompareFlowWindows(ctx, connect.NewRequest(msg))
-	if err != nil {
-		return flowResult(nil, err), nil
-	}
-	return flowResult(resp.Msg, nil), nil
+	return flowReply(resp, err), nil
 }
