@@ -201,6 +201,7 @@ func TestSystemClock_should_ReturnUTC_When_Called(t *testing.T) {
 
 func TestFlowImports_should_ExcludeEntSessionServerProto_When_GoListDepsScanned(t *testing.T) {
 	t.Parallel()
+	//nolint:norawexec short-lived `go list` in a test; no long-running process to reap.
 	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
 	require.NoError(t, err, string(out))
 	forbidden := []string{

@@ -101,6 +101,7 @@ func writerLoop(t *testing.T, c *ent.Client, item uuid.UUID, stop <-chan struct{
 			return lat
 		}
 		lat = append(lat, time.Since(start))
+		//nolint:notimesleeptest env-gated wall-clock perf measurement: the paced writer gap is the workload.
 		time.Sleep(perfWriteGap)
 	}
 }
@@ -146,6 +147,7 @@ func TestFlowAllTime_should_KeepConcurrentWritesUnder100ms_When_BackupCopyOfLive
 		readerMs = append(readerMs, took)
 		require.Less(t, slices.Max(lat), writeBudget, "round %d: a write exceeded the budget during the all-time read", i)
 
+		//nolint:notimesleeptest env-gated wall-clock perf measurement: sleeping for the measured read time is the no-reader control.
 		lat = round(t, c, item, func() { time.Sleep(took) })
 		withoutReader = append(withoutReader, p99(lat))
 	}
