@@ -1,6 +1,6 @@
 # buf lint findings tolerated until the owner decides to fix them (tools/bzl/proto/buf_lint.sh ratchet).
 # Regenerate: bazel run //proto/session/v1:buf_lint_update_baseline. Entries only ever leave this file.
-# Owner decision (proto_and_lint): fix all findings. Audit result: every remaining finding is a rename or wire-breaking change,
+# Owner decision 2026-11-06: the 8 enum findings are permanent exceptions in buf.yaml (ignore_only); the 44 RPC findings stay here until a versioned migration.
 # so none was applied (all 52 re-verified with `buf lint`; `buf breaking` flags each fix). Needs a versioned migration, not an in-place edit:
 #   RPC_*_STANDARD_NAME / RPC_REQUEST_RESPONSE_UNIQUE: rename/split shared messages (PRActionResponse, StreamHubRolloutStatus, TymuxRolloutStatus,
 #     TerminalData, *Event stream types). Binary wire/Connect paths are unaffected, but Go/TS/mobile generated type names change.
@@ -8,13 +8,6 @@
 #     the websocket path and web-app TerminalOutput.tsx.
 #   types.proto ENUM_NO_ALLOW_ALIAS: SessionStatus aliases (RUNNING/READY/LOADING/NEEDS_APPROVAL) preserve legacy wire values 1,2,3,5.
 proto/session/v1/backlog.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BacklogItemEvent\" should be named \"WatchBacklogItemsResponse\" or \"BacklogServiceWatchBacklogItemsResponse\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"AT_TOP\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"BLOCKED\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"DELIVERED\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"LEASE_CONTENTION\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"MULTIPLE_VIEWERS\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"NO_CAPABILITY\" should be prefixed with \"SCROLL_FORWARD_OUTCOME_\".
-proto/session/v1/events.proto ENUM_VALUE_PREFIX Enum value name \"UNSUPPORTED_STREAMING_PATH\" should be prefixed with \"SCROLL_BLOCKED_REASON_\".
 proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
 proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
 proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
@@ -57,5 +50,4 @@ proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response typ
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"ReplaceTymuxdResponse\" or \"TymuxRolloutServiceReplaceTymuxdResponse\".
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxGlobalOverrideResponse\" or \"TymuxRolloutServiceSetTymuxGlobalOverrideResponse\".
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxSessionOverrideResponse\" or \"TymuxRolloutServiceSetTymuxSessionOverrideResponse\".
-proto/session/v1/types.proto ENUM_NO_ALLOW_ALIAS Enum option \"allow_alias\" on enum \"SessionStatus\" must be false.
 proto/session/v1/unfinished.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UnfinishedWorkEvent\" should be named \"WatchUnfinishedWorkResponse\" or \"UnfinishedWorkServiceWatchUnfinishedWorkResponse\".

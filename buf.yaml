@@ -9,6 +9,14 @@ lint:
   rpc_allow_google_protobuf_empty_requests: true
   rpc_allow_google_protobuf_empty_responses: true
   service_suffix: Service
+  # Owner decision 2026-11-06: permanent exceptions. Renaming these changes JSON enum names / drops legacy wire values
+  # (events.proto scroll enums are used by session/instance_scroll_forward.go and web-app TerminalOutput.tsx;
+  # SessionStatus aliases keep wire values 1,2,3,5).
+  ignore_only:
+    ENUM_VALUE_PREFIX:
+      - proto/session/v1/events.proto
+    ENUM_NO_ALLOW_ALIAS:
+      - proto/session/v1/types.proto
 breaking:
   use:
     - FILE

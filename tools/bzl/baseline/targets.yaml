@@ -3,11 +3,11 @@
 # tools/bzl/scoping/baseline.json and the cached Task 0.1i job data, using the proposal formulas the owner
 # accepted (owner-attestations.yaml, key `targets`). Never estimated: a row whose input is not measured yet has
 # target_value null, status PENDING_INPUT and `pending_input` naming the missing key.
-# targets_confirmed is NOT set: the owner reviews these values first.
+# Owner confirmed 2026-11-06 (owner-attestations.yaml targets_confirmed) with two amendments: T9c 0.385, T6 0.2.
 # Readers: tools/bzl/parity/improvement (yaml: id + target_value of the `targets:` list) and
 # tools/bzl/economic-gate.py (line scanner over `economic_gate_factors`: target_value, second_value). Keep one
 # `key: value` per line; extra keys are ignored by both.
-status: computed-unconfirmed
+status: confirmed-2026-11-06
 targets:
   - id: T1
     status: COMPUTED
@@ -83,10 +83,10 @@ targets:
     target_value: 1.0
     source: "measured.json fixtures (fixtures/make-path-results.json)"
   - id: T6
-    status: DEGENERATE
-    formula: "at most 10% of baseline median regen steps per session after the flip"
+    status: COMPUTED
+    formula: "at most 10% of the build-active p90 regen steps per session after the flip"
     baseline_value: 0  # median over the literal 30-session cohort; build-active cohort (n=16) median 0, p90 2
-    target_value: 0  # 0.10 x 0
+    target_value: 0.2  # 0.10 x build-active p90 (2); owner-amended 2026-11-06 (median basis was 0 and could not detect improvement)
     source: "measured.json regen_steps_per_session_median"
     note: "baseline median is 0, so the formula yields 0 and cannot detect improvement; owner may want the build-active p90 (2, so 0.2) as the basis"
   - id: T7
@@ -126,7 +126,7 @@ targets:
     status: COMPUTED
     formula: "mean affected library-LOC share <= 0.395 and share of changes affecting less than baseline >= 0.12"
     baseline_value: 0.3945  # t9c_mean_lib_loc_share (plan text says 40.5%)
-    target_value: 0.395
+    target_value: 0.385  # owner-amended 2026-11-06: ADR-010 predicted 38.5%; the 0.395 proposal was already met at baseline 0.3945
     lower_lib_share_min: 0.12  # baseline t9c_changes_with_lower_lib_loc = 0
     source: "scoping/baseline.json t9c_mean_lib_loc_share, t9c_changes_with_lower_lib_loc"
     note: "CONFLICT: the measured baseline 0.3945 is already below the 0.395 proposal, so the first clause cannot detect improvement (plan assumed 0.405); only the 0.12 clause constrains. Owner may want a lower bound, e.g. 0.385 (ADR-010's predicted 38.5%)"
