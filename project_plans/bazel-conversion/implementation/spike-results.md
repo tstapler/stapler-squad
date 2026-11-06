@@ -914,3 +914,33 @@ The S6 PASS-iff line itself (plan, fallback matrix row S6) is the conjunction of
 - `layering` starts `bazel-remote` with a default argument template (`--dir --max_size --http_address --grpc_address`) whose flag names are UNVERIFIED (the binary is not installed here); `-remote-args` replaces it.
 - `layout` E6 uses `--repository_disable_download` for the offline build (the plan lists it as the alternative to `unshare -rn`); whether that flag exists on 9.3.1 is checked by the run itself (an unknown flag is an error, not a Pass). The 14-day contents-cache GC question is reported as not measured.
 - `containment` E7 uses a bounded `head -c 600M /dev/zero | tail -n 1` probe in a `systemd-run --user --scope -p MemoryMax=256M` scope; the live unit is only read with `systemctl --user show` before and after.
+
+## EG4 re-costing: `recosted_cu_m` (2026-11-06) - base 36.18M CU (range 35.64 to 38.31, partly UNVERIFIED)
+
+Method: start from the plan.md header total (38.36M CU = 21.92M x 1.75, `plan.md` line 7 and line 329), replace each default-path cost with the chosen-path cost where a spike chose a path that differs from what the plan priced, sum. CU conversion follows plan.md "Effort estimate": XS 15k, S 55k, M 130k, L 240k raw tokens, x1.1 CU per raw token, x1.75 verification. Fallback matrix costs are classes (plan.md line 373, "INFERRED"), not CU, so every number below is class-derived.
+
+| Item | Default cost (M CU) | Chosen-path cost (M CU) | Delta | Source |
+|---|---|---|---|---|
+| S1 `buf-generate-genrule-local-plugins` (M) | Task 2.1a, class M, path-agnostic ("per S1 verdict") | M, matrix workaround "buf generate as run_binary (M)" | 0 | plan.md Task 2.1a (line 1139), matrix row S1; spike-results.yaml S1 |
+| S2 declared-output ent_gen + entc program (M) | Task 2.3a, class M | M, matrix "entc program ... (M)" | 0 | plan.md Task 2.3a (line 1176), matrix row S2; spike-results.yaml S2 |
+| S4, S3, S5, S7, S11, S8, S9, S-gomod, S1-ts | Pass | Pass (S5 uses the matrix's rules_foreign_cc path at class M, already in Stories 0.7 and 3.3) | 0 | spike-results.yaml |
+| S12 nogo twins (M) | Story 8.4 priced in the table (2M, 0.29M before x1.75) | Story 8.4 runs (Tasks 8.4a, 8.4b done); the matrix default "Wrapped; Story 8.4 skipped" is NOT what was chosen | 0 base (see UNVERIFIED U2) | plan.md Story 8.4 (line 2010) and Effort table; spike-results.yaml S12 |
+| S13 commit lock + driver + CI auto-regen (S) | Story 11.2 + Story 7.8 priced | same tasks (Task 11.2a, 7.8b) | 0 base (see UNVERIFIED U3) | plan.md lines 1931, 2191; spike-results.yaml S13 |
+| S14 `Fail`, owner chose full e2e run | Epic 12 Stories 12.1-12.6 = 325+303+77+325+281+61 = 1372k CU before verification = 2.401M | 0 (matrix default "Epic 12 not released; e2e stays a full run") | -2.401 | plan.md matrix row S14 (line 389), Effort table rows 12.1-12.6; spike-results.yaml S14; plan.md line 5 |
+| S15b otel_weave_hermetic (M) | Story 3.6, class XS, 17k CU = 0.030M | class M, 143k CU = 0.250M | +0.2205 (see UNVERIFIED U1) | plan.md Story 3.6 (line 1378, "Superseded"), Effort table; spike-results.yaml S15b |
+| S10, S10-redaction waived; S6 no row | priced as default | not re-costed | 0 base (see UNVERIFIED U4) | spike-results.yaml, plan.md line 5 |
+| **Total** | **38.36** | **36.18 (36.1795)** | **-2.18** | 38.36 - 2.401 + 0.2205 |
+
+Written to `spike-measurements.json` as `recosted_cu_m = 36.18` (the base).
+
+UNVERIFIED assumptions, with range:
+- U1 S15b/Story 3.6: the matrix has no S15 row, so the cost of the shipped hermetic weave rule is the spike row's class M replacing Story 3.6's XS. Low: 0 (rule already built inside the spike, nothing left to price); high: class L instead of M, +0.432M.
+- U2 S12: the matrix prices the workaround at zero (Story 8.4 skipped) and has no cost for twins. Base assumes Tasks 8.4a/8.4b (2M, already priced) cover them. Low: 0. High: epic0-seal.md D3 says "M + ~S each" for 17 analyzers, +17 x 61k x 1.75 = +1.815M.
+- U3 S13: the matrix prices "commit lock + merge driver" only; the added CI auto-regen + required check is assumed absorbed by Story 7.8 (already priced). High: one extra S task, +0.107M.
+- U4 S10 waived (remote cache deferred): Story 7.4 (182k CU = 0.319M) might shrink, but no verdict and no owner scoping, so base keeps it. Low: -0.319M. S6 has no verdict row, not re-costed.
+- U5 Epic 13 Stories 13.4/13.5 name a "Story 12.1 manifest" dependency (criterion SC5); with Epic 12 not released, their rework cost was not re-priced.
+- U6 Whole table: class bands are INFERRED (ESTIMATION.md), never calibrated on an implementer run.
+
+Range: low 35.64M (U1 0, U4 -0.319), base 36.18M, high 38.31M (U1 L, U2 +1.815, U3 +0.107).
+
+Gate-constant mismatch (not edited here, docs/data only): `tools/bzl/economic-gate.py` `VERIFIED_CU_M = 30.50` and `targets.yaml` EG4 `computed_limit: 38.125` use 30.50M, but the plan.md header total is 38.36M (30.50M predates the ADR-009/ADR-010 additions: 34.00M after ADR-009, 38.36M now). A zero-delta re-cost of the current plan (38.36M) already exceeds 38.125M. Against the stale limit: base 36.18 CLEAR (1.95M under), high 38.31 would TRIP by 0.19M. Against the header-consistent limit 1.25 x 38.36 = 47.95M: base CLEAR by 11.77M, high CLEAR by 9.64M.
