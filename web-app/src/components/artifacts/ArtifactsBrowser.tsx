@@ -1,5 +1,7 @@
 "use client";
 
+// +feature: session-artifacts-browse
+
 import { useEffect, useMemo, useRef } from "react";
 import { Link, useReplaceSearch, useRouter, useSearchParams } from "@/lib/nav";
 import { routes } from "@/lib/routes";
