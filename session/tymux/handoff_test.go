@@ -150,7 +150,7 @@ func TestReplaceDaemon_FailedHandoffFallsBackOnlyWithOperatorOverride(t *testing
 	t.Cleanup(func() { portListeningFn, checkDaemonHealthyFn, stopTymuxdFn = origPort, origCheck, origStop })
 	portListeningFn = func(DaemonConfig) bool { return s.signals == 0 }
 	checkDaemonHealthyFn = func(context.Context, DaemonConfig) bool { return s.spawns > 0 }
-	stopTymuxdFn = func() error { return nil }
+	stopTymuxdFn = func(StopReason) error { return nil }
 
 	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
 
@@ -165,7 +165,7 @@ func TestReplaceDaemon_NoLivePanesSkipsHandoff(t *testing.T) {
 	t.Cleanup(func() { portListeningFn, checkDaemonHealthyFn, stopTymuxdFn = origPort, origCheck, origStop })
 	portListeningFn = func(DaemonConfig) bool { return s.signals == 0 }
 	checkDaemonHealthyFn = func(context.Context, DaemonConfig) bool { return s.spawns > 0 }
-	stopTymuxdFn = func() error { return nil }
+	stopTymuxdFn = func(StopReason) error { return nil }
 
 	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, false)
 
