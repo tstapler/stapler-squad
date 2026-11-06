@@ -545,6 +545,10 @@ message CreateBacklogItemResponse {
 message CreateBacklogItemFromChatRequest {
   string existing_item_id = 1;
   string message = 2;
+  // repo_path scopes a new item (empty existing_item_id) to a repository so
+  // CreateBacklogItem can start triage. Empty means no repo context; ignored
+  // on refinement turns.
+  string repo_path = 3;
 }
 
 message CreateBacklogItemFromChatResponse {
