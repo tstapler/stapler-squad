@@ -50,9 +50,11 @@ const clientProtocolVersion = 1
 
 const (
 	versionProbeTimeout    = 5 * time.Second
-	daemonStopGracePeriod  = 10 * time.Second
 	daemonStopPollInterval = 100 * time.Millisecond
 )
+
+// daemonStopGracePeriod is how long a stopped daemon gets to exit on SIGTERM before SIGKILL; a var so tests can shrink it.
+var daemonStopGracePeriod = 10 * time.Second
 
 // Injection seams so tests need no real daemon, lsof, or /proc.
 var (
@@ -200,7 +202,9 @@ func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVe
 func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
-	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +212,9 @@ func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, err
 }
 
 func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {
-	resp, err := NewRealTransport(cfg.Addr).ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return 0, err
 	}
@@ -235,7 +241,8 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 		if live > 0 && !allowInterrupt {
 			return before, fmt.Errorf("%w (%d live)", ErrLiveSessionsWouldBeInterrupted, live)
 		}
-		if err := stopListener(before.PID, cfg); err != nil {
+		reason := StopReason{Kind: StopVersionReplace, Detail: fmt.Sprintf("from %q to %q (binary %s)", before.RunningVersion, before.InstalledVersion, cfg.BinaryPath), Probes: lastProbeFor(cfg.Addr)}
+		if err := stopListener(before.PID, cfg, reason); err != nil {
 			return before, err
 		}
 	}
@@ -248,20 +255,27 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 
 // stopListener SIGTERMs pid (tymuxd flushes its session records on SIGTERM), waits for
 // the port to free, then escalates to SIGKILL.
-func stopListener(pid int, cfg DaemonConfig) error {
+func stopListener(pid int, cfg DaemonConfig, reason StopReason) error {
+	attempt := beginStop(pid, reason)
 	if err := signalProcessFn(pid, syscall.SIGTERM); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGTERM pid %d: %w", pid, err)
 	}
 	if waitPortFree(cfg, daemonStopGracePeriod) {
+		attempt.finish(StopExitedAfterTerm, nil)
 		return nil
 	}
-	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid)
+	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid, "reason_kind", string(reason.Kind))
 	if err := signalProcessFn(pid, syscall.SIGKILL); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGKILL pid %d: %w", pid, err)
 	}
 	if !waitPortFree(cfg, daemonStopGracePeriod) {
-		return fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		err := fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		attempt.finish(StopSignalFailed, err)
+		return err
 	}
+	attempt.finish(StopEscalatedToKill, nil)
 	return nil
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
@@ -247,7 +248,11 @@ func fullStateFrame(ctx context.Context, pane any) (snapshotFrame, bool) {
 	}
 	snap, ok, err := f.CapturePaneRedraw(ctx)
 	if err != nil {
-		log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		if errors.Is(err, tymux.ErrPaneNotRunning) {
+			log.Debug("full-state redraw skipped, pane is not running", "err", err)
+		} else {
+			log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		}
 		return snapshotFrame{}, false
 	}
 	if !ok {
@@ -401,16 +406,22 @@ type ConnectRPCWebSocketHandler struct {
 // is decided server-side from the instance snapshot; the client's own
 // read-only flag is never consulted.
 func (h *ConnectRPCWebSocketHandler) writerFor(instance *session.Instance) TerminalWriter {
-	snap := instance.Snapshot()
-	if snap.ArchivedAt != nil || (snap.Backend == session.BackendTymux && snap.Status != session.Active) {
-		return nil
+	writer, _ := h.writerDecision(instance)
+	return writer
+}
+
+// writerDecision is writerFor plus whether a nil writer may become non-nil
+// later: true only when a tymux instance is not Active yet (see upgradableWriter).
+func (h *ConnectRPCWebSocketHandler) writerDecision(instance *session.Instance) (writer TerminalWriter, upgradable bool) {
+	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
+		return nil, recoverable
 	}
 	writer, err := AccessFor(instance).Writer(h.tmuxSender)
 	if err != nil {
 		log.Debug("[WebSocket] read-only attach: input, resize and scroll forwarding are dropped", "session", instance.GetTitle())
-		return nil
+		return nil, false
 	}
-	return writer
+	return writer, false
 }
 
 // controlModeStreamGeneration identifies one streamViaControlMode invocation
@@ -1128,6 +1139,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	sessionID := terminalData.SessionId
 	shellID := terminalData.ShellId
 	log.Info("StreamTerminal called", "session", sessionID, "shell", shellID)
+
+	if fid := session.ParseFederatedSessionID(sessionID); !fid.IsLocal() {
+		return h.streamFederatedTerminal(stream, fid, sessionID)
+	}
 
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
@@ -2256,16 +2271,39 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 		// Read-only attach: never vote on the pane size.
 		return subscriberID
 	}
-	if a.currentPaneReq.TargetCols != nil && a.currentPaneReq.TargetRows != nil {
-		if size, sizeErr := streamhub.NewTerminalSize(int(*a.currentPaneReq.TargetCols), int(*a.currentPaneReq.TargetRows)); sizeErr != nil {
-			log.Warn("[streamViaHub] invalid handshake dimensions", "err", sizeErr)
-		} else {
-			hub.RequestResize(connCtx, subscriberID, size)
-		}
-	} else {
-		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
-	}
+	voteHandshakeSize(connCtx, hub, subscriberID, a.writer, a.currentPaneReq)
 	return subscriberID
+}
+
+// handshakeSize returns the handshake's target size, if it carried one.
+func handshakeSize(req *sessionv1.CurrentPaneRequest) (cols, rows int, ok bool) {
+	if req.TargetCols == nil || req.TargetRows == nil {
+		return 0, 0, false
+	}
+	return int(*req.TargetCols), int(*req.TargetRows), true
+}
+
+// voteHandshakeSize casts the subscriber's resize vote from the handshake's target size.
+func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer TerminalWriter, req *sessionv1.CurrentPaneRequest) {
+	cols, rows, ok := handshakeSize(req)
+	if !ok {
+		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
+		return
+	}
+	voteSize(connCtx, hub, id, writer, cols, rows)
+}
+
+// voteSize needs the pane writer as proof the subscriber may resize; a nil writer (read-only) casts no vote.
+func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer TerminalWriter, cols, rows int) {
+	if writer == nil {
+		return
+	}
+	size, sizeErr := streamhub.NewTerminalSize(cols, rows)
+	if sizeErr != nil {
+		log.Warn("[streamViaHub] invalid resize dimensions", "err", sizeErr)
+		return
+	}
+	hub.RequestResize(connCtx, id, size)
 }
 
 // sendHubInitialSnapshot sends an immediate initial snapshot so the client
@@ -2306,7 +2344,10 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)
 		return wrapSessionGone(captureErr)
 	}
-	if captureErr != nil {
+	if errors.Is(captureErr, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaHub] initial capture", sessionID, captureErr)
+		content = ""
+	} else if captureErr != nil {
 		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
 			"session", sessionID, "err", captureErr)
 		content = ""
@@ -2394,10 +2435,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 	stream.creation.Mark(stageHubCreate)
 
-	writer := h.writerFor(instance)
 	noteOperatorOpen(instance)
-	subscriberID := h.attachHubSubscriber(connCtx, hub, hubSubscriberAttachment{
-		writer:          writer,
+	upWriter, subscriberID, _ := h.attachUpgradableSubscriber(connCtx, hub, hubSubscriberAttachment{
 		stream:          stream,
 		instance:        instance,
 		sessionID:       sessionID,
@@ -2439,12 +2478,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
 	// already owns delivering output to this connection via transport.Send.
 	runInputReadLoop(inputReadLoopParams{
-		writer:    writer,
-		stream:    stream,
-		doneChan:  doneChan,
-		errChan:   errChan,
-		sessionID: sessionID,
+		currentWriter:   upWriter.Writer,
+		onDroppedResize: upWriter.NoteDroppedResize,
+		stream:          stream,
+		doneChan:        doneChan,
+		errChan:         errChan,
+		sessionID:       sessionID,
 		onInput: func(data []byte) {
+			writer := upWriter.Writer()
 			if writer == nil {
 				return
 			}
@@ -2466,6 +2507,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			sendCancel()
 		},
 		onResize: func(cols, rows int) {
+			writer := upWriter.Writer()
 			if writer == nil {
 				return
 			}
@@ -2478,7 +2520,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		},
 		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
 			return scrollbackResultForRequest(scrollbackRequestParams{
-				writer:          writer,
+				writer:          upWriter.Writer(),
 				instance:        instance,
 				subscriberCount: hub.SubscriberCount(),
 				hub:             hub,
@@ -2489,7 +2531,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return answerCurrentPane(ctx, sessionID, instance, req, writer)
+			return answerCurrentPane(ctx, sessionID, instance, req, upWriter.Writer())
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -2985,11 +3027,16 @@ func resolveResyncID(sessionID string, req *sessionv1.CurrentPaneRequest, opts R
 type inputReadLoopParams struct {
 	// writer is nil for a read-only attach: Input and Resize frames are
 	// dropped here (debug-logged) before any handler sees them.
-	writer    TerminalWriter
-	stream    *connectWebSocketStream
-	doneChan  chan struct{}
-	errChan   chan error
-	sessionID string
+	writer TerminalWriter
+	// currentWriter, when set, is consulted per frame instead of writer, so a
+	// read-only attach can upgrade mid-connection (see upgradableWriter).
+	currentWriter func() TerminalWriter
+	// onDroppedResize, when set, is told of a resize frame dropped while read-only.
+	onDroppedResize func(cols, rows int)
+	stream          *connectWebSocketStream
+	doneChan        chan struct{}
+	errChan         chan error
+	sessionID       string
 	// onInput forwards one input frame's raw bytes to tmux (CM path + subprocess fallback).
 	onInput func(data []byte)
 	// onResize pushes a mid-stream resize request to the coalescing worker.
@@ -3004,6 +3051,13 @@ type inputReadLoopParams struct {
 	// loop starts) — see handleCurrentPaneRequestFrame.
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error)
 	resizeSettling       *atomic.Bool
+}
+
+func (p inputReadLoopParams) activeWriter() TerminalWriter {
+	if p.currentWriter != nil {
+		return p.currentWriter()
+	}
+	return p.writer
 }
 
 // runInputReadLoop is the WebSocket input-read loop for streamViaControlMode
@@ -3069,19 +3123,23 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 // out purely to keep this loop's cognitive complexity under the lint gate;
 // behavior is unchanged from when they lived inline.
 func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.TerminalData) error {
+	writer := p.activeWriter()
 	if input := incomingData.GetInput(); input != nil {
-		if p.writer != nil {
+		if writer != nil {
 			p.onInput(input.Data)
 		} else {
 			log.Debug("[runInputReadLoop] read-only attach: input frame dropped", "session", p.sessionID, "bytes", len(input.Data))
 		}
 	}
 	if resize := incomingData.GetResize(); resize != nil {
-		if p.writer != nil {
+		if writer != nil {
 			log.Debug("[runInputReadLoop] received mid-stream resize frame", "session", p.sessionID, "cols", resize.Cols, "rows", resize.Rows)
 			p.onResize(int(resize.Cols), int(resize.Rows))
 		} else {
 			log.Debug("[runInputReadLoop] read-only attach: resize frame dropped", "session", p.sessionID, "cols", resize.Cols, "rows", resize.Rows)
+			if p.onDroppedResize != nil {
+				p.onDroppedResize(int(resize.Cols), int(resize.Rows))
+			}
 		}
 	}
 	if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
@@ -3311,8 +3369,16 @@ func handleCurrentPaneRequestFrame(
 	// doc comment for the incident this closes.
 	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
-		span.RecordError(err)
-		return logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err)
+		if !errors.Is(err, tymux.ErrPaneNotRunning) {
+			span.RecordError(err)
+		}
+		if endErr := logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err); endErr != nil {
+			return endErr
+		}
+		if out := paneNotLiveReply(paneReq, err); out != nil {
+			writeCurrentPaneResponse(stream, sessionID, "", out)
+		}
+		return nil
 	}
 	span.SetAttributes(attribute.Int("output.bytes", len(output.GetData())))
 	log.Debug("[runInputReadLoop] answered mid-stream currentPaneRequest", "session", sessionID, "resync_id", paneReq.GetResyncId(), "output_bytes", len(output.GetData()))
@@ -3330,6 +3396,17 @@ func answerCurrentPane(ctx context.Context, sessionID string, instance *session.
 	return out, err
 }
 
+// paneNotLiveReply is the empty answer to a resync aimed at a pane with no live process
+// (tymux.ErrPaneNotRunning). Staying silent leaves the client's stall watchdog to fire after 4s,
+// reset the stream, and re-ask; an empty output completes the resync instead. Nil for any
+// other error.
+func paneNotLiveReply(req *sessionv1.CurrentPaneRequest, err error) *sessionv1.TerminalOutput {
+	if !errors.Is(err, tymux.ErrPaneNotRunning) {
+		return nil
+	}
+	return &sessionv1.TerminalOutput{ResyncId: req.GetResyncId()}
+}
+
 // logCurrentPaneFailure logs a failed current-pane request and returns the error only when it
 // must end the stream (the session is definitively gone), so a resyncing client reconnects once
 // and reads not_found instead of re-asking a dead pane forever. Gone failures are throttled.
@@ -3339,6 +3416,10 @@ func logCurrentPaneFailure(what, sessionID, resyncID string, err error) error {
 		if errors.Is(err, errSessionGone) {
 			return err
 		}
+		return nil
+	}
+	if errors.Is(err, tymux.ErrPaneNotRunning) {
+		logPaneNotRunning("[streamViaControlMode] "+what, sessionID, err)
 		return nil
 	}
 	log.Error("[streamViaControlMode] failed to handle "+what, "session", sessionID, "resync_id", resyncID, "err", err)
@@ -3445,9 +3526,13 @@ func handleBatchedCurrentPaneRequest(
 	for _, paneReq := range requests {
 		output, err := onCurrentPaneRequest(ctx, paneReq)
 		if err != nil {
-			span.RecordError(err)
+			if !errors.Is(err, tymux.ErrPaneNotRunning) {
+				span.RecordError(err)
+			}
 			if gone := logCurrentPaneFailure("coalesced current pane request", sessionID, paneReq.GetResyncId(), err); gone != nil {
 				endErr = gone
+			} else if out := paneNotLiveReply(paneReq, err); out != nil {
+				outputs = append(outputs, out)
 			}
 			continue
 		}

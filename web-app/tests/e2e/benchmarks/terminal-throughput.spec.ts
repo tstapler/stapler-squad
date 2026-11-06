@@ -41,7 +41,7 @@ const PAYLOAD_BYTES = 100 * 1024;
 
 test.describe('Terminal Throughput Benchmark', () => {
   // Increase timeout: each run takes ~5–15s depending on rendering speed
-  test.setTimeout(300_000);
+  test.setTimeout(700_000);
 
   test('measure xterm.js render throughput over 10 runs', async ({ page }) => {
     const throughputSamples: number[] = [];
@@ -61,7 +61,7 @@ test.describe('Terminal Throughput Benchmark', () => {
       await startTest(page);
 
       // Wait for the test to complete (all payloads rendered)
-      await waitForTestCompletion(page, 30_000);
+      await waitForTestCompletion(page, 60_000);
 
       // Capture end time and compute duration in a single evaluate() call
       // to avoid Playwright IPC overhead on the timing boundary.

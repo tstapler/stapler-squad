@@ -421,7 +421,7 @@ func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config Plu
 	if err != nil {
 		return time.Time{}, err
 	}
-	updatedAt, err := readIssueUpdatedAt(ctx, cfg, externalID)
+	_, updatedAt, err := readIssueState(ctx, cfg, externalID)
 	if err != nil {
 		log.Debug("github_issues: read-back after progress comment failed", "issue", externalID, "err", err)
 		return time.Time{}, nil
@@ -429,26 +429,37 @@ func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config Plu
 	return updatedAt, nil
 }
 
-func readIssueUpdatedAt(ctx context.Context, cfg githubPluginConfig, externalID string) (time.Time, error) {
+// ReadIssueState returns the issue's current state ("open"/"closed") and
+// updated_at, so the forward-sync close can skip an already-closed issue.
+func (g *GitHubIssuesPlugin) ReadIssueState(ctx context.Context, config PluginConfig, externalID string) (state string, updatedAt time.Time, err error) {
+	cfg, err := decodeGithubIssuesConfig(config)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return readIssueState(ctx, cfg, externalID)
+}
+
+func readIssueState(ctx context.Context, cfg githubPluginConfig, externalID string) (state string, updatedAt time.Time, err error) {
 	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s", cfg.Owner, cfg.Repo, externalID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return time.Time{}, err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
-		return time.Time{}, err
+		return "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return time.Time{}, fmt.Errorf("status %d", resp.StatusCode)
+		return "", time.Time{}, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	var issue githubIssue
 	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
-		return time.Time{}, err
+		return "", time.Time{}, err
 	}
-	return time.Parse(time.RFC3339, issue.UpdatedAt)
+	updatedAt, err = time.Parse(time.RFC3339, issue.UpdatedAt)
+	return issue.State, updatedAt, err
 }
 
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.
