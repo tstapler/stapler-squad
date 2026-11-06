@@ -3149,7 +3149,7 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Description("Only required when the PR's actual head branch (per GitHub) differs from this item's tracked branch — e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead. Explain why in one sentence; it is recorded in the server log as an audit trail. Omit when the PR's head branch matches the tracked branch. The PR must also have been authored by this same GitHub identity — the override path cannot attach a PR someone/something else opened, even with a reason."),
 			),
 		),
-		h.reportPRCreated,
+		h.reportPRCreatedTool(),
 	)
 
 	s.AddTool(

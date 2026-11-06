@@ -2201,7 +2201,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 		"summary":   "Implemented the feature and shipped it via /backlog:ship.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 	require.Len(t, result.Content, 1)
 	tc, ok := result.Content[0].(mcpgo.TextContent)
@@ -2249,7 +2249,7 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -2290,7 +2290,7 @@ func TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible(t *testing.
 				"summary":   "Implemented the feature.",
 			})
 
-			result, err := handler.reportPRCreated(ctxWithUUID, req)
+			result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 			require.NoError(t, err)
 
 			m := parseResult(t, result)
@@ -2355,7 +2355,7 @@ func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 	require.Len(t, result.Content, 1)
 	tc, ok := result.Content[0].(mcpgo.TextContent)
@@ -2394,7 +2394,7 @@ func TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork(t *testing.T) 
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -2430,7 +2430,7 @@ func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -2470,7 +2470,7 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -2575,7 +2575,7 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 			"pr_number": float64(prNumber),
 			"summary":   fmt.Sprintf("Racing report_pr_created call for PR #%d.", prNumber),
 		})
-		result, callErr := handler.reportPRCreated(ctxWithUUID, req)
+		result, callErr := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 		// Do not require/assert here — this closure runs in a spawned
 		// goroutine; see callToolRaceResult's doc comment.
 		results <- prRaceResult{prNumber: prNumber, result: result, err: callErr}
@@ -3036,7 +3036,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOve
 		"override_reason": "tracked branch had unrelated commits from a shared worktree; opened PR from a clean branch instead",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 	require.Len(t, result.Content, 1)
 	tc, ok := result.Content[0].(mcpgo.TextContent)
@@ -3092,7 +3092,7 @@ func TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideRea
 		"summary":   "Shipped the fix from a clean fallback branch.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3135,7 +3135,7 @@ func TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRe
 		"summary":   "Shipped the fix from a clean fallback branch.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3177,7 +3177,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideRea
 		"override_reason": "trying anyway",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3222,7 +3222,7 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch(t *tes
 		"override_reason": "trying anyway",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3273,7 +3273,7 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 		"override_reason": "trying anyway",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3356,7 +3356,7 @@ func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReas
 		"override_reason": "tracked branch was polluted by another session; opened a clean PR instead and closed the original",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 	require.Len(t, result.Content, 1)
 	tc, ok := result.Content[0].(mcpgo.TextContent)
@@ -3401,7 +3401,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingO
 		"summary":   "Trying to correct the PR without a reason.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3450,7 +3450,7 @@ func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t
 		"override_reason": "trying anyway",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3526,7 +3526,7 @@ func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(
 			"summary":         fmt.Sprintf("Racing reassignment call for PR #%d.", prNumber),
 			"override_reason": "racing correction",
 		})
-		result, callErr := handler.reportPRCreated(ctxWithUUID, req)
+		result, callErr := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 		results <- prRaceResult{prNumber: prNumber, result: result, err: callErr}
 	}
 
@@ -3595,7 +3595,7 @@ func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testi
 		"override_reason": "tracked branch was polluted; opened a clean PR instead",
 	})
 
-	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	_, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	notes, err := storage.ListProgressNotesForItem(context.Background(), item.ID)
@@ -3640,7 +3640,7 @@ func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *te
 		"override_reason": "tracked branch was polluted; opened a clean PR instead",
 	})
 
-	_, err := handler.reportPRCreated(ctxWithUUID, req)
+	_, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
@@ -3687,7 +3687,7 @@ func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *te
 		"summary":   "Implemented the feature.",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -3730,7 +3730,7 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 		"override_reason": "trying anyway",
 	})
 
-	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	result, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), req)
 	require.NoError(t, err)
 
 	m := parseResult(t, result)
@@ -4813,7 +4813,7 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 		"pr_number": float64(42),
 		"summary":   "Implemented the feature.",
 	})
-	prResult, err := handler.reportPRCreated(ctxWithUUID, prReq)
+	prResult, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), prReq)
 	require.NoError(t, err)
 	prTC, ok := prResult.Content[0].(mcpgo.TextContent)
 	require.True(t, ok)
@@ -7056,7 +7056,7 @@ var linkConsistencyMutatingTools = []linkConsistencyCase{
 		}))
 	}},
 	{"report_pr_created", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
-		return h.reportPRCreated(ctx, makeToolReq(map[string]interface{}{
+		return h.reportPRCreatedTool()(asVerified(ctx), makeToolReq(map[string]interface{}{
 			"item_id": itemID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/1", "pr_number": float64(1), "summary": "s",
 		}))
 	}},
@@ -7537,7 +7537,7 @@ func TestResumeWork_ThenReportPRCreated_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	requireToolTextResult(t, reviewResult)
 
-	prResult, err := handler.reportPRCreated(ctxWithUUID, makeToolReq(map[string]interface{}{
+	prResult, err := handler.reportPRCreatedTool()(asVerified(ctxWithUUID), makeToolReq(map[string]interface{}{
 		"item_id":   item.ID,
 		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
 		"pr_number": float64(42),
