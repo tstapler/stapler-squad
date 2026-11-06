@@ -427,8 +427,8 @@ const (
 	AcStatusInProgress AcStatus = "in_progress"
 	AcStatusDone       AcStatus = "done"
 	AcStatusFail       AcStatus = "fail"
-	// AcStatusWaived is set only by the owner (WaiveAcceptanceCriterion RPC), never by
-	// an agent's report_progress. It satisfies the completion gates like AcStatusDone.
+	// AcStatusWaived is set only through WaiveAcCriterion (audited), never by an agent's
+	// report_progress or a whole-list rewrite. It satisfies the completion gates like AcStatusDone.
 	AcStatusWaived AcStatus = "waived"
 )
 
@@ -441,7 +441,7 @@ func (s AcStatus) IsValid() bool {
 	return false
 }
 
-// IsSatisfied reports whether the criterion no longer blocks completion: done or owner-waived.
+// IsSatisfied reports whether the criterion no longer blocks completion: done or waived.
 func (s AcStatus) IsSatisfied() bool { return s == AcStatusDone || s == AcStatusWaived }
 
 // BacklogCategory is a validated string-backed enum classifying a backlog
@@ -494,7 +494,7 @@ type AcCriterion struct {
 	Text   string   `json:"text"`
 	Status AcStatus `json:"status"` // pending, in_progress, done, fail, waived
 	Note   string   `json:"note,omitempty"`
-	// WaiverReason is the owner's mandatory justification when Status is waived.
+	// WaiverReason is the mandatory justification when Status is waived.
 	WaiverReason string `json:"waiver_reason,omitempty"`
 	// WaivedBy and WaivedAt record who waived (AcActor.Label) and when (RFC 3339 UTC); display
 	// copies of the authoritative AcAuditEvent row.

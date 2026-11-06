@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
@@ -9,7 +10,37 @@ import (
 
 // startDBMaintenance reclaims free SQLite pages of the sessions, analytics and escape-events
 // databases in the background until ctx is cancelled (see session/dbmaint).
+// acAuditRetention bounds how long the AC audit trail is kept; per-item growth is capped on write.
+const (
+	acAuditRetention     = 90 * 24 * time.Hour
+	acAuditPruneInterval = 6 * time.Hour
+)
+
+func (s *Server) startAcAuditPruning(ctx context.Context, storage interface {
+	PruneAcAuditOlderThan(context.Context, time.Time) (int, error)
+}) {
+	s.goBackground(func() {
+		t := time.NewTicker(acAuditPruneInterval)
+		defer t.Stop()
+		for {
+			if n, err := storage.PruneAcAuditOlderThan(ctx, time.Now().Add(-acAuditRetention)); err != nil {
+				log.Warn("ac audit prune failed", "err", err)
+			} else if n > 0 {
+				log.Info("pruned ac audit events", "count", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	})
+}
+
 func (s *Server) startDBMaintenance(ctx context.Context, deps *ServerDependencies) {
+	if deps.Storage != nil {
+		s.startAcAuditPruning(ctx, deps.Storage)
+	}
 	cfg := dbmaint.ConfigFromEnv()
 	if cfg.Disabled {
 		log.Info("db maintenance disabled", "env", dbmaint.EnvDisable)

@@ -9,7 +9,7 @@ import * as styles from "../BacklogItemDetail.css";
 export interface AcCriteriaSectionProps {
   item: BacklogItem;
   defaultExpanded: boolean;
-  /** Owner waive action; omit to hide the Waive buttons. */
+  /** Audited waive action; omit to hide the Waive buttons. */
   onWaive?: (criterionIndex: number, reason: string) => Promise<void>;
 }
 

@@ -18,16 +18,17 @@ describe("AcCriteriaList waivers", () => {
   it("shows who waived and when, with a fallback for legacy waivers", () => {
     const { rerender } = render(<AcCriteriaList criteria={criteria} />);
     expect(screen.getByTestId("ac-waived-by-2")).toHaveTextContent(
-      "Waived by unknown caller (recorded before audit trail) at unknown time"
+      "Waived by unknown caller (recorded before audit trail) at unknown time (identity not verified)"
     );
     rerender(
       <AcCriteriaList
-        criteria={[{ ...criteria[2], waivedBy: "operator (authenticated)", waivedAt: "2026-11-05T12:00:00Z" }]}
+        criteria={[{ ...criteria[2], waivedBy: "claimed agent session abc (unverified claim)", waivedAt: "2026-11-05T12:00:00Z" }]}
       />
     );
     const line = screen.getByTestId("ac-waived-by-2").textContent ?? "";
-    expect(line).toContain("Waived by operator (authenticated) at ");
+    expect(line).toContain("Waived by claimed agent session abc (unverified claim) at ");
     expect(line).not.toContain("unknown time");
+    expect(line).toContain("identity not verified");
   });
 
   it("offers Waive only on unmet criteria and requires a non-blank reason", async () => {

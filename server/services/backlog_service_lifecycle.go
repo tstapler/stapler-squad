@@ -106,35 +106,14 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 	return string(merged), nil
 }
 
-// pinWaivers makes the WaiveAcceptanceCriterion RPC (and its audit trail) the only way to waive:
-// an incoming list may not introduce a waiver, and a criterion already waived keeps its
-// recorded status, reason, waived_by and waived_at whatever the client resubmits. existing is
-// nil on create.
-func pinWaivers(incoming session.AcCriteriaJSON, existing session.AcCriteriaJSON) (session.AcCriteriaJSON, error) {
+// checkNoNewWaivers is the early, user-facing error for a rewrite that introduces a waiver; the
+// repository re-checks authoritatively inside its transaction and carries existing waivers
+// forward by criterion text, so nothing here rewrites the list.
+func checkNoNewWaivers(incoming, existing session.AcCriteriaJSON) error {
 	if incoming == "" {
-		return incoming, nil
+		return nil
 	}
-	list, err := session.ParseAcCriteria(incoming)
-	if err != nil {
-		return "", err
-	}
-	prior, _ := session.ParseAcCriteria(existing) // an unparsable stored list pins nothing
-	byIndex := make(map[int]session.AcCriterion, len(prior))
-	for _, c := range prior {
-		byIndex[c.Index] = c
-	}
-	for i, c := range list {
-		if old, ok := byIndex[c.Index]; ok && old.Status == session.AcStatusWaived {
-			list[i].Status, list[i].WaiverReason, list[i].WaivedBy, list[i].WaivedAt =
-				old.Status, old.WaiverReason, old.WaivedBy, old.WaivedAt
-			continue
-		}
-		if c.Status == session.AcStatusWaived {
-			return "", fmt.Errorf("criterion %d: waivers are recorded only through WaiveAcceptanceCriterion", c.Index)
-		}
-		list[i].WaiverReason, list[i].WaivedBy, list[i].WaivedAt = "", "", ""
-	}
-	return session.SerializeAcCriteria(list)
+	return session.CheckNoNewAcWaivers(existing, incoming)
 }
 
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
@@ -219,7 +198,7 @@ func (s *BacklogService) CreateBacklogItem(
 
 	acJSON, err := acCriteriaToJSON(req.Msg.AcceptanceCriteria)
 	if err == nil {
-		acJSON, err = pinWaivers(acJSON, "")
+		err = checkNoNewWaivers(acJSON, "")
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
@@ -320,7 +299,8 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
 	}
 
-	if acJSON, err = pinWaivers(acJSON, existing.AcceptanceCriteria); err != nil {
+	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	if err = checkNoNewWaivers(acJSON, existing.AcceptanceCriteria); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
 
@@ -619,13 +599,15 @@ func (s *BacklogService) UnarchiveBacklogItem(
 	}), nil
 }
 
+const maxWaiverReason = 2000
+
 // --- WaiveAcceptanceCriterion ---
 
-// WaiveAcceptanceCriterion records the owner's waiver of one acceptance criterion. No MCP tool
-// exposes it, and a request that identifies itself as an agent session is refused. The Connect
-// surface has no per-caller identity of its own, so a caller that sends no identity headers is
-// recorded as "unverified" rather than trusted: every attempt, applied or refused, is written to
-// the AC audit trail.
+// WaiveAcceptanceCriterion records an audited waiver of one acceptance criterion. No MCP tool
+// exposes it, and a request that carries an agent-session identity is denied. The Connect surface
+// has no per-caller identity of its own, so a plain loopback caller is recorded as "unverified",
+// not trusted and not blocked: every attempt, applied or refused, is written to the AC audit trail.
+// This is an audit control, not owner-only enforcement.
 // +api: WaiveAcceptanceCriterion
 func (s *BacklogService) WaiveAcceptanceCriterion(
 	ctx context.Context,
@@ -652,19 +634,21 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 	switch {
 	case session.AcActorFrom(ctx).Class == session.AcActorAgentSession:
 		return deny(connect.CodePermissionDenied, "denied:agent_session",
-			errors.New("acceptance criteria can only be waived by the owner, not from an agent session"))
+			errors.New("acceptance criteria cannot be waived from a request carrying an agent-session identity"))
 	case current.ArchivedAt != nil || current.Status == string(session.BacklogStatusDone) || current.Status == string(session.BacklogStatusArchived):
 		return deny(connect.CodeFailedPrecondition, "denied:item_terminal",
 			fmt.Errorf("backlog item %q is %s; its criteria can no longer be waived", m.ItemId, current.Status))
 	case strings.TrimSpace(m.Reason) == "":
 		return deny(connect.CodeInvalidArgument, "rejected:reason_required", session.ErrWaiverReasonRequired)
+	case len(m.Reason) > maxWaiverReason:
+		return deny(connect.CodeInvalidArgument, "rejected:reason_too_long", fmt.Errorf("waiver reason is limited to %d bytes", maxWaiverReason))
 	}
 
 	err = s.storage.WaiveAcCriterion(ctx, m.ItemId, idx, m.Reason)
 	switch {
 	case errors.Is(err, session.ErrNotFound):
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
-	case errors.Is(err, session.ErrAcCriterionAlreadyDone):
+	case errors.Is(err, session.ErrAcCriterionAlreadyDone), errors.Is(err, session.ErrAcCriterionAlreadyWaived):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, session.ErrWaiverReasonRequired), errors.Is(err, session.ErrAcCriterionOutOfRange):
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)

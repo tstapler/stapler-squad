@@ -21,6 +21,8 @@ func (AcAuditEvent) Fields() []ent.Field {
 	return []ent.Field{
 		field.UUID("id", uuid.UUID{}).Default(uuid.New),
 		field.UUID("item_id", uuid.UUID{}),
+		field.String("item_public_id").Optional().
+			Comment("The item's bl_ public id at write time, so the trail stays readable by that id after the item is deleted."),
 		field.Int("criterion_index"),
 		field.String("previous_status").Optional(),
 		field.String("new_status").Optional().
@@ -29,7 +31,7 @@ func (AcAuditEvent) Fields() []ent.Field {
 		field.String("outcome").
 			Comment("applied, or denied:<why> / rejected:<why> when nothing changed."),
 		field.String("actor_class").
-			Comment("operator_authenticated, agent_session, mcp_session or unverified. Only operator_authenticated and verified mcp sessions are proven; unverified means no identity signal, not 'is the operator'."),
+			Comment("authenticated_session_cookie, authenticated_bearer_token, agent_session, mcp_session, system or unverified. A claim about the caller, not proof of who the owner is; only a verified session proof proves an agent session."),
 		field.String("actor_session_uuid").Optional().
 			Comment("Claimed or verified session UUID, see session_verified."),
 		field.Bool("session_verified").Default(false),
@@ -42,5 +44,5 @@ func (AcAuditEvent) Fields() []ent.Field {
 }
 
 func (AcAuditEvent) Indexes() []ent.Index {
-	return []ent.Index{index.Fields("item_id", "created_at")}
+	return []ent.Index{index.Fields("item_id", "created_at"), index.Fields("item_public_id")}
 }

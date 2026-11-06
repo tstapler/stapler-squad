@@ -10,7 +10,7 @@ message AcCriterion {
   int32 index = 1;
   string text = 2;
   string status = 3; // "pending", "in_progress", "done", "fail", "waived"
-  // Owner's justification; set only when status is "waived".
+  // Justification given with the waiver; set only when status is "waived".
   string waiver_reason = 4;
   // Who waived (display label of the recorded caller identity) and when (RFC 3339 UTC).
   string waived_by = 5;
@@ -784,11 +784,12 @@ message AcAuditEvent {
   string reason = 6;
   // "applied", or "denied:<why>" / "rejected:<why>" when nothing changed.
   string outcome = 7;
-  // operator_authenticated, agent_session, mcp_session or unverified.
+  // authenticated_session_cookie, authenticated_bearer_token, agent_session, mcp_session,
+  // system or unverified. A claim about the caller, not proof of who the owner is.
   string actor_class = 8;
   string actor_session_uuid = 9;
   bool session_verified = 10;
-  // ui, api or mcp (ui/api is a browser-header hint, not a security boundary).
+  // ui, api or mcp; ui/api and remote_addr are self-reported hints, not evidence.
   string source = 11;
   string remote_addr = 12;
   string user_agent = 13;
@@ -1666,9 +1667,10 @@ service BacklogService {
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
 
-  // WaiveAcceptanceCriterion lets the owner mark one acceptance criterion waived with a
-  // reason. A waived criterion satisfies the request_review gate. Human-operator only:
-  // no MCP tool exposes it.
+  // WaiveAcceptanceCriterion records an audited waiver of one acceptance criterion with a
+  // reason; a waived criterion satisfies the request_review gate. Agent-originated requests
+  // that carry an identity are denied; plain loopback callers are recorded as unverified.
+  // No MCP tool exposes it.
   rpc WaiveAcceptanceCriterion(WaiveAcceptanceCriterionRequest) returns (WaiveAcceptanceCriterionResponse) {}
 
   // ListAcAuditEvents returns the read-only audit trail of acceptance-criterion

@@ -1423,8 +1423,8 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 // --- AC criterion update ---
 
 // ErrAcCriterionWaived is returned when an agent-driven status update targets a
-// criterion the owner has waived; only the owner's waiver RPC changes it.
-var ErrAcCriterionWaived = errors.New("acceptance criterion was waived by the owner")
+// criterion that was waived; only the audited waiver path changes it.
+var ErrAcCriterionWaived = errors.New("acceptance criterion was waived")
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
@@ -1446,8 +1446,8 @@ var ErrAcCriterionOutOfRange = errors.New("acceptance criterion index out of ran
 // ErrWaiverReasonRequired is returned when a waiver carries a blank reason.
 var ErrWaiverReasonRequired = errors.New("a waiver needs a non-empty reason")
 
-// WaiveAcCriterion marks a criterion waived with the owner's non-empty reason.
-// Idempotent: re-waiving replaces the reason.
+// WaiveAcCriterion marks a criterion waived with a non-empty reason. Refused (and audited) when
+// the criterion is already done or already waived.
 func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -1455,8 +1455,11 @@ func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, cri
 	}
 	actor := AcActorFrom(ctx)
 	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(AcStatusWaived), reason: reason}, func(c *AcCriterion) error {
-		if c.Status == AcStatusDone {
+		switch c.Status {
+		case AcStatusDone:
 			return ErrAcCriterionAlreadyDone
+		case AcStatusWaived:
+			return ErrAcCriterionAlreadyWaived
 		}
 		c.Status = AcStatusWaived
 		c.WaiverReason = reason
@@ -1505,8 +1508,8 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	audit := func(prev, outcome string) error {
-		return r.createAcAuditEvent(ctx, tx.AcAuditEvent.Create(), AcAuditEventData{
-			ItemID: parsedID.String(), CriterionIndex: criterionIndex, PreviousStatus: prev,
+		return r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: criterionIndex, PreviousStatus: prev,
 			NewStatus: change.newStatus, Reason: change.reason, Outcome: outcome,
 		})
 	}
@@ -1540,8 +1543,12 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	if err != nil {
 		return fmt.Errorf("failed to save AC criteria update for item %s: %w", itemID, err)
 	}
-	if err := audit(prev, "applied"); err != nil {
-		return err
+	// Only a real status transition is a mutation worth an audit row; a repeated report of the
+	// same status (or a note-only update) is not.
+	if prev != change.newStatus {
+		if err := audit(prev, "applied"); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit AC update: %w", err)

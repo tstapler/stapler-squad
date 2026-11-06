@@ -19,13 +19,14 @@ function waivedByLine(c: AcCriterion): string {
   const who = c.waivedBy || "unknown caller (recorded before audit trail)";
   const parsed = c.waivedAt ? new Date(c.waivedAt) : null;
   const when = parsed && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleString() : "unknown time";
-  return `Waived by ${who} at ${when}`;
+  const unverified = who.includes("(verified)") ? "" : " (identity not verified)";
+  return `Waived by ${who} at ${when}${unverified}`;
 }
 
 interface AcCriteriaListProps {
   criteria: AcCriterion[];
   readonly?: boolean;
-  /** Owner waive action; when given, unmet criteria show a Waive button. */
+  /** Audited waive action; when given, unmet criteria show a Waive button. */
   onWaive?: (criterionIndex: number, reason: string) => Promise<void>;
 }
 

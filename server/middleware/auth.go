@@ -74,7 +74,8 @@ func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.H
 				return
 			}
 
-			if !isAuthenticated(r, validator) {
+			kind := authenticatedKind(r, validator)
+			if kind == "" {
 				// API call → 401 JSON
 				if isAPIPath(r.URL.Path) {
 					w.Header().Set("Content-Type", "application/json")
@@ -87,18 +88,24 @@ func Auth(validator AuthValidator, opts ...AuthOption) func(http.Handler) http.H
 				return
 			}
 
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), passkeyAuthenticatedKey{}, true)))
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), credentialKindKey{}, kind)))
 		})
 	}
 }
 
-type passkeyAuthenticatedKey struct{}
+type credentialKindKey struct{}
 
-// PasskeyAuthenticated reports whether Auth validated this request's passkey session cookie or
-// bearer token. It is false when auth is disabled or the path was exempt, so false never means
-// "agent" -- only "no proof of an operator".
-func PasskeyAuthenticated(ctx context.Context) bool {
-	v, _ := ctx.Value(passkeyAuthenticatedKey{}).(bool)
+// Credential kinds recorded by Auth. They say which credential was presented, nothing more: a
+// session cookie can be minted from the local API token, and a bearer token may be either.
+const (
+	CredentialCookie = "cookie"
+	CredentialBearer = "bearer"
+)
+
+// AuthCredentialKind returns the credential Auth validated for this request (CredentialCookie or
+// CredentialBearer), or "" when auth is disabled or the path was exempt. "" never means "agent".
+func AuthCredentialKind(ctx context.Context) string {
+	v, _ := ctx.Value(credentialKindKey{}).(string)
 	return v
 }
 
@@ -170,18 +177,22 @@ func isAPIPath(path string) bool {
 }
 
 func isAuthenticated(r *http.Request, validator AuthValidator) bool {
-	// Cookie
+	return authenticatedKind(r, validator) != ""
+}
+
+// authenticatedKind returns the credential that validated, or "".
+func authenticatedKind(r *http.Request, validator AuthValidator) string {
 	if cookie, err := r.Cookie("cs_auth"); err == nil && cookie.Value != "" {
 		if validator.ValidateAuthSession(cookie.Value) {
-			return true
+			return CredentialCookie
 		}
 	}
 	// Bearer token (API/headless clients)
 	auth := r.Header.Get("Authorization")
 	if len(auth) > 7 && auth[:7] == "Bearer " {
 		if validator.ValidateAuthSession(auth[7:]) {
-			return true
+			return CredentialBearer
 		}
 	}
-	return false
+	return ""
 }

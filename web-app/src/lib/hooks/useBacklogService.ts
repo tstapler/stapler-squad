@@ -37,7 +37,7 @@ export interface AcCriterion {
   index: number;
   text: string;
   status: AcCriterionStatus;
-  /** Owner's justification; set when status is "waived". */
+  /** Justification recorded with the waiver; set when status is "waived". */
   waiverReason?: string;
   waivedBy?: string;
   waivedAt?: string;
@@ -851,7 +851,7 @@ interface UseBacklogServiceReturn {
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
-  /** Owner-only: waive one acceptance criterion with a mandatory reason. Returns the refreshed item. */
+  /** Audited waiver of one acceptance criterion with a mandatory reason. Returns the refreshed item. */
   waiveAcceptanceCriterion: (id: string, criterionIndex: number, reason: string) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;

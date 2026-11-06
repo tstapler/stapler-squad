@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -20,16 +21,17 @@ const maxAuditUserAgent = 200
 
 // acActorFromRequest derives the best-available caller identity for an AC mutation.
 //
-// Signals: a passkey-authenticated request is the only proof of an operator. A request that
-// carries X-Stapler-Session-UUID or a session proof comes from an agent session (verified when
-// the proof checks out). Everything else is "unverified": on the local loopback surface an
-// agent's curl and the operator's own CLI look identical, so absence of an agent header must
-// never be read as "operator". The Connect surface has no identity middleware of its own.
+// This is a claim about the caller, not proof of who "the owner" is. A request that carries
+// X-Stapler-Session-UUID or a session proof is treated as an agent session (verified only when
+// the proof checks out). A request that passed the auth middleware is recorded with the credential
+// it presented (cookie or bearer token; either may derive from the local API token). Everything
+// else is "unverified": on the local loopback surface an agent's curl and the operator's own CLI
+// look identical, so the absence of an agent header must never be read as "operator".
 func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) session.AcActor {
 	actor := session.AcActor{
 		Class:      session.AcActorUnverified,
 		Source:     "api",
-		RemoteAddr: peerAddr,
+		RemoteAddr: truncateAuditField(peerAddr, 100),
 		UserAgent:  truncateAuditField(h.Get("User-Agent"), maxAuditUserAgent),
 	}
 	if h.Get("Sec-Fetch-Site") == "same-origin" {
@@ -39,12 +41,18 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) ses
 	switch {
 	case sid != "" || proof != "":
 		actor.Class = session.AcActorAgentSession
-		actor.SessionUUID = sid
-		if p := DefaultMcpProofs(); p != nil && sid != "" && proof != "" {
-			actor.SessionVerified = p.Verify(sid, proof)
+		if _, err := uuid.Parse(sid); err == nil {
+			actor.SessionUUID = sid
+			if p := DefaultMcpProofs(); p != nil && proof != "" {
+				actor.SessionVerified = p.Verify(sid, proof)
+			}
+		} else {
+			actor.SessionUUID = "(invalid id)" // never echo attacker-controlled text into the trail
 		}
-	case middleware.PasskeyAuthenticated(ctx):
-		actor.Class = session.AcActorOperatorAuthenticated
+	case middleware.AuthCredentialKind(ctx) == middleware.CredentialCookie:
+		actor.Class = session.AcActorAuthenticatedSession
+	case middleware.AuthCredentialKind(ctx) == middleware.CredentialBearer:
+		actor.Class = session.AcActorAuthenticatedBearer
 	}
 	return actor
 }

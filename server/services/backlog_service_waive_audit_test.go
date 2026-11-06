@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -57,7 +58,7 @@ func TestWaiveAcceptanceCriterion_should_DenyAndAudit_When_RequestCarriesSession
 	t.Parallel()
 	f := newAuditFixture(t, session.BacklogStatusInProgress)
 
-	err := f.waive(t, t.Context(), 0, "self waive", map[string]string{"X-Stapler-Session-UUID": "agent-1"})
+	err := f.waive(t, t.Context(), 0, "self waive", map[string]string{"X-Stapler-Session-UUID": "11111111-1111-4111-8111-111111111111"})
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
@@ -65,7 +66,7 @@ func TestWaiveAcceptanceCriterion_should_DenyAndAudit_When_RequestCarriesSession
 	require.Len(t, rows, 1)
 	assert.Equal(t, "denied:agent_session", rows[0].Outcome)
 	assert.Equal(t, string(session.AcActorAgentSession), rows[0].ActorClass)
-	assert.Equal(t, "agent-1", rows[0].ActorSessionUUID)
+	assert.Equal(t, "11111111-1111-4111-8111-111111111111", rows[0].ActorSessionUUID)
 	assert.False(t, rows[0].SessionVerified, "an unproven claim must not be recorded as verified")
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
 	require.NoError(t, err)
@@ -133,7 +134,7 @@ func TestAcActorFromRequest_should_ClassifyOperator_When_PasskeyMiddlewareAuthen
 
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
-	assert.Equal(t, session.AcActorOperatorAuthenticated, got.Class)
+	assert.Equal(t, session.AcActorAuthenticatedBearer, got.Class)
 }
 
 type stubValidator struct{}
@@ -175,7 +176,7 @@ func TestUpdateBacklogItem_should_NotIntroduceOrClearWaiver_When_ClientResubmits
 func TestListAcAuditEvents_should_ReturnTrailOldestFirst(t *testing.T) {
 	t.Parallel()
 	f := newAuditFixture(t, session.BacklogStatusInProgress)
-	require.Error(t, f.waive(t, t.Context(), 0, "x", map[string]string{"X-Stapler-Session-UUID": "a"}))
+	require.Error(t, f.waive(t, t.Context(), 0, "x", map[string]string{"X-Stapler-Session-UUID": "11111111-1111-4111-8111-111111111111"}))
 	require.NoError(t, f.waive(t, t.Context(), 0, "y", nil))
 
 	resp, err := f.svc.ListAcAuditEvents(t.Context(), connect.NewRequest(&sessionv1.ListAcAuditEventsRequest{ItemId: f.itemID}))
@@ -185,4 +186,84 @@ func TestListAcAuditEvents_should_ReturnTrailOldestFirst(t *testing.T) {
 	assert.Equal(t, "denied:agent_session", resp.Msg.Events[0].Outcome)
 	assert.Equal(t, "applied", resp.Msg.Events[1].Outcome)
 	assert.NotNil(t, resp.Msg.Events[1].CreatedAt)
+}
+
+func TestAcActorFromRequest_should_ClassifyCookieAndBearerSeparately(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		set  func(*http.Request)
+		want session.AcActorClass
+	}{
+		"cookie": {func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "cs_auth", Value: "good"}) }, session.AcActorAuthenticatedSession},
+		"bearer": {func(r *http.Request) { r.Header.Set("Authorization", "Bearer good") }, session.AcActorAuthenticatedBearer},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got session.AcActor
+			h := middleware.Auth(stubValidator{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = acActorFromRequest(r.Context(), r.Header, r.RemoteAddr)
+			}))
+			req := httptest.NewRequest(http.MethodPost, "/api/x", nil)
+			tc.set(req)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			assert.Equal(t, tc.want, got.Class)
+		})
+	}
+}
+
+func TestAcActorFromRequest_should_MarkInvalidSessionIDAndCapRemoteAddr(t *testing.T) {
+	t.Parallel()
+	h := http.Header{}
+	h.Set("X-Stapler-Session-UUID", "<script>not-a-uuid</script>")
+
+	a := acActorFromRequest(t.Context(), h, strings.Repeat("x", 500))
+
+	assert.Equal(t, session.AcActorAgentSession, a.Class)
+	assert.Equal(t, "(invalid id)", a.SessionUUID)
+	assert.False(t, a.SessionVerified)
+	assert.Len(t, a.RemoteAddr, 100)
+	assert.Contains(t, a.Label(), "unverified claim")
+}
+
+func TestWaiveAcceptanceCriterion_should_RefuseRewaiveAndOversizedReason(t *testing.T) {
+	t.Parallel()
+	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	require.NoError(t, f.waive(t, t.Context(), 0, "first", nil))
+
+	err := f.waive(t, t.Context(), 0, "second", nil)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+
+	f2 := newAuditFixture(t, session.BacklogStatusInProgress)
+	err = f2.waive(t, t.Context(), 0, strings.Repeat("r", maxWaiverReason+1), nil)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesExistingWaiverByText(t *testing.T) {
+	t.Parallel()
+	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil)) // "pending one"
+
+	// Re-triage: reorders, inserts, and the model emits a bogus waived status plus waiver metadata.
+	result := &session.HeadlessTriageResult{AcceptanceCriteria: []session.AcCriterion{
+		{Text: "brand new", Status: session.AcStatusWaived, WaiverReason: "model says so", WaivedBy: "model"},
+		{Text: "done one", Status: session.AcStatusDone},
+		{Text: "Pending One", Status: session.AcStatusPending},
+	}}
+	var update session.BacklogItemUpdate
+	applyTriageResultToUpdate(result, &update)
+	_, err := f.storage.UpdateBacklogItem(session.WithAcActor(t.Context(), session.AcActor{Class: session.AcActorSystem, Source: "api"}), f.itemID, update, nil)
+	require.NoError(t, err)
+
+	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
+	require.NoError(t, err)
+	got, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, session.AcStatusPending, got[0].Status, "model-emitted waiver is normalised away")
+	assert.Empty(t, got[0].WaivedBy)
+	assert.Equal(t, session.AcStatusWaived, got[2].Status, "existing waiver follows its text to the new index")
+	assert.Equal(t, "owner call", got[2].WaiverReason)
+	assert.NotEmpty(t, got[2].WaivedBy)
 }

@@ -1666,6 +1666,11 @@ func (s *Storage) RecordAcAudit(ctx context.Context, d AcAuditEventData) error {
 	return s.repo.RecordAcAudit(ctx, d)
 }
 
+// PruneAcAuditOlderThan deletes AC audit rows older than cutoff and returns the count removed.
+func (s *Storage) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	return s.repo.PruneAcAuditOlderThan(ctx, cutoff)
+}
+
 // ListAcAudit returns an item's AC audit trail, oldest first.
 func (s *Storage) ListAcAudit(ctx context.Context, itemID string) ([]AcAuditEventData, error) {
 	return s.repo.ListAcAudit(ctx, itemID)
