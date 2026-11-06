@@ -22,7 +22,7 @@ function freshCopy(): string {
 
 function opts(root: string, extra: Record<string, unknown> = {}) {
   return {
-    ...optionsFromEnv([], { NEXT_PUBLIC_RECONNECT_V2: "sentinel-reconnect", NEXT_PUBLIC_OTEL_ENABLED: "sentinel-otel" }),
+    ...optionsFromEnv([], { NEXT_PUBLIC_CONNECTRPC_NATIVE_STREAMING: "sentinel-streaming", NEXT_PUBLIC_OTEL_ENABLED: "sentinel-otel" }),
     root,
     allowlistPath: path.join(root, "allowlist.json"),
     budgetsPath: path.join(root, "budgets.json"),
