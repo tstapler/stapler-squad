@@ -1,0 +1,21 @@
+# Hermeticity downgrades (Task 7.7a, T7 H4). Each non-comment row is one action that carries `no-remote-cache`
+# (or runs on a host tool) because its output is not proven byte-reproducible. hermeticity.sh counts the rows
+# (H4) and the parity report prints them; tools/bzl/determinism reads the first column as an action mnemonic.
+#
+# Columns, separated by `|`:  action | tool | pin | reason | owner-accepted
+#   action          Bazel action mnemonic (or test target) that carries the tag
+#   tool            host or repository-rule tool the action depends on
+#   pin             where that tool's version is pinned
+#   reason          why the action cannot be remote-cached yet
+#   owner-accepted  date the owner accepted the downgrade, or `pending` while only D-HERMETIC (plan.md, still
+#                   unchecked) covers it. `pending` rows still count in H4.
+#
+# A row is removed together with its tag once `bazel run //tools/bzl/determinism` (bazel-determinism.yml) reports
+# the action matched ("NOTE ... may be removed"). Rows below are the tags that exist in the tree today; add a row in
+# the same change that adds a new `no-remote-cache` tag.
+#
+# Not listed: the tmux build (tools/bzl/tmux) builds from the pinned tarball through rules_foreign_cc and carries no
+# downgrade tag; D-HERMETIC would only apply if that build were changed to a host cc genrule.
+BunWebBuild | bun + node_modules from the web_node_modules repository rule | .bun-version, web-app/bun.lock | tools/bzl/bun/bun.bzl exec_tags: node_modules not proven byte-reproducible (Story 7.7); also no-sandbox (S4: sandboxed cost 2.6x make) | pending
+BufGenTs | protoc-gen-es from the Bun install, Go-built buf | .bun-version, web-app/bun.lock, buf in go.mod | tools/bzl/proto/ts.bzl: plugin output not proven byte-reproducible across hosts | pending
+//web-app:jest | bun + node_modules from the web_node_modules repository rule | .bun-version, web-app/bun.lock | web-app/BUILD.bazel tag: web build output not proven byte-reproducible (Story 7.7) | pending
