@@ -65,7 +65,7 @@ func TestMergePR_ShouldTargetActivePR_WhenNoPRSelector(t *testing.T) {
 	svc, rec := prTargetService(t, mergedAndOpen...)
 	_, err := svc.MergePR(context.Background(), connect.NewRequest(&sessionv1.MergePRRequest{Id: "multi"}))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"merge#12:squash"}, rec.calls)
+	assert.Equal(t, []string{"merge#12:merge"}, rec.calls)
 }
 
 func TestResolveTargetPR_ShouldFailPrecondition_WhenPRNotAttached(t *testing.T) {
