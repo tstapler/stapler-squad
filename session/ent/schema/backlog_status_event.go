@@ -54,5 +54,8 @@ func (BacklogStatusEvent) Edges() []ent.Edge {
 func (BacklogStatusEvent) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("item_id", "created_at"),
+		// Serves the flow-analytics window read (created_at >= ?); without it
+		// that read is a full table scan (ADR-004 spike result).
+		index.Fields("created_at"),
 	}
 }
