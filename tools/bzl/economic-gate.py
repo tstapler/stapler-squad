@@ -13,6 +13,10 @@ decision never turns UNMEASURED into CLEAR. owner-attestations.yaml is read
 only, never written, and this script never picks a decision. Decisions apply
 to the EG gate only, not --midpoint.
 
+An input listed under `noisy_inputs` in that file was measured under load with the owner-authorised
+override (BZL_ALLOW_NOISY_HOST=1 / -allow-noisy-host); any criterion computed from it prints NOISY and the
+summary counts them. The verdict is still computed from the number; the tag is never hidden.
+
 Measurements not available from measured.json (S6/S10 timings, re-costed CU)
 come from a JSON file (--inputs, default spike-measurements.json beside
 spike-results.yaml). Keys: s10_second_run_job_s, unconverted_jobs_s,
@@ -225,6 +229,21 @@ def mid_t4(m, i):
     return _result("T4", "TRIP" if e > lim else "CLEAR", "latency %.1f s vs limit %.1f s" % (e, lim))
 
 
+CRITERION_INPUTS = {
+    "EG1": ("s10_second_run_job_s", "unconverted_jobs_s"), "EG2": ("s10_cold_run_s",),
+    "EG3": ("make_cold_median_s", "s6_first_cold_s", "s6_second_cold_s"), "EG4": ("recosted_cu_m",),
+    "EG5": ("e2e_selected_share_median",), "T1": ("mid_t1_ratio",),
+    "T3": ("mid_second_cold_s", "mid_first_cold_s"), "T4": ("mid_edit_test_s", "baseline_edit_test_s"),
+}
+
+
+def noisy_keys(i, cid):
+    """Inputs of criterion cid that the inputs file marks as measured under load."""
+    side = i.get("noisy_inputs")
+    side = side if isinstance(side, dict) else {}
+    return [k for k in CRITERION_INPUTS.get(cid, ()) if side.get(k)]
+
+
 def evaluate(m, i, midpoint=False):
     fns = (mid_t1, mid_t3, mid_t4) if midpoint else (eg1, eg2, eg3, eg4, eg5)
     return [f(m, i) for f in fns]
@@ -280,10 +299,16 @@ def main(argv=None):
     m = load_json(a.measured, True)
     i = load_json(a.inputs, False)
     results = evaluate(m, i, a.midpoint)
+    noisy = {}
     for r in results:
-        print("  %-3s %-10s %s" % (r["id"], r["status"], r["detail"]))
+        keys = noisy_keys(i, r["id"]) if r["status"] != UNMEASURED else []
+        if keys:
+            noisy[r["id"]] = keys
+        print("  %-3s %-10s %s%s" % (r["id"], r["status"], r["detail"], "  [NOISY: measured under load, owner-authorised; inputs " + ", ".join(keys) + "]" if keys else ""))
     evaluable = [r["id"] for r in results if r["status"] != UNMEASURED]
     unmeasured = [r["id"] for r in results if r["status"] == UNMEASURED]
+    if noisy:
+        print("NOISY: %d of %d evaluated criteria derive from inputs measured under load (%s); not quiet-host numbers" % (len(noisy), len(evaluable), ", ".join(sorted(noisy))))
     print("evaluable: %s; unmeasured: %s" % (", ".join(evaluable) or "none", ", ".join(unmeasured) or "none"))
     code, headline = verdict(results)
     if not a.midpoint:

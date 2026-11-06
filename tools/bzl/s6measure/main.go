@@ -4,6 +4,8 @@
 //	s6measure concurrent K worktrees building at the same time (peak combined RSS, wall time each)
 //
 // Every build is gated on a quiet host (1-minute load <= 2.0) and records the load before and after.
+// -allow-noisy-host (or BZL_ALLOW_NOISY_HOST=1) is the owner-authorised override: the build starts at once
+// under load and every result carries not_quiet:true plus load and free memory before and after.
 package main
 
 import (
@@ -42,6 +44,8 @@ func main() {
 type common struct {
 	repo, ref, dir, diskCache, target, out string
 	watchdogGB                             float64
+	allowNoisy                             bool
+	update                                 string
 	quietWait                              time.Duration
 }
 
@@ -53,10 +57,13 @@ func (c *common) flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.target, "target", "//:stapler-squad", "bazel target")
 	fs.StringVar(&c.out, "out", "", "write result JSON here")
 	fs.Float64Var(&c.watchdogGB, "watchdog-gb", 20, "kill the builds if combined RSS exceeds this (host protection, not the 12 GB verdict bound)")
+	fs.BoolVar(&c.allowNoisy, "allow-noisy-host", false, "OWNER-AUTHORISED OVERRIDE: measure under load instead of waiting for a quiet host (also BZL_ALLOW_NOISY_HOST=1); results are marked not_quiet")
+	fs.StringVar(&c.update, "update", "", "cold only: merge s6_/mid_ first and second cold keys (and noisy_inputs) into this inputs JSON")
 	fs.DurationVar(&c.quietWait, "quiet-wait", 40*time.Minute, "max wait for a quiet host before a timed build")
 }
 
 func (c *common) check() error {
+	c.allowNoisy = AllowNoisy(c.allowNoisy, os.Getenv(noisyEnv))
 	if c.dir == "" || c.diskCache == "" {
 		return fmt.Errorf("-dir and -disk-cache are required")
 	}
@@ -123,7 +130,9 @@ type Build struct {
 	LoadPre      float64 `json:"load_pre"`
 	LoadPost     float64 `json:"load_post"`
 	Quiet        bool    `json:"quiet_at_start"`
+	NotQuiet     bool    `json:"not_quiet"`
 	MemAvailPre  float64 `json:"mem_avail_gb_pre"`
+	MemAvailPost float64 `json:"mem_avail_gb_post"`
 	PeakRSSKB    int64   `json:"peak_rss_kb"`
 	OutputBaseKB int64   `json:"output_base_kb"`
 	Log          string  `json:"log"`
@@ -143,7 +152,13 @@ func duKB(path string) int64 {
 func (c *common) build(label, wt, ob string, quiet bool, sampler *Sampler) Build {
 	b := Build{Label: label, WT: wt, Quiet: true}
 	if quiet {
-		b.LoadPre, b.Quiet = waitQuiet(c.quietWait)
+		if c.allowNoisy {
+			b.LoadPre = loadNow()
+			b.Quiet = !IsNoisy(b.LoadPre, b.LoadPre)
+			fmt.Fprintf(os.Stderr, "s6measure: NOISY HOST OVERRIDE: starting %s at 1-min load %.2f\n", label, b.LoadPre)
+		} else {
+			b.LoadPre, b.Quiet = waitQuiet(c.quietWait)
+		}
 	} else {
 		b.LoadPre = loadNow()
 	}
@@ -162,6 +177,8 @@ func (c *common) build(label, wt, ob string, quiet bool, sampler *Sampler) Build
 	err := cmd.Run()
 	b.WallS = time.Since(t0).Seconds()
 	b.LoadPost = loadNow()
+	b.MemAvailPost = memAvailGB()
+	b.NotQuiet = IsNoisy(b.LoadPre, b.LoadPost)
 	if err != nil {
 		b.ExitCode = 1
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -235,7 +252,7 @@ func runCold(args []string) error {
 	all = append(all, fa)
 	c.dropWT(a, aob)
 	if fa.ExitCode != 0 {
-		return writeOut(c.out, map[string]any{"builds": all, "error": "first build failed"})
+		return writeOut(c.out, map[string]any{"builds": all, "error": "first build failed", "not_quiet": AnyNoisy(all)})
 	}
 	for k := 1; k <= *runs; k++ {
 		wt, err := c.addWT(fmt.Sprintf("b%d", k), k%4+1)
@@ -252,7 +269,20 @@ func runCold(args []string) error {
 		all = append(all, b)
 		c.dropWT(wt, ob)
 	}
-	return writeOut(c.out, map[string]any{"builds": all, "second_median_s": medianWall(all[1:])})
+	return c.finishCold(all)
+}
+
+func (c *common) finishCold(all []Build) error {
+	noisy := AnyNoisy(all)
+	second := medianWall(all[1:])
+	if c.update != "" && all[0].ExitCode == 0 && second >= 0 {
+		first := all[0].WallS
+		kv := map[string]any{"s6_first_cold_s": first, "s6_second_cold_s": second, "mid_first_cold_s": first, "mid_second_cold_s": second}
+		if err := UpdateInputs(c.update, kv, noisy, NoisyEntry(all, "s6measure cold")); err != nil {
+			return err
+		}
+	}
+	return writeOut(c.out, map[string]any{"builds": all, "second_median_s": second, "not_quiet": noisy, "allow_noisy_host": c.allowNoisy})
 }
 
 func medianWall(bs []Build) float64 {
@@ -290,7 +320,9 @@ func runConcurrent(args []string) error {
 		}
 		us = append(us, unit{wt, ob})
 	}
-	waitQuiet(c.quietWait)
+	if !c.allowNoisy {
+		waitQuiet(c.quietWait)
+	}
 	var sampler Sampler
 	sampler.WatchdogKB = int64(c.watchdogGB * 1024 * 1024)
 	res := make([]Build, *k)
@@ -307,5 +339,5 @@ func runConcurrent(args []string) error {
 	for _, u := range us {
 		c.dropWT(u.wt, u.ob)
 	}
-	return writeOut(c.out, map[string]any{"builds": res, "peak_combined_rss_kb": peak, "peak_combined_rss_gb": float64(peak) / 1024 / 1024, "watchdog_fired": sampler.Fired})
+	return writeOut(c.out, map[string]any{"builds": res, "peak_combined_rss_kb": peak, "peak_combined_rss_gb": float64(peak) / 1024 / 1024, "watchdog_fired": sampler.Fired, "not_quiet": AnyNoisy(res), "allow_noisy_host": c.allowNoisy})
 }

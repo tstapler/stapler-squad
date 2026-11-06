@@ -199,5 +199,30 @@ class Ra2Projection(unittest.TestCase):
         self.assertEqual(run(dict(MEASURED, ra2_non_go_share=0.987), dict(CLEAR))[0], 3)
 
 
+class Noisy(unittest.TestCase):
+    SIDE = {"s6_first_cold_s": {"not_quiet": True}, "mid_edit_test_s": {"not_quiet": True}}
+
+    def test_clean_inputs_print_no_tag(self):
+        _, out = run(MEASURED, dict(CLEAR))
+        self.assertNotIn("NOISY", out)
+
+    def test_eg3_from_noisy_input_is_tagged_and_counted_but_verdict_still_computed(self):
+        code, out = run(MEASURED, dict(CLEAR, noisy_inputs=self.SIDE))
+        eg3 = [ln for ln in out.splitlines() if ln.strip().startswith("EG3")][0]
+        self.assertIn("[NOISY", eg3)
+        self.assertIn("s6_first_cold_s", eg3)
+        self.assertIn("NOISY: 1 of", out)
+        self.assertEqual(run(MEASURED, dict(CLEAR, s6_first_cold_s=9999, noisy_inputs=self.SIDE))[0], 3)
+
+    def test_midpoint_t4_tagged(self):
+        _, out = run(MEASURED, {"mid_edit_test_s": 3, "baseline_edit_test_s": 2, "noisy_inputs": self.SIDE}, "--midpoint")
+        t4 = [ln for ln in out.splitlines() if ln.strip().startswith("T4")][0]
+        self.assertIn("[NOISY", t4)
+
+    def test_unmeasured_criterion_is_never_tagged(self):
+        _, out = run(MEASURED, {"noisy_inputs": self.SIDE})
+        self.assertNotIn("[NOISY", out)
+
+
 if __name__ == "__main__":
     unittest.main()

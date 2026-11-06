@@ -863,3 +863,24 @@ Second-worktree cold build median of 5 versus the make median (56.04 s, `baselin
 
 ### Economic gate hook
 `spike-measurements.json` now holds `make_cold_median_s` = 56.04 and `mid_t1_ratio` = 0.0143. `s6_first_cold_s`, `s6_second_cold_s`, `mid_first_cold_s`, `mid_second_cold_s` and `mid_edit_test_s` are absent, so `economic-gate.py` reports EG3 and T3/T4 UNMEASURED.
+
+## S6 worktree cost and Story 2.7 T3/T4 under load (2026-11-06) - MEASURED UNDER LOAD, OWNER-AUTHORISED; NO S6 VERDICT
+
+The owner authorised measuring on the busy host (`BZL_ALLOW_NOISY_HOST=1` / `-allow-noisy-host`; the default still refuses above a 1-minute load of 2.0). Every number below is NOT a quiet-host number: 1-minute load was 15 to 48 for all runs. Inputs are tagged under `noisy_inputs` in `spike-measurements.json`, and `economic-gate.py` and `check-spike-results.py` print NOISY for anything derived from them. Raw output: `s6measure cold` (`-runs 5`, empty disk cache, `//:stapler-squad`, wrapper with `BAZEL_WRAPPER_SLOTS=3`) and `economic-midpoint t4` (`-runs 5`).
+
+| Run | wall s | load1 pre / post | free mem GB pre / post |
+|---|---|---|---|
+| first worktree, cold | 222.8 | 26.33 / 43.35 | 38.6 / 33.7 |
+| second worktree 1 | 36.4 | 38.99 / 34.03 | 36.8 / 38.9 |
+| second worktree 2 | 36.2 | 34.03 / 31.25 | 40.7 / 37.7 |
+| second worktree 3 | 33.7 | 30.11 / 29.15 | 40.0 / 38.6 |
+| second worktree 4 | 35.3 | 27.77 / 43.50 | 40.0 / 34.7 |
+| second worktree 5 | 33.8 | 47.42 / 47.69 | 36.2 / 35.7 |
+
+Second-worktree median 35.3 s. T4 (`bazel test //config:all` after a comment edit of `config/background_models.go`): 3.12, 1.13, 1.13, 1.19, 1.13 s, median 1.13 s at load 15.3 to 15.6; run 1 was disturbed by a `git checkout` of the edited file by the operator mid-run, the median does not depend on it. The file was restored (`git status` clean of it).
+
+### Verdicts the data supports
+- T3: 35.3 s <= 0.25 x 222.8 s = 55.7 s, PASS [NOISY]. T4: 1.13 s <= max(1.25 x 2.687, 2.687 + 5) = 7.7 s, PASS [NOISY]. `economic-gate.py --midpoint` exits 0.
+- EG3: first cold 222.8 s > 3.0 x 56.04 s = 168 s, TRIP [NOISY]; second cold 35.3 s <= 2.0 x 0.6 x 56.04 s = 67 s. A quiet host would likely be faster, so the first-cold trip is not proof; it needs a quiet-host rerun.
+- S6: NO ROW WRITTEN. The first clause (median second-worktree cold build <= 30% of the make median 56.04 s, i.e. 16.8 s) reads 35.3 s here, but a number taken at load 15 to 48 cannot show a Fail either. A Pass is impossible: 3 concurrent builds peak RSS, 8 queued invocations plus the terminal-stream p99, Task 0.10c and E1 to E6/E8 were not run (their tools are still not in the tree). `check-spike-results.py` keeps S6 as MISSING, which blocks like a Fail.
+- Peak RSS per single build (sampled, Bazel server tree): 6.2 GB first cold, 2.3 to 3.5 GB second builds; output base after a second build 1.6 GB.

@@ -93,3 +93,30 @@ func TestMergeInputsKeepsOtherKeys(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+func TestNoisyOverride(t *testing.T) {
+	if AllowNoisy(false, "") || AllowNoisy(false, "yes") || !AllowNoisy(true, "") || !AllowNoisy(false, "1") {
+		t.Fatal("override must be opt-in via flag or BZL_ALLOW_NOISY_HOST=1")
+	}
+	if IsNoisy(2.0, 1.0) || !IsNoisy(2.01, 1.0) || !IsNoisy(1.0, 3.0) || !IsNoisy(math.NaN(), 1.0) {
+		t.Fatal("IsNoisy limit")
+	}
+}
+
+func TestMergeNoisyAndTag(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "in.json")
+	e := map[string]any{"not_quiet": true}
+	if err := MergeNoisy(p, map[string]any{"mid_edit_test_s": 7.5}, true, e); err != nil {
+		t.Fatal(err)
+	}
+	m := readJSON(p)
+	if NoisyTag(m, "mid_edit_test_s") != " [NOISY]" || noisyTagFor("T4", m) != " [NOISY]" || noisyTagFor("T3", m) != "" {
+		t.Fatal(m)
+	}
+	if err := MergeNoisy(p, map[string]any{"mid_edit_test_s": 5.0}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if NoisyTag(readJSON(p), "mid_edit_test_s") != "" {
+		t.Fatal("quiet re-measure clears the tag")
+	}
+}

@@ -160,5 +160,32 @@ class CheckSpikeResults(unittest.TestCase):
         self.assertEqual(per_id["S10"], "Pass")
 
 
+class Noisy(unittest.TestCase):
+    def run_main(self, rows_text, measurements):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "spike-results.yaml")
+            open(p, "w").write(rows_text)
+            if measurements is not None:
+                json.dump(measurements, open(os.path.join(d, "spike-measurements.json"), "w"))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = csr.main(["x", p])
+            return code, out.getvalue()
+
+    def rows(self, noisy):
+        return "".join("- spike: %s\n  verdict: Pass\n%s" % (s, "  noisy: true\n" if noisy and s == "S6" else "") for s in csr.REQUIRED)
+
+    def test_noisy_row_and_inputs_are_tagged_but_verdict_unchanged(self):
+        code, out = self.run_main(self.rows(True), {"noisy_inputs": {"mid_edit_test_s": {"not_quiet": True}}})
+        self.assertEqual(code, 0)
+        self.assertIn("S6", [ln for ln in out.splitlines() if "[NOISY" in ln][0])
+        self.assertIn("NOISY: 1 verdict row(s) (S6) and 1 measurement input(s) (mid_edit_test_s)", out)
+
+    def test_clean_run_prints_nothing_noisy(self):
+        _, out = self.run_main(self.rows(False), {"mid_t1_ratio": 0.01})
+        self.assertNotIn("NOISY", out)
+
+
 if __name__ == "__main__":
     unittest.main()

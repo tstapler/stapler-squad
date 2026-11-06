@@ -4,6 +4,8 @@
 //	economic-midpoint t4     warm edit-build-test latency of `bazel test //config:all`
 //	economic-midpoint report print T1/T3/T4 PASS|FAIL from spike-measurements.json + measured.json
 //
+// t4 takes -allow-noisy-host (or BZL_ALLOW_NOISY_HOST=1), the owner-authorised override: it runs under load
+// instead of waiting for a quiet host, and its output and inputs entry are marked not_quiet / [NOISY].
 // A criterion that cannot be evaluated prints FAIL (plan rule), with the reason on stderr.
 package main
 
@@ -181,7 +183,9 @@ func runT4(args []string) error {
 	out := fs.String("out", "", "write samples JSON here")
 	update := fs.String("update", "", "merge mid_edit_test_s into this inputs JSON")
 	wait := fs.Duration("wait", 40*time.Minute, "max wait for a quiet host before each run")
+	noisyFlag := fs.Bool("allow-noisy-host", false, "OWNER-AUTHORISED OVERRIDE: measure under load instead of waiting for a quiet host (also BZL_ALLOW_NOISY_HOST=1); results are marked not_quiet")
 	_ = fs.Parse(args)
+	allowNoisy := AllowNoisy(*noisyFlag, os.Getenv(noisyEnv))
 	if *file == "" || strings.HasSuffix(*file, "_test.go") {
 		return fmt.Errorf("-file must be a non-test file")
 	}
@@ -204,11 +208,23 @@ func runT4(args []string) error {
 		LoadPre  float64 `json:"load_pre"`
 		LoadPost float64 `json:"load_post"`
 		Quiet    bool    `json:"quiet"`
+		NotQuiet bool    `json:"not_quiet"`
+		MemPre   float64 `json:"mem_avail_gb_pre"`
+		MemPost  float64 `json:"mem_avail_gb_post"`
 	}
 	var ss []sample
 	var ts []float64
 	for i := 1; i <= *runs; i++ {
-		pre, ok := waitQuiet(*wait)
+		var pre float64
+		var ok bool
+		if allowNoisy {
+			pre = loadNow()
+			ok = !IsNoisy(pre, pre)
+			fmt.Fprintf(os.Stderr, "economic-midpoint: NOISY HOST OVERRIDE: run %d at 1-min load %.2f\n", i, pre)
+		} else {
+			pre, ok = waitQuiet(*wait)
+		}
+		memPre := memAvailGB()
 		edited := append(append([]byte(nil), orig...), []byte(fmt.Sprintf("\n// midpoint edit %d\n", i))...)
 		if err := os.WriteFile(path, edited, 0o644); err != nil {
 			return err
@@ -219,23 +235,54 @@ func runT4(args []string) error {
 		}
 		d := time.Since(t0).Seconds()
 		post := loadNow()
-		ss = append(ss, sample{i, d, pre, post, ok})
+		ss = append(ss, sample{i, d, pre, post, ok, IsNoisy(pre, post), memPre, memAvailGB()})
 		ts = append(ts, d)
 	}
 	med := median(ts)
+	entry := map[string]any{"not_quiet": false, "source": "economic-midpoint t4", "authorisation": "owner, measured under load; never a quiet-host number",
+		"load1_pre_max": math.Inf(-1), "load1_post_max": math.Inf(-1), "mem_avail_gb_min": math.Inf(1)}
+	for _, s := range ss {
+		if s.NotQuiet {
+			entry["not_quiet"] = true
+		}
+		entry["load1_pre_max"] = math.Max(entry["load1_pre_max"].(float64), s.LoadPre)
+		entry["load1_post_max"] = math.Max(entry["load1_post_max"].(float64), s.LoadPost)
+		entry["mem_avail_gb_min"] = math.Min(entry["mem_avail_gb_min"].(float64), math.Min(s.MemPre, s.MemPost))
+	}
+	noisy := entry["not_quiet"] == true
 	if *out != "" {
-		b, _ := json.MarshalIndent(map[string]any{"samples": ss, "median_s": med}, "", "  ")
+		b, _ := json.MarshalIndent(map[string]any{"samples": ss, "median_s": med, "not_quiet": noisy, "allow_noisy_host": allowNoisy, "summary": entry}, "", "  ")
 		if err := os.WriteFile(*out, append(b, '\n'), 0o644); err != nil {
 			return err
 		}
 	}
 	if *update != "" {
-		if err := MergeInputs(*update, map[string]any{"mid_edit_test_s": med}); err != nil {
+		if err := MergeNoisy(*update, map[string]any{"mid_edit_test_s": med}, noisy, entry); err != nil {
 			return err
 		}
 	}
-	fmt.Printf("T4 median edit-build-test %.2f s over %d runs\n", med, len(ts))
+	tag := ""
+	if noisy {
+		tag = " [NOISY: measured under load, not a quiet-host number]"
+	}
+	fmt.Printf("T4 median edit-build-test %.2f s over %d runs%s\n", med, len(ts), tag)
 	return nil
+}
+
+func memAvailGB() float64 {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return math.NaN()
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(ln, "MemAvailable:"); ok {
+			var kb float64
+			if _, err := fmt.Sscan(v, &kb); err == nil {
+				return kb / 1024 / 1024
+			}
+		}
+	}
+	return math.NaN()
 }
 
 func readJSON(path string) map[string]any {
@@ -262,8 +309,19 @@ func runReport(args []string) error {
 		EvalT4(Num(i, "mid_edit_test_s"), base),
 	}
 	for _, v := range vs {
-		fmt.Println(v.Line())
+		fmt.Println(v.Line() + noisyTagFor(v.ID, i))
 		fmt.Fprintf(os.Stderr, "  %s %s\n", v.ID, v.Detail)
 	}
 	return nil
+}
+
+// noisyTagFor tags a verdict derived from any input listed under noisy_inputs.
+func noisyTagFor(id string, inputs map[string]any) string {
+	keys := map[string][]string{"T1": {"mid_t1_ratio"}, "T3": {"mid_second_cold_s", "mid_first_cold_s"}, "T4": {"mid_edit_test_s"}}
+	for _, k := range keys[id] {
+		if t := NoisyTag(inputs, k); t != "" {
+			return t
+		}
+	}
+	return ""
 }
