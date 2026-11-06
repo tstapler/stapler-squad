@@ -204,7 +204,7 @@ func ensureDaemonOnFreshLoopbackPort(t *testing.T, bin string) (DaemonConfig, Ty
 			return cfg, ready, err
 		}
 		t.Logf("port %s was taken before tymuxd could bind it; retrying on a fresh port (attempt %d/%d)", cfg.Addr, attempt+1, maxPortAttempts)
-		_ = stopTymuxdFn()
+		_ = stopTymuxdFn(StopReason{Kind: StopManual})
 		truncateTymuxdOutputLog(t)
 	}
 	return cfg, ready, err
@@ -235,7 +235,7 @@ func TestIntegration_EnsureDaemonRunning_ColdStart_SpawnsRealTymuxdAndBecomesHea
 	withFastRetryBounds(t, 8, 50*time.Millisecond, 300*time.Millisecond)
 
 	cfg, ready, err := ensureDaemonOnFreshLoopbackPort(t, bin)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 
 	require.NoError(t, err)
 	assert.True(t, ready.Spawned, "a genuine cold start must report Spawned true")
@@ -250,7 +250,7 @@ func TestIntegration_EnsureDaemonRunning_ReuseCase_DoesNotRespawnHealthyRealTymu
 
 	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 	firstPID := readTymuxdPID(t)
 
 	ready, err := EnsureDaemonRunning(context.Background(), cfg)
@@ -285,7 +285,7 @@ func TestIntegration_EnsureDaemonRunning_RecoversFromStuckAliveDaemon(t *testing
 	cfg := DaemonConfig{Addr: rightAddr, BinaryPath: bin, SocketPath: socketPath}
 
 	ready, err := EnsureDaemonRunning(context.Background(), cfg)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 
 	require.NoError(t, err, "must recover by killing the stuck predecessor and spawning a healthy replacement")
 	assert.True(t, ready.Spawned)
@@ -321,7 +321,7 @@ func TestIntegration_EnsureDaemonRunning_PortSquatted_FailsLoudly(t *testing.T) 
 	cfg := DaemonConfig{Addr: "http://" + listener.Addr().String(), BinaryPath: bin}
 
 	_, err = EnsureDaemonRunning(context.Background(), cfg)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrTymuxdPortSquatted)
@@ -337,7 +337,7 @@ func TestIntegration_EnsureDaemonRunning_MissingBinary_FailsPlainly(t *testing.T
 	cfg := DaemonConfig{Addr: "http://127.0.0.1:1", BinaryPath: "/nonexistent/tymuxd-binary-does-not-exist"}
 
 	_, err := EnsureDaemonRunning(context.Background(), cfg)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrTymuxdPortSquatted, "a missing binary is a plain spawn failure, not a port-squat")
@@ -356,13 +356,13 @@ func TestIntegration_EnsureDaemonRunning_DistinctSocketPaths_AllowConcurrentInst
 	cfgA := DaemonConfig{Addr: "http://" + reserveLoopbackAddr(t), BinaryPath: bin, SocketPath: shortSocketPath(t, "a")}
 	readyA, errA := EnsureDaemonRunning(context.Background(), cfgA)
 	require.NoError(t, errA)
-	t.Cleanup(func() { _ = stopTymuxdFn() }) // stops whatever instance A's config dir currently names
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) }) // stops whatever instance A's config dir currently names
 
 	envtest.NewIsolatedStateDir(t) // re-sets STAPLER_SQUAD_TEST_DIR — a second, independent config dir
 	cfgB := DaemonConfig{Addr: "http://" + reserveLoopbackAddr(t), BinaryPath: bin, SocketPath: shortSocketPath(t, "b")}
 	readyB, errB := EnsureDaemonRunning(context.Background(), cfgB)
 	require.NoError(t, errB)
-	t.Cleanup(func() { _ = stopTymuxdFn() }) // stops whatever instance B's config dir currently names
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) }) // stops whatever instance B's config dir currently names
 
 	assert.True(t, readyA.Spawned)
 	assert.True(t, readyB.Spawned)
@@ -420,7 +420,7 @@ func TestIntegration_EnsureDaemonRunning_SharedDefaultSocket_CollisionSurfacesLo
 	envtest.NewIsolatedStateDir(t)
 	cfgB := DaemonConfig{Addr: "http://" + reserveLoopbackAddr(t), BinaryPath: bin, SocketPath: sharedSocketPath} // same socket as cfgA, different everything else
 	_, errB := EnsureDaemonRunning(context.Background(), cfgB)
-	t.Cleanup(func() { _ = stopTymuxdFn() }) // stops whatever B's own PID file names, if anything
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) }) // stops whatever B's own PID file names, if anything
 
 	if errB == nil {
 		t.Skip("this tymuxd binary does not enforce the Unix-socket lock BUG-106 fixed against " +

@@ -872,6 +872,12 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
 	}
 	i.processManager = newPM
+	i.wireTmuxSession(command)
+	if backendOverride == BackendTymux {
+		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
+	}
+	newPM.ResetExitOnce()
+	newPM.SetOnExitCallback(instanceOnExitCallback(i))
 
 	i.mu.Lock()
 	i.Backend = backendOverride

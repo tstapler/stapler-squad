@@ -102,6 +102,37 @@ const (
 	driverStopTimeout = 6 * time.Second
 )
 
+// driverAttempt keeps the current run's activity floor separate from durable
+// prompt delivery. Every initial and retry driver constructs one in the core loop.
+type driverAttempt struct {
+	startedAt           time.Time
+	sentInitial         bool
+	initialPromptSentAt time.Time
+	nudgeSentAt         time.Time
+}
+
+func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
+	attempt := driverAttempt{startedAt: now}
+	if initialPrompt == "" {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = now
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = persisted
+	}
+	return attempt
+}
+
+func (a *driverAttempt) idleDuration(now, outputAt time.Time) time.Duration {
+	activityRef := a.startedAt
+	for _, candidate := range []time.Time{a.initialPromptSentAt, outputAt, a.nudgeSentAt} {
+		if candidate.After(activityRef) {
+			activityRef = candidate
+		}
+	}
+	return now.Sub(activityRef)
+}
+
 // dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
 // dialogUnanswered -> dialogAwaitingDismissal -> dialogGaveUp, keyed by a
 // content hash of the (tail-sliced, whitespace-normalized) dialog text.
@@ -395,37 +426,21 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
 	prURLLinked := inst.GitHubPRNumber > 0
 
-	// nudgeSentAt records when the last backlog-work nudge was sent.
-	// Zero means no nudge has been sent yet.
-	var nudgeSentAt time.Time
-
-	// No initial prompt configured — skip the send step; driver still handles
-	// startup dialogs, auto-approval, and monitoring.
-	sentInitial := initialPrompt == ""
-	var initialPromptSentAt time.Time
-	if sentInitial {
-		initialPromptSentAt = time.Now()
-	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
-		// Persisted record of an actual send in a previous service run --
-		// authoritative, checked before the output/JSONL heuristics below
-		// (which only exist for sessions that predate this field, or for the
-		// rare case a send happened but the persist call itself failed).
-		sentInitial = true
-		initialPromptSentAt = persisted
-	} else {
+	attempt := newDriverAttempt(inst, initialPrompt, time.Now())
+	if !attempt.sentInitial {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
 		// Persist the result via SetInitialPromptSentAt either way, so this
 		// session (predating the persisted field, or hit by an earlier failed
 		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -468,7 +483,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		// Stopped after sentInitial = potential unexpected exit.
-		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt); ret {
+		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, attempt.sentInitial, attempt.initialPromptSentAt); ret {
 			return
 		} else if cont {
 			continue
@@ -496,15 +511,15 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			// handleStartupDialogTick's doc comment.
 		}
 
-		if !sentInitial {
-			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &sentInitial, &initialPromptSentAt, &sendAttempts)
+		if !attempt.sentInitial {
+			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &attempt.sentInitial, &attempt.initialPromptSentAt, &sendAttempts)
 			continue
 		}
 
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, &attempt, time.Now())
 			if ret {
 				return
 			}
@@ -518,7 +533,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
-		prURLLinked = scanAndLinkPRURL(inst, sentInitial, prURLLinked, previewErr, output)
+		prURLLinked = scanAndLinkPRURL(inst, attempt.sentInitial, prURLLinked, previewErr, output)
 	}
 }
 
@@ -873,26 +888,31 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	markSent()
 }
 
-// handleInactivityTick checks for driver inactivity once the initial prompt
-// has been sent, sending a backlog-work nudge or escalating to
-// handleDriverFailure as needed. shouldContinue and shouldReturn tell the
-// caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
-	last := inst.LastMeaningfulOutputTime()
-	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
-	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
-	// from DB before the ReviewQueue poller had a chance to refresh it from live
-	// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
-	// fires immediately after startup.
-	activityRef := initialPromptSentAt
-	if !last.IsZero() && last.After(initialPromptSentAt) {
-		activityRef = last
+func driverWaitingForOperator(inst *Instance) bool {
+	status := inst.GetDetectedStatus()
+	if (InstanceStatusInfo{ClaudeStatus: status}).IsWaitingForUser() {
+		return true
 	}
-	if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
-		activityRef = *nudgeSentAt
+	if inst.HasTag(TagBacklogWork) {
+		return false
 	}
+	switch status {
+	case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
 
-	idle := time.Since(activityRef)
+func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, now time.Time) (shouldContinue, shouldReturn bool) {
+	if driverWaitingForOperator(inst) {
+		// Human response time is not agent inactivity; resumed work gets a fresh budget.
+		attempt.startedAt = now
+		attempt.nudgeSentAt = time.Time{}
+		return false, false
+	}
+	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
+	nudgeSentAt := &attempt.nudgeSentAt
 
 	// For backlog work sessions: send a task-reminder nudge before restarting.
 	// This preserves conversational context when Claude finishes but forgets to

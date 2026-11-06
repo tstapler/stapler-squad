@@ -461,8 +461,12 @@ func prFooter(origin PRFooterOrigin, item *BacklogItemData) string {
 
 // appendBacklogFooter returns the LLM-drafted body with exactly one trailing
 // newline, followed by the item footer.
-func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogItemData) string {
-	return strings.TrimRight(drafted, "\n") + "\n\n" + prFooter(origin, item)
+func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogItemData, prRemoteURL string) string {
+	body := strings.TrimRight(drafted, "\n") + "\n\n"
+	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+		body += line + "\n\n"
+	}
+	return body + prFooter(origin, item)
 }
 
 // buildFallbackPRBody composes a PR body from the backlog item's own data —
@@ -474,9 +478,12 @@ func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *BacklogIte
 // item's own problem statement (the "why"); the item's acceptance criteria
 // double as a test plan checklist since they are the only verification steps
 // this code path has available without an LLM call.
-func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin) string {
+func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin, prRemoteURL string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Summary\n%s\n", sanitizeField(item.Description, 1000))
+	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+		fmt.Fprintf(&sb, "\n%s\n", line)
+	}
 	sb.WriteString("\n" + prFooter(origin, item))
 
 	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
@@ -687,7 +694,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 		origin := l.getPRFooterOrigin()
 		prTitle := item.Title
-		prBody := buildFallbackPRBody(item, origin)
+		// Best-effort: without a remote URL no closing keyword is emitted.
+		prRemoteURL, _ := git.RemoteURL(wt.RepoPath, "origin")
+		prBody := buildFallbackPRBody(item, origin, prRemoteURL)
 		if pool := l.getHeadlessCaller(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
@@ -704,7 +713,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 				if draftErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 				} else if drafted != "" {
-					prBody = appendBacklogFooter(drafted, origin, item)
+					prBody = appendBacklogFooter(drafted, origin, item, prRemoteURL)
 				}
 			}
 		}

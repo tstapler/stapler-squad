@@ -25,7 +25,17 @@ const pageWithScroller = (name: string) => ({
   ),
 });
 
+// Real pages nest their own <main id="main-content"> inside the shell's, so the id is not unique.
+const pageWithNestedMain = {
+  default: () => (
+    <main id="main-content" data-testid="nested-main">
+      <h1>nested</h1>
+    </main>
+  ),
+};
+
 const routes: AppRoute[] = [
+  { path: "/nested", load: async () => pageWithNestedMain },
   { path: "/a", load: async () => pageWithScroller("a") },
   { path: "/b", load: async () => pageWithScroller("b") },
 ];
@@ -84,6 +94,19 @@ describe("ScrollPolicy", () => {
     const remounted = await screen.findByTestId("page-scroller-a");
     expect(remounted).not.toBe(first);
     expect(remounted.scrollTop).toBe(250);
+  });
+
+  it("restores a scroller whose id is duplicated by the shell's own element", async () => {
+    const router = setup();
+    await screen.findByText("a");
+    await go(router, "/nested");
+    const first = await screen.findByTestId("nested-main");
+    scrollTo(first, 300);
+    await go(router, "/b");
+    await screen.findByTestId("page-scroller-b");
+    await go(router, -1);
+    const remounted = await screen.findByTestId("nested-main");
+    expect(remounted.scrollTop).toBe(300);
   });
 
   it("leaves the position alone for a search-only change", async () => {

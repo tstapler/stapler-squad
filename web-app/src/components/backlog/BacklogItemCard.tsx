@@ -61,7 +61,7 @@ interface BacklogItemCardProps {
 
 // The bare externalId is only an issue number, so repo-qualify it from the URL
 // (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
-function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
+export function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
   const source = getSourceBadgeConfig(pluginId);
   const { fullRef, shortRef } = buildExternalRefLabels(pluginId, externalUrl, externalId);
   const href = safeExternalHref(externalUrl);
@@ -91,7 +91,7 @@ function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: s
   );
 }
 
-function AcSummary({ item }: { item: BacklogItem }) {
+export function AcSummary({ item }: { item: BacklogItem }) {
   if (item.acCriteria.length === 0) return null;
   const done = item.acCriteria.filter(isAcSatisfied).length;
   return (
@@ -112,7 +112,7 @@ const VERDICT_BADGE_CONFIG: Partial<Record<NonNullable<BacklogItem["gateVerdict"
 // FAIL/PARTIAL verdict that triggered rework is otherwise invisible until the
 // item is opened (PENDING is left unbadged: it just means a review is running,
 // not a signal worth a card badge).
-function VerdictBadge({ item }: { item: BacklogItem }) {
+export function VerdictBadge({ item }: { item: BacklogItem }) {
   if (!item.gateVerdict) return null;
   const config = VERDICT_BADGE_CONFIG[item.gateVerdict];
   if (!config) return null;

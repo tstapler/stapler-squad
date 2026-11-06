@@ -2,7 +2,7 @@
 /**
  * Scroll policy. The scroll container is found by measurement (the inner <main> on Settings, a
  * content <div> on Up Next), never the window. Forward navigation lands at the top, and the Up Next
- * tab change uses history.replaceState, so it adds no history entry and leaves scroll untouched.
+ * tab change uses history.replaceState, so it adds no history entry.
  */
 import { test, expect } from '@playwright/test';
 import { AppShellPage } from './pages/AppShellPage';
@@ -18,7 +18,7 @@ test.describe('scroll policy', () => {
     expect(observed.forwardNavScrollTop).toBe(0);
   });
 
-  test('switching the Up Next tab leaves scroll and the history length unchanged', async ({ page }) => {
+  test('switching the Up Next tab adds no history entry', async ({ page }) => {
     const shell = new AppShellPage(page);
     const upNext = new UpNextPage(page);
     await upNext.resetStorage();
@@ -34,25 +34,18 @@ test.describe('scroll policy', () => {
         return shell.scrollTop();
       })
       .toBe(SCROLL_OFFSET);
-    const before = await shell.scrollTop();
     const historyLength = await page.evaluate(() => history.length);
 
     await upNext.selectTab('queue');
     await expect(page).toHaveURL(/[?&]tab=queue/);
     expect(await page.evaluate(() => history.length)).toBe(historyLength);
-    expect(await shell.scrollTop()).toBe(before);
+    // No scrollTop assertion: the scroller lives inside each tab's panel, so the PRs scroller unmounts on
+    // the switch and the short queue panel doesn't scroll (the page object then measures an unrelated
+    // element). "A search-only change keeps position" is covered in lib/nav/__tests__/scroll-policy.test.tsx.
   });
 });
 
 test.describe('scroll policy on Back (UX G8)', () => {
-  // KNOWN GAP, found verifying this story against a real Bun build: ScrollPolicy.tsx's POP branch
-  // (src/lib/nav/ScrollPolicy.tsx) calls restore() with the position saved under the current
-  // location.key, but observed backScrollTop is 0, not the saved offset, on every run (verified
-  // with a real mouse-wheel scroll, not just a scripted scrollTop write, so this isn't a
-  // test-harness timing artifact). Needs an issue filed and a fix outside PR 7b's file set before
-  // this can be un-marked. test.fail() keeps the gap visible (and tracked as a red flag) instead
-  // of asserting a policy that does not hold.
-  test.fail();
   test('Back restores the previous scroll position (within 2px)', async ({ page }) => {
     const observed = await measureScrollPolicy(page);
     expect(observed.scrolledTo, 'the long page really scrolled').toBeGreaterThan(0);

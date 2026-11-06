@@ -8,6 +8,11 @@ See ADR-002 in `project_plans/go-git-fork-full-git-replacement/decisions/`.
 
 A fork tag misbehaves (build break, test failure, or a runtime regression traced to a fork patch).
 
+> **Warning:** stock `v5.19.3` rejects `extensions.worktreeConfig` (and `partialClone`/`preciousObjects`) on
+> `core.repositoryformatversion=0` repos, so every `OpenRepo` fails on any repo that has had a linked worktree.
+> The fork fixes this from `v5.19.3-ssq.2`; rolling back below that tag (or to stock) reintroduces
+> `core.repositoryformatversion does not support extension: worktreeconfig`.
+
 ## Steps
 
 1. Delete this line from `go.mod`:

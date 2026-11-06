@@ -84,15 +84,15 @@ func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
 		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
 	}
-	repo, err := OpenRepo(repoPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
-	}
-	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	loc := backend.Local{Root: backend.RepoRoot(repoPath)}
+	// Fully qualified so a local branch named "origin/<b>" cannot shadow the lookup.
+	sha, err := gitprovider.Backend().ResolveRef(ctx, loc, backend.RefName("refs/remotes/origin/"+mainBranch))
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
 	}
-	return ref.Hash().String(), nil
+	return string(sha), nil
 }
 
 // ResolveLocalBranchSHA returns the tip commit SHA of the local branch (refs/heads/<branchName>)
@@ -101,15 +101,14 @@ func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 // itself, just not guaranteed fresh, unlike falling back to repoPath's ambient HEAD which could be
 // checked out to any branch a concurrent process last left it on.
 func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
-	repo, err := OpenRepo(repoPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
-	}
-	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	loc := backend.Local{Root: backend.RepoRoot(repoPath)}
+	sha, err := gitprovider.Backend().ResolveRef(ctx, loc, backend.RefName("refs/heads/"+branchName))
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve local branch %s: %w", branchName, err)
 	}
-	return ref.Hash().String(), nil
+	return string(sha), nil
 }
 
 // ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
