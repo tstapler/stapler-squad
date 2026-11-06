@@ -554,10 +554,13 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, FormatSep, 4)
-		if len(fields) != 4 {
+		// Split from the right so a name containing the separator stays intact.
+		fields := strings.Split(line, FormatSep)
+		if len(fields) < 4 {
 			continue
 		}
+		n := len(fields)
+		fields = []string{strings.Join(fields[:n-3], FormatSep), fields[n-3], fields[n-2], fields[n-1]}
 		name := fields[0]
 		dead := fields[1] == "1"
 		// A session's window can have multiple panes; a session counts as

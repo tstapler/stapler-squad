@@ -82,3 +82,17 @@ func waitForPendingCM(t *testing.T, sess *TmuxSession) {
 		t.Fatalf("command not enqueued: %v", err)
 	}
 }
+
+func TestServerCommand_should_ReturnNotRunning_When_SessionIsRemote(t *testing.T) {
+	t.Parallel()
+	sess, _ := newDispatchTestSession(t)
+	sess.runner = remoteStubRunner{}
+	_, err := sess.ServerCommand(context.Background(), "list-sessions")
+	if !errors.Is(err, ErrControlModeNotRunning) {
+		t.Fatalf("err = %v, want ErrControlModeNotRunning", err)
+	}
+}
+
+type remoteStubRunner struct{ LocalRunner }
+
+func (remoteStubRunner) IsRemote() bool { return true }

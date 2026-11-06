@@ -1415,7 +1415,8 @@ func (t *TmuxSession) teardownControlModeGeneration(doneCh chan struct{}) (owner
 // mode is off, not started, or its normal-priority queue is backed up, so callers
 // can fall back to a subprocess.
 func (t *TmuxSession) ServerCommand(ctx context.Context, args ...string) (string, error) {
-	if !t.cmEnabledForBackground() {
+	// A remote session's client is attached to another host's tmux server.
+	if t.commandRunner().IsRemote() || !t.cmEnabledForBackground() {
 		return "", ErrControlModeNotRunning
 	}
 	return t.sendCMCommand(ctx, args...)

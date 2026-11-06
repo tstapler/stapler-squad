@@ -267,6 +267,37 @@ func TestReconcileOrphans_should_NotKill_When_UUIDMatchesKnownSession(t *testing
 	require.Empty(t, f.killTargets())
 }
 
+func TestReconcileOrphans_should_NotKill_When_NameIsKnownNameWithFusedEpoch(t *testing.T) {
+	t.Parallel()
+	live := liveInstance("staplersquad_dotfiles")
+	f := &fakeTmux{list: "staplersquad_dotfiles_1793909015|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
+
+	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_NotKill_When_ShowEnvironmentSucceedsWithUnexpectedBody(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{"", "-STAPLER_SESSION_UUID", "garbage"} {
+		f := &bodyFake{fakeTmux: fakeTmux{list: "staplersquad_x|1793909015\n"}, envBody: body}
+		reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+		require.Empty(t, f.killTargets(), body)
+	}
+}
+
+type bodyFake struct {
+	fakeTmux
+	envBody string
+}
+
+func (f *bodyFake) run(ctx context.Context, args ...string) ([]byte, string, error) {
+	if args[0] == "show-environment" {
+		return []byte(f.envBody), "", nil
+	}
+	return f.fakeTmux.run(ctx, args...)
+}
+
 // uuidFake answers show-environment with a fixed STAPLER_SESSION_UUID.
 type uuidFake struct{ fakeTmux }
 

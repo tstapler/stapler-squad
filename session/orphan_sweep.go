@@ -234,7 +234,12 @@ func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, 
 		envCancel()
 		switch {
 		case envErr == nil:
-			uuid := strings.TrimPrefix(strings.TrimSpace(string(envOut)), "STAPLER_SESSION_UUID=")
+			uuid, hasUUID := strings.CutPrefix(strings.TrimSpace(string(envOut)), "STAPLER_SESSION_UUID=")
+			if !hasUUID || uuid == "" {
+				// Success with an unexpected body: can't prove it's an orphan.
+				skippedUnsure++
+				continue
+			}
 			if _, known := knownUUIDs[uuid]; known {
 				// UUID matches a DB session that happened to be renamed or sanitized
 				// differently. Don't kill it.
