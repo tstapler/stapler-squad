@@ -173,6 +173,42 @@ export const chip = style({
   color: vars.color.textSecondary,
 });
 
+export const dialogContent = style({
+  selectors: { "&&": { maxWidth: "720px" } },
+});
+
+export const dialogTitle = style({
+  selectors: { "&:focus": { outline: "none" }, "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" } },
+});
+
+export const dialogMeta = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+});
+
+export const dialogRows = style({
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+});
+
+export const dialogClose = style({
+  position: "absolute",
+  top: vars.space["4"],
+  right: vars.space["4"],
+  minWidth: "32px",
+  minHeight: "32px",
+  fontSize: vars.fontSize.lg,
+  color: vars.color.textMuted,
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+});
+
 export const textButton = style({
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   fontSize: vars.fontSize.sm,

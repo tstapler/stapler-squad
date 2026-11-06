@@ -19,6 +19,8 @@ export interface FlowSectionBodyProps {
   comparison: CompareFlowWindowsResponse | null;
   /** Every number is a button that sets the `drill` URL parameter through this. */
   onDrill: (key: string) => void;
+  /** Opens the collapsed event timeline of one thrashing item. */
+  onViewEvents?: (itemId: string, invoker: HTMLElement) => void;
 }
 
 /** The response does not flag archived thrashers yet; callers with that knowledge pass their own ids. */
@@ -27,7 +29,7 @@ export const NO_ARCHIVED_IDS: ReadonlySet<string> = new Set();
 const captureSince = (summary: FlowSummary): Date | null => (summary.meta?.captureSince ? timestampDate(summary.meta.captureSince) : null);
 
 /** Maps a section id to its component; the page owns status, skeleton and error blocks. */
-export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectionBodyProps) {
+export function FlowSectionBody({ id, summary, comparison, onDrill, onViewEvents }: FlowSectionBodyProps) {
   switch (id) {
     case "tiles":
       return <FlowTiles summary={summary} comparison={comparison} onDrill={onDrill} />;
@@ -52,7 +54,7 @@ export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectio
         <FlowStuck stuck={summary.stuck} estimated={summary.stuck.meta?.estimated ?? []} captureSince={captureSince(summary)} onDrill={onDrill} />
       ) : null;
     case "anomalies":
-      return summary.anomalies ? <FlowAnomalies anomalies={summary.anomalies} archivedIds={NO_ARCHIVED_IDS} onDrill={onDrill} /> : null;
+      return summary.anomalies ? <FlowAnomalies anomalies={summary.anomalies} archivedIds={NO_ARCHIVED_IDS} onDrill={onDrill} onViewEvents={onViewEvents} /> : null;
     case "notes":
       return <FlowDataNotes notes={summary.notes} meta={summary.meta} />;
     default:

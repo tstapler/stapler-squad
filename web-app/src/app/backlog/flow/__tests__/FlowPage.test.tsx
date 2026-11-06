@@ -1,12 +1,12 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { CompareFlowWindowsResponseSchema, GetFlowSummaryResponseSchema } from "@/gen/session/v1/backlog_flow_pb";
+import { CompareFlowWindowsResponseSchema, GetFlowSummaryResponseSchema, GetItemFlowTimelineResponseSchema } from "@/gen/session/v1/backlog_flow_pb";
 import { FLOW_POLL_INTERVAL_MS } from "@/lib/hooks/useBacklogFlow";
 import { FlowPage } from "../FlowPage";
 import { AS_OF, location, makeSummary, renderAt, resourceExhausted } from "./flowFixtures";
 
-const mockClient = { getFlowSummary: jest.fn(), compareFlowWindows: jest.fn() };
+const mockClient = { getFlowSummary: jest.fn(), compareFlowWindows: jest.fn(), getItemFlowTimeline: jest.fn(), listFlowDrilldown: jest.fn() };
 
 jest.mock("@/lib/nav", () => jest.requireActual("@/lib/nav/impl.memory"));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
@@ -298,5 +298,26 @@ describe("FlowPage", () => {
 
     fireEvent.click(within(await screen.findByTestId("flow-tile-throughput")).getByRole("button", { name: /9 merged/ }));
     expect(location()).toBe("/backlog/flow?drill=tiles.merged");
+  });
+
+  it("FlowPage_should_OpenItemTimelineAndReturnFocus_When_ViewEventsActivated", async () => {
+    const anomalies = {
+      meta: { status: "ok" },
+      thrashItems: { value: 1, drillKey: "thrash.episode" },
+      items: { items: [{ itemId: "a90b99cb", title: "Flaky review", episodes: 2, events: 40, pair: "a <-> b" }], totalCount: 1, returnedCount: 1 },
+    };
+    mockClient.getFlowSummary.mockResolvedValue(respond({ anomalies }));
+    mockClient.getItemFlowTimeline.mockResolvedValue(create(GetItemFlowTimelineResponseSchema, { itemId: "a90b99cb", title: "Flaky review", entries: [], totalEntries: 0 }));
+    await renderAt("/backlog/flow", <FlowPage />);
+    fireEvent.click(await screen.findByTestId("flow-toggle-anomalies"));
+
+    const invoker = screen.getByRole("button", { name: /View events/ });
+    fireEvent.click(invoker);
+    const dialog = await screen.findByTestId("flow-item-timeline");
+    expect(mockClient.getItemFlowTimeline).toHaveBeenCalledWith(expect.objectContaining({ itemId: "a90b99cb", windowDays: 30 }));
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("flow-item-timeline")).toBeNull());
+    expect(invoker).toHaveFocus();
   });
 });

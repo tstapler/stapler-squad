@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { AppLink } from "@/components/ui/AppLink";
+import { FlowItemTimeline } from "@/components/backlog-flow/FlowItemTimeline";
 import { FlowSectionBody, NO_ARCHIVED_IDS } from "@/components/backlog-flow/FlowSectionBody";
 import { ThrashBanner } from "@/components/backlog-flow/ThrashBanner";
 import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
@@ -153,11 +154,19 @@ function useSectionNav() {
   return { openSections, jumpTo, toggleSection };
 }
 
+interface TimelineTarget {
+  itemId: string;
+  invoker: HTMLElement;
+}
+
 export function FlowPage() {
   const { announce } = useAnnounce();
   const now = useNow(CLOCK_TICK_MS);
   const { url, notices, selectWindow, selectCompare, selectDrill } = useFlowUrl();
   const { openSections, jumpTo, toggleSection } = useSectionNav();
+  const [timeline, setTimeline] = useState<TimelineTarget | null>(null);
+  const viewEvents = useCallback((itemId: string, invoker: HTMLElement) => setTimeline({ itemId, invoker }), []);
+  const closeTimeline = useCallback(() => setTimeline(null), []);
 
   const onSettled = useCallback(
     ({ kind, ok, asOf }: FlowSettled) => {
@@ -221,13 +230,14 @@ export function FlowPage() {
                   onReload={reload}
                 >
                   {empty && <EmptyWindow window={url.window} onWiden={selectWindow} />}
-                  {summary && !empty && <FlowSectionBody id={def.id} summary={summary} comparison={flow.comparison} onDrill={selectDrill} />}
+                  {summary && !empty && <FlowSectionBody id={def.id} summary={summary} comparison={flow.comparison} onDrill={selectDrill} onViewEvents={viewEvents} />}
                 </FlowSection>
               );
             })}
           </div>
         )}
       </div>
+      {timeline && <FlowItemTimeline itemId={timeline.itemId} window={url.window} returnFocusTo={timeline.invoker} onClose={closeTimeline} />}
     </div>
   );
 }

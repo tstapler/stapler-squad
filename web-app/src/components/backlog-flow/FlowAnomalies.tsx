@@ -16,6 +16,8 @@ interface FlowAnomaliesProps {
   /** Client clock; a parameter so tests do not depend on the wall clock. */
   now?: number;
   onDrill: (key: string) => void;
+  /** Opens the item's collapsed timeline; `invoker` is where focus returns when it closes. */
+  onViewEvents?: (itemId: string, invoker: HTMLElement) => void;
 }
 
 const SHORT_ID_LENGTH = 8;
@@ -27,9 +29,10 @@ interface RowProps {
   now: number;
   drillKey: string;
   onDrill: (key: string) => void;
+  onViewEvents?: FlowAnomaliesProps["onViewEvents"];
 }
 
-function Row({ row, archived, now, drillKey, onDrill }: RowProps) {
+function Row({ row, archived, now, drillKey, onDrill, onViewEvents }: RowProps) {
   const first = row.firstAt ? timestampDate(row.firstAt).getTime() : null;
   const last = row.lastAt ? timestampDate(row.lastAt).getTime() : null;
   const active = last !== null && now - last < FLOW_POLL_INTERVAL_MS;
@@ -59,13 +62,18 @@ function Row({ row, archived, now, drillKey, onDrill }: RowProps) {
         <AppLink href={`?item=${row.itemId}`} className={styles.link}>
           Open item<span className={srOnly}> {row.title}</span>
         </AppLink>
+        {onViewEvents && (
+          <button type="button" className={styles.textButton} onClick={(event) => onViewEvents(row.itemId, event.currentTarget)}>
+            View events<span className={srOnly}> {row.title}</span>
+          </button>
+        )}
       </td>
     </tr>
   );
 }
 
 /** One row per thrashing item (episodes merge across gaps, so an item still has several). */
-export function FlowAnomalies({ anomalies, archivedIds, now = Date.now(), onDrill }: FlowAnomaliesProps) {
+export function FlowAnomalies({ anomalies, archivedIds, now = Date.now(), onDrill, onViewEvents }: FlowAnomaliesProps) {
   const items = anomalies.items?.items ?? [];
   if (items.length === 0) return <p>No thrash episodes in this window</p>;
   const total = Math.max(anomalies.items?.totalCount ?? 0, items.length);
@@ -86,7 +94,7 @@ export function FlowAnomalies({ anomalies, archivedIds, now = Date.now(), onDril
           </thead>
           <tbody>
             {items.map((row) => (
-              <Row key={row.itemId} row={row} archived={archivedIds.has(row.itemId)} now={now} drillKey={drillKey} onDrill={onDrill} />
+              <Row key={row.itemId} row={row} archived={archivedIds.has(row.itemId)} now={now} drillKey={drillKey} onDrill={onDrill} onViewEvents={onViewEvents} />
             ))}
           </tbody>
         </table>
