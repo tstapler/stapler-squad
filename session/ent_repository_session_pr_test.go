@@ -939,3 +939,32 @@ func TestSessionUUIDsByPR_ShouldReturnSessionLinksOnly_WhenItemAndOtherPRLinked(
 	_, err = repo.SessionUUIDsByPR(context.Background(), PRRef{})
 	assert.ErrorIs(t, err, ErrZeroPRRef)
 }
+
+func TestUpdatePullRequestState_ShouldPersistRateLimitReset_OnNoteAndCountedFailures(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, kind := range []PRObservationKind{PRObservationErrorNote, PRObservationCountedFailure} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			repo := newPRRepo(t)
+			ref := mustPRRef(t, "", "acme", "app", 5)
+			seedState(t, repo, ref, PRStateOpen, false)
+			reset := prRepoT0.Add(30 * time.Minute)
+
+			obs := failObs(prRepoT0, kind, "rate_limited")
+			obs.RateLimitResetAt = reset
+			_, err := repo.UpdatePullRequestState(ctx, ref, obs)
+			require.NoError(t, err)
+			row := reload(t, repo, ref)
+			require.NotNil(t, row.RateLimitResetAt)
+			assert.True(t, reset.Equal(*row.RateLimitResetAt), "got %v want %v", row.RateLimitResetAt, reset)
+
+			// A later failure without a reset must not clear it.
+			_, err = repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Minute), kind, "network"))
+			require.NoError(t, err)
+			row = reload(t, repo, ref)
+			require.NotNil(t, row.RateLimitResetAt)
+			assert.True(t, reset.Equal(*row.RateLimitResetAt))
+		})
+	}
+}

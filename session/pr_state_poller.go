@@ -482,20 +482,28 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *Instance, s
 	}
 	prMetrics.discoveryListCall()
 	info, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, etag)
-	if newEtag != "" {
-		p.listEtags.Store(listKey, newEtag)
+	// The ETag is stored only once the answer was handled: storing it before a
+	// failed attach would make the next poll a 304 and the PR never discovered.
+	storeEtag := func() {
+		if newEtag != "" {
+			p.listEtags.Store(listKey, newEtag)
+		}
 	}
 	if err != nil || !changed || info == nil {
-		if err != nil && !errors.Is(err, github.ErrNoPR) {
+		if err == nil || errors.Is(err, github.ErrNoPR) {
+			storeEtag()
+		} else {
 			log.Warn("PR status poller: discovery for a resolved session failed", "session", snap.Title, "err", err)
 		}
 		return
 	}
 	prRef, err := NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, info.Number)
 	if err != nil {
+		storeEtag()
 		return
 	}
 	if _, linked := findPR(gh.PRs, prRef); linked {
+		storeEtag()
 		return
 	}
 	initial := PRInitial{State: PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
@@ -503,6 +511,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *Instance, s
 		log.Warn("PR status poller: attaching the discovered PR failed", "session", snap.Title, "pr", prRef, "err", err)
 		return
 	}
+	storeEtag()
 	log.Info("PR status poller: resolved session resumed, new PR on its branch", "session", snap.Title, "pr", prRef)
 }
 

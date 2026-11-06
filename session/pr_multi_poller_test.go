@@ -314,6 +314,7 @@ func TestPoller_ShouldUseHostAwareToken_WhenItemOnlyStateOnGHE(t *testing.T) {
 type discoveryClient struct {
 	recordingPRClient
 	found       *github.PRInfo
+	newEtag     string // returned as the list ETag when non-empty
 	branchCalls int
 }
 
@@ -321,6 +322,9 @@ func (c *discoveryClient) GetPRForBranchConditional(_ context.Context, _ github.
 	c.mu.Lock()
 	c.branchCalls++
 	c.mu.Unlock()
+	if c.newEtag != "" {
+		etag = c.newEtag
+	}
 	if c.found == nil {
 		return nil, etag, false, github.ErrNoPR
 	}
@@ -369,6 +373,31 @@ func TestPoller_ShouldResumeAndClearTerminal_WhenDiscoveryFindsPRBOnBranch(t *te
 	p.checkAllSessions()
 	assert.Equal(t, 1, client.callsFor(12), "the next tick polls #12")
 	assert.Equal(t, PRStateOpen, rowOf(t, storage, 12).State)
+}
+
+func TestPoller_ShouldKeepBranchListETagUnset_UntilAttachSucceeds(t *testing.T) {
+	p, _, inst, client := discoverySession(t, PRInitialRef{11, PRInitial{State: PRStateMerged, Terminal: true}})
+	client.found = &github.PRInfo{Number: 12, State: "open", HeadRef: "feat/x"}
+	client.newEtag = `"list-v1"`
+	snap := inst.Snapshot()
+	listKey := snap.GitHub.GitHubOwner + "/" + snap.GitHub.GitHubRepo + "/" + inst.CurrentBranch()
+	ctx := context.Background()
+
+	inst.mu.Lock()
+	inst.UUID = "" // AttachPR now fails with ErrNoSessionUUID
+	inst.mu.Unlock()
+	p.discoverBranchPR(ctx, inst, snap)
+	_, stored := p.listEtags.Load(listKey)
+	assert.False(t, stored, "a failed attach must not store the ETag, or the next poll would 304 and never retry")
+
+	inst.mu.Lock()
+	inst.UUID = snap.UUID
+	inst.mu.Unlock()
+	p.discoverBranchPR(ctx, inst, snap)
+	v, stored := p.listEtags.Load(listKey)
+	assert.True(t, stored, "the ETag is stored once the attach succeeds")
+	assert.Equal(t, `"list-v1"`, v)
+	assert.Len(t, inst.Snapshot().GitHub.PRs, 2)
 }
 
 func TestPoller_ShouldDiscoverSlowly_WhenAllPRsTerminal(t *testing.T) {

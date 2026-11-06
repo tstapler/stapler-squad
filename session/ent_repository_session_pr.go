@@ -948,14 +948,24 @@ func (r *EntRepository) applyObservationPlan(ctx context.Context, row *ent.PullR
 	case PRObservationCountedFailure:
 		upd = upd.SetPollError(pollErr).SetPollFailCount(p.failCount).SetFirstFailAt(*p.firstFailAt).
 			SetLastPolledAt(obs.ObservedAt).SetLastCheckedAt(obs.Now)
+		upd = setRateLimitResetIfAny(upd, obs)
 	default:
-		upd = upd.SetPollError(pollErr)
+		upd = setRateLimitResetIfAny(upd.SetPollError(pollErr), obs)
 	}
 	n, err := upd.Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("update pull request state %d: %w", row.ID, err)
 	}
 	return n == 1, nil
+}
+
+// setRateLimitResetIfAny persists a rate-limit reset on a failure observation;
+// unlike a fetch it never clears one, so a failure without a reset keeps the last.
+func setRateLimitResetIfAny(upd *ent.PullRequestStateUpdate, obs PRObservation) *ent.PullRequestStateUpdate {
+	if obs.RateLimitResetAt.IsZero() {
+		return upd
+	}
+	return upd.SetRateLimitResetAt(obs.RateLimitResetAt)
 }
 
 func applyFetchColumns(upd *ent.PullRequestStateUpdate, obs PRObservation) *ent.PullRequestStateUpdate {
