@@ -29,7 +29,7 @@ import (
 var (
 	// ErrInvalidPROwner means an owner did not name exactly one of a session and an item.
 	ErrInvalidPROwner = errors.New("session: PR owner must set exactly one of session uuid and backlog item id")
-	// ErrSessionPRLinkCap means a session already holds maxSessionPRLinks links.
+	// ErrSessionPRLinkCap means a session or item already holds maxSessionPRLinks links.
 	ErrSessionPRLinkCap = errors.New("session: session already has the maximum number of PR links")
 	// ErrNoSessionUUID means the session has no uuid, so no link row can reference it.
 	ErrNoSessionUUID = errors.New("session: session has no uuid")
@@ -227,20 +227,21 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef
 	return PRLinkResult{StateID: stateID, Created: true, Role: role}, nil
 }
 
-// resolveNewLinkRole enforces the session link cap and the one-primary rule.
+// resolveNewLinkRole enforces the link cap for sessions and items, and the
+// one-primary rule for sessions.
 func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner PROwner, want PRRole) (PRRole, error) {
 	if want == "" {
 		want = PRRolePrimary
 	}
-	if !owner.isSession() {
-		return want, nil
-	}
-	count, err := tx.SessionPR.Query().Where(sessionpr.SessionUUID(owner.SessionUUID)).Count(ctx)
+	count, err := tx.SessionPR.Query().Where(linkOwnerPredicates(owner)...).Count(ctx)
 	if err != nil {
-		return "", fmt.Errorf("count session links: %w", err)
+		return "", fmt.Errorf("count owner links: %w", err)
 	}
 	if count >= maxSessionPRLinks {
 		return "", ErrSessionPRLinkCap
+	}
+	if !owner.isSession() {
+		return want, nil
 	}
 	if want != PRRolePrimary {
 		return want, nil

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -271,7 +271,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// override_reason, no reassignment guard, status unchanged. The branch check below
 	// still applies. Scope off: today's reassignment rules.
 	_, replacesPresent := args["replaces_pr_number"]
-	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.multiPRBacklogOn()
+	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
 	isReassignment := item.Status == string(session.BacklogStatusPRPending) && !additive
 	if isReassignment && overrideReason == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
@@ -310,6 +310,9 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
+	if u, uErr := url.Parse(strings.TrimSpace(prURL)); uErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
+	}
 	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
@@ -317,6 +320,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	if ref.PRNumber != 0 && ref.PRNumber != prNumber {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber), ""), nil
 	}
+
+	// Store the canonical URL, not the agent's raw one (e.g. .../pull/5/files).
+	ref.PRNumber = prNumber
+	canonicalPRURL := ref.PRURL()
 
 	// Resolve this session's own branch to verify the reported PR against —
 	// the whole point of this check is to refuse a self-reported PR number
@@ -329,6 +336,16 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	repoRef, repoRefErr := githubpkg.NewRepoRefWithHost(ref.Owner, ref.Repo, ref.Host)
 	if repoRefErr != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", repoRefErr), ""), nil
+	}
+	// VerifyPRMatchesBranch matches on head-branch name alone, so any repo with a
+	// same-named branch would pass. Anchor on the repo of the PR the item already
+	// tracks: an additive PR must live there, and provenance is stamped only there.
+	inItemRepo := h.prInItemRepo(item, repoRef)
+	if additive && !inItemRepo {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"PR #%d is in %s/%s, not the repository of the PR this item already tracks — an additional PR must be in the same repository. "+
+				"To move the item to a PR in another repository, use replaces_pr_number with override_reason.",
+			prNumber, ref.Owner, ref.Repo), ""), nil
 	}
 	verification, verifyErr := h.verifyPR(ctx, repoRef, prNumber, branch)
 	if verifyErr != nil {
@@ -399,7 +416,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 
 	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
 		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
+	}, session.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
 		}
@@ -422,7 +439,9 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 
 	log.InfoLog().Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
-	h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	if inItemRepo {
+		h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	}
 
 	if isReassignment || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit
@@ -454,10 +473,17 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	)), nil
 }
 
-// multiPRBacklogOn reports whether reader:backlog of session_multi_pr is effective.
-func (h *backlogHandlers) multiPRBacklogOn() bool {
-	if h.multiPRBacklog != nil {
-		return h.multiPRBacklog()
+// prInItemRepo reports whether repoRef is the repository of the PR the item
+// already tracks. With no tracked PR (the item's first) there is nothing to
+// compare against, so it is true; an unparseable tracked URL fails closed.
+func (h *backlogHandlers) prInItemRepo(item *session.BacklogItemData, repoRef githubpkg.RepoRef) bool {
+	if item.PrURL == "" {
+		return true
 	}
-	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
+	cur, err := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
+	if err != nil {
+		return false
+	}
+	curRef, err := githubpkg.NewRepoRefWithHost(cur.Owner, cur.Repo, cur.Host)
+	return err == nil && curRef.PRKey(0) == repoRef.PRKey(0)
 }

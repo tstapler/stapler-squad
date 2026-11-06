@@ -2,12 +2,15 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -37,13 +40,22 @@ type SessionRetentionSweeper struct {
 	// now is the clock; tests inject one.
 	now   func() time.Time
 	holds itemHoldTracker
+	// sessionHolds tracks session-level PR holds (a linked PR of the session itself).
+	sessionHolds itemHoldTracker
+	// reread returns the session's current row for the pre-delete re-check;
+	// nil skips the re-read (tests that build the struct directly).
+	reread func(uuid string) (*session.InstanceData, error)
+	// reverifyClosed asks GitHub whether a PR the store has as closed-unmerged was
+	// reopened; nil uses a conditional GET. An error holds the session.
+	reverifyClosed func(ctx context.Context, ref session.PRRef) (reopened bool, err error)
 }
 
 // NewSessionRetentionSweeper constructs a sweeper. svc is used to perform the actual
 // deletion via its existing DeleteSession RPC handler, so tmux/worktree/DB cleanup
 // logic is not duplicated here.
 func NewSessionRetentionSweeper(storage *session.Storage, cfg *config.Config, svc *SessionService) *SessionRetentionSweeper {
-	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage, now: time.Now}
+	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage, now: time.Now,
+		reread: storage.FindInstanceDataByID, reverifyClosed: newClosedPRReverifier()}
 }
 
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled.
@@ -107,6 +119,7 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 	}
 
 	s.surfaceItemPRHolds(dataSlice, pr, cutoff)
+	s.surfaceSessionPRHolds(dataSlice, pr, cutoff)
 
 	for _, d := range dataSlice {
 		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
@@ -119,7 +132,7 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 			continue
 		}
 
-		if safe, reason := s.stillPREligible(ctx, d); !safe {
+		if safe, reason := s.stillPREligible(ctx, d, cutoff); !safe {
 			log.Info("session retention sweeper: PR evidence changed since cycle load, skipping delete",
 				"session", d.Title, "reason", reason)
 			continue
@@ -138,15 +151,81 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 // stillPREligible re-reads one session's PR evidence immediately before its
 // delete, since the cycle load can be minutes old (a PR attached mid-cycle must
 // win). The cycle load stays as the prefilter.
-func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session.InstanceData) (bool, string) {
+func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session.InstanceData, cutoff time.Time) (bool, string) {
 	if d.UUID == "" {
 		return true, ""
+	}
+	if s.reread != nil {
+		fresh, err := s.reread(d.UUID)
+		if err != nil {
+			return false, "session re-read failed: " + err.Error()
+		}
+		if fresh.ArchivedAt == nil || !fresh.ArchivedAt.Before(cutoff) {
+			return false, "session was unarchived or re-archived since cycle load"
+		}
+		// LoadMinimal omits the worktree; keep the one the cycle load carried.
+		fresh.Worktree = d.Worktree
+		d = *fresh
 	}
 	fresh, err := loadSweepPRData(ctx, s.prSource, []string{d.UUID})
 	if err != nil {
 		return false, "PR evidence re-read failed: " + err.Error()
 	}
-	return fresh.prEligible(d)
+	if safe, reason := fresh.prEligible(d); !safe {
+		return false, reason
+	}
+	return s.closedPRsStayClosed(ctx, d, fresh)
+}
+
+// closedPRsStayClosed re-asks GitHub about every closed-unmerged PR the session
+// or its items hold. The store keeps a closed PR terminal against anything but a
+// reopened webhook, so a missed webhook would otherwise let a reopened PR's
+// worktree be deleted. Any lookup error holds the session.
+func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d session.InstanceData, p *sweepPRData) (bool, string) {
+	if s.reverifyClosed == nil {
+		return true, ""
+	}
+	var views []session.PRView
+	views = append(views, p.views[d.UUID]...)
+	for _, id := range p.itemIDs[d.UUID] {
+		views = append(views, p.guards[id].Direct...)
+	}
+	for _, v := range views {
+		if v.State != session.PRStateClosed {
+			continue
+		}
+		reopened, err := s.reverifyClosed(ctx, v.Ref)
+		if err != nil {
+			return false, fmt.Sprintf("could not re-verify closed PR %s: %v", v.Ref, err)
+		}
+		if reopened {
+			return false, fmt.Sprintf("PR %s was reopened on GitHub", v.Ref)
+		}
+	}
+	return true, ""
+}
+
+// newClosedPRReverifier is the production reverifyClosed: one conditional GET
+// per PR, with a process-lifetime ETag cache so repeat sweeps cost a 304.
+func newClosedPRReverifier() func(context.Context, session.PRRef) (bool, error) {
+	cache := githubpkg.NewETagCache()
+	return func(ctx context.Context, ref session.PRRef) (bool, error) {
+		repo, err := githubpkg.NewRepoRefWithHost(ref.Owner(), ref.Repo(), ref.Host())
+		if err != nil {
+			return false, err
+		}
+		info, _, err := githubpkg.GetPRInfoConditional(ctx, repo, ref.Number(), cache)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(info.State) {
+		case "closed", "merged":
+			return false, nil
+		case "open":
+			return true, nil
+		}
+		return false, fmt.Errorf("unrecognized PR state %q", info.State)
+	}
 }
 
 // surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
@@ -160,6 +239,23 @@ func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []session.InstanceData,
 		holds = append(holds, pr.itemHolds(d, d.ArchivedAt.AddDate(0, 0, days))...)
 	}
 	s.holds.observe(holds, s.now())
+}
+
+// surfaceSessionPRHolds reports expired archived sessions held by their own
+// linked PRs, so a long-held session is visible rather than Debug-only.
+func (s *SessionRetentionSweeper) surfaceSessionPRHolds(all []session.InstanceData, pr *sweepPRData, cutoff time.Time) {
+	days := s.cfg.SessionRetention.RetentionDaysOrDefault()
+	var holds []ItemPRHold
+	for _, d := range all {
+		if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) || d.UUID == "" {
+			continue
+		}
+		if safe, _ := pr.ownPRsEligible(d); !safe {
+			holds = append(holds, ItemPRHold{ItemID: d.UUID, SessionUUID: d.UUID, Since: d.ArchivedAt.AddDate(0, 0, days)})
+		}
+	}
+	s.sessionHolds.observeWith(sessionPRHoldOverMax,
+		"session retention sweeper: session PR hold exceeded max age; session kept (fail closed)", holds, s.now())
 }
 
 // expiredUUIDs lists the uuids of archived sessions past the cutoff: the only

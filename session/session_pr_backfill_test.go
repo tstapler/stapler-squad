@@ -221,6 +221,14 @@ func TestBackfill_ShouldSeedItemsFromStatusWithoutGuessing(t *testing.T) {
 	}
 }
 
+func TestParseItemPRRef_ShouldRejectNonHTTPScheme(t *testing.T) {
+	t.Parallel()
+	for _, u := range []string{"javascript://github.com/o/r/pull/5", "ftp://github.com/o/r/pull/5", "//github.com/o/r/pull/5"} {
+		_, err := ParseItemPRRef(u, 5)
+		assert.ErrorIs(t, err, ErrItemBadPRRef, u)
+	}
+}
+
 func TestParseItemPRRef_ShouldUseURLHostAndRequireMatchingNumber(t *testing.T) {
 	t.Parallel()
 	ref, err := ParseItemPRRef("https://ghe.acme.io/acme/app/pull/7", 7)

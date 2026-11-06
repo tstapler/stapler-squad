@@ -426,6 +426,9 @@ type BuildOptions struct {
 	// PRMaintenanceRunner replaces the real maintenance call in tests (a recording
 	// fake); nil means storage.RunPRStartupMaintenance.
 	PRMaintenanceRunner func(context.Context, *session.Storage) error
+	// Context bounds PR startup maintenance (its boot retries and retry ticker), so
+	// a SIGTERM during boot stops it. Nil means context.Background().
+	Context context.Context
 }
 
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
@@ -483,7 +486,11 @@ func runPRMaintenance(opts BuildOptions, storage *session.Storage) (func(), erro
 	if run == nil {
 		run = func(ctx context.Context, st *session.Storage) error { return st.RunPRStartupMaintenance(ctx) }
 	}
-	if err := run(context.Background(), storage); err != nil {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := run(ctx, storage); err != nil {
 		return nil, fmt.Errorf("pr startup maintenance: %w", err)
 	}
 	return storage.StopPRMaintenance, nil
