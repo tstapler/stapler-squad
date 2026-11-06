@@ -51,6 +51,10 @@ type Config struct {
 	Paths     []string
 	SinceWhen EventID       // SinceNow or a saved EventID to replay from
 	Latency   time.Duration // coalesce window passed to FSEvents
+	// NoWatchRoot omits kFSEventStreamCreateFlagWatchRoot. That flag makes the
+	// stream hold ~14 fds (DIR fds on every ancestor of the path plus a kqueue
+	// and pipes), so streams that never need RootChanged should set this.
+	NoWatchRoot bool
 	// OnEvents receives every batch. It runs on the run-loop thread and must
 	// not block.
 	OnEvents func([]Event)
