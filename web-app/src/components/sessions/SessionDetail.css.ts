@@ -34,7 +34,7 @@ export const header = style({
   background: vars.color.cardBackground,
   position: "sticky",
   top: 0,
-  zIndex: 10,
+  zIndex: zIndex.raised,
   flexShrink: 0,
   minHeight: "40px",
   selectors: {

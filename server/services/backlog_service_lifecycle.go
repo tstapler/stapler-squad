@@ -584,7 +584,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 // WaiveAcceptanceCriterion records the owner's waiver of one acceptance criterion. Only
 // reachable over the operator RPC surface; no MCP tool exposes it, so an agent cannot
 // waive its own criteria.
-// +api: backlog:waive-criterion
+// +api: WaiveAcceptanceCriterion
 func (s *BacklogService) WaiveAcceptanceCriterion(
 	ctx context.Context,
 	req *connect.Request[sessionv1.WaiveAcceptanceCriterionRequest],

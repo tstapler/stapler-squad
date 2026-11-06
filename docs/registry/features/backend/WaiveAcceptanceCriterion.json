@@ -4,8 +4,12 @@
   "service": "BacklogService",
   "method": "WaiveAcceptanceCriterion",
   "protoFile": "proto/session/v1/backlog.proto",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-10-28T21:40:15.172987923-07:00"
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestWaiveAcceptanceCriterion_should_RecordWaiverAndReturnItem_When_ReasonGiven",
+    "TestWaiveAcceptanceCriterion_should_MapErrorCodes_When_InputInvalid"
+  ],
+  "lastModified": "2026-11-05T17:44:19.808040022-08:00"
 }

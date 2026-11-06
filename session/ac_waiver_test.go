@@ -70,3 +70,12 @@ func TestUpdateAcCriterionStatus_should_NotOverwrite_When_CriterionWaived(t *tes
 	assert.ErrorIs(t, err, session.ErrAcCriterionWaived)
 	assert.Equal(t, session.AcStatusWaived, loadCriteria(t, repo, id)[0].Status)
 }
+
+func TestWaiveAcCriterion_should_ReturnErrNotFound_When_ItemMissing(t *testing.T) {
+	t.Parallel()
+	repo := session.NewTestEntRepository(t)
+
+	err := repo.WaiveAcCriterion(context.Background(), "bl_01HXYZABCDEFGHJKMNPQRSTVWX", 0, "why")
+
+	assert.ErrorIs(t, err, session.ErrNotFound)
+}

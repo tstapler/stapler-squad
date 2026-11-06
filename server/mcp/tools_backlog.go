@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2884,6 +2885,13 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				status := ac.Status
 				if status == "" {
 					status = "pending"
+				}
+				// Only the owner's WaiveAcceptanceCriterion RPC may set or clear a waiver.
+				if session.AcStatus(status) == session.AcStatusWaived {
+					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: status %q can only be set by the owner", i, status), ""), nil
+				}
+				if slices.ContainsFunc(existing, func(c session.AcCriterion) bool { return c.Index == idx && c.Status == session.AcStatusWaived }) {
+					continue // keep the owner's waiver; an agent edit cannot overwrite it
 				}
 				incomingCriteria = append(incomingCriteria, session.AcCriterion{Index: idx, Text: ac.Text, Status: session.AcStatus(status)})
 			}

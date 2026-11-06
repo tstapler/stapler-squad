@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -129,4 +130,50 @@ func TestRequestOwnerAction_ToolDescription_should_DistinguishItFromTheNeighbour
 	for _, other := range []string{"create_guidance_request", "request_help", "report_blocked"} {
 		assert.Contains(t, desc, other, "the description must say when to use %s instead", other)
 	}
+}
+
+func triageACReq(itemID string, status string) mcpgo.CallToolRequest {
+	return makeToolReq(map[string]interface{}{
+		"item_id": itemID,
+		"summary": "s",
+		"acceptance_criteria": []interface{}{
+			map[string]interface{}{"index": float64(0), "text": "rewritten", "status": status},
+		},
+	})
+}
+
+func TestSubmitTriageResult_should_RejectWaivedStatus_When_AgentSubmitsAC(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupTriageSession(t, storage)
+	h := &backlogHandlers{storage: storage}
+
+	res, err := h.submitTriageResult(WithSessionUUID(context.Background(), sessUUID), triageACReq(itemID, "waived"))
+
+	require.NoError(t, err)
+	require.Len(t, res.Content, 1)
+	assert.Contains(t, res.Content[0].(mcpgo.TextContent).Text, "INVALID_ARGUMENT")
+}
+
+func TestSubmitTriageResult_should_KeepOwnerWaiver_When_AgentRewritesWaivedCriterion(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupTriageSession(t, storage)
+	ac, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "orig", Status: session.AcStatusPending}})
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	require.NoError(t, err)
+	require.NoError(t, storage.WaiveAcCriterion(context.Background(), itemID, 0, "owner call"))
+	h := &backlogHandlers{storage: storage}
+
+	_, err = h.submitTriageResult(WithSessionUUID(context.Background(), sessUUID), triageACReq(itemID, "pending"))
+
+	require.NoError(t, err)
+	item, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	got, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, session.AcStatusWaived, got[0].Status)
+	assert.Equal(t, "owner call", got[0].WaiverReason)
 }

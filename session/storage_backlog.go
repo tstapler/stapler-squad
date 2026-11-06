@@ -1465,6 +1465,9 @@ func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, cri
 func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, mutate func(*AcCriterion) error) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+		}
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 

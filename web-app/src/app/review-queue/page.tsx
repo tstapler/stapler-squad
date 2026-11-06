@@ -4,10 +4,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Session, SessionSchema, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
+import type { Session, ReviewItem } from "@/gen/session/v1/types_pb";
+import { SessionSchema, SessionStatus } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
-import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
+import type { SessionDetailTab } from "@/components/sessions/SessionDetail";
+import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
@@ -339,7 +341,7 @@ function ReviewQueueContent() {
                   className={styles.inlineSectionRow}
                   onClick={() => router.push(`/backlog?item=${item.id}`)}
                   data-testid={`plan-review-item-${item.id}`}
-                >
+                >{/* analytics-exempt */}
                   <span>{item.title}</span>
                   <span className={styles.inlineSectionRowMeta}>Plan awaiting approval</span>
                 </button>
@@ -361,7 +363,7 @@ function ReviewQueueContent() {
                   className={styles.inlineSectionRow}
                   onClick={() => handleSessionClick(s.id)}
                   data-testid={`working-session-${s.id}`}
-                >
+                >{/* analytics-exempt */}
                   <span>{s.title}</span>
                   <span className={styles.inlineSectionRowMeta}>
                     {s.status === SessionStatus.CREATING ? "Queued" : "In progress"} — nothing to do yet
@@ -431,7 +433,7 @@ function ReviewQueueContent() {
                 className={styles.helpOverlayCloseButton}
                 onClick={() => setIsHelpOpen(false)}
                 aria-label="Close keyboard shortcuts"
-              >
+              >{/* analytics-exempt */}
                 ✕
               </button>
             </div>
@@ -457,7 +459,7 @@ function ReviewQueueContent() {
         onClick={() => setIsHelpOpen(true)}
         aria-label="Show keyboard shortcuts"
         title="Keyboard shortcuts (?)"
-      >
+      >{/* analytics-exempt */}
         ?
       </button>
     </div>
