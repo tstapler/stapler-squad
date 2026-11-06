@@ -117,12 +117,12 @@ func TestPrFixTrigger_should_ClassifyTotalTable_When_FlagCombinations(t *testing
 		{"review", false, false, true, false, PRFixTriggerReview},
 		{"feedback", false, false, false, true, PRFixTriggerFeedback},
 		{"none", false, false, false, false, PRFixTriggerUnknown},
-		{"ci+review", true, false, true, false, PRFixTriggerUnknown},
-		{"ci+feedback", true, false, false, true, PRFixTriggerUnknown},
-		{"conflict+review", false, true, true, false, PRFixTriggerUnknown},
-		{"review+feedback", false, false, true, true, PRFixTriggerUnknown},
-		{"ci+conflict+review", true, true, true, false, PRFixTriggerUnknown},
-		{"all", true, true, true, true, PRFixTriggerUnknown},
+		{"ci+review", true, false, true, false, PRFixTriggerMixed},
+		{"ci+feedback", true, false, false, true, PRFixTriggerMixed},
+		{"conflict+review", false, true, true, false, PRFixTriggerMixed},
+		{"review+feedback", false, false, true, true, PRFixTriggerMixed},
+		{"ci+conflict+review", true, true, true, false, PRFixTriggerMixed},
+		{"all", true, true, true, true, PRFixTriggerMixed},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, ClassifyPRFixTrigger(tc.ci, tc.conflict, tc.rev, tc.fb), tc.name)

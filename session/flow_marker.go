@@ -41,19 +41,25 @@ type FlowMarkerData struct {
 }
 
 // ClassifyPRFixTrigger maps the poller's decision flags to a trigger value.
-// It is total: only the five documented single-cause shapes (plus ci+conflict
-// as mixed) are named; every other combination, including all-false, is unknown.
+// It is total: exactly one flag names that cause, two or more are mixed, and
+// no flag (e.g. the closed-PR branch) is unknown.
 func ClassifyPRFixTrigger(ci, conflict, blockingReview, feedback bool) string {
+	flags := 0
+	for _, f := range [...]bool{ci, conflict, blockingReview, feedback} {
+		if f {
+			flags++
+		}
+	}
 	switch {
-	case ci && conflict && !blockingReview && !feedback:
+	case flags >= 2:
 		return PRFixTriggerMixed
-	case ci && !conflict && !blockingReview && !feedback:
+	case ci:
 		return PRFixTriggerCI
-	case conflict && !ci && !blockingReview && !feedback:
+	case conflict:
 		return PRFixTriggerConflict
-	case blockingReview && !ci && !conflict && !feedback:
+	case blockingReview:
 		return PRFixTriggerReview
-	case feedback && !ci && !conflict && !blockingReview:
+	case feedback:
 		return PRFixTriggerFeedback
 	default:
 		return PRFixTriggerUnknown

@@ -117,3 +117,13 @@ func (s *Scanner) watchPendingAdmin(w gitWatcher, admin string) (string, bool) {
 	}
 	return linkedWorktreePath(admin)
 }
+
+// sharedWorktreesRoot makes every linked-worktree admin dir under one repo's
+// .git/worktrees share a single FSEvents stream instead of one stream each.
+func sharedWorktreesRoot(resolved string) string {
+	parent := filepath.Dir(resolved)
+	if filepath.Base(parent) == "worktrees" && filepath.Base(filepath.Dir(parent)) == ".git" {
+		return parent
+	}
+	return resolved
+}
