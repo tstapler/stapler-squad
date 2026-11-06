@@ -29,3 +29,18 @@ Measured on a `sqlite3 .backup` copy of `~/.stapler-squad/workspaces/6eb0b580fa0
 3. **Prefilter is a safe superset.** For five window starts (2026-08-10, 08-17 00:00, 08-17 12:00, 08-18, 10-06), the text prefilter `created_at >= (start - 2h30 - 15h)` missed 0 rows that a parsed-instant filter `datetime(created_at) >= start - 2h30` keeps, including the span with `-07:00` rows (at 08-17 00:00: Go keeps 247,419, SQL fetches 247,451, 83 of them `-07:00`).
 4. **Index decision: keep `index.Fields("created_at")` (Story 2.1.1 stays).** `EXPLAIN QUERY PLAN` without it is `SCAN backlog_status_events` (full table); with it, `SEARCH ... USING INDEX backlogstatusevent_created_at (created_at>?)`. Through ent, warm, 40 reads per run: no index p50 147ms / 178ms (p90 198 / 335ms, min 99 / 121ms); with index p50 36ms / 36ms (p90 55ms). That misses the plan's 100ms "skip" bar by 1.5-1.8x unindexed and is about 4x faster indexed. (The `sqlite3` CLI showed 40-100ms for both, dominated by process start and output, so it was not used for the decision.) The index costs 10.7 MB (existing `(item_id, created_at)` index: 20.4 MB) and built in 0.33s on 257,990 rows with the CLI, so it is cheap to apply at the next restart through `Schema.Create`. The seed query (`GROUP BY item_id MAX(created_at)`, `created_at < ...`) already used `COVERING INDEX backlogstatusevent_item_id_created_at` with and without the new index (about 0.2s CLI wall, 122 groups).
 5. **Fallback decision:** none needed. No reader-pool fallback (0.1.2b) and no index skip. Cold first reads were 0.27-1.3s (page cache), another reason to keep the 30s cache and the index.
+
+## Story 2.1.5 results (2026-11-06)
+
+Run by `session/ent_repository_flow_perf_test.go` (env-gated `SSQ_FLOW_PERF_DB`) against a fresh `sqlite3 -readonly .backup` copy of the live workspace DB (257,990 events; the test copies it again into a temp dir because the writer rounds insert rows; the live DB was never opened read-write). `EntFlowReader` serves all four sources with `SystemClock`. "Cold" is a new `Aggregator` (empty summary cache); "warm" is a second new `Aggregator` right after. The file was just written, so the OS page cache was not truly cold.
+
+| Window | Events read | Cold | Warm | Path |
+|---|---|---|---|---|
+| 30 days | 10,126 | 69 ms | 83 ms | single `Events` read |
+| All time | 257,990 | 918 ms | 850 ms | chunked `StreamEvents` (25 items per batch), `slow_path=true` |
+
+The 30-day cold number meets the 1 s SLO by about 14x.
+
+Writer latency with a concurrent reader: 5 alternating rounds of (all-time `Summary` running while a writer inserts one `backlog_status_events` row every 2 ms) and (a same-length period with no reader). Writer p99 per round with reader: 1.5, 6.2, 7.9, 8.7, 2.6 ms (median **6.2 ms**); without reader: 7.2, 9.6, 5.3, 6.2, 1.1 ms (median **6.2 ms**). Every write in every with-reader round stayed under the 100 ms assertion and none returned `SQLITE_BUSY`. The round-to-round spread (1-10 ms) exceeds any reader effect, so the result is "no measurable reader effect", not a tight bound. Under the concurrent writer the all-time read took a median 1.86 s (0.85-0.92 s alone): the writer slows the reader, not the reverse.
+
+The CI-resident proof that a read holds no writer connection is `TestFlowRead_should_NotBlockWriter_When_StreamEventsPausedOnBarrier`. Not measured here: partial-index build time (Phase 5).
