@@ -242,7 +242,7 @@ func TestCache_should_ReturnErrBusyAndSkipSlotForHits_When_SlotHeldAndWaiterExpi
 
 	hit, err := c.Do(ctx, hitQ, func(context.Context) (*cacheTestValue, error) {
 		t.Error("cache hit must not compute")
-		return nil, nil
+		return &cacheTestValue{}, nil
 	})
 	require.NoError(t, err)
 	assert.EqualValues(t, 5, hit.QueryMs, "hit served while the slot is held")
@@ -253,7 +253,7 @@ func TestCache_should_ReturnErrBusyAndSkipSlotForHits_When_SlotHeldAndWaiterExpi
 	cancel()
 	_, err = c.Do(expired, FlowQuery{Window: WindowSpec{Days: 90}, Config: waiterCfg}, func(context.Context) (*cacheTestValue, error) {
 		t.Error("expired waiter must not compute")
-		return nil, nil
+		return &cacheTestValue{}, nil
 	})
 	assert.ErrorIs(t, err, ErrBusy)
 

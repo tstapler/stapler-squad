@@ -115,7 +115,7 @@ func (c *Cache[V]) Do(ctx context.Context, q FlowQuery, compute func(context.Con
 		}
 		// The leader's own context can fail the shared call; a follower whose
 		// context is still live retries rather than inheriting that failure.
-		if ctx.Err() != nil || !(errors.Is(err, ErrBusy) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		if ctx.Err() != nil || (!errors.Is(err, ErrBusy) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)) {
 			break
 		}
 	}

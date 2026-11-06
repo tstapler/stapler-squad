@@ -10,7 +10,7 @@ import (
 func TestLeadTime_should_ReturnPercentilesAndExcludeItemsWithoutInProgress_When_ThreeMergedItems(t *testing.T) {
 	t.Parallel()
 	mergeAt := s12Base.Add(10 * 24 * time.Hour)
-	var spans []Span
+	spans := make([]Span, 0, 7)
 	for i, days := range []int{1, 3, 5} {
 		item := s12Item(i)
 		spans = append(spans,
