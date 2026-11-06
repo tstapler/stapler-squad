@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +197,23 @@ func TestCause_should_NameEveryValue_When_Stringified(t *testing.T) {
 func TestSystemClock_should_ReturnUTC_When_Called(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, time.UTC, SystemClock{}.Now().Location())
+}
+
+func TestFlowImports_should_ExcludeEntSessionServerProto_When_GoListDepsScanned(t *testing.T) {
+	t.Parallel()
+	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
+	require.NoError(t, err, string(out))
+	forbidden := []string{
+		"entgo.io/",
+		"connectrpc.com/",
+		"github.com/tstapler/stapler-squad/server",
+		"github.com/tstapler/stapler-squad/session/ent",
+		"github.com/tstapler/stapler-squad/proto",
+	}
+	for _, dep := range strings.Fields(string(out)) {
+		assert.NotEqual(t, "github.com/tstapler/stapler-squad/session", dep, "flow must not import session")
+		for _, bad := range forbidden {
+			assert.False(t, strings.HasPrefix(dep, bad), "forbidden transitive dependency %s", dep)
+		}
+	}
 }

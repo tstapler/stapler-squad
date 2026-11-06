@@ -91,6 +91,18 @@ linters:
             - "**/pkg/threatscan/*.go"
           allow:
             - $gostd
+        # session/flow is the pure analytics core: no ent, session, proto or server imports, so
+        # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
+        # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.
+        isolate_flow_core:
+          list-mode: strict
+          files:
+            - "**/session/flow/**"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - golang.org/x/sync/singleflight
         no_ioutil:
           files:
             - "$all"
