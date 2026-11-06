@@ -7,7 +7,7 @@ import * as styles from "./flow.css";
 interface ThrashBannerProps {
   /** Undefined until the first response. */
   anomalies: FlowAnomaliesSection | undefined;
-  /** Item ids known to be archived; they still count, because their events are excluded from aggregates too. */
+  /** Item ids known to be archived client-side; the server's archivedItems covers the whole count, this only adds to it. */
   archivedIds: ReadonlySet<string>;
   onView: () => void;
   onReload: () => void;
@@ -32,7 +32,7 @@ export function ThrashBanner({ anomalies, archivedIds, onView, onReload }: Thras
   }
   const count = anomalies.thrashItems?.value ?? 0;
   if (count === 0) return null;
-  const archived = archivedIds.size;
+  const archived = Math.max(anomalies.archivedItems, archivedIds.size);
   return (
     <div className={styles.banner} role="status" data-testid="flow-thrash-banner">
       <span aria-hidden="true">!</span>

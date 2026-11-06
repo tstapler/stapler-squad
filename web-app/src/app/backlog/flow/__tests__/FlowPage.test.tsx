@@ -318,6 +318,25 @@ describe("FlowPage", () => {
     await waitFor(() => expect(document.activeElement).toBe(heading("Anomalies & thrash")));
   });
 
+  it("FlowPage_should_LabelArchivedThrashers_When_ServerReportsArchivedItems", async () => {
+    mockClient.getFlowSummary.mockResolvedValue(
+      respond({
+        anomalies: {
+          meta: { status: "ok" },
+          thrashItems: { value: 35, drillKey: "thrash.episode" },
+          archivedItems: 2,
+          items: { totalCount: 35, returnedCount: 1, items: [{ itemId: "abcdef1234", title: "Old item", pair: "ready<>in_progress", episodes: 1, events: 8, archived: true }] },
+        },
+      }),
+    );
+    await renderAt("/backlog/flow", <FlowPage />);
+
+    expect(screen.getByTestId("flow-thrash-banner")).toHaveTextContent("35 items thrashing (2 archived); excluded from averages");
+    fireEvent.click(within(screen.getByTestId("flow-thrash-banner")).getByRole("button", { name: "View" }));
+    const row = await screen.findByRole("row", { name: /Old item/ });
+    expect(within(row).getByText("archived")).toBeInTheDocument();
+  });
+
   it("FlowPage_should_ReplaceBannerWithUnavailableReload_When_AnomalyDataFailed", async () => {
     mockClient.getFlowSummary.mockResolvedValue(respond({ anomalies: { meta: { status: "failed", error: "boom" } } }));
     await renderAt("/backlog/flow", <FlowPage />);

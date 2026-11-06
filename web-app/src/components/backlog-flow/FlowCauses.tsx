@@ -90,6 +90,9 @@ export function FlowCauses({ causes, estimated, trends, onDrill }: FlowCausesPro
               Count
             </SortHeader>
             <th scope="col" className={styles.cell}>
+              Items affected
+            </th>
+            <th scope="col" className={styles.cell}>
               Trend (weekly)
             </th>
           </tr>
@@ -103,6 +106,11 @@ export function FlowCauses({ causes, estimated, trends, onDrill }: FlowCausesPro
               <td className={styles.cell}>
                 <DrillButton drillKey={row.count?.drillKey ?? ""} onDrill={onDrill} label={String(row.count?.value ?? 0)}>
                   {formatInt(row.count?.value ?? 0)}
+                </DrillButton>
+              </td>
+              <td className={styles.cell}>
+                <DrillButton drillKey={row.count?.drillKey ?? ""} onDrill={onDrill} label={`${row.itemsAffected} items affected`}>
+                  {formatInt(row.itemsAffected)}
                 </DrillButton>
               </td>
               <td className={styles.cell}>

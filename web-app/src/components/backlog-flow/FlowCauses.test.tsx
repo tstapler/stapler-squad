@@ -31,6 +31,19 @@ describe("FlowCauses", () => {
     expect(onDrill).toHaveBeenCalledWith("rework.review_fail");
   });
 
+  it("FlowCauses_should_ShowItemsAffectedBesideCount_When_RowsCarryIt", () => {
+    const section = causes({ rework: [{ ...row("review_fail", 398), itemsAffected: 61 }, { ...row("bounce", 28), itemsAffected: 12 }] });
+    render(<FlowCauses causes={section} estimated={[]} onDrill={onDrill} />);
+
+    expect(screen.getByRole("columnheader", { name: "Items affected" })).toBeInTheDocument();
+    const rows = bodyRows();
+    expect(rows[0]).toHaveTextContent("Review FAIL rework");
+    expect(within(rows[0]).getAllByRole("cell")[1]).toHaveTextContent("61");
+    expect(within(rows[1]).getAllByRole("cell")[1]).toHaveTextContent("12");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "61 items affected" }));
+    expect(onDrill).toHaveBeenCalledWith("rework.review_fail");
+  });
+
   it("FlowCauses_should_StatePrFixCauseGap_When_TriggerCaptureUnavailable", () => {
     render(<FlowCauses causes={causes()} estimated={["pr_fix_cause:unavailable"]} onDrill={onDrill} />);
 

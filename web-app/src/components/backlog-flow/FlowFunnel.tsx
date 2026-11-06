@@ -22,9 +22,17 @@ function BackEdge({ stage, funnel, collapsedEvents, onDrill }: { stage: FlowFunn
     episodes > 0 && collapsedEvents > 0 ? ` (${formatInt(collapsedEvents)} raw events in ${plural(episodes, "thrash episode")} excluded)` : "";
   return (
     <div className={styles.backEdge}>
-      <DrillButton drillKey={stage.entered?.drillKey ?? ""} onDrill={onDrill}>
-        {stage.status} -&gt; earlier stage: {formatInt(stage.backEdges)} real reopens
-      </DrillButton>
+      {stage.backEdgeTargets.length > 0 ? (
+        stage.backEdgeTargets.map((edge) => (
+          <DrillButton key={edge.toStage} drillKey={edge.drillKey} onDrill={onDrill}>
+            {stage.status} -&gt; {edge.toStage} {formatInt(edge.count)}
+          </DrillButton>
+        ))
+      ) : (
+        <DrillButton drillKey={stage.entered?.drillKey ?? ""} onDrill={onDrill}>
+          {stage.status} -&gt; earlier stage: {formatInt(stage.backEdges)} real reopens
+        </DrillButton>
+      )}
       {excluded && <span>{excluded}</span>}
     </div>
   );
@@ -49,7 +57,9 @@ function StageRow({ stage, index, total, widest, ...rest }: { stage: FlowFunnelS
             <DrillButton drillKey={stage.entered?.drillKey ?? ""} onDrill={rest.onDrill}>
               entered {formatInt(entered)}
             </DrillButton>
-            <span>advanced {formatInt(stage.advanced)}</span>
+            <DrillButton drillKey={stage.advancedDrillKey} onDrill={rest.onDrill}>
+              advanced {formatInt(stage.advanced)}
+            </DrillButton>
           </span>
         </>
       )}

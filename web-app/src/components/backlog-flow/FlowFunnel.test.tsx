@@ -33,6 +33,31 @@ describe("FlowFunnel", () => {
     expect(onDrill).toHaveBeenCalledWith("funnel.stage.pr_pending");
   });
 
+  it("FlowFunnel_should_NameBackEdgeTargetsAndDrillEach_When_TargetsPresent", () => {
+    const section = funnel({
+      stages: [
+        {
+          ...stage("review", 100, 80, 440, undefined),
+          advancedDrillKey: "funnel.advanced.review",
+          backEdgeTargets: [
+            { toStage: "in_progress", count: 426, drillKey: "funnel.back_edge.review.in_progress" },
+            { toStage: "ready", count: 14, drillKey: "funnel.back_edge.review.ready" },
+          ],
+        },
+      ],
+    });
+    render(<FlowFunnel funnel={section} collapsedEvents={0} onDrill={onDrill} />);
+
+    const row = screen.getByTestId("flow-funnel-stage-review");
+    expect(row).toHaveTextContent("review -> in_progress 426");
+    expect(row).toHaveTextContent("review -> ready 14");
+    expect(row).not.toHaveTextContent("earlier stage");
+    fireEvent.click(within(row).getByRole("button", { name: /review -> in_progress 426/ }));
+    expect(onDrill).toHaveBeenCalledWith("funnel.back_edge.review.in_progress");
+    fireEvent.click(within(row).getByRole("button", { name: /advanced 80/ }));
+    expect(onDrill).toHaveBeenCalledWith("funnel.advanced.review");
+  });
+
   it("FlowFunnel_should_RenderStagesFromResponseAndOtherRow_When_CustomStageOrder", () => {
     const section = funnel({
       stages: [stage("idea", 158, 150), stage("triage", 150, 141), stage("ready", 141, 100), stage("done", 100, 0)],

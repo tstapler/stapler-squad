@@ -51,6 +51,11 @@ export function FlowReview({ review, estimated, trends, onDrill }: FlowReviewPro
               </span>
             )}
           </span>
+          {review.unverifiable && review.unverifiable.den > 0 && (
+            <span className={styles.row} data-testid="flow-review-unverifiable">
+              <span>UNVERIFIABLE</span> <FlowRatio ratio={review.unverifiable} onDrill={onDrill} />
+            </span>
+          )}
           <ExcludedNote review={review} />
         </div>
       )}

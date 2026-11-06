@@ -71,9 +71,25 @@ describe("ThrashBanner", () => {
   });
 });
 
+describe("ThrashBanner server archived count", () => {
+  it("ThrashBanner_should_UseServerArchivedCount_When_ClientKnowsNoArchivedIds", () => {
+    banner(create(FlowAnomaliesSectionSchema, { meta: { status: "ok" }, thrashItems: { value: 35, drillKey: "thrash.episode" }, archivedItems: 2 } as never));
+
+    expect(screen.getByRole("status")).toHaveTextContent("35 items thrashing (2 archived); excluded from averages");
+  });
+});
+
 describe("FlowAnomalies", () => {
   const view = (section: FlowAnomaliesSection, archived = new Set<string>()) =>
     render(<FlowAnomalies anomalies={section} archivedIds={archived} now={NOW} onDrill={onDrill} />);
+
+  it("FlowAnomalies_should_ChipArchivedRow_When_ServerFlagsItArchived", () => {
+    view(anomalies([{ ...thrashRow("a1", 2, 40, 1000, 3), archived: true }, thrashRow("b2", 5, 90, 1000, 9)]));
+
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent("archived");
+    expect(rows[1]).not.toHaveTextContent("archived");
+  });
 
   it("FlowAnomalies_should_ListOneRowPerItemWithChipAndDrill_When_ItemsThrash", () => {
     view(anomalies([thrashRow("a1", 2, 87_400, 30_000, 48), thrashRow("b2", 5, 8_700, 4 * DAY, 28)]), new Set(["b2"]));

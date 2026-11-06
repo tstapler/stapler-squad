@@ -31,6 +31,23 @@ const tile = (name: string) => screen.getByTestId(`flow-tile-${name}`);
 
 beforeEach(() => onDrill.mockReset());
 
+describe("FlowTiles in-window label", () => {
+  it("FlowTiles_should_LabelLeadTimeAndFpyInWindowOnly_When_TilesCarryTheCodes", () => {
+    const meta = { status: "ok", estimated: ["lead_time:in_window_only", "fpy:in_window_only"] };
+    render(<FlowTiles summary={summaryWith({ meta })} comparison={null} onDrill={onDrill} />);
+
+    expect(tile("lead-time")).toHaveTextContent("judged on in-window events only");
+    expect(tile("fpy")).toHaveTextContent("judged on in-window events only");
+    expect(tile("throughput")).not.toHaveTextContent("in-window");
+  });
+
+  it("FlowTiles_should_OmitInWindowLabel_When_NoCodes", () => {
+    render(<FlowTiles summary={summaryWith()} comparison={null} onDrill={onDrill} />);
+
+    expect(screen.queryByText("judged on in-window events only")).not.toBeInTheDocument();
+  });
+});
+
 describe("FlowTiles without color", () => {
   it("NoColorOnly_should_UseTextPatternArrowUnderline_When_RenderedInGrayscale", () => {
     const comparison = compareWith([{ name: "merged_items", unit: "items", state: "ok", a: 7, b: 9, delta: 2, nA: 7, nB: 9 }]);

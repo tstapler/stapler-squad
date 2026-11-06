@@ -39,6 +39,21 @@ describe("FlowReview", () => {
     expect(rates.textContent?.indexOf("Adjusted")).toBeLessThan(rates.textContent?.indexOf("Raw") ?? -1);
   });
 
+  it("FlowReview_should_ShowRawUnverifiableRatioAndDrill_When_Present", () => {
+    render(<FlowReview review={review({ unverifiable: { num: 110, den: 528, drillKey: "review.unverifiable" } })} estimated={[]} onDrill={onDrill} />);
+
+    const line = screen.getByTestId("flow-review-unverifiable");
+    expect(line).toHaveTextContent("UNVERIFIABLE 110/528 (20.8%)");
+    fireEvent.click(within(line).getByRole("button", { name: /110\/528/ }));
+    expect(onDrill).toHaveBeenCalledWith("review.unverifiable");
+  });
+
+  it("FlowReview_should_OmitUnverifiableLine_When_DenominatorZero", () => {
+    render(<FlowReview review={review()} estimated={[]} onDrill={onDrill} />);
+
+    expect(screen.queryByTestId("flow-review-unverifiable")).not.toBeInTheDocument();
+  });
+
   it("FlowReview_should_SayNoVerdicts_When_TotalZero", () => {
     render(<FlowReview review={review({ total: { value: 0 }, classes: [] })} estimated={[]} onDrill={onDrill} />);
 

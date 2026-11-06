@@ -51,6 +51,13 @@ function ThroughputTile({ summary, comparison, onDrill }: FlowTilesProps) {
   );
 }
 
+const IN_WINDOW_ONLY_NOTE = "judged on in-window events only";
+
+function InWindowNote({ summary, code }: { summary: FlowSummary; code: string }) {
+  if (!summary.tiles?.meta?.estimated.includes(code)) return null;
+  return <span className={styles.muted}>{IN_WINDOW_ONLY_NOTE}</span>;
+}
+
 function LeadTimeTile({ summary, comparison, onDrill }: FlowTilesProps) {
   const lead = summary.tiles?.leadTime;
   const text = durationText(lead);
@@ -68,6 +75,7 @@ function LeadTimeTile({ summary, comparison, onDrill }: FlowTilesProps) {
       </span>
       {lead && text && <span className={styles.secondary}>p90 {text.p90}, {plural(lead.n, "item")}</span>}
       {excluded > 0 && <span className={styles.muted}>{plural(excluded, "item")} without an in_progress start excluded</span>}
+      <InWindowNote summary={summary} code="lead_time:in_window_only" />
       <FlowDelta comparison={comparison} metric="lead_time_p50_hours" good="down" />
     </Tile>
   );
@@ -79,6 +87,7 @@ function FpyTile({ summary, comparison, onDrill }: FlowTilesProps) {
       <span className={styles.tileValue}>
         <FlowRatio ratio={summary.tiles?.firstPassYield} onDrill={onDrill} />
       </span>
+      <InWindowNote summary={summary} code="fpy:in_window_only" />
       <FlowDelta comparison={comparison} metric="first_pass_yield" good="up" />
     </Tile>
   );

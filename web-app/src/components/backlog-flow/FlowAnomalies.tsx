@@ -94,7 +94,7 @@ export function FlowAnomalies({ anomalies, archivedIds, now = Date.now(), onDril
           </thead>
           <tbody>
             {items.map((row) => (
-              <Row key={row.itemId} row={row} archived={archivedIds.has(row.itemId)} now={now} drillKey={drillKey} onDrill={onDrill} onViewEvents={onViewEvents} />
+              <Row key={row.itemId} row={row} archived={row.archived || archivedIds.has(row.itemId)} now={now} drillKey={drillKey} onDrill={onDrill} onViewEvents={onViewEvents} />
             ))}
           </tbody>
         </table>
