@@ -123,7 +123,7 @@ func TestReplaceDaemon_StopsListenerThenEnsuresDaemon(t *testing.T) {
 	spawned := false
 	startDaemonAttemptFn = func(DaemonConfig) (*os.Process, error) { spawned = true; return &os.Process{}, nil }
 	checkDaemonHealthyFn = func(context.Context, DaemonConfig) bool { return spawned }
-	stopTymuxdFn = func() error { return nil }
+	stopTymuxdFn = func(StopReason) error { return nil }
 
 	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
 
