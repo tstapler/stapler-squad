@@ -8,6 +8,8 @@ package dirwatch
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
@@ -39,8 +41,9 @@ type Watcher interface {
 type Option func(*config)
 
 type config struct {
-	name   string
-	warnAt int
+	name       string
+	warnAt     int
+	maxStreams int
 	// rootFor maps a resolved watch path to the path whose FSEvents stream
 	// should cover it, letting many sibling watches share one stream.
 	rootFor func(resolved string) string
@@ -103,3 +106,21 @@ func (f fsnotifyWatcher) Remove(name string) error      { return f.w.Remove(name
 func (f fsnotifyWatcher) Events() <-chan fsnotify.Event { return f.w.Events }
 func (f fsnotifyWatcher) Errors() <-chan error          { return f.w.Errors }
 func (f fsnotifyWatcher) Close() error                  { return f.w.Close() }
+
+// WithMaxStreams caps FSEvents streams process-wide before Adds degrade to
+// kqueue; zero means DefaultMaxStreams (darwin only).
+func WithMaxStreams(n int) Option { return func(c *config) { c.maxStreams = n } }
+
+// RootAt makes every watched path under root share one stream on root. root is
+// resolved through symlinks; paths outside it keep their own stream.
+func RootAt(root string) Option {
+	return WithRootFunc(func(p string) string {
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			root = r
+		}
+		if p == root || strings.HasPrefix(p, root+string(filepath.Separator)) {
+			return root
+		}
+		return p
+	})
+}

@@ -340,7 +340,7 @@ func (s *Scanner) Start(ctx context.Context) {
 	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
 	s.mu.RLock()
-	injected := s.gitwatch.override != nil
+	injected := s.gitwatch.override != nil && !s.gitwatch.ownsOverride
 	s.mu.RUnlock()
 	if !injected {
 		// dirwatch uses FSEvents on macOS: kqueue would hold an fd per file in
@@ -350,6 +350,7 @@ func (s *Scanner) Start(ctx context.Context) {
 		} else {
 			s.mu.Lock()
 			s.gitwatch.override = w
+			s.gitwatch.ownsOverride = true // fsnotifyLoop closes it on exit, so a restart needs a fresh one
 			s.mu.Unlock()
 		}
 	}

@@ -70,8 +70,10 @@ func (s *SharedObjectStore) startPackWatchLocked() {
 func (s *SharedObjectStore) packWatchLoop(w dirwatch.Watcher, stop chan struct{}) {
 	defer func() { _ = w.Close() }()
 
-	var timer *time.Timer
-	var timerC <-chan time.Time
+	// One refresh right after the watch starts: a repack that landed between
+	// loading the indexes and the watch becoming live raises no event.
+	timer := time.NewTimer(packWatchDebounce)
+	timerC := timer.C
 	defer func() {
 		if timer != nil {
 			timer.Stop()

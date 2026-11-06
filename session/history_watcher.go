@@ -114,13 +114,15 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		return nil
 	}
 
-	watcher, err := dirwatch.New(dirwatch.WithName("history"))
+	watcher, err := dirwatch.New(dirwatch.WithName("history"), dirwatch.RootAt(w.watchDir))
 	if err != nil {
 		close(w.stopped)
 		return err
 	}
 	w.watcher = watcher
 
+	// RootAt: one FSEvents stream covers every project dir (a stream per dir would
+	// exhaust the ~512 per-process limit at a few hundred projects).
 	if err := watcher.Add(w.watchDir); err != nil {
 		_ = watcher.Close()
 		close(w.stopped)

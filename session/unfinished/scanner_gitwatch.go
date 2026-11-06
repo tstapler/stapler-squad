@@ -39,6 +39,8 @@ type worktreeTarget struct{ repoRoot, worktree string }
 type gitwatchState struct {
 	// override replaces the watcher derived from Scanner.fsWatcher (tests).
 	override gitWatcher
+	// ownsOverride marks override as created by Start (not injected by a test).
+	ownsOverride bool
 	// watchWorktreeGitdirs gates every Tier A behaviour (linked gitdir watches,
 	// Rename events, overflow rescans); set it before Start.
 	watchWorktreeGitdirs bool

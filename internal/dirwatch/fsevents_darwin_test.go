@@ -11,6 +11,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/internal/fsevents"
 )
 
 func openFDs(t *testing.T) int {
@@ -67,11 +68,29 @@ func TestFDFreeWatcherHoldsNoFDPerWatchedFile(t *testing.T) {
 	require.LessOrEqual(t, fseventsCost, 1, "FSEvents watcher must not hold an fd per watched dir/file (kqueue cost %d)", kqueueCost)
 }
 
+// waitEvent triggers once and waits for a match; for the kqueue fallback, which is reliable.
+func waitEvent(t *testing.T, w Watcher, match func(fsnotify.Event) bool, trigger func()) {
+	t.Helper()
+	trigger()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case e, ok := <-w.Events():
+			require.True(t, ok, "events channel closed")
+			if match(e) {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no matching event from the kqueue fallback")
+		}
+	}
+}
+
 // eventually runs trigger, then waits briefly for a matching event, retrying so a
 // slow or briefly unregistered FSEvents stream cannot fail the test spuriously.
 func eventually(t *testing.T, w Watcher, trigger func(i int), match func(fsnotify.Event) bool) fsnotify.Event {
 	t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(20 * time.Second)
 	var all []fsnotify.Event
 	for i := 0; ; i++ {
 		trigger(i)
@@ -88,6 +107,7 @@ func eventually(t *testing.T, w Watcher, trigger func(i int), match func(fsnotif
 			case <-retry:
 				break wait
 			case <-deadline:
+				skipIfHostDropsFSEvents(t)
 				t.Fatalf("no matching event; got %v", all)
 			}
 		}
@@ -167,4 +187,115 @@ func TestFDFreeWatcherMergesNarrowStreamsUnderNewAncestor(t *testing.T) {
 	eventually(t, w, func(i int) {
 		require.NoError(t, os.WriteFile(want, []byte(fmt.Sprint(i)), 0o644))
 	}, func(e fsnotify.Event) bool { return e.Name == want })
+}
+
+// Not parallel: processStreams is process-wide.
+func TestFDFreeWatcherFallsBackToKqueueWhenStreamBudgetIsSpent(t *testing.T) {
+	_, paths := populate(t, 6, 1)
+	base := int(processStreams.Load())
+	w, ok := NewFDFree(WithMaxStreams(base + 3))
+	require.True(t, ok)
+	for _, p := range paths {
+		require.NoError(t, w.Add(p), "a spent stream budget must degrade, not fail the Add")
+	}
+	fw := w.(*fseventsWatcher)
+	fw.mu.Lock()
+	require.Len(t, fw.streams, 3)
+	require.Len(t, fw.fbNames, 3)
+	fw.mu.Unlock()
+
+	want := filepath.Join(paths[5], "HEAD") // beyond the budget: served by kqueue
+	waitEvent(t, w, func(e fsnotify.Event) bool { return e.Name == want }, func() {
+		require.NoError(t, os.WriteFile(want, []byte("x"), 0o644))
+	})
+	require.NoError(t, w.Remove(paths[5]))
+	require.NoError(t, w.Close())
+	require.Equal(t, base, int(processStreams.Load()), "Close must release every stream")
+}
+
+func TestFDFreeWatcherSharesOneStreamAcrossManySiblingDirs(t *testing.T) {
+	root, paths := populate(t, 600, 0) // 600 > the ~512 per-process stream limit
+	w, ok := NewFDFree(RootAt(root))
+	require.True(t, ok)
+	t.Cleanup(func() { _ = w.Close() })
+	for _, p := range paths {
+		require.NoError(t, w.Add(p))
+	}
+	fw := w.(*fseventsWatcher)
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	require.Len(t, fw.streams, 1)
+	require.Empty(t, fw.fbNames)
+}
+
+func TestFDFreeWatcherKeepsStreamUntilLastAliasIsRemoved(t *testing.T) {
+	_, paths := populate(t, 1, 0)
+	alias := paths[0] + "-alias"
+	require.NoError(t, os.Symlink(paths[0], alias))
+	w, ok := NewFDFree()
+	require.True(t, ok)
+	t.Cleanup(func() { _ = w.Close() })
+	require.NoError(t, w.Add(paths[0]))
+	require.NoError(t, w.Add(alias))
+	require.NoError(t, w.Remove(paths[0]))
+	fw := w.(*fseventsWatcher)
+	fw.mu.Lock()
+	require.Len(t, fw.streams, 1, "alias still watches the path")
+	fw.mu.Unlock()
+	require.NoError(t, w.Remove(alias))
+	fw.mu.Lock()
+	require.Empty(t, fw.streams)
+	fw.mu.Unlock()
+}
+
+func TestOpsForRenameOntoExistingPathIsAlsoCreate(t *testing.T) {
+	_, paths := populate(t, 1, 1)
+	existing := filepath.Join(paths[0], "f0")
+	require.True(t, opsFor(fsevents.ItemRenamed, existing).Has(fsnotify.Create), "lock-file rename onto HEAD must look like a Create")
+	require.False(t, opsFor(fsevents.ItemRenamed, filepath.Join(paths[0], "gone")).Has(fsnotify.Create))
+}
+
+func TestDroppedEventsEscalateOnlyWhenTheyCanTouchAWatchedPath(t *testing.T) {
+	root, paths := populate(t, 1, 0)
+	w, ok := NewFDFree()
+	require.True(t, ok)
+	t.Cleanup(func() { _ = w.Close() })
+	require.NoError(t, w.Add(paths[0]))
+	fw := w.(*fseventsWatcher)
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	require.True(t, fw.touchesWatchedLocked(paths[0]))
+	require.True(t, fw.touchesWatchedLocked(filepath.Join(paths[0], "child")))
+	require.True(t, fw.touchesWatchedLocked(root), "an ancestor of a watched dir")
+	require.False(t, fw.touchesWatchedLocked(filepath.Join(paths[0], "a", "b", "objects")), "deep churn below a watched dir")
+	require.False(t, fw.touchesWatchedLocked(filepath.Join(root, "elsewhere")))
+}
+
+// skipIfHostDropsFSEvents skips when a bare FSEvents stream on a fresh dir also
+// sees nothing: a host with fseventsd saturated (observed at load average ~120
+// with many concurrent builds) cannot tell us anything about this package.
+func skipIfHostDropsFSEvents(t *testing.T) {
+	t.Helper()
+	_, paths := populate(t, 1, 0)
+	got := make(chan struct{}, 1)
+	s, err := fsevents.NewStream(fsevents.Config{Paths: []string{paths[0]}, SinceWhen: fsevents.SinceNow, OnEvents: func([]fsevents.Event) {
+		select {
+		case got <- struct{}{}:
+		default:
+		}
+	}})
+	require.NoError(t, err)
+	require.NoError(t, s.Start())
+	defer s.Stop()
+	deadline := time.After(10 * time.Second)
+	for i := 0; ; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(paths[0], "canary"), []byte(fmt.Sprint(i)), 0o644))
+		select {
+		case <-got:
+			return
+		case <-time.After(500 * time.Millisecond):
+		case <-deadline:
+			t.Skip("host FSEvents delivered nothing to a bare canary stream; cannot judge dirwatch here")
+		}
+	}
 }
