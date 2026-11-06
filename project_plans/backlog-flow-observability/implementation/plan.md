@@ -1346,4 +1346,13 @@ Patched against the round 2 triad lens analyses (engineering, UX, product), real
 
 **Deferred polish (listed, not fixed, by instruction)**: tab-stop count for "every number a button" and the 24px-target exemption for inline links; the "Review FAIL (judg.)" tile label jargon and the three fail-ish percentages in the first row; sparkline behavior with only 1-2 weekly buckets on the 7-day window; time-zone label on the as-of time and UTC-midnight MCP dates; dimmed-previous-data and slow all-time loading copy during window changes; criterion 1 asserting the whole funnel in the viewport and a test for the "better/worse" delta wording; adoption telemetry (MCP call counts) and a consultation cadence.
 
+### Owner decisions (2026-11-05, interview)
+
+These override any conflicting text above (the 50% figure appears in Stories 4.2.2 and 6.1.1, ADR-005, requirements and UX S8; read it as 70%).
+
+- **Bounce definition**: keep the plan default (real `review>in_progress` events without the `ReviewReopen` note).
+- **Deadlock precision bar**: 70%, not 50%. Tyler hand-labels about 10 candidates; below 70% the section keeps the name "Review-fail streaks (heuristic)".
+- **Thrash-backoff fix**: a parallel, separate PR (not gating PR-B). The ship+30d checkpoint still starts after the later of the PR-B merge and the backoff landing.
+- **PR strategy**: three PRs, A (capture writers) then B then C, as in "Delivery plan: three PRs".
+
 **Not fixed, with reasons**: (1) the outcome metric still has no numeric target, because the baseline sample is small (26 vs 8 merged items per 30 days) and a threshold would be invented; the decision-rule table stays the contract. (2) Manual nudges per week stays UNMEASURED (no data source). (3) The first window's CI-vs-conflict split stays unmet until the soak accrues; PR-A starts the clock earlier, which is the only mitigation available. (4) The 600/hour cap, 30m interval and 35m join window are chosen defaults, not measured values; each has a test that exposes a bad choice.
