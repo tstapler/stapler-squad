@@ -53,15 +53,20 @@ test.describe("flow page happy path", () => {
 
     await flow.click(flow.drawer.getByRole("link", { name: "Flow e2e merged item" }).first());
     expect(flow.clicks).toBe(2);
-    await expect(page).toHaveURL(new RegExp(`item=${seeded.mergedItemId}`));
+    await expect(page).toHaveURL(new RegExp(`/backlog\\?item=${seeded.mergedItemId}`));
+    await expect(page.getByTestId("backlog-item-detail")).toContainText("Flow e2e merged item");
   });
 
-  // GAP (UX criterion 2, "detail panel in 2 clicks"): the drawer's item link is `?item=<id>` on /backlog/flow, but only
-  // the List page (web-app/src/app/backlog/page.tsx) reads `item`, so no detail panel opens from the Flow route.
-  test.fixme("item link opens the existing detail panel from the Flow route", async ({ page }) => {
+  test("drawer item link opens that item's detail on the backlog page", async ({ page }) => {
     const flow = new BacklogFlowPage(page);
-    await flow.goto(`?window=30&item=${seeded.mergedItemId}`);
+    await flow.goto("?window=30&drill=tiles.merged");
+    await expect(flow.drawer).toBeVisible();
+
+    await flow.drawer.getByRole("link", { name: "Flow e2e merged item" }).first().click();
+
+    await expect(page).toHaveURL(new RegExp(`/backlog\\?item=${seeded.mergedItemId}`));
     await expect(page.getByTestId("backlog-item-detail")).toBeVisible();
+    await expect(page.getByTestId("backlog-item-detail")).toContainText("Flow e2e merged item");
   });
 
   test("compare previous period shows a delta on the tiles in one click", async ({ page }) => {

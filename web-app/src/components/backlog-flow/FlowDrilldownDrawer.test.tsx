@@ -48,7 +48,7 @@ describe("FlowDrilldownDrawer", () => {
     expect(row).toHaveTextContent("review");
     expect(row).toHaveTextContent("FAIL x3");
     expect(row).toHaveTextContent("2.1d");
-    expect(within(row).getByRole("link", { name: "Fix login test 3" })).toHaveAttribute("href", "?window=30&item=item-3");
+    expect(within(row).getByRole("link", { name: "Fix login test 3" })).toHaveAttribute("href", "/backlog?item=item-3");
     expect(dialog).toHaveAttribute("role", "dialog");
   });
 

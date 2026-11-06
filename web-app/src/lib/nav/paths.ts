@@ -45,6 +45,7 @@ export const routes = {
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  backlogItem: (itemId: string) => `/backlog?item=${encodeURIComponent(itemId)}`,
   unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
   unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
 } as const;

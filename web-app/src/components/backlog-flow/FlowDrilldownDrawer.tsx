@@ -6,7 +6,7 @@ import { AppLink } from "@/components/ui/AppLink";
 import type { FlowDrillItem } from "@/gen/session/v1/backlog_flow_pb";
 import type { FlowWindow } from "@/lib/hooks/useBacklogFlow";
 import { useFlowDrilldown, type UseFlowDrilldownReturn } from "@/lib/hooks/useFlowDrilldown";
-import { useSearchParams } from "@/lib/nav";
+import { routes } from "@/lib/routes";
 import { DialogError, DialogSkeleton, FlowDialog } from "./FlowDialog";
 import { drillTitle, windowPhrase } from "./drillLabels";
 import { formatDurationMs, formatInt, plural } from "./flowFormatters";
@@ -20,14 +20,6 @@ interface FlowDrilldownDrawerProps {
   onClose: () => void;
   /** The List view URL that shows the same items, when a filter for this key exists. */
   listHrefFor?: (key: string) => string | null;
-}
-
-/** Keeps the flow page's other parameters but swaps `drill` for `item`, so Back returns to the drawer. */
-function itemHref(params: URLSearchParams | { toString(): string }, itemId: string): string {
-  const next = new URLSearchParams(params.toString());
-  next.delete("drill");
-  next.set("item", itemId);
-  return `?${next.toString()}`;
 }
 
 function ItemRow({ item, href }: { item: FlowDrillItem; href: string }) {
@@ -95,7 +87,6 @@ function CountNote({ drill, asOf, listHref }: CountNoteProps) {
 /** The items behind one number. Open state lives in the URL (`drill`), so the page controls mounting. */
 export function FlowDrilldownDrawer({ drillKey, window, returnFocusTo, onClose, listHrefFor }: FlowDrilldownDrawerProps) {
   const drill = useFlowDrilldown(drillKey, window);
-  const params = useSearchParams();
   const ready = drill.phase === "ready";
   const asOfDate = drill.meta?.asOf ? timestampDate(drill.meta.asOf) : null;
   const asOf = asOfDate ? formatClock(asOfDate) : "the last refresh";
@@ -120,7 +111,7 @@ export function FlowDrilldownDrawer({ drillKey, window, returnFocusTo, onClose, 
             </thead>
             <tbody>
               {drill.items.map((item) => (
-                <ItemRow key={item.itemId} item={item} href={itemHref(params, item.itemId)} />
+                <ItemRow key={item.itemId} item={item} href={routes.backlogItem(item.itemId)} />
               ))}
             </tbody>
           </table>
