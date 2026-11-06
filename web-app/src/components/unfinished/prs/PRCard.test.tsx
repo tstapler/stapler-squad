@@ -33,7 +33,7 @@ describe("PRCard session chip (ux.md S6)", () => {
   it("prCard_should_nameTheSession_When_OneTracksIt_AndCountThem_When_Several", () => {
     mockTracking = [{ id: "a", title: "refactor-auth" }];
     const { unmount } = render(inStore(<PRCard pr={makePR()} />));
-    expect(screen.getByRole("link", { name: "Open session refactor-auth" })).toHaveTextContent("session: refactor-auth");
+    expect(screen.getByRole("link", { name: "session: refactor-auth" })).toHaveTextContent("session: refactor-auth");
     unmount();
 
     mockTracking = [{ id: "a", title: "refactor-auth" }, { id: "b", title: "rework" }];
