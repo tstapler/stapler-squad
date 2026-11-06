@@ -176,10 +176,6 @@ func isAPIPath(path string) bool {
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/actuator/")
 }
 
-func isAuthenticated(r *http.Request, validator AuthValidator) bool {
-	return authenticatedKind(r, validator) != ""
-}
-
 // authenticatedKind returns the credential that validated, or "".
 func authenticatedKind(r *http.Request, validator AuthValidator) string {
 	if cookie, err := r.Cookie("cs_auth"); err == nil && cookie.Value != "" {
