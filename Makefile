@@ -1064,7 +1064,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard otel-auto-isolation-guard check-no-generated-committed ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -1114,6 +1114,16 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
+
+.PHONY: check-no-generated-committed
+check-no-generated-committed: ## Fail if generated ent or gen/ output is tracked (only session/ent/schema/ and generate.go may be)
+	@bad="$$(git ls-files session/ent gen | grep -v -E '^session/ent/(schema/|generate\.go)')"; \
+	if [ -n "$$bad" ]; then \
+	    echo "❌ check-no-generated-committed: generated output is tracked (untrack it; .gitignore excludes it):"; \
+	    echo "$$bad" | head -20; \
+	    exit 1; \
+	fi
+	@echo "✅ check-no-generated-committed: no generated ent or gen/ output tracked"
 
 .PHONY: plan-check-session-multi-pr
 plan-check-session-multi-pr: ## Validate the session-multi-pr-tracking plan's task dependency table
