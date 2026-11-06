@@ -1,0 +1,1522 @@
+{
+ "description": "Synthetic verdicts, one per session; sequence letters F/R/U/P = FAIL/PARTIAL/UNVERIFIABLE/PASS. Summaries synthesized.",
+ "live_counts_at_generation": {
+  "verdicts": 529,
+  "verdicts_by_outcome": {
+   "FAIL": 186,
+   "PARTIAL": 82,
+   "PASS": 151,
+   "UNVERIFIABLE": 110
+  },
+  "no_commit_fails": 97,
+  "self_check_unverifiable": 34,
+  "auto_verified_pass": 23,
+  "stuck_rows": 718
+ },
+ "verdicts": [
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-001",
+   "created_at": "2026-10-01 00:00:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-001",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-002",
+   "created_at": "2026-10-01 00:01:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-002",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-003",
+   "created_at": "2026-10-01 00:02:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-003",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-004",
+   "created_at": "2026-10-01 00:03:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-004",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-005",
+   "created_at": "2026-10-01 00:04:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-005",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-006",
+   "created_at": "2026-10-01 00:05:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-006",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-007",
+   "created_at": "2026-10-01 00:06:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-007",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-008",
+   "created_at": "2026-10-01 00:07:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-008",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-009",
+   "created_at": "2026-10-01 00:08:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-009",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-010",
+   "created_at": "2026-10-01 00:09:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-010",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-011",
+   "created_at": "2026-10-01 00:10:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-011",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-012",
+   "created_at": "2026-10-01 00:11:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-012",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-013",
+   "created_at": "2026-10-01 00:12:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-013",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "0791f5b4",
+   "session_id": "sess-014",
+   "created_at": "2026-10-01 00:13:00.000000+00:00",
+   "overall_outcome": "PASS",
+   "summary": "Synthetic judgment: criteria met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-014",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-015",
+   "created_at": "2026-10-03 00:00:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-015",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-016",
+   "created_at": "2026-10-03 00:01:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-016",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-017",
+   "created_at": "2026-10-03 00:02:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-017",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-018",
+   "created_at": "2026-10-03 00:03:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-018",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-019",
+   "created_at": "2026-10-03 00:04:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-019",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-020",
+   "created_at": "2026-10-03 00:05:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-020",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-021",
+   "created_at": "2026-10-03 00:06:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-021",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-022",
+   "created_at": "2026-10-03 00:07:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-022",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-023",
+   "created_at": "2026-10-03 00:08:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-023",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-024",
+   "created_at": "2026-10-03 00:09:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-024",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-025",
+   "created_at": "2026-10-03 00:10:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-025",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-026",
+   "created_at": "2026-10-03 00:11:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-026",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-027",
+   "created_at": "2026-10-03 00:12:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-027",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-028",
+   "created_at": "2026-10-03 00:13:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-028",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-029",
+   "created_at": "2026-10-03 00:14:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-029",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-030",
+   "created_at": "2026-10-03 00:15:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-030",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-031",
+   "created_at": "2026-10-03 00:16:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-031",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-032",
+   "created_at": "2026-10-03 00:17:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-032",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-033",
+   "created_at": "2026-10-03 00:18:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-033",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-034",
+   "created_at": "2026-10-03 00:19:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-034",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-035",
+   "created_at": "2026-10-03 00:20:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-035",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-036",
+   "created_at": "2026-10-03 00:21:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Synthetic judgment: reviewer could not confirm criteria from the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-036",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-037",
+   "created_at": "2026-10-03 00:22:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-037",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "5eaaa473",
+   "session_id": "sess-038",
+   "created_at": "2026-10-03 00:23:00.000000+00:00",
+   "overall_outcome": "PASS",
+   "summary": "Synthetic judgment: criteria met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-038",
+   "override_by": "user",
+   "override_reason": "synthetic human override"
+  },
+  {
+   "item_id": "rep-crit",
+   "session_id": "sess-039",
+   "created_at": "2026-10-05 00:00:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-039",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "rep-crit",
+   "session_id": "sess-040",
+   "created_at": "2026-10-05 00:01:00.000000+00:00",
+   "overall_outcome": "PARTIAL",
+   "summary": "Synthetic judgment: criteria partially met.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PARTIAL",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-040",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "rep-crit",
+   "session_id": "sess-041",
+   "created_at": "2026-10-05 00:02:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-041",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "same-diff",
+   "session_id": "sess-042",
+   "created_at": "2026-10-06 00:00:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "shared-diff-hash",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "same-diff",
+   "session_id": "sess-043",
+   "created_at": "2026-10-06 00:01:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Synthetic judgment: criteria not met by the diff.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "shared-diff-hash",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "nocommit-a",
+   "session_id": "sess-044",
+   "created_at": "2026-10-07 00:00:00.000000+00:00",
+   "overall_outcome": "FAIL",
+   "summary": "Review blocked: no committed changes were found for this session. Synthetic.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "FAIL",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-044",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "selfcheck-a",
+   "session_id": "sess-045",
+   "created_at": "2026-10-07 00:01:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Review UNVERIFIABLE: codebase-read capability self-check failed. Synthetic.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-045",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "nodiff-a",
+   "session_id": "sess-046",
+   "created_at": "2026-10-07 00:02:00.000000+00:00",
+   "overall_outcome": "UNVERIFIABLE",
+   "summary": "Review blocked: no diff could be computed and the codebase-read fallback directory is synthetic.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "UNVERIFIABLE",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-046",
+   "override_by": "",
+   "override_reason": ""
+  },
+  {
+   "item_id": "auto-a",
+   "session_id": "sess-047",
+   "created_at": "2026-10-07 00:03:00.000000+00:00",
+   "overall_outcome": "PASS",
+   "summary": "Auto-verified by reconcileBouncingItems: PR #1 for this item is confirmed merged. Synthetic.",
+   "per_criterion": [
+    {
+     "criterion_index": 0,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 1,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 2,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    },
+    {
+     "criterion_index": 3,
+     "outcome": "PASS",
+     "evidence": "synthetic evidence"
+    }
+   ],
+   "diff_hash": "hash-047",
+   "override_by": "",
+   "override_reason": ""
+  }
+ ]
+}
