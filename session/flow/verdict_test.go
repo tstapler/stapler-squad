@@ -133,7 +133,7 @@ func TestVerdictSummary_should_ComputeOverrideRateAndHandleEmptyInput(t *testing
 
 func TestVerdictJoin_should_CountFourNotThirtySix_When_ItemHasNineSessionsFourVerdicts(t *testing.T) {
 	t.Parallel()
-	var rows []SessionVerdictRow
+	rows := make([]SessionVerdictRow, 0, 36)
 	for s := range 9 {
 		for range 4 { // join inflation: every session row repeated per verdict row
 			row := SessionVerdictRow{ItemID: "item", SessionID: SessionID(fmt.Sprintf("sess-%d", s))}
