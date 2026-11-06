@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -46,17 +47,23 @@ func (h *flowHandlers) guard() *mcpgo.CallToolResult {
 }
 
 // flowIntArg reads a numeric tool argument; present is false when absent or not a number.
+// Values saturate to the int32 range so a later int32 conversion cannot wrap
+// a huge argument into a small valid one.
 func flowIntArg(args map[string]any, name string) (n int, present bool) {
 	switch v := args[name].(type) {
 	case float64:
-		return int(v), true
+		return saturateInt32(v), true
 	case int:
-		return v, true
+		return saturateInt32(float64(v)), true
 	case json.Number:
-		i, err := v.Int64()
-		return int(i), err == nil
+		f, err := v.Float64()
+		return saturateInt32(f), err == nil
 	}
 	return 0, false
+}
+
+func saturateInt32(f float64) int {
+	return int(max(min(f, math.MaxInt32), math.MinInt32))
 }
 
 func flowStringArg(args map[string]any, name string) string {
@@ -124,21 +131,51 @@ func resourceExhaustedResult(msg string) *mcpgo.CallToolResult {
 	return errResult(ErrInvalidArgument, text, "")
 }
 
-const unknownDrillKeyPrefix = `unknown drill key "`
+const (
+	unknownDrillKeyPrefix = `unknown drill key "`
+	validKeysSeparator    = `"; valid keys: `
+	// validKeysMaxCount bounds the valid-keys list echoed to the agent.
+	validKeysMaxCount = 60
+)
 
-// sanitizeFlowError sanitizes an RPC error message. The valid-keys list of an
-// unknown-drill-key error is server-generated and longer than one leaf may be,
-// so only the echoed (caller-supplied) key is sanitized and truncated.
+// sanitizeFlowError sanitizes an RPC error message. For an unknown-drill-key
+// error the echoed (caller-supplied) key is sanitized and truncated and the
+// server-generated valid-keys list is bounded. The list follows the key, so the
+// separator is found from the right: a key that contains the separator itself
+// cannot move the split and smuggle text into the list.
 func sanitizeFlowError(msg string) string {
 	rest, ok := strings.CutPrefix(msg, unknownDrillKeyPrefix)
 	if !ok {
 		return sanitizeFlowLeaf(msg)
 	}
-	key, valid, found := strings.Cut(rest, `"; valid keys: `)
-	if !found {
+	i := strings.LastIndex(rest, validKeysSeparator)
+	if i < 0 {
 		return sanitizeFlowLeaf(msg)
 	}
-	return fmt.Sprintf(`%s%s"; valid keys: %s`, unknownDrillKeyPrefix, sanitizeFlowKeyEcho(key), valid)
+	key, valid := rest[:i], rest[i+len(validKeysSeparator):]
+	return unknownDrillKeyPrefix + sanitizeFlowKeyEcho(key) + validKeysSeparator + boundValidKeys(valid)
+}
+
+// boundValidKeys keeps the first validKeysMaxCount stable keys of a
+// comma-separated list; per-week bucket keys ("<series>@<week>") are dropped
+// since their form is in the tool description.
+func boundValidKeys(list string) string {
+	var kept []string
+	dropped := 0
+	for _, k := range strings.Split(list, ", ") {
+		switch {
+		case strings.Contains(k, "@"):
+		case len(kept) >= validKeysMaxCount:
+			dropped++
+		default:
+			kept = append(kept, sanitizeFlowKeyEcho(k))
+		}
+	}
+	out := strings.Join(kept, ", ")
+	if dropped > 0 {
+		out += fmt.Sprintf(", ... (%d more; see the tool description)", dropped)
+	}
+	return out
 }
 
 // flowReply turns a service response or error into the tool result.

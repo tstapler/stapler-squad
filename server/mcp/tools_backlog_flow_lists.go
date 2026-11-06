@@ -67,7 +67,7 @@ func listFlowDeadlockCandidatesTool() mcpgo.Tool {
 	opts := append([]mcpgo.ToolOption{
 		mcpgo.WithDescription("List deadlock candidates: a heuristic ranked review-fail streak list (items whose reviewer kept failing the same criterion, ranked by run_length), not confirmed deadlocks. " +
 			"Each row has sequence, resolution, run_length, repeated_criterion, diff_unchanged_pairs and agent_claimed_done; weak_filter repeats the caveat shown in the UI. " +
-			"Paged: default 10, max 50, with total_count/returned_count/has_more. Use get_item_flow_timeline for one item's history. " +
+			"Top-N only (default 10, max 50, no offset): total_count/returned_count/has_more say whether more exist; page through the full set with list_flow_drilldown key review.deadlock. Use get_item_flow_timeline for one item's history. " +
 			`Example: {"window_days":30,"limit":10}`),
 	}, windowOptions()...)
 	return mcpgo.NewTool("list_flow_deadlock_candidates", append(opts, limitOption())...)
@@ -75,7 +75,7 @@ func listFlowDeadlockCandidatesTool() mcpgo.Tool {
 
 func listFlowThrashEpisodesTool() mcpgo.Tool {
 	opts := append([]mcpgo.ToolOption{
-		mcpgo.WithDescription("List items that thrash between statuses (many rapid flips collapsed into episodes), worst first. Paged: default 10, max 50, with total_count/returned_count/has_more so 10 rows are never mistaken for all of them. " +
+		mcpgo.WithDescription("List items that thrash between statuses (many rapid flips collapsed into episodes), worst first. Top-N only (default 10, max 50, no offset): total_count/returned_count/has_more so 10 rows are never mistaken for all of them; page through the full set with list_flow_drilldown key thrash.episode. " +
 			"Open one with get_item_flow_timeline. " + `Example: {"window_days":30,"limit":10}`),
 	}, windowOptions()...)
 	return mcpgo.NewTool("list_flow_thrash_episodes", append(opts, limitOption())...)

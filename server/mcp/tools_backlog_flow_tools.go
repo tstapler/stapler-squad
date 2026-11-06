@@ -34,14 +34,17 @@ func setCompareDates(args map[string]any, msg *sessionv1.CompareFlowWindowsReque
 	return hasDates, nil
 }
 
-// drillKeyEnum is the registry-backed enum for list_flow_drilldown's key.
-func drillKeyEnum() []string {
+// drillKeyList is the registry-backed list of keys for list_flow_drilldown's
+// description. It is not a schema enum: get_flow_summary also hands out dynamic
+// keys (stuck.<custom>, custom funnel stages, per-week buckets) that a strict
+// client would reject.
+func drillKeyList() string {
 	keys := flow.DrillKeys()
 	out := make([]string, len(keys))
 	for i, k := range keys {
 		out[i] = string(k)
 	}
-	return out
+	return strings.Join(out, ", ")
 }
 
 func windowOptions() []mcpgo.ToolOption {
@@ -79,7 +82,7 @@ func compareFlowWindowsTool() mcpgo.Tool {
 	return mcpgo.NewTool("compare_flow_windows",
 		mcpgo.WithDescription("Compare two bounded windows metric by metric (A, B, delta, N_A, N_B). Give either offsets (a_days, b_days, b_offset_days) or absolute dates (a_start, a_end, b_start, b_end); not both, and not all-time. "+
 			"Dates are YYYY-MM-DD (UTC midnight) or RFC3339 and bounds are half-open [start, end): end is exclusive, so to include Oct 19 as the last day of A pass a_end=2026-10-20. "+
-			"Anchor on a tuning commit's ship date this way. Deltas are descriptive: no significance test is computed, and a metric below the minimum sample is reported as incomparable with a reason. "+
+			"Anchor on a tuning commit's ship date this way. Deltas are descriptive: no significance test is computed, and a metric below the minimum sample is reported as incomparable with a reason; raw counts (merged, thrash, rework events) are also incomparable when the windows differ in length. "+
 			`Example: (A covers Oct 6-19, B covers Oct 20-Nov 2) {"a_start":"2026-10-06","a_end":"2026-10-20","b_start":"2026-10-20","b_end":"2026-11-03"}; or {"a_days":30,"b_days":30,"b_offset_days":30}`),
 		mcpgo.WithNumber("a_days", mcpgo.Description("Window A length in days (offset form)."), mcpgo.Min(1), mcpgo.Max(flowMaxWindowDays)),
 		mcpgo.WithNumber("b_days", mcpgo.Description("Window B length in days (offset form)."), mcpgo.Min(1), mcpgo.Max(flowMaxWindowDays)),
@@ -94,9 +97,9 @@ func compareFlowWindowsTool() mcpgo.Tool {
 func listFlowDrilldownTool() mcpgo.Tool {
 	opts := append([]mcpgo.ToolOption{
 		mcpgo.WithDescription("List the items behind one number: pass the drill_key beside it in get_flow_summary. Paged: limit defaults to 10 and is clamped to 50; total_count is the full item count and has_more says whether more exist (use offset). " +
-			"Besides the keys enumerated here, dynamic keys of the form " + strings.Join(flow.DrillKeyPatterns(), ", ") + " are accepted. " +
+			"Keys: " + drillKeyList() + ". Dynamic keys of the form " + strings.Join(flow.DrillKeyPatterns(), ", ") + " are also accepted: always pass the drill_key exactly as get_flow_summary returned it. " +
 			`Example: {"key":"rework.review_fail","window_days":30,"limit":10}`),
-		mcpgo.WithString("key", mcpgo.Description("Drill key from get_flow_summary."), mcpgo.Required(), mcpgo.Enum(drillKeyEnum()...)),
+		mcpgo.WithString("key", mcpgo.Description("Drill key exactly as returned by get_flow_summary."), mcpgo.Required()),
 	}, windowOptions()...)
 	opts = append(opts,
 		mcpgo.WithNumber("limit", mcpgo.Description("Page size (default 10, max 50)."), mcpgo.DefaultNumber(10), mcpgo.Min(1), mcpgo.Max(50)),

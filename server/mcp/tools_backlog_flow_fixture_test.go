@@ -90,6 +90,7 @@ func liveShapedSummary(q flow.FlowQuery) *flow.FlowSummary {
 			RawFail:      flow.RatioMetric{Num: 186, Den: 528, Ratio: 0.352, Drill: flow.DrillRawFail},
 			AdjustedFail: flow.RatioMetric{Num: 132, Den: 400, Ratio: 0.33, Drill: flow.DrillAdjustedFail},
 			Override:     flow.RatioMetric{Num: 12, Den: 528, Ratio: 0.022, Drill: flow.DrillOverride},
+			Unverifiable: flow.RatioMetric{Num: 110, Den: 528, Ratio: 0.208, Drill: flow.DrillUnverifiable},
 			Deadlocks:    pageOf(deadlocks, limit), WeakFilter: "Heuristic: ranked review-fail streaks, not confirmed deadlocks.",
 		},
 		PR: flow.PRSection{Meta: okMeta(), FixDwell: durMetric(flow.DrillPRFixDwell, 20, 2*time.Hour), Cycles: flow.CountMetric{Value: 20, Drill: flow.DrillReworkPRFix}},
