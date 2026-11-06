@@ -1,19 +1,24 @@
 package tymux
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
-	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+
+	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+	"github.com/tstapler/tymux/clients/go/selecting"
 )
 
-func einval() error { return syscallDialErr(syscall.EINVAL) }
-func eperm() error  { return syscallDialErr(syscall.EPERM) }
+func eperm() error { return syscallDialErr(syscall.EPERM) }
 
 func TestSelectingTransport_UnixEPERM_IsHardErrorAndNeverFallsBack(t *testing.T) {
 	t.Parallel()
@@ -25,7 +30,7 @@ func TestSelectingTransport_UnixEPERM_IsHardErrorAndNeverFallsBack(t *testing.T)
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
 	require.ErrorIs(t, err, syscall.EPERM)
 	require.Zero(t, tcp.calls.Load())
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 }
 
 func TestSelectingTransport_ReprobeSeesEPERM_SwitchesBackToUnixSoTheErrorSurfaces(t *testing.T) {
@@ -34,83 +39,58 @@ func TestSelectingTransport_ReprobeSeesEPERM_SwitchesBackToUnixSoTheErrorSurface
 	unix.fail(enoent())
 	require.NoError(t, list(t, s))
 	unix.fail(eperm())
-	clock.advance(transportReprobeInterval)
+	clock.advance(reprobeInterval)
 	tcpCalls := tcp.calls.Load()
 
 	require.ErrorIs(t, list(t, s), ErrTymuxdSocketAccessDenied)
-	require.Equal(t, transportUnix, s.Active())
+	require.Equal(t, selecting.Unix, s.Active())
 	require.Equal(t, tcpCalls, tcp.calls.Load())
 }
 
-// EINVAL is what connect() returns for a sun_path over the platform limit: the socket can never
-// work, so it must fall back (loudly) instead of failing permanently with TCP never tried.
-func TestSelectingTransport_UnixEINVAL_FallsBackToTCP(t *testing.T) {
+// A socket path that can never work must fall back to TCP instead of failing permanently with TCP
+// never tried. ENAMETOOLONG is unreachable here: sun_path (104/108) is shorter than NAME_MAX, so an
+// over-long path surfaces as EINVAL, which this covers.
+func TestSelectingTransport_BrokenSocketPath_FallsBackToTCP(t *testing.T) {
 	t.Parallel()
-	s, tcp, unix, _ := newTestSelector()
-	unix.fail(einval())
+	brokenPaths := map[string]func(t *testing.T) string{
+		"ENOTDIR": func(t *testing.T) string {
+			file := filepath.Join(t.TempDir(), "afile")
+			require.NoError(t, os.WriteFile(file, nil, 0o600))
+			return filepath.Join(file, "d.sock")
+		},
+		"ELOOP": func(t *testing.T) string {
+			dir := t.TempDir()
+			require.NoError(t, os.Symlink(filepath.Join(dir, "b"), filepath.Join(dir, "a")))
+			require.NoError(t, os.Symlink(filepath.Join(dir, "a"), filepath.Join(dir, "b")))
+			return filepath.Join(dir, "a", "d.sock")
+		},
+		"EINVAL (over-long sun_path)": func(*testing.T) string { return overlongSocketPath() },
+	}
+	for name, mk := range brokenPaths {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			unix, _ := newUnixTransport(mk(t))
+			tcp := &fakeEndpoint{}
+			s := selecting.NewFromTransports(unix, tcp, selecting.Options{})
 
-	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active())
-	require.Positive(t, tcp.calls.Load())
-}
-
-func TestSelectingTransport_StickyOnTCP_OtherProbeErrorsWarnRateLimited(t *testing.T) {
-	t.Parallel()
-	s, _, unix, clock := newTestSelector()
-	unix.fail(enoent())
-	require.NoError(t, list(t, s))
-	odd := syscallDialErr(syscall.ENOTDIR)
-
-	require.True(t, s.warnProbeError(odd), "first odd probe error is logged")
-	require.False(t, s.warnProbeError(odd), "then rate-limited")
-	clock.advance(transportProbeWarnEvery)
-	require.True(t, s.warnProbeError(odd))
-
-	unix.fail(odd)
-	clock.advance(transportReprobeInterval)
-	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active(), "an odd probe error keeps the fallback, only louder")
-}
-
-func TestSelectingTransport_ReprobeIsShortBounded(t *testing.T) {
-	t.Parallel()
-	s, _, unix, clock := newTestSelector()
-	unix.fail(enoent())
-	require.NoError(t, list(t, s))
-	clock.advance(transportReprobeInterval)
-
-	require.NoError(t, list(t, s))
-
-	require.Positive(t, unix.lastInfoTimeout.Load())
-	require.LessOrEqual(t, unix.lastInfoTimeout.Load(), int64(500*time.Millisecond), "a caller never waits the full probe timeout for a re-probe")
-}
-
-func TestSelectingTransport_TCPRefusedWithSocketStillDown_DoesNotSwitchOrLie(t *testing.T) {
-	t.Parallel()
-	s, tcp, unix, _ := newTestSelector()
-	unix.fail(enoent())
-	require.NoError(t, list(t, s))
-	require.Equal(t, transportTCP, s.Active())
-	tcp.fail(refused())
-	before := unix.calls.Load()
-
-	require.Error(t, list(t, s))
-
-	require.Equal(t, transportTCP, s.Active(), "switching to a socket that was never probed would log a transition that did not happen")
-	require.Greater(t, unix.calls.Load(), before, "the socket is probed before any switch")
+			require.NoError(t, list(t, s))
+			require.Equal(t, selecting.TCP, s.Active())
+			require.Positive(t, tcp.calls.Load())
+		})
+	}
 }
 
 func TestSharedTransportFor_ConcurrentFirstCallersBuildOnce(t *testing.T) {
 	t.Parallel()
 	var built atomic.Int32
 	key := fmt.Sprintf("shared-concurrent-%p", &built)
-	got := make([]*selectingTransport, 32)
+	got := make([]*selecting.Client, 32)
 	var wg sync.WaitGroup
 	for i := range got {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got[i] = sharedTransportFor(key, func() *selectingTransport {
+			got[i] = sharedTransportFor(key, func() *selecting.Client {
 				built.Add(1)
 				s, _, _, _ := newTestSelector()
 				return s
@@ -140,13 +120,14 @@ func TestNewRealTransport_KeyIncludesSocket(t *testing.T) {
 }
 
 func TestNewRealTransport_GaugeIsPerDaemonAndNotResetByLaterConstruction(t *testing.T) {
-	addr := closedAddr(t)
+	addr := tcpAnswering(t)
 	t.Setenv("STAPLER_SQUAD_INSTANCE", "")
 	t.Setenv("TYMUXD_ADDR", addr)
 	t.Setenv("TYMUXD_SOCKET_PATH", missingSocketPath(t))
-	first := NewRealTransport(addr).(*selectingTransport)
-	first.switchTo(transportTCP, "test")
-	require.EqualValues(t, 1, transportGauge(t, addr, transportTCP))
+	first := NewRealTransport(addr)
+	_, err := first.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
+	require.NoError(t, err, "the socket is missing and TCP answers: the call fails over")
+	require.EqualValues(t, 1, transportGauge(t, addr, string(selecting.TCP)))
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -155,8 +136,8 @@ func TestNewRealTransport_GaugeIsPerDaemonAndNotResetByLaterConstruction(t *test
 	}
 	wg.Wait()
 
-	require.EqualValues(t, 1, transportGauge(t, addr, transportTCP), "constructing more session transports must not reset the gauge")
-	require.EqualValues(t, 0, transportGauge(t, addr, transportUnix))
+	require.EqualValues(t, 1, transportGauge(t, addr, string(selecting.TCP)), "constructing more session transports must not reset the gauge")
+	require.EqualValues(t, 0, transportGauge(t, addr, string(selecting.Unix)))
 }
 
 func TestSocketPathForAddr_OverlongPathIsTCPOnly(t *testing.T) {
@@ -170,7 +151,8 @@ func TestSocketPathForAddr_OverlongPathIsTCPOnly(t *testing.T) {
 	require.Empty(t, socketPathForAddr(addr), "a sun_path over the limit can never be dialed")
 	require.Empty(t, unixSocketPath(cfg))
 	require.Equal(t, long, ownedSocketPath(cfg), "the never-kill veto still names the path")
-	require.IsType(t, &grpcTransport{}, NewRealTransport(addr), "TCP-only transport")
+	_, selects := NewRealTransport(addr).(*selecting.Client)
+	require.False(t, selects, "TCP-only transport")
 }
 
 func TestSocketPathUsable_PlatformLimit(t *testing.T) {

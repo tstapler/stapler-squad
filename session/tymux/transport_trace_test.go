@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+	"github.com/tstapler/tymux/clients/go/udsdialer"
 )
 
 // traceCapturingHandler records the traceparent header tymuxd would receive.
@@ -62,7 +63,7 @@ func TestNewTymuxClient_PropagatesTraceContextToDaemon(t *testing.T) {
 	srv.Start()
 	t.Cleanup(srv.Close)
 
-	client := newTymuxClient(newH2CClient(), srv.URL)
+	client := newTymuxClient(udsdialer.DialTCPHTTPClient(), srv.URL)
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
 	_, err := client.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))

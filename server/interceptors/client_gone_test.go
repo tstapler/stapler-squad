@@ -16,6 +16,7 @@ func TestAsCanceled(t *testing.T) {
 	live := context.Background()
 	write := fmt.Errorf("write envelope: write tcp [::1]:8543->[::1]:1: %w", syscall.EPIPE)
 	backend := fmt.Errorf("dial tymuxd: %w", syscall.ECONNRESET)
+	unknownWrap := connect.NewError(connect.CodeUnknown, write)
 	internalCanceled := connect.NewError(connect.CodeInternal, context.Canceled)
 
 	for name, tc := range map[string]struct {
@@ -23,12 +24,13 @@ func TestAsCanceled(t *testing.T) {
 		err  error
 		want connect.Code
 	}{
-		"connect write broken pipe, live ctx": {live, write, connect.CodeCanceled},
-		"ctx canceled, dead ctx":              {dead, context.Canceled, connect.CodeCanceled},
-		"backend reset, live ctx stays real":  {live, backend, connect.CodeUnknown},
-		"server-side canceled, live ctx":      {live, context.Canceled, connect.CodeUnknown},
-		"internal wrapping canceled kept":     {dead, internalCanceled, connect.CodeInternal},
-		"plain error":                         {live, errors.New("boom"), connect.CodeUnknown},
+		"connect write broken pipe, live ctx":  {live, write, connect.CodeCanceled},
+		"connect Unknown wrapping write reset": {live, unknownWrap, connect.CodeCanceled},
+		"ctx canceled, dead ctx":               {dead, context.Canceled, connect.CodeCanceled},
+		"backend reset, live ctx stays real":   {live, backend, connect.CodeUnknown},
+		"server-side canceled, live ctx":       {live, context.Canceled, connect.CodeUnknown},
+		"internal wrapping canceled kept":      {dead, internalCanceled, connect.CodeInternal},
+		"plain error":                          {live, errors.New("boom"), connect.CodeUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := connect.CodeOf(asCanceled(tc.ctx, tc.err)); got != tc.want {

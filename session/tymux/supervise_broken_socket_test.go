@@ -117,15 +117,15 @@ func TestProbeDaemon_BrokenSocketPath_ConsultsTCP(t *testing.T) {
 	}
 }
 
-func TestSelectingTransport_UnixENOTDIRAndELOOP_FallBackToTCP(t *testing.T) {
+// The dial layer turns an undialable socket path into a refusal, which is what makes upstream's
+// selector fall back to TCP (end-to-end ENOTDIR case: TestSelectingTransport_BrokenSocketPath_FallsBackToTCP).
+func TestRefusedIfSocketPathBroken_BrokenPathReadsAsRefusal(t *testing.T) {
 	t.Parallel()
-	for _, errno := range []syscall.Errno{syscall.ENOTDIR, syscall.ELOOP, syscall.ENAMETOOLONG} {
-		s, tcp, unix, _ := newTestSelector()
-		unix.fail(syscallDialErr(errno))
-		require.NoError(t, list(t, s), errno.Error())
-		require.Equal(t, transportTCP, s.Active())
-		require.Positive(t, tcp.calls.Load())
+	for _, errno := range []syscall.Errno{syscall.EINVAL, syscall.ENOTDIR, syscall.ELOOP, syscall.ENAMETOOLONG} {
+		require.ErrorIs(t, refusedIfSocketPathBroken("unix", syscallDialErr(errno)), syscall.ENOENT, errno.Error())
 	}
+	require.NotErrorIs(t, refusedIfSocketPathBroken("tcp", syscallDialErr(syscall.EINVAL)), syscall.ENOENT, "only a unix path can be broken")
+	require.NotErrorIs(t, refusedIfSocketPathBroken("unix", syscallDialErr(syscall.EACCES)), syscall.ENOENT)
 }
 
 // --- TCP-liveness signal: only a definite refusal is "down" ---

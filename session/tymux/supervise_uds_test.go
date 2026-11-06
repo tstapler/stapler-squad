@@ -42,9 +42,14 @@ func (l *lockedBuf) String() string {
 	return l.b.String()
 }
 
-// captureTymuxLogs routes squad's logger into a buffer for the test's duration.
+// captureTymuxLogs routes squad's logger into a buffer for the test's duration. It also starts a
+// fresh warn-once episode: onceLogged is process-global and keyed by address, so a recycled
+// ephemeral port (or an earlier test) would otherwise already hold the key and silence the warning.
 func captureTymuxLogs(t *testing.T) *lockedBuf {
 	t.Helper()
+	resetOnceLogged := func() { onceLogged.Range(func(k, _ any) bool { onceLogged.Delete(k); return true }) }
+	resetOnceLogged()
+	t.Cleanup(resetOnceLogged)
 	buf := &lockedBuf{}
 	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
