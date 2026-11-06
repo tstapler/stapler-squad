@@ -15,6 +15,7 @@ import BacklogBoardPage from "../page";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));

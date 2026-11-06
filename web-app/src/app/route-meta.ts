@@ -28,6 +28,7 @@ export const ROUTE_META: Record<RoutePath, RouteMetaEntry> = {
   "/analytics/escape": { title: "Escape Analytics - Stapler Squad" },
   "/backlog": { title: ROOT_TITLE, guard: "backlog" },
   "/backlog/board": { title: ROOT_TITLE, guard: "backlog" },
+  "/backlog/flow": { title: ROOT_TITLE, guard: "backlog" },
   "/changelog": { title: ROOT_TITLE, guard: "changelog" },
   "/config": { title: "Configuration - Stapler Squad" },
   "/debug/escape-codes": { title: ROOT_TITLE },

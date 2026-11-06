@@ -15,6 +15,7 @@ export const routeTable = {
   "/analytics/escape": { load: () => import("./analytics/escape/page") },
   "/backlog": { load: () => import("./backlog/page") },
   "/backlog/board": { load: () => import("./backlog/board/page") },
+  "/backlog/flow": { load: () => import("./backlog/flow/page") },
   "/changelog": { load: () => import("./changelog/page") },
   "/config": { redirect: "/settings?tab=config-files", keepQuery: false },
   "/debug/escape-codes": { load: () => import("./debug/escape-codes/page") },
