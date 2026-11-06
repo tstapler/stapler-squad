@@ -198,7 +198,7 @@ Actions per row (overflow `[...]`, Radix menu pattern; inline buttons on desktop
 
 | Action | Shown when | Confirm |
 |---|---|---|
-| Merge | PR open, not draft | Dialog: "Merge #12 acme/app into main? Method: squash (select: merge, squash, rebase; request field `MergePRRequest.method`, plan T4.1.1 and T6.1.3)" |
+| Merge | PR open, not draft | Dialog: "Merge #12 acme/app into main? Method: merge (select: merge, squash, rebase; request field `MergePRRequest.method`, plan T4.1.1 and T6.1.3)" |
 | Close | PR open | Focus-trapped dialog: "Close #12 acme/app without merging?" |
 | Ask to fix | PR open | None; toast names target |
 | Pin as current | not already pinned | None; toast with Undo |

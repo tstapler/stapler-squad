@@ -66,7 +66,7 @@ interface MergeDialogProps {
 }
 
 export function MergeDialog({ target, baseBranch, isActive, url, onMerge, onClose, onDone, onStale }: MergeDialogProps) {
-  const [method, setMethod] = useState<MergeMethod>("squash");
+  const [method, setMethod] = useState<MergeMethod>("merge");
   const confirmRef = useRef<HTMLButtonElement>(null);
   const { busy, failed, submit } = useDialogAction(async () => {
     const result = await onMerge(method);
@@ -88,8 +88,8 @@ export function MergeDialog({ target, baseBranch, isActive, url, onMerge, onClos
         <label className={s.field}>
           Merge method
           <select className={s.input} value={method} disabled={busy} onChange={(e) => setMethod(e.target.value as MergeMethod)}>
-            <option value="squash">Squash and merge</option>
             <option value="merge">Create a merge commit</option>
+            <option value="squash">Squash and merge</option>
             <option value="rebase">Rebase and merge</option>
           </select>
         </label>

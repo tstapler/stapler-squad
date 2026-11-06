@@ -302,16 +302,16 @@ describe("PullRequestList poll errors, holds and refresh (U-147)", () => {
 });
 
 describe("PullRequestList dialogs (S3)", () => {
-  it("merge_dialog_should_nameTheActivePrDefaultToSquashAndPassTheRowRef", async () => {
+  it("merge_dialog_should_nameTheActivePrDefaultToMergeAndPassTheRowRef", async () => {
     const user = userEvent.setup();
     const actions = fakeActions();
     render(<PullRequestList pullRequests={[makePr({ number: 12, isActive: true, baseBranch: "main" }), merged(11, 1)]} actions={actions} nowMs={NOW} />);
     await user.click(screen.getByTestId("pr-merge-12"));
     const dialog = screen.getByRole("dialog", { name: "Merge #12 acme/app into main?" });
     expect(within(dialog).getByText("This is the active pull request.")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Merge method")).toHaveValue("squash");
+    expect(within(dialog).getByLabelText("Merge method")).toHaveValue("merge");
     await user.click(within(dialog).getByRole("button", { name: "Merge" }));
-    expect(actions.merge).toHaveBeenCalledWith({ host: "", owner: "acme", repo: "app", number: 12 }, "squash");
+    expect(actions.merge).toHaveBeenCalledWith({ host: "", owner: "acme", repo: "app", number: 12 }, "merge");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
