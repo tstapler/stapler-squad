@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestTreeRSSCountsDescendantsOnce(t *testing.T) {
 	procs := []Proc{
@@ -47,5 +52,54 @@ func TestParsers(t *testing.T) {
 	}
 	if ParseMemAvailGB("nothing") != -1 {
 		t.Fatal("absent")
+	}
+}
+
+func TestAllowNoisyIsOptIn(t *testing.T) {
+	if AllowNoisy(false, "") || AllowNoisy(false, "0") || AllowNoisy(false, "true") {
+		t.Fatal("default and non-1 env must keep the quiet-host gate")
+	}
+	if !AllowNoisy(true, "") || !AllowNoisy(false, "1") {
+		t.Fatal("flag or env=1 enables the override")
+	}
+}
+
+func TestIsNoisy(t *testing.T) {
+	if IsNoisy(1.9, 2.0) {
+		t.Fatal("<=2.0 both ends is quiet")
+	}
+	if !IsNoisy(1.0, 2.1) || !IsNoisy(4, 1) || !IsNoisy(-1, 1) {
+		t.Fatal("either end above 2.0, or unknown, is noisy")
+	}
+}
+
+func TestNoisyEntryAndUpdateInputs(t *testing.T) {
+	bs := []Build{{LoadPre: 4, LoadPost: 5, MemAvailPre: 40, MemAvailPost: 30, NotQuiet: true}, {LoadPre: 1, LoadPost: 1, MemAvailPre: 35, MemAvailPost: 36}}
+	e := NoisyEntry(bs, "src")
+	if e["not_quiet"] != true || e["load1_pre_max"] != 4.0 || e["load1_post_max"] != 5.0 || e["mem_avail_gb_min"] != 30.0 {
+		t.Fatal(e)
+	}
+	p := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(p, []byte(`{"keep":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateInputs(p, map[string]any{"a": 2.0}, true, e); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	b, _ := os.ReadFile(p)
+	_ = json.Unmarshal(b, &got)
+	side, _ := got["noisy_inputs"].(map[string]any)
+	if got["keep"] != 1.0 || got["a"] != 2.0 || side["a"] == nil {
+		t.Fatal(got)
+	}
+	if err := UpdateInputs(p, map[string]any{"a": 3.0}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	got = nil
+	_ = json.Unmarshal(b, &got)
+	if _, has := got["noisy_inputs"]; has {
+		t.Fatal("a quiet re-measurement must clear the tag", got)
 	}
 }

@@ -52,5 +52,7 @@ cat "$TMP/a.json" "$TMP/b.json" | jq -s --arg head "$(git rev-parse --short HEAD
   | { head:$head, run_date:$d,
       passed:(map(select(.Action=="pass")|"\(.Package)/\(.Test)")|unique|sort),
       failed:(map(select(.Action=="fail")|"\(.Package)/\(.Test)")|unique|sort) }
-  | .passed_count=(.passed|length) | .failed_count=(.failed|length)' > "$OUT"
+  | .passed_count=(.passed|length) | .failed_count=(.failed|length)
+  | .not_quiet=($nq=="1") | .load1_at_start=($l0|tonumber) | .load1_at_end=($l1|tonumber)' \
+  --arg nq "${BZL_NOT_QUIET:-0}" --arg l0 "${BZL_LOAD1_AT_START:-0}" --arg l1 "$(loadavg1)" > "$OUT"
 jq -c '{head,passed_count,failed_count}' "$OUT"

@@ -136,3 +136,54 @@ func Num(m map[string]any, k string) float64 {
 	}
 	return math.NaN()
 }
+
+// noisyEnv is the owner-authorised override of the quiet-host wait; the default stays "wait for load <= 2.0".
+const noisyEnv = "BZL_ALLOW_NOISY_HOST"
+
+// AllowNoisy reports whether the loud override is on (flag or BZL_ALLOW_NOISY_HOST=1).
+func AllowNoisy(flag bool, env string) bool { return flag || env == "1" }
+
+// IsNoisy is true when either end of a run saw a 1-minute load above the quiet limit (NaN counts as noisy).
+func IsNoisy(pre, post float64) bool {
+	return math.IsNaN(pre) || math.IsNaN(post) || pre > quietLoad1 || post > quietLoad1
+}
+
+// MergeNoisy merges kv into the inputs JSON and records (noisy) or clears (quiet) noisy_inputs[key] for each key in kv.
+func MergeNoisy(path string, kv map[string]any, noisy bool, entry map[string]any) error {
+	cur := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(b, &cur); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	side, _ := cur["noisy_inputs"].(map[string]any)
+	if side == nil {
+		side = map[string]any{}
+	}
+	for k, v := range kv {
+		cur[k] = v
+		if noisy {
+			side[k] = entry
+		} else {
+			delete(side, k)
+		}
+	}
+	if len(side) > 0 {
+		cur["noisy_inputs"] = side
+	} else {
+		delete(cur, "noisy_inputs")
+	}
+	out, err := json.MarshalIndent(cur, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+// NoisyTag is " [NOISY]" when key is listed under noisy_inputs in the decoded inputs.
+func NoisyTag(inputs map[string]any, key string) string {
+	if side, ok := inputs["noisy_inputs"].(map[string]any); ok && side[key] != nil {
+		return " [NOISY]"
+	}
+	return ""
+}

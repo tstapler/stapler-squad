@@ -3,6 +3,7 @@
 
 Rows are {spike, verdict, path, cost}. Stdlib only (no PyYAML on the host).
 """
+import json
 import os
 import re
 import sys
@@ -14,6 +15,7 @@ OPTIONAL = ["S14", "S15", "S15b"]
 VERDICTS = ("Pass", "FallbackWorkaround", "FallbackFork", "Fail")
 FALLBACKS = ("FallbackWorkaround", "FallbackFork")
 DEFAULT = "project_plans/bazel-conversion/implementation/spike-results.yaml"
+MEASUREMENTS = "spike-measurements.json"  # beside the results file; its noisy_inputs map is display only
 ATTESTATIONS = "owner-attestations.yaml"  # beside the results file; display only, never changes the verdict
 
 
@@ -65,6 +67,21 @@ def owner_accepted_fails(path):
     if not ids:
         return None
     return ids, found["decision"], found.get("date", "")
+
+
+def noisy_inputs(path):
+    """Keys of spike-measurements.json recorded as measured under load (owner-authorised override); [] when none."""
+    try:
+        with open(path) as f:
+            side = json.load(f).get("noisy_inputs")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return sorted(k for k, v in side.items() if v) if isinstance(side, dict) else []
+
+
+def noisy_rows(rows):
+    """Spike ids whose row carries `noisy: true` (verdict computed from a run under load)."""
+    return [r["spike"] for r in rows if r.get("noisy", "").lower() == "true" and r.get("spike")]
 
 
 def _scalar(v):
@@ -142,8 +159,9 @@ def main(argv):
         return 2
     per_id, errors = check(rows)
     print("spike-results check: %s" % path)
+    noisy_ids = set(noisy_rows(rows))
     for sid in REQUIRED + OPTIONAL:
-        print("  %-14s %s" % (sid, per_id[sid]))
+        print("  %-14s %s%s" % (sid, per_id[sid], "  [NOISY: measured under load, owner-authorised]" if sid in noisy_ids else ""))
     attest_path = os.path.join(os.path.dirname(os.path.abspath(path)), ATTESTATIONS)
     accepted = owner_accepted_fails(attest_path)
     accepted_ids = set(accepted[0]) if accepted else set()
@@ -161,6 +179,10 @@ def main(argv):
     deferred = owner_deferrals(attest_path)
     if deferred:
         print("owner-deferred: %s (%s, %s)" % (", ".join(deferred[0]), deferred[1], deferred[2]))
+    noisy_keys = noisy_inputs(os.path.join(os.path.dirname(os.path.abspath(path)), MEASUREMENTS))
+    if noisy_ids or noisy_keys:
+        print("NOISY: %d verdict row(s) (%s) and %d measurement input(s) (%s) were measured under load, not on a quiet host"
+              % (len(noisy_ids), ", ".join(sorted(noisy_ids)) or "none", len(noisy_keys), ", ".join(noisy_keys) or "none"))
     ok = not errors
     print("RESULT: %s" % ("OK" if ok else "FAIL"))
     return 0 if ok else 1

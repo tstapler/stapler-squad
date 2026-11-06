@@ -5,6 +5,7 @@ go_library(
     name = "s6measure_lib",
     srcs = [
         "main.go",
+        "noisy.go",
         "proc.go",
         "sampler.go",
     ],
