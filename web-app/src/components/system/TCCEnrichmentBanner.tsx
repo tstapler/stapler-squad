@@ -69,10 +69,12 @@ export function TCCEnrichmentBanner() {
         Background worktree enrichment needs to read git metadata to identify repositories and worktrees in {root.root}.
         Affected sessions: {root.sessionTitles.length ? root.sessionTitles.join(", ") : root.paths.join(", ")}.
         {!root.appConsented ? <> This location is protected by a known lexical policy or needs readiness approval because its filesystem type is unknown. No filesystem classification runs before approval. Conventional code/worktree locations are treated as unprotected heuristically; mount protection there cannot be guaranteed without I/O. Continue when you are ready for a possible macOS permission request; macOS may not show one. Not now leaves this enrichment paused.</> : <> App consent saved. Enrichment: {root.outcome}. A slow or failed operation does not establish whether macOS permission is granted or denied; filesystem problems can also cause it.</>}
+        {root.outcome === "denied" && <> macOS may be blocking access to this location (the read failed with &quot;operation not permitted&quot;; immutable flags or device management can cause that too). If you denied the prompt, allow stapler-squad in System Settings{root.settingsUrl ? <> (<a href={root.settingsUrl} rel="noreferrer noopener" data-testid="tcc-settings-link">Open Privacy settings</a>)</> : null}, then choose Check again.</>}
         {" "}This gates enrichment only, not other app or child-process filesystem access. Classification is heuristic, and app consent is not an OS grant.
         {errors[root.id] && <span role="alert"> {errors[root.id]}</span>}
       </>}
       actions={[
+        ...(root.appConsented && root.outcome === "denied" ? [{ label: "Check again", onClick: () => { void proceed(root.id); }, disabled: busy !== null }] : []),
         ...(!root.appConsented ? [{ label: "Continue to macOS permission request", onClick: () => { void proceed(root.id); }, disabled: busy !== null }] : []),
         { label: "Not now", onClick: () => setDeferred((current) => new Set(current).add(root.id)), disabled: busy === root.id },
       ]}

@@ -6,7 +6,6 @@ export const PUBLIC_ENV_VARS = [
   "NEXT_PUBLIC_CONNECTRPC_NATIVE_STREAMING",
   "NEXT_PUBLIC_OTEL_ENABLED",
   "NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "NEXT_PUBLIC_RECONNECT_V2",
 ] as const;
 
 /** Mirrors server/middleware/auth.go exemptPrefixes without the leading slash (a Go test pins the parity in build.test.ts). */

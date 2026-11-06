@@ -67,7 +67,10 @@ describe("BackgroundActivity", () => {
     window.localStorage.clear();
     resetReviewedMarksForTests();
   });
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.useRealTimers(); // a failed assertion in a fake-timer test must not leak into the next one
+    jest.restoreAllMocks();
+  });
 
   it("background_section_should_render_loading_none_error_offline_states_without_a_spinner_on_empty", () => {
     const loading = setup([], { loading: true, lastUpdatedAt: null });
