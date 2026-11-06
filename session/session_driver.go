@@ -109,6 +109,9 @@ type driverAttempt struct {
 	sentInitial         bool
 	initialPromptSentAt time.Time
 	nudgeSentAt         time.Time
+	// stallFlagged edge-triggers the interactive "quiet session" flag: set when
+	// raised, cleared once the session produces output or waits on the operator.
+	stallFlagged bool
 }
 
 func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
@@ -909,9 +912,13 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 		// Human response time is not agent inactivity; resumed work gets a fresh budget.
 		attempt.startedAt = now
 		attempt.nudgeSentAt = time.Time{}
+		attempt.stallFlagged = false
 		return false, false
 	}
 	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
+	if !isAutonomousSession(inst) {
+		return handleInteractiveInactivity(inst, allowedPath, policy, stop, attempt, idle, now)
+	}
 	nudgeSentAt := &attempt.nudgeSentAt
 
 	// For backlog work sessions: send a task-reminder nudge before restarting.
@@ -927,11 +934,40 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 		graceTimeout = driverBacklogNudgeGrace
 	}
 	if idle > graceTimeout {
+		e := gatherStallEvidence(inst, true, idle, graceTimeout)
+		logStallDecision(inst, e, decideStall(e), policy, now)
 		log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
 			"session", inst.Title,
 			"inactivity", idle.Round(time.Second),
 		)
 		return handleDriverFailure(inst, allowedPath, policy, "stalled", stop)
+	}
+	return false, false
+}
+
+// handleInteractiveInactivity applies the stall policy to a non-backlog
+// session. It never restarts a live pane and never marks the session
+// PermanentlyFailed for quiet alone (2026-11-05: nine live sessions were
+// killed and failed this way). A dead pane still takes the failure path; a
+// live one is flagged once per quiet episode.
+func handleInteractiveInactivity(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, idle time.Duration, now time.Time) (shouldContinue, shouldReturn bool) {
+	if idle <= driverInactivityTimeout {
+		attempt.stallFlagged = false
+		return false, false
+	}
+	e := gatherStallEvidence(inst, false, idle, interactiveStallBudget(policy))
+	switch v := decideStall(e); v {
+	case stallPaneDead:
+		logStallDecision(inst, e, v, policy, now)
+		return handleDriverFailure(inst, allowedPath, policy, classifyFailureReason(inst), stop)
+	case stallNeedsAttention:
+		if !attempt.stallFlagged {
+			attempt.stallFlagged = true
+			logStallDecision(inst, e, v, policy, now)
+			flagInteractiveStall(inst, e)
+		}
+	default:
+		attempt.stallFlagged = false
 	}
 	return false, false
 }
