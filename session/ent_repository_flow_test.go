@@ -53,7 +53,7 @@ func TestEntFlowReader_should_FilterByParsedInstant_When_RowsCarryMixedOffsets(t
 	seedFlowEvent(t, c, item, "in_progress", "review", time.Date(2026, 10, 5, 20, 0, 0, 0, time.UTC), "b")
 
 	r := NewEntFlowReader(c)
-	rng := FlowEventRange{
+	rng := flow.EventRange{
 		From: time.Date(2026, 10, 5, 21, 30, 0, 0, time.UTC),
 		To:   time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 	}
@@ -80,7 +80,7 @@ func TestEntFlowReader_should_OrderByInstantThenSeq_When_RowsCarryMixedOffsets(t
 	seedFlowEvent(t, c, item, "ready", "in_progress", time.Date(2026, 8, 10, 10, 30, 0, 0, pdt), "later")
 	seedFlowEvent(t, c, item, "idea", "ready", time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC), "earlier")
 
-	got, err := NewEntFlowReader(c).Events(context.Background(), FlowEventRange{
+	got, err := NewEntFlowReader(c).Events(context.Background(), flow.EventRange{
 		From: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -115,7 +115,7 @@ func TestEntFlowReader_should_ReturnTypedError_When_ContextCancelled(t *testing.
 	repo := newFlowTestRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := NewEntFlowReader(repo.GetEntClient()).Events(ctx, FlowEventRange{From: time.Now().Add(-time.Hour)})
+	_, err := NewEntFlowReader(repo.GetEntClient()).Events(ctx, flow.EventRange{From: time.Now().Add(-time.Hour)})
 	require.ErrorIs(t, err, context.Canceled)
 	var re *FlowReadError
 	require.ErrorAs(t, err, &re)
@@ -131,7 +131,7 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 	seedFlowEvent(t, c, item, "idea", "ready", time.Now().UTC().Add(-time.Hour), "x")
 
 	r := NewEntFlowReader(c)
-	rng := FlowEventRange{From: time.Now().UTC().Add(-48 * time.Hour)}
+	rng := flow.EventRange{From: time.Now().UTC().Add(-48 * time.Hour)}
 	ids := []flow.ItemID{flow.ItemID(item.String())}
 	ctx := context.Background()
 	win, err := flow.NewFlowWindowBounds(rng.From, time.Now().UTC().Add(time.Hour))
@@ -142,6 +142,8 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 		"LastEventsBefore": func() error { _, err := r.LastEventsBefore(ctx, time.Now().UTC(), ids); return err },
 		"Verdicts":         func() error { _, err := r.Verdicts(ctx, win); return err },
 		"AgentDoneClaims":  func() error { _, err := r.AgentDoneClaims(ctx, win); return err },
+		"StuckIntervals":   func() error { _, err := r.StuckIntervals(ctx); return err },
+		"Items":            func() error { _, err := r.Items(ctx, ids); return err },
 	}
 	for name, call := range calls {
 		beforeR, beforeW := poolQueries("ent-read"), poolQueries("ent")

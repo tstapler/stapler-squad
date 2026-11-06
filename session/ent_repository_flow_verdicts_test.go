@@ -94,7 +94,13 @@ func TestEntFlowReader_should_ReturnDoneClaim_When_LastNoteBeforeVerdictIsDone(t
 	seedFlowVerdict(t, c, seedFlowSession(t, c, item), flowVerdictSeed{"FAIL", `[{"criterion_index":3,"outcome":"FAIL","evidence":""}]`, "", base.Add(2 * time.Hour)})
 	note("in_progress", base.Add(3*time.Hour)) // after the verdict: ignored
 
-	got, err := NewEntFlowReader(c).AgentDoneClaims(context.Background(), flowWindow(t, base, base.Add(24*time.Hour)))
+	r := NewEntFlowReader(c)
+	w := flowWindow(t, base, base.Add(24*time.Hour))
+	got, err := r.AgentDoneClaimDetails(context.Background(), w)
 	require.NoError(t, err)
-	require.Equal(t, []FlowDoneClaim{{ItemID: flow.ItemID(item.String()), VerdictAt: base.Add(2 * time.Hour), CriterionIndex: 3, AgentStatus: "done"}}, got)
+	require.Equal(t, []FlowDoneClaim{{ItemID: flow.ItemID(item.String()), VerdictAt: base.Add(2 * time.Hour), CriterionIndex: 3, AgentStatus: "done", VerdictOutcome: flow.OutcomeFail}}, got)
+
+	claims, err := r.AgentDoneClaims(context.Background(), w)
+	require.NoError(t, err)
+	require.Equal(t, map[flow.ItemID]bool{flow.ItemID(item.String()): true}, claims)
 }

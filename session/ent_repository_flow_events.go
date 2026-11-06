@@ -60,7 +60,7 @@ func (row flowEventRow) event() flow.Event {
 // prefilter returns the conservative text-comparison predicates: created_at
 // is stored as local wall-clock text with a varying offset, so bounds are
 // widened by maxOffsetSkew and Go applies the exact parsed-instant filter.
-func (rng FlowEventRange) prefilter() []predicate.BacklogStatusEvent {
+func prefilter(rng flow.EventRange) []predicate.BacklogStatusEvent {
 	preds := []predicate.BacklogStatusEvent{
 		backlogstatusevent.CreatedAtGTE(rng.From.UTC().Add(-maxOffsetSkew)),
 	}
@@ -73,7 +73,7 @@ func (rng FlowEventRange) prefilter() []predicate.BacklogStatusEvent {
 	return preds
 }
 
-func (rng FlowEventRange) contains(at time.Time) bool {
+func inRange(rng flow.EventRange, at time.Time) bool {
 	return !at.Before(rng.From) && (rng.To.IsZero() || at.Before(rng.To))
 }
 
@@ -89,9 +89,9 @@ func parseFlowItemIDs(ids []flow.ItemID) []uuid.UUID {
 }
 
 // fetchEvents runs the prefilter query only (a superset of the exact range).
-func (r *EntFlowReader) fetchEvents(ctx context.Context, rng FlowEventRange) ([]flow.Event, error) {
+func (r *EntFlowReader) fetchEvents(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
 	var rows []flowEventRow
-	err := selectFlowEvents(r.client.BacklogStatusEvent.Query().Where(rng.prefilter()...)).Scan(ctx, &rows)
+	err := selectFlowEvents(r.client.BacklogStatusEvent.Query().Where(prefilter(rng)...)).Scan(ctx, &rows)
 	if err != nil {
 		return nil, err
 	}
@@ -104,14 +104,14 @@ func (r *EntFlowReader) fetchEvents(ctx context.Context, rng FlowEventRange) ([]
 
 // Events returns events inside rng, ordered by (At, Seq). The SQL prefilter is
 // a superset; the exact filter and ordering use parsed instants (ADR-004).
-func (r *EntFlowReader) Events(ctx context.Context, rng FlowEventRange) ([]flow.Event, error) {
+func (r *EntFlowReader) Events(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
 	raw, err := r.fetchEvents(ctx, rng)
 	if err != nil {
 		return nil, flowReadErr("events", err)
 	}
 	out := raw[:0]
 	for _, e := range raw {
-		if rng.contains(e.At) {
+		if inRange(rng, e.At) {
 			out = append(out, e)
 		}
 	}
@@ -122,8 +122,8 @@ func (r *EntFlowReader) Events(ctx context.Context, rng FlowEventRange) ([]flow.
 // CountEvents returns an upper bound on len(Events(rng)): the prefilter count,
 // which can exceed the exact count by rows within the offset skew of a bound.
 // It decides chunk-or-refuse only, so the over-count is harmless.
-func (r *EntFlowReader) CountEvents(ctx context.Context, rng FlowEventRange) (int, error) {
-	n, err := r.client.BacklogStatusEvent.Query().Where(rng.prefilter()...).Count(ctx)
+func (r *EntFlowReader) CountEvents(ctx context.Context, rng flow.EventRange) (int, error) {
+	n, err := r.client.BacklogStatusEvent.Query().Where(prefilter(rng)...).Count(ctx)
 	return n, flowReadErr("count_events", err)
 }
 

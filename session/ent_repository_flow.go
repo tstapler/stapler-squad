@@ -2,10 +2,8 @@ package session
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/flow"
 )
 
 // EntFlowReader implements the flow analytics source interfaces (events,
@@ -16,20 +14,19 @@ import (
 // connection. It opens no database handle of its own.
 type EntFlowReader struct {
 	client *ent.Client
+	engine WorkflowEngine // source of Stages; nil means the default engine
+}
+
+// WithWorkflowEngine returns a copy of r whose Stages come from engine.
+func (r *EntFlowReader) WithWorkflowEngine(engine WorkflowEngine) *EntFlowReader {
+	cp := *r
+	cp.engine = engine
+	return &cp
 }
 
 // NewEntFlowReader returns a reader over client, normally repo.GetEntClient().
 func NewEntFlowReader(client *ent.Client) *EntFlowReader {
 	return &EntFlowReader{client: client}
-}
-
-// FlowEventRange selects events with From <= At < To (parsed instants). A zero
-// To is unbounded. The caller pads From by Config.CollapsePad before calling.
-// ItemIDs, when non-empty, restricts the read to those items.
-type FlowEventRange struct {
-	From    time.Time
-	To      time.Time
-	ItemIDs []flow.ItemID
 }
 
 // FlowReadError wraps a failed flow read with the operation name so callers

@@ -23,6 +23,8 @@ type FlowDoneClaim struct {
 	VerdictAt      time.Time
 	CriterionIndex int
 	AgentStatus    string
+	// VerdictOutcome is the criterion outcome in that verdict.
+	VerdictOutcome flow.Outcome
 }
 
 // Verdicts returns the verdicts created inside w, oldest first. The verdict is
@@ -88,10 +90,27 @@ func parsePerCriterion(raw string) []flow.CriterionResult {
 	return out
 }
 
-// AgentDoneClaims returns, for every criterion in each verdict inside w, the
+// AgentDoneClaims reports per item whether the agent last claimed done, before
+// a non-PASS verdict, on a criterion that verdict did not pass. Informational
+// only (ADR-005).
+func (r *EntFlowReader) AgentDoneClaims(ctx context.Context, w flow.FlowWindow) (map[flow.ItemID]bool, error) {
+	details, err := r.AgentDoneClaimDetails(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	out := map[flow.ItemID]bool{}
+	for _, d := range details {
+		if d.AgentStatus == "done" && d.VerdictOutcome != flow.OutcomePass {
+			out[d.ItemID] = true
+		}
+	}
+	return out, nil
+}
+
+// AgentDoneClaimDetails returns, for every criterion in each verdict inside w, the
 // status of the agent's latest progress note before that verdict. Criteria
 // with no earlier note are omitted.
-func (r *EntFlowReader) AgentDoneClaims(ctx context.Context, w flow.FlowWindow) ([]FlowDoneClaim, error) {
+func (r *EntFlowReader) AgentDoneClaimDetails(ctx context.Context, w flow.FlowWindow) ([]FlowDoneClaim, error) {
 	verdicts, err := r.Verdicts(ctx, w)
 	if err != nil {
 		return nil, err
@@ -132,7 +151,7 @@ func doneClaims(verdicts []flow.Verdict, notes []*ent.BacklogProgressNote) []Flo
 		}
 		for _, c := range v.PerCriterion {
 			if status, ok := latestNoteStatusBefore(byKey[key{item, c.Index}], v.CreatedAt); ok {
-				out = append(out, FlowDoneClaim{ItemID: v.ItemID, VerdictAt: v.CreatedAt, CriterionIndex: c.Index, AgentStatus: status})
+				out = append(out, FlowDoneClaim{ItemID: v.ItemID, VerdictAt: v.CreatedAt, CriterionIndex: c.Index, AgentStatus: status, VerdictOutcome: c.Outcome})
 			}
 		}
 	}
