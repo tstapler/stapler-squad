@@ -1,7 +1,9 @@
 "use client";
 
 import type { CompareFlowWindowsResponse, FlowSummary } from "@/gen/session/v1/backlog_flow_pb";
+import { FlowCauses } from "./FlowCauses";
 import { FlowFunnel } from "./FlowFunnel";
+import { FlowReview } from "./FlowReview";
 import { FlowTiles } from "./FlowTiles";
 
 export type FlowSectionBodyId = "tiles" | "leaks" | "causes" | "review" | "pr" | "stuck" | "anomalies" | "notes";
@@ -22,6 +24,14 @@ export function FlowSectionBody({ id, summary, comparison, onDrill }: FlowSectio
     case "leaks":
       return summary.funnel ? (
         <FlowFunnel funnel={summary.funnel} collapsedEvents={summary.notes?.collapsedEvents ?? 0} onDrill={onDrill} />
+      ) : null;
+    case "causes":
+      return summary.causes ? (
+        <FlowCauses causes={summary.causes} estimated={summary.causes.meta?.estimated ?? []} onDrill={onDrill} />
+      ) : null;
+    case "review":
+      return summary.review ? (
+        <FlowReview review={summary.review} estimated={summary.review.meta?.estimated ?? []} onDrill={onDrill} />
       ) : null;
     default:
       return null;

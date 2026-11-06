@@ -3,10 +3,11 @@
 import type { ReactNode } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { srOnly } from "@/components/ui/LiveRegion.css";
-import type { CompareFlowWindowsResponse, FlowRatioMetric, FlowSummary } from "@/gen/session/v1/backlog_flow_pb";
+import type { CompareFlowWindowsResponse, FlowSummary } from "@/gen/session/v1/backlog_flow_pb";
 import { DrillButton } from "./DrillButton";
 import { FlowDelta } from "./FlowDelta";
-import { durationText, formatInt, formatPercent, formatRatio, isLowSample, plural } from "./flowFormatters";
+import { FlowRatio } from "./FlowRatio";
+import { durationText, formatInt, plural } from "./flowFormatters";
 import * as styles from "./flow.css";
 
 interface FlowTilesProps {
@@ -27,25 +28,6 @@ function Tile({ name, label, children }: TileProps) {
       <span className={styles.tileLabel}>{label}</span>
       {children}
     </div>
-  );
-}
-
-interface RatioProps {
-  ratio: FlowRatioMetric | undefined;
-  onDrill: (key: string) => void;
-  prefix?: string;
-}
-
-/** `32/105 (30.5%)`; a small denominator greys the percentage and says so. */
-function Ratio({ ratio, onDrill, prefix = "" }: RatioProps) {
-  if (!ratio || ratio.den === 0) return <span className={styles.muted}>no data</span>;
-  const low = isLowSample(ratio);
-  const counts = `${prefix}${formatInt(ratio.num)}/${formatInt(ratio.den)}`;
-  return (
-    <DrillButton drillKey={ratio.drillKey} onDrill={onDrill} label={`${prefix}${formatRatio(ratio.num, ratio.den)}${low ? ", low sample" : ""}`}>
-      {counts} <span className={low ? styles.lowSample : undefined} data-low-sample={low || undefined}>({formatPercent(ratio.num, ratio.den)})</span>
-      {low && <span className={styles.lowSample}> low sample</span>}
-    </DrillButton>
   );
 }
 
@@ -93,7 +75,7 @@ function FpyTile({ summary, comparison, onDrill }: FlowTilesProps) {
   return (
     <Tile name="fpy" label="First-pass yield">
       <span className={styles.tileValue}>
-        <Ratio ratio={summary.tiles?.firstPassYield} onDrill={onDrill} />
+        <FlowRatio ratio={summary.tiles?.firstPassYield} onDrill={onDrill} />
       </span>
       <FlowDelta comparison={comparison} metric="first_pass_yield" good="up" />
     </Tile>
@@ -118,12 +100,12 @@ function ReviewFailTile({ summary, comparison, onDrill }: FlowTilesProps) {
   return (
     <Tile name="review-fail" label="Review FAIL (judgment verdicts only)">
       <span className={styles.tileValue}>
-        <Ratio ratio={review?.adjustedFail} onDrill={onDrill} />
+        <FlowRatio ratio={review?.adjustedFail} onDrill={onDrill} />
       </span>
       <span className={styles.secondary}>FAIL, judgment verdicts only</span>
       {review?.rawFail && review.rawFail.den > 0 && (
         <span className={styles.secondary}>
-          <Ratio ratio={review.rawFail} onDrill={onDrill} prefix="raw " />
+          <FlowRatio ratio={review.rawFail} onDrill={onDrill} prefix="raw " />
         </span>
       )}
       <FlowDelta comparison={comparison} metric="review_adjusted_fail_rate" good="down" sampleNoun="verdicts" />
