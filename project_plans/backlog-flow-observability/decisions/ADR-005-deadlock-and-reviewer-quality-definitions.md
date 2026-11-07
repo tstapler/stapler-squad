@@ -15,3 +15,14 @@ Live recount (`sqlite3 -readonly`, 2026-11-05): 132 of 378 non-PASS verdicts are
 - All outputs are tagged `estimated: deadlock_candidates:heuristic` (the one spelling used in the plan, UX and tests). The default list is the top 10 by `run_length` with a "weak filter" note in the UI and the MCP response, and `total_count` shows the full set. In-flight items need an age or activity threshold (default: latest verdict older than 1h or item in review/in_progress) before being called stalled.
 - **Verdict mix over time** is a weekly series by `VerdictClass` x outcome (`VerdictMixSeries`), rendered by the `FlowChart` wrapper (Story 4.2.5); empty weeks are real zeros.
 - Out of scope: changing reviewer prompts or thresholds.
+
+## Hand-label validation status (pending)
+
+Not yet run. The live `sessions.db` has no `review_verdicts.reviewed_commit_sha` column until this change is deployed, and the 31 existing candidates predate it (empty SHA), so the SHA-based signal cannot be applied to them retroactively.
+
+Procedure once new verdicts have accumulated:
+1. List current "Review-fail streaks" candidates; for each with 2+ consecutive non-PASS verdicts, check `reviewed_commit_sha` is equal and non-empty (the `IsNoProgressReview` rule).
+2. Hand-label each flagged item as true deadlock (no new commit, same failure) or false positive.
+3. Record true-positive rate here. Rename the section to "Deadlock candidates" only if ≥70%.
+
+Status: section name stays "Review-fail streaks (heuristic)".
