@@ -1633,16 +1633,3 @@ func (s *BacklogService) SubmitManualReview(
 		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
 	}), nil
 }
-
-// acCriteriaToProto converts criteria (used for the waivers an update dropped) to proto form.
-func acCriteriaToProto(cs []session.AcCriterion) []*sessionv1.AcCriterion {
-	out := make([]*sessionv1.AcCriterion, len(cs))
-	for i, c := range cs {
-		out[i] = &sessionv1.AcCriterion{
-			// #nosec G115 -- index into one item's short AC list.
-			Index: int32(c.Index), Text: c.Text, Status: string(c.Status),
-			WaiverReason: c.WaiverReason, WaivedBy: c.WaivedBy, WaivedAt: c.WaivedAt,
-		}
-	}
-	return out
-}
