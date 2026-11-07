@@ -32,6 +32,8 @@ Do NOT add a new action type for:
 
 Every action type must have a `describe` block in `dispatch.test.ts`. Test name convention: `dispatchOmnibarAction_should_<effect>_When_<action>`
 
+**Special case: `find_sessions_for_pr`** (pasted github.com PR URL, design/ux.md S9) — the dispatcher case only emits the navigation target `/artifacts?pr=owner/repo%23N` through the optional `navigateToHref` dep. The shipped flow lives in `OmnibarFindPrAction.tsx` (it calls `FindSessionsByPullRequest`, then opens the single match with a "View all" toast, or goes to the target for none or several, or shows an inline error with Retry); the pure helpers are in `lib/omnibar/findSessionsForPr.ts`. Feature marker: `omnibar:detect`. It is an extra action on the existing `GitHubPR` detection (`GitHubRef` now carries `host`), not a new detector or input type.
+
 ### Registration checklist for a new OmnibarAction
 
 - [ ] Add variant to `OmnibarAction` union in `types.ts`

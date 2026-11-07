@@ -37,6 +37,14 @@ const transportBanPlugin = {
   },
 };
 
+const legacyPrScalarMessage =
+  "Do not read the legacy single-PR scalar off a Session: take the PR from session.pullRequests (lib/pr/pullRequests.ts) or, for the flag-off fallback, from lib/pr/legacyPullRequest.ts.";
+const legacyPrScalarBans = ["githubPrNumber", "githubPrUrl"].map((property) => ({ property, message: legacyPrScalarMessage }));
+const LEGACY_PR_SCALAR_ALLOWLIST = [
+  "src/lib/pr/legacyPullRequest.ts",
+  "src/lib/vcs/adapters.ts",
+];
+
 export default [
   {
     files: ["src/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
@@ -316,6 +324,26 @@ export default [
   },
   {
     files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["src/lib/nav/**", "src/**/*.test.*", "src/**/*.spec.*", "src/**/__tests__/**"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          property: "pushState",
+          message: "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav.",
+        },
+        {
+          property: "replaceState",
+          message: "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav.",
+        },
+        ...legacyPrScalarBans,
+      ],
+    },
+  },
+  {
+    // The legacy single-PR scalars may be read only here (session-multi-pr-tracking T6.3.1, ratchet: the
+    // list is expected to shrink).
+    files: LEGACY_PR_SCALAR_ALLOWLIST,
     ignores: ["src/lib/nav/**", "src/**/*.test.*", "src/**/*.spec.*", "src/**/__tests__/**"],
     rules: {
       "no-restricted-properties": [

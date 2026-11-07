@@ -164,11 +164,20 @@ func (s *SessionService) listLocalSessions(
 		}
 	}
 
+	prFilter, hasPRFilter, err := listPRFilter(req.Msg.GetPr())
+	if err != nil {
+		return nil, err
+	}
+
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
 	var hiddenManaged []hiddenOutcomeEntry
 	for _, inst := range instances {
 		if !instanceMatchesListFilters(inst, req.Msg) {
+			continue
+		}
+
+		if hasPRFilter && !instanceHasPR(inst, prFilter) {
 			continue
 		}
 
@@ -235,7 +244,7 @@ func (s *SessionService) GetSession(
 		wfNames := s.workflowNames()
 		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
-				Session: adapters.InstanceToProto(inst, wfNames),
+				Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 			}), nil
 		}
 		// Not in poller — also check external sessions
@@ -259,7 +268,7 @@ func (s *SessionService) GetSession(
 	wfNames := s.workflowNames()
 	if inst := findInstanceByID(instances, req.Msg.Id); inst != nil {
 		return connect.NewResponse(&sessionv1.GetSessionResponse{
-			Session: adapters.InstanceToProto(inst, wfNames),
+			Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 		}), nil
 	}
 

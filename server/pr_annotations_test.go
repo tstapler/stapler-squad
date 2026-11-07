@@ -72,3 +72,31 @@ func TestResolveSessionRepo_LegacyNoRemoteNoURL_StaysUnrecorded(t *testing.T) {
 	assert.True(t, unrecorded)
 	assert.Equal(t, "o", ref.Owner())
 }
+
+func TestAnnotationsForSnapshot_ShouldEmitOneEntryPerPR_WhenSessionHoldsSeveral(t *testing.T) {
+	r11, err := session.NewPRRef("", "acme", "app", 11)
+	require.NoError(t, err)
+	r12, err := session.NewPRRef("", "acme", "app", 12)
+	require.NoError(t, err)
+	snap := &session.InstanceSnapshot{
+		Branch: "feat",
+		GitHub: session.GitHubIntegration{
+			GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 12,
+			PRs: []session.PRView{{Ref: r11}, {Ref: r12}},
+		},
+	}
+
+	got := annotationsForSnapshot("multi", snap, nil)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, []int{11, 12}, []int{got[0].PRNumber, got[1].PRNumber})
+	assert.Equal(t, "acme", got[0].Repo.Owner())
+	assert.False(t, got[0].HostUnrecorded)
+}
+
+func TestAnnotationsForSnapshot_ShouldKeepLegacyEntry_WhenSessionHasNoLinks(t *testing.T) {
+	snap := &session.InstanceSnapshot{GitHub: session.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "app", GitHubHost: "github.com", GitHubPRNumber: 7}}
+	got := annotationsForSnapshot("legacy", snap, nil)
+	require.Len(t, got, 1)
+	assert.Equal(t, 7, got[0].PRNumber)
+}

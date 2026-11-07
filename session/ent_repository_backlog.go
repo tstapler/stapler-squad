@@ -1159,8 +1159,15 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
+	// One transaction: the criteria read-merge-write below must not race a concurrent waiver.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin backlog item update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	// Fetch current item for precondition check.
-	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	current, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
@@ -1177,7 +1184,8 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		}
 	}
 
-	u := r.client.BacklogItem.UpdateOneID(parsedID)
+	var clearedWaivers []AcCriterion
+	u := tx.BacklogItem.UpdateOneID(parsedID)
 	if update.Title != nil {
 		u.SetTitle(*update.Title)
 	}
@@ -1185,7 +1193,15 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		u.SetDescription(*update.Description)
 	}
 	if update.AcceptanceCriteria != nil {
-		u.SetAcceptanceCriteria(string(*update.AcceptanceCriteria))
+		merged, cleared, rejectErr := r.reconcileAcUpdate(ctx, tx, current, *update.AcceptanceCriteria)
+		if rejectErr != nil {
+			if commitErr := tx.Commit(); commitErr != nil { // keep the rejection's audit row
+				return nil, errors.Join(rejectErr, commitErr)
+			}
+			return nil, rejectErr
+		}
+		u.SetAcceptanceCriteria(string(merged))
+		clearedWaivers = cleared
 	}
 	if update.Priority != nil {
 		u.SetPriority(*update.Priority)
@@ -1316,6 +1332,18 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if err != nil {
 		return nil, fmt.Errorf("failed to update backlog item %s: %w", id, err)
 	}
+	for _, c := range clearedWaivers {
+		if err := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: c.Index,
+			PreviousStatus: string(AcStatusWaived), Reason: c.WaiverReason,
+			Outcome: "waiver_cleared:criterion_removed_or_text_changed",
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit backlog item update: %w", err)
+	}
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the update itself.
@@ -1324,7 +1352,37 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
 
+	result.ClearedAcWaivers = clearedWaivers
 	return &result, nil
+}
+
+// reconcileAcUpdate applies the waiver invariant to a whole-list criteria rewrite inside tx and
+// returns the list to store plus the waivers that did not survive (to be audited on commit). A
+// refused rewrite writes its own audit row on tx before returning the error.
+func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, current *ent.BacklogItem, incomingJSON AcCriteriaJSON) (AcCriteriaJSON, []AcCriterion, error) {
+	incoming, err := ParseAcCriteria(incomingJSON)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid acceptance criteria: %w", err)
+	}
+	existing, _ := ParseAcCriteria(AcCriteriaJSON(current.AcceptanceCriteria)) // an unreadable stored list pins nothing
+	merged, cleared, err := reconcileAcWaivers(existing, incoming)
+	if err != nil {
+		if auditErr := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: current.ID.String(), ItemPublicID: current.PublicID, NewStatus: string(AcStatusWaived),
+			Outcome: "rejected:" + ErrAcWaiverViaUpdate.Error(),
+		}); auditErr != nil {
+			return "", nil, errors.Join(err, auditErr)
+		}
+		return "", nil, err
+	}
+	if len(merged) == 0 {
+		return incomingJSON, cleared, nil
+	}
+	out, err := SerializeAcCriteria(merged)
+	if err != nil {
+		return "", nil, fmt.Errorf("serialize acceptance criteria: %w", err)
+	}
+	return out, cleared, nil
 }
 
 // updatedFieldsFromBacklogItemUpdate computes which fields a BacklogItemUpdate
@@ -1713,6 +1771,10 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		}
 	}
 
+	if err := deleteOwnerPRRows(ctx, tx, ItemPROwner(parsedID.String())); err != nil {
+		return fmt.Errorf("delete backlog item: %w", err)
+	}
+
 	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -2011,7 +2073,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
 // (see the `interface-pollution-checklist` skill).
-func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string, link *itemPRLinkWrite) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -2025,7 +2087,16 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
-	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	// The item UPDATE and the item-direct link write share one transaction, so a
+	// failure of either leaves neither (BUG-058 narrowed). Only tx is used until
+	// commit or rollback: a second connection would deadlock a single-writer sqlite.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transition with PR fields: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	update := tx.BacklogItem.Update().Where(backlogitem.ID(parsedID))
 	if precondition != nil {
 		if precondition.ExpectedStatus != "" {
 			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
@@ -2049,6 +2120,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		// The row either no longer exists or the precondition no longer holds —
 		// re-fetch to report which. Mirrors TransitionBacklogItemStatus's
 		// identical affected==0 handling.
+		_ = tx.Rollback()
 		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
@@ -2060,6 +2132,12 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
 		}
 		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
+	if err := link.writeTx(ctx, tx, parsedID.String(), r.afterPRLinkHook); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("transition with PR fields: commit: %w", err)
 	}
 
 	item, err := r.client.BacklogItem.Get(ctx, parsedID)
@@ -2359,7 +2437,21 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	err = tx.BacklogStuckState.Create().
+	if _, err := markStuckTx(ctx, tx, parsedID, reason, stuckContext, now); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("mark stuck: commit: %w", err)
+	}
+	return true, nil
+}
+
+// markStuckTx is MarkStuck's in-transaction write: the resolve-in-place upsert,
+// the conditional reopen UPDATE, and the open of an append-only stuck episode
+// (ADR-003) sharing the same now, so opened_at equals first_detected_at.
+func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason domain.StuckReason, stuckContext string, now time.Time) (stuckTransition, error) {
+	err := tx.BacklogStuckState.Create().
 		SetItemID(parsedID).
 		SetReason(string(reason)).
 		SetFirstDetectedAt(now).
@@ -2372,13 +2464,13 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 		}).
 		Exec(ctx)
 	if err != nil {
-		return false, fmt.Errorf("mark stuck: upsert %s/%s: %w", itemID, reason, err)
+		return stuckTransition{}, fmt.Errorf("mark stuck: upsert %s/%s: %w", parsedID, reason, err)
 	}
 
 	// Reopen-in-place: only touches a row that was already resolved. This is
 	// its own atomic, idempotent conditional UPDATE — running it unconditionally
 	// after the upsert above is safe because it only ever affects a resolved row.
-	if _, err := tx.BacklogStuckState.Update().
+	reopened, err := tx.BacklogStuckState.Update().
 		Where(
 			backlogstuckstate.ItemID(parsedID),
 			backlogstuckstate.Reason(string(reason)),
@@ -2387,14 +2479,15 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 		ClearResolvedAt().
 		ClearNotifiedAt().
 		SetFirstDetectedAt(now).
-		Save(ctx); err != nil {
-		return false, fmt.Errorf("mark stuck: reopen %s/%s: %w", itemID, reason, err)
+		Save(ctx)
+	if err != nil {
+		return stuckTransition{}, fmt.Errorf("mark stuck: reopen %s/%s: %w", parsedID, reason, err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("mark stuck: commit: %w", err)
-	}
-	return true, nil
+	return stuckTransition{
+		Reopened:      reopened > 0,
+		EpisodeOpened: openStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now),
+	}, nil
 }
 
 // ResolveStuck atomically, idempotently closes an open BacklogStuckState row
@@ -2408,16 +2501,29 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
 
-	n, err := r.client.BacklogStuckState.Update().
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve stuck: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	now := time.Now()
+	n, err := tx.BacklogStuckState.Update().
 		Where(
 			backlogstuckstate.ItemID(parsedID),
 			backlogstuckstate.Reason(string(reason)),
 			backlogstuckstate.ResolvedAtIsNil(),
 		).
-		SetResolvedAt(time.Now()).
+		SetResolvedAt(now).
 		Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("resolve stuck %s/%s: %w", itemID, reason, err)
+	}
+	if n > 0 {
+		closeStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("resolve stuck: commit: %w", err)
 	}
 	return n > 0, nil
 }

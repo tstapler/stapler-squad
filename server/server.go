@@ -61,6 +61,7 @@ type Server struct {
 	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
 	terminalMuxBridge          atomic.Pointer[services.TerminalMuxBridge] // serves /actuator/terminal-mux
 	unfinishedScanner          *unfinished.Scanner                        // serves /actuator/unfinished-scanner; nil without deps
+	prLinkGC                   *session.SessionPRLinkGC                   // orphan session-PR link collector; nil without storage
 	tlsConfig                  *tls.Config                                // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler            // nil when auth is disabled
 	requiresAuth               bool                                       // explicit: a real validator is wired
@@ -223,6 +224,24 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.PRStatusPoller.Start(serverCtx)
 	srv.joinAfterCancel(serverCtx, deps.PRStatusPoller.Wait)
 	log.Info("PRStatusPoller started")
+
+	if deps.Storage != nil {
+		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler.Start(serverCtx)
+		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
+
+		// The collector gates itself on session_multi_pr each pass, so it is
+		// always started and does nothing while the flag is off.
+		if gc := deps.Storage.NewSessionPRLinkGC(0); gc != nil {
+			gc.Start(serverCtx)
+			srv.joinAfterCancel(serverCtx, gc.Wait)
+			srv.prLinkGC = gc
+		}
+	}
+
+	if deps.StopPRMaintenance != nil {
+		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
+	}
 
 	if deps.SessionTagClassificationPoller != nil {
 		deps.SessionTagClassificationPoller.Start(serverCtx)
@@ -1673,6 +1692,7 @@ func (s *Server) Start(ctx context.Context) error {
 				errCh <- lerr
 				return
 			}
+			markListenerUp()
 			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
@@ -1682,6 +1702,7 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 			resolvedAddr := ln.Addr().String()
 			s.addr.Store(&resolvedAddr)
+			markListenerUp()
 			// Log the real, OS-assigned address (never the pre-bind ":0"
 			// request) now that the listener has actually bound.
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)

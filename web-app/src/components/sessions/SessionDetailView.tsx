@@ -33,6 +33,7 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { GoalPanel } from "./GoalPanel";
+import { SessionPullRequestsSection } from "./SessionPullRequestsSection";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { HandoffSummarySection } from "./HandoffSummarySection";
@@ -475,6 +476,19 @@ export function SessionDetailView({
   // The mobile toast deck docks directly under this tab row.
   const tabRowRef = useRef<HTMLDivElement>(null);
   usePublishStackTopOffset(tabRowRef, measureEnabled);
+
+  // Vertical wheel -> horizontal scroll on the tab strip (needs a non-passive listener).
+  useEffect(() => {
+    const strip = tabRowRef.current?.querySelector<HTMLElement>('[role="tablist"]');
+    if (!strip) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaX !== 0 || strip.scrollWidth <= strip.clientWidth) return;
+      e.preventDefault();
+      strip.scrollLeft += e.deltaY;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, []);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
@@ -1590,18 +1604,8 @@ export function SessionDetailView({
                   </span>
                 </div>
               )}
-              {/* GitHub PR */}
-              {session.githubPrUrl && (
-                <div className={styles.infoItem}>
-                  <span className={styles.infoLabel}>GitHub PR:</span>
-                  <span className={styles.infoValue}>
-                    <a href={session.githubPrUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-link, #3b82f6)' }}>
-                      #{session.githubPrNumber} {session.githubPrState && `(${session.githubPrState})`}
-                      {session.githubPrIsDraft && " [Draft]"}
-                    </a>
-                  </span>
-                </div>
-              )}
+              {/* GitHub PR(s): the Pull requests list, or the legacy single link with the flag off */}
+              <SessionPullRequestsSection session={session} />
               {session.githubOwner && session.githubRepo && (
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>GitHub Repo:</span>

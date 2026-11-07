@@ -44,7 +44,7 @@ const backgroundActivityFeedDefault = true
 // Wake trigger types and MCP tools accepted as scopes (plan Data Model).
 var (
 	wakeTriggerTypeScopes = []string{"at", "cron", "backlog_event", "pr_event", "ci_event", "session_state", "guidance_answered"}
-	wakeToolScopes        = []string{"schedule_wake", "list_wakes", "cancel_wake", "request_help"}
+	wakeToolScopes        = []string{"schedule_wake", "list_wakes", "cancel_wake", "request_help", "request_owner_action"}
 	inlineActionKindNames = []string{"APPROVE", "DENY", actionKindAnswerQuestion, "BACKLOG_DECISION", "ANSWER_GUIDANCE", "CANCEL_WAKE", "CANCEL_PEER_HELP"}
 )
 

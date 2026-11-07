@@ -1,0 +1,16 @@
+{
+  "id": "session:detach-item-pr",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DetachItemPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_item_pr_detach.go",
+  "tested": true,
+  "testIds": [
+    "TestDetachItemPullRequest_ShouldDeleteLinkAndTombstone_ForItemInAnyStatus",
+    "TestDetachItemPullRequest_ShouldNotTouchSessionLinks",
+    "TestDetachItemPullRequest_ShouldRejectBadRequests"
+  ],
+  "lastModified": "2026-11-04T21:38:02.268188574-08:00"
+}

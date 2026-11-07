@@ -23,6 +23,9 @@ var ErrConflict = errors.New("conflict")
 // PR to a different PR number without a valid PRReassignmentGuard.
 var ErrPRReassignmentNotAllowed = errors.New("PR reassignment not allowed")
 
+// ErrPRDetached is returned when a writer tries to attach a PR the owner detached.
+var ErrPRDetached = errors.New("PR was detached from this owner")
+
 // PRReassignmentGuard carries the caller-verified preconditions required
 // before SetBacklogItemPRAndTransition (session/storage.go) will accept a
 // reassignment — a call where the observed item is already pr_pending with
@@ -323,6 +326,9 @@ type SourceSyncEventData struct {
 // BacklogItemData is the domain model for a backlog item.
 type BacklogItemData struct {
 	ID string
+	// ClearedAcWaivers lists waivers an UpdateBacklogItem call dropped because their criterion
+	// text changed or disappeared. It is set only on that call's return value, never persisted.
+	ClearedAcWaivers []AcCriterion
 	// PublicIDRaw is the raw public_id column value ("" when unset — see
 	// session/ent/schema/backlog_item.go's field comment for why that's a
 	// real SQL NULL underneath, not a deliberately-empty string). Do not

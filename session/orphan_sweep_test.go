@@ -1,14 +1,18 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestReconcileOrphanedTmuxSessions_UsesIsolatedSocket is the regression guard for the
@@ -27,8 +31,8 @@ func TestReconcileOrphanedTmuxSessions_UsesIsolatedSocket(t *testing.T) {
 	script := `#!/bin/sh
 echo "$@" >> "` + logPath + `"
 case "$*" in
-  *list-sessions*) echo "staplersquad_orphan-test"; exit 0 ;;
-  *show-environment*) exit 1 ;;
+  *list-sessions*) echo "staplersquad_orphan-test|1"; exit 0 ;;
+  *show-environment*) echo "unknown variable: STAPLER_SESSION_UUID" >&2; exit 1 ;;
   *kill-session*) exit 0 ;;
 esac
 exit 1
@@ -38,8 +42,7 @@ exit 1
 
 	// No known instances -- the fake "staplersquad_orphan-test" session is an orphan,
 	// which drives all three call sites (list-sessions, show-environment, kill-session).
-	// minAge=0 (this fake script's list-sessions output has no session_created field,
-	// so a nonzero minAge could never skip it anyway -- ParseInt fails closed to "check it").
+	// minAge=0 so the (ancient) created time never grace-skips it.
 	ReconcileOrphanedTmuxSessions(nil, 0)
 
 	logBytes, err := os.ReadFile(logPath)
@@ -71,8 +74,8 @@ func TestReconcileOrphanedTmuxSessions_PreservesLiveShellSessions(t *testing.T) 
 	script := `#!/bin/sh
 echo "$@" >> "` + logPath + `"
 case "$*" in
-  *list-sessions*) echo "staplersquad_parent_shell_shell-1"; exit 0 ;;
-  *show-environment*) exit 1 ;;
+  *list-sessions*) echo "staplersquad_parent_shell_shell-1|1"; exit 0 ;;
+  *show-environment*) echo "unknown variable: STAPLER_SESSION_UUID" >&2; exit 1 ;;
   *kill-session*) exit 0 ;;
 esac
 exit 1
@@ -110,8 +113,8 @@ func newFakeTmuxWithSessionAge(t *testing.T, createdAgo time.Duration) (logPath,
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$@" >> "%s"
 case "$*" in
-  *list-sessions*) echo "staplersquad_orphan-test	%d"; exit 0 ;;
-  *show-environment*) exit 1 ;;
+  *list-sessions*) echo "staplersquad_orphan-test|%d"; exit 0 ;;
+  *show-environment*) echo "unknown variable: STAPLER_SESSION_UUID" >&2; exit 1 ;;
   *kill-session*) exit 0 ;;
 esac
 exit 1
@@ -150,4 +153,339 @@ func TestReconcileOrphanedTmuxSessions_KillsOldOrphanDespiteGracePeriod(t *testi
 	require.NoError(t, err)
 	require.Contains(t, string(logBytes), "kill-session",
 		"a session older than minAge with no DB record must still be killed")
+}
+
+// fakeTmux is an injected tmux runner: it serves canned list-sessions output and
+// records every command so tests can assert kill-session was (not) called.
+type fakeTmux struct {
+	mu       sync.Mutex
+	list     string
+	listErr  error
+	envErr   string // stderr returned for show-environment ("" = succeed with no UUID line)
+	envFails bool
+	calls    [][]string
+}
+
+func (f *fakeTmux) run(_ context.Context, args ...string) ([]byte, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, args)
+	switch args[0] {
+	case "list-sessions":
+		if len(args) > 4 && args[3] == "-f" { // pre-kill recheck: filter to one exact name
+			want := strings.TrimSuffix(strings.TrimPrefix(args[4], "#{==:#{session_name},"), "}")
+			for _, l := range strings.Split(f.list, "\n") {
+				if strings.HasPrefix(l, want+"|") {
+					return []byte(l + "\n"), "", nil
+				}
+			}
+			return nil, "", nil
+		}
+		return []byte(f.list), "", f.listErr
+	case "show-environment":
+		if f.envFails {
+			return nil, f.envErr, errors.New("exit status 1")
+		}
+		return nil, "", nil
+	}
+	return nil, "", nil
+}
+
+func (f *fakeTmux) killTargets() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.calls {
+		if c[0] == "kill-session" {
+			out = append(out, c[len(c)-1])
+		}
+	}
+	return out
+}
+
+// namedPM gives a bare Instance a fixed tmux session name.
+type namedPM struct {
+	ProcessManager
+	id string
+}
+
+func (p namedPM) GetSessionIdentifier() string { return p.id }
+
+func liveInstance(tmuxName string) *Instance {
+	return &Instance{Title: tmuxName, processManager: namedPM{id: tmuxName}}
+}
+
+func sweepNow() time.Time { return time.Unix(2_000_000_000, 0) }
+
+func TestReconcileOrphans_should_NotKillLiveSessions_When_TmuxMangledSeparatorToUnderscore(t *testing.T) {
+	t.Parallel()
+	// Observed 2026-11-05: tmux 3.8 without a UTF-8 locale printed the tab as "_",
+	// so every live session looked like "<name>_<created epoch>".
+	live := liveInstance("staplersquad_dotfiles")
+	f := &fakeTmux{list: "staplersquad_dotfiles_1793909015\nstaplersquad_keepalive_1793846962\n", envFails: true, envErr: "no such session"}
+
+	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets(), "mangled name_epoch lines must never reach kill-session")
+}
+
+func TestReconcileOrphans_should_ReapTrueOrphan_When_OlderThanMinAge(t *testing.T) {
+	t.Parallel()
+	live := liveInstance("staplersquad_dotfiles")
+	f := &fakeTmux{list: "staplersquad_dotfiles|1793909015\nstaplersquad_keepalive|1793846962\nstaplersquad_ghost|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
+
+	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+
+	require.Equal(t, []string{"=staplersquad_ghost"}, f.killTargets(), "only the true orphan is killed, with an exact-match target")
+}
+
+func TestReconcileOrphans_should_SkipOrphan_When_YoungOrCreatedUnparseable(t *testing.T) {
+	t.Parallel()
+	young := sweepNow().Add(-time.Minute).Unix()
+	f := &fakeTmux{
+		list:     fmt.Sprintf("staplersquad_young|%d\nstaplersquad_badtime|abc\nstaplersquad_nosep\n", young),
+		envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID",
+	}
+
+	reconcileOrphanedTmuxSessions(nil, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_FailClosed_When_ListOrEnvLookupErrors(t *testing.T) {
+	t.Parallel()
+	listFail := &fakeTmux{listErr: context.DeadlineExceeded}
+	reconcileOrphanedTmuxSessions(nil, 0, listFail.run, sweepNow)
+	require.Empty(t, listFail.killTargets())
+
+	for name, stderr := range map[string]string{"timeout": "signal: killed", "vanished": "no such session: =x"} {
+		f := &fakeTmux{list: "staplersquad_x|1793909015\n", envFails: true, envErr: stderr}
+		reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+		require.Empty(t, f.killTargets(), name)
+	}
+}
+
+func TestReconcileOrphans_should_NotKill_When_UUIDMatchesKnownSession(t *testing.T) {
+	t.Parallel()
+	live := liveInstance("staplersquad_dotfiles")
+	live.UUID = "uuid-1"
+	f := &uuidFake{fakeTmux: fakeTmux{list: "staplersquad_renamed|1793909015\n"}}
+
+	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_NotKill_When_NameIsKnownNameWithFusedEpoch(t *testing.T) {
+	t.Parallel()
+	live := liveInstance("staplersquad_dotfiles")
+	f := &fakeTmux{list: "staplersquad_dotfiles_1793909015|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
+
+	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_NotKill_When_ShowEnvironmentSucceedsWithUnexpectedBody(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{"", "-STAPLER_SESSION_UUID", "garbage"} {
+		f := &bodyFake{fakeTmux: fakeTmux{list: "staplersquad_x|1793909015\n"}, envBody: body}
+		reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+		require.Empty(t, f.killTargets(), body)
+	}
+}
+
+type bodyFake struct {
+	fakeTmux
+	envBody string
+}
+
+func (f *bodyFake) run(ctx context.Context, args ...string) ([]byte, string, error) {
+	if args[0] == "show-environment" {
+		return []byte(f.envBody), "", nil
+	}
+	return f.fakeTmux.run(ctx, args...)
+}
+
+// uuidFake answers show-environment with a fixed STAPLER_SESSION_UUID.
+type uuidFake struct{ fakeTmux }
+
+func (f *uuidFake) run(ctx context.Context, args ...string) ([]byte, string, error) {
+	if args[0] == "show-environment" {
+		f.mu.Lock()
+		f.calls = append(f.calls, args)
+		f.mu.Unlock()
+		return []byte("STAPLER_SESSION_UUID=uuid-1\n"), "", nil
+	}
+	return f.fakeTmux.run(ctx, args...)
+}
+
+type fakeCM struct {
+	mu    sync.Mutex
+	calls [][]string
+	body  string
+	err   error
+}
+
+func (f *fakeCM) ServerCommand(_ context.Context, args ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, args)
+	return f.body, f.err
+}
+
+func TestControlModeRunner_should_UseControlModeAndSkipFallback_When_Available(t *testing.T) {
+	t.Parallel()
+	cm := &fakeCM{body: "staplersquad_a|1"}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{cm}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	out, _, err := run(context.Background(), "list-sessions", "-F", "#{session_name}|#{session_created}")
+
+	require.NoError(t, err)
+	require.Equal(t, "staplersquad_a|1", string(out))
+	require.Zero(t, fallbackCalls)
+	require.Equal(t, []string{"list-sessions", "-F", "'#{session_name}|#{session_created}'"}, cm.calls[0],
+		"format must be single-quoted: tmux re-parses control-mode lines")
+}
+
+func TestControlModeRunner_should_FallBackToExec_When_NoClientAcceptsTheCommand(t *testing.T) {
+	t.Parallel()
+	cm := &fakeCM{err: tmux.ErrControlModeNotRunning}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{cm}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return []byte("x"), "", nil
+	})
+
+	out, _, err := run(context.Background(), "list-sessions")
+
+	require.NoError(t, err)
+	require.Equal(t, "x", string(out))
+	require.Equal(t, 1, fallbackCalls)
+}
+
+func TestControlModeRunner_should_NotRetryOnExec_When_TmuxRejectedTheCommand(t *testing.T) {
+	t.Parallel()
+	cm := &fakeCM{err: errors.New("tmux: no such session: =x")}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{cm}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	_, stderr, err := run(context.Background(), "kill-session", "-t", "=x")
+
+	require.Error(t, err)
+	require.Contains(t, stderr, "no such session")
+	require.Zero(t, fallbackCalls, "a command tmux already rejected must stay failed (fail closed)")
+}
+
+func TestReconcileOrphans_should_IssueOneTmuxCommand_When_AllSessionsAreKnown(t *testing.T) {
+	t.Parallel()
+	var instances []*Instance
+	var list strings.Builder
+	for i := 0; i < 20; i++ {
+		title := fmt.Sprintf("sess%d", i)
+		instances = append(instances, liveInstance("staplersquad_"+title))
+		fmt.Fprintf(&list, "staplersquad_%s|1793909015\n", title)
+	}
+	f := &fakeTmux{list: list.String()}
+
+	reconcileOrphanedTmuxSessions(instances, 5*time.Minute, f.run, sweepNow)
+
+	require.Len(t, f.calls, 1, "steady state must be O(1) tmux commands per round, not O(sessions)")
+}
+
+// accessorPM exposes a fixed *tmux.TmuxSession, like TmuxBackend does.
+type accessorPM struct {
+	ProcessManager
+	ts *tmux.TmuxSession
+}
+
+func (p accessorPM) TmuxSession() *tmux.TmuxSession   { return p.ts }
+func (p accessorPM) SetTmuxSession(*tmux.TmuxSession) {}
+
+func TestControlModeSessionsOn_should_FilterBySocketAndSkipInstancesWithoutTmuxSession(t *testing.T) {
+	t.Parallel()
+	onDefault := tmux.NewTmuxSessionWithServerSocket("a", "true", tmux.TmuxPrefix, "ssq-default")
+	onOther := tmux.NewTmuxSessionWithServerSocket("b", "true", tmux.TmuxPrefix, "ssq-other")
+	instances := []*Instance{
+		{processManager: accessorPM{ts: onDefault}},
+		{processManager: accessorPM{ts: onOther}},
+		{processManager: accessorPM{ts: nil}},
+		liveInstance("staplersquad_noaccessor"),
+	}
+
+	require.Equal(t, []*tmux.TmuxSession{onDefault}, controlModeSessionsOn(instances, "ssq-default"))
+	require.Equal(t, []*tmux.TmuxSession{onOther}, controlModeSessionsOn(instances, "ssq-other"))
+}
+
+func TestReconcileOrphans_should_NotKill_When_TargetChangedBeforeKill(t *testing.T) {
+	t.Parallel()
+	f := &recheckFake{fakeTmux: fakeTmux{list: "staplersquad_x|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}}
+
+	reconcileOrphanedTmuxSessions(nil, 5*time.Minute, f.run, sweepNow)
+
+	require.Empty(t, f.killTargets(), "a session recreated (new created time) between list and kill must be spared")
+}
+
+type recheckFake struct{ fakeTmux }
+
+func (f *recheckFake) run(ctx context.Context, args ...string) ([]byte, string, error) {
+	if args[0] == "list-sessions" && len(args) > 4 && args[3] == "-f" {
+		return []byte("staplersquad_x|1793999999\n"), "", nil
+	}
+	return f.fakeTmux.run(ctx, args...)
+}
+
+func TestReconcileOrphans_should_SkipNames_When_TheyContainControlCharacters(t *testing.T) {
+	t.Parallel()
+	f := &fakeTmux{list: "staplersquad_a\rb|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
+	reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+	require.Empty(t, f.killTargets())
+}
+
+func TestReconcileOrphans_should_NotKill_When_UnknownVariableTextIsForADifferentVariable(t *testing.T) {
+	t.Parallel()
+	f := &fakeTmux{list: "staplersquad_x|1793909015\n", envFails: true, envErr: "unknown variable: OTHER"}
+	reconcileOrphanedTmuxSessions(nil, 0, f.run, sweepNow)
+	require.Empty(t, f.killTargets())
+}
+
+func TestControlModeRunner_should_TryFallbackOnReadTimeout_ButNeverRetryKill(t *testing.T) {
+	t.Parallel()
+	wedged := &fakeCM{err: context.DeadlineExceeded}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{wedged}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	_, _, err := run(context.Background(), "list-sessions")
+	require.NoError(t, err)
+	require.Equal(t, 1, fallbackCalls, "a wedged client must not block a read-only command")
+
+	_, _, err = run(context.Background(), "kill-session", "-t", "=x")
+	require.Error(t, err)
+	require.Equal(t, 1, fallbackCalls, "kill-session is never retried after a timeout")
+}
+
+func TestControlModeRunner_should_FallBackToExec_When_ArgumentIsUnquotable(t *testing.T) {
+	t.Parallel()
+	cm := &fakeCM{}
+	fallbackCalls := 0
+	run := newControlModeFirstRunner([]*fakeCM{cm}, func(context.Context, ...string) ([]byte, string, error) {
+		fallbackCalls++
+		return nil, "", nil
+	})
+
+	_, _, err := run(context.Background(), "list-sessions", "-f", "a\rb")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, fallbackCalls)
+	require.Empty(t, cm.calls)
 }

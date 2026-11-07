@@ -9,9 +9,18 @@ import AxeBuilder from "@axe-core/playwright";
  * focusable) are an editor-theme follow-up, not a Files layout defect.
  */
 export async function axeAaViolations(page: Page, scope?: string): Promise<string[]> {
+  // Axe reads the colours painted right now: let finite fade-in/transition animations finish first, or a half-blended foreground reads as a contrast failure.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
   const builder = new AxeBuilder({ page });
   const result = await (scope ? builder.include(scope) : builder.include("[data-layout]").include("[role=dialog]").exclude(".cm-scroller")).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
-  return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`);
+  return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => `${n.target.join(" ")} [${(n.any[0]?.message ?? n.failureSummary ?? "").slice(0, 160)}]`).join(", ")}`);
 }
 
 /** No horizontal page scroll, and every visible button/link/input sits inside the viewport horizontally. */
@@ -115,4 +124,54 @@ export async function assertNonTextContrast(page: Page, testIds: string[], min =
   }
   await page.emulateMedia({ colorScheme: null });
   return problems;
+}
+
+/** Runs `fn` with Chromium's achromatopsia emulation on (WCAG 1.4.1: state must not ride on color alone). Chromium only. */
+export async function withAchromatopsia<T>(page: Page, fn: () => Promise<T>): Promise<T> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setEmulatedVisionDeficiency", { type: "achromatopsia" });
+  try {
+    return await fn();
+  } finally {
+    await cdp.send("Emulation.setEmulatedVisionDeficiency", { type: "none" });
+    await cdp.detach();
+  }
+}
+
+/** Visible text of every element matching `locatorText`, as an array; a fixed list the caller compares for distinctness. */
+export async function visibleTexts(page: Page, selector: string): Promise<string[]> {
+  return page.$$eval(selector, (els) => els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()).filter(Boolean));
+}
+
+/**
+ * Dark then light AA runs of one scope. The app picks its theme from localStorage "stapler-theme" (ThemeContext),
+ * not from prefers-color-scheme, so each run sets it, reloads and calls `reopen` to get the surface back.
+ * Returns violations tagged with the scheme.
+ */
+export async function axeLightAndDark(page: Page, scope: string, reopen: () => Promise<void>): Promise<string[]> {
+  const out: string[] = [];
+  for (const scheme of ["dark", "light"] as const) {
+    await page.evaluate((t) => localStorage.setItem("stapler-theme", t), scheme);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await reopen();
+    out.push(...(await axeAaViolations(page, scope)).map((v) => `[${scheme}] ${v}`));
+  }
+  return out;
+}
+
+/** Asserts a visible control's box is at least 44x44 CSS px (WCAG 2.5.5 / the repo's touch-target rule). */
+export async function touchTargetProblems(...targets: import("@playwright/test").Locator[]): Promise<string[]> {
+  const problems: string[] = [];
+  for (const target of targets) {
+    const box = await target.boundingBox();
+    const name = await target.evaluate((el) => el.getAttribute("aria-label") ?? el.textContent?.trim() ?? el.tagName);
+    if (!box) problems.push(`${name}: not visible`);
+    else if (box.width < 43.5 || box.height < 43.5) problems.push(`${name}: ${Math.round(box.width)}x${Math.round(box.height)} is under 44px`);
+  }
+  return problems;
+}
+
+/** Asserts the mobile precondition shared by every *-mobile spec: coarse pointer, touch points and a mobile UA. */
+export async function mobilePreconditionFacts(page: Page): Promise<{ coarse: boolean; touchPoints: number; ua: string }> {
+  return page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints, ua: navigator.userAgent }));
 }

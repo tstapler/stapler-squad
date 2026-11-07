@@ -579,3 +579,84 @@ func TestPRBodies_ClosingKeyword(t *testing.T) {
 		})
 	}
 }
+
+// triggerValuesFor returns the pr_fix_trigger marker values stored for itemID, oldest first.
+func triggerValuesFor(t *testing.T, er *EntRepository, itemID string) []string {
+	t.Helper()
+	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, FlowMarkerPRFixTrigger,
+		time.Unix(0, 0), time.Now().Add(100*365*24*time.Hour))
+	require.NoError(t, err)
+	vals := make([]string, 0, len(got))
+	for _, m := range got {
+		vals = append(vals, m.Value)
+	}
+	return vals
+}
+
+func TestPrFixReopen_should_RecordTriggerOnce_When_PollerDecidesFix(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9301)
+	er := storage.repo
+	clk := newFakeMarkerClock()
+	er.markerClock = clk.Now
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "CI failed"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	for i := 0; i < 5; i++ {
+		listener.ReconcilePRPending(ctx, er)
+	}
+	assert.Equal(t, []string{PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
+
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"},
+	})
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{PRFixTriggerCI, PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
+
+	clk.Advance(TriggerRecordMinInterval)
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{PRFixTriggerCI, PRFixTriggerConflict, PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
+}
+
+func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9302)
+	er := storage.repo
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, HasConflicts: true, HasBlockingReviews: true, FeedbackText: "all"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
+}
+
+func TestPrFixReopen_should_RecordUnknownTrigger_When_PRClosedWithoutMerge(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9303)
+	er := storage.repo
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	before := PRFixTriggerUnknownCount()
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{PRFixTriggerUnknown}, triggerValuesFor(t, er, item.ID))
+	assert.Greater(t, PRFixTriggerUnknownCount(), before)
+}

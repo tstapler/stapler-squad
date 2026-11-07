@@ -550,8 +550,8 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 	if inst == nil {
 		return
 	}
-	if inst.GitHubPRURL != "" {
-		return // already has a PR — nothing to do
+	if autoCreateBlockedByExistingPR(inst) {
+		return // an open PR already exists on this branch (or the branch is unknown) — nothing to do
 	}
 	stableID := inst.GetStableID()
 	if stableID == "" {
@@ -590,7 +590,7 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 		// window between the synchronous check above and this goroutine
 		// actually running — e.g. a human clicking the manual "Create PR"
 		// button for this same session during the DB lookups just above.
-		if inst.GitHubPRURL != "" {
+		if autoCreateBlockedByExistingPR(inst) {
 			return
 		}
 
@@ -603,6 +603,21 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 		}
 		log.Info("auto-create-PR: PR created automatically", "session", inst.Title, "backlog_item", backlogItem.ID, "pr_url", prURL)
 	}()
+}
+
+// autoCreateBlockedByExistingPR reports whether auto-create must skip inst. The
+// branch falls back to the checked-out one when the snapshot has none; if it is
+// still unknown while the session holds PR links, no-duplicate cannot be proven,
+// so it fails closed.
+func autoCreateBlockedByExistingPR(inst *session.Instance) bool {
+	snap := inst.Snapshot()
+	branch := inst.CurrentBranch()
+	if branch == "" && len(snap.GitHub.PRs) > 0 {
+		log.Warn("auto-create-PR: branch unknown and session holds PRs, skipping", "session", inst.Title)
+		return true
+	}
+	_, _, hasPR := session.ExistingPRForCreate(snap, branch)
+	return hasPR
 }
 
 // baseContext returns rqm.ctx if the manager has been Start()ed, otherwise

@@ -71,6 +71,41 @@ func TestConflictRetryLedger_RefundKeepsThrottleButReturnsTheGrant(t *testing.T)
 	g.refund("missing") // no entry: no-op
 }
 
+// A fix attempt that fails to start on every tick must stay on the hourly throttle: the
+// live loop (one pr_pending<->in_progress flip pair per ~minute) came from a refund of the
+// only grant dropping grants to 0, which the throttle treated as "never granted".
+func TestConflictRetryLedger_RefundOfOnlyGrantStillThrottles(t *testing.T) {
+	var g conflictRetryLedger
+	now := time.Unix(1_000_000, 0)
+	attempts := 0
+	for i := 0; i < 120; i++ { // two hours of one-minute ticks
+		if g.take("a", now, time.Hour, 0) == conflictRetryGranted {
+			attempts++
+			g.refund("a") // the spawn failed
+		}
+		now = now.Add(time.Minute)
+	}
+	if attempts > 2 {
+		t.Fatalf("a failing spawn got %d attempts in 2h; want at most 2 (hourly)", attempts)
+	}
+}
+
+func TestConflictRetryLedger_RefundsAreBoundedSoFailuresEventuallyExhaust(t *testing.T) {
+	var g conflictRetryLedger
+	now := time.Unix(1_000_000, 0)
+	granted := 0
+	for i := 0; i < 100; i++ { // hourly ticks, every spawn fails
+		if g.take("a", now, time.Hour, 0) == conflictRetryGranted {
+			granted++
+			g.refund("a")
+		}
+		now = now.Add(time.Hour)
+	}
+	if want := conflictRetryMaxAttempts + conflictRetryMaxRefunds; granted != want {
+		t.Fatalf("persistently failing spawn got %d attempts; want exactly %d", granted, want)
+	}
+}
+
 func TestConflictRetryLedger_RowAttemptsDroppingReArmsAnExhaustedItem(t *testing.T) {
 	var g conflictRetryLedger
 	now := time.Unix(1_000_000, 0)
