@@ -1,0 +1,14 @@
+{
+  "id": "ClearTerminalStatusIfLive",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ClearTerminalStatusIfLive",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestClearTerminalStatusOne_Outcomes",
+    "TestClearTerminalStatusIfLive_RPCValidation"
+  ],
+  "lastModified": "2026-11-06T18:27:56.100185073-08:00"
+}

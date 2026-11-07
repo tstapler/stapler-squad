@@ -686,6 +686,12 @@ service SessionService {
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
 
+  // ClearTerminalStatusIfLive clears Stopped/Failed/PermanentlyFailed on sessions
+  // whose backing process (tymux pane or tmux session) is still alive, by
+  // hot-attaching without restarting the process or the service. Not-live,
+  // archived and non-terminal sessions are reported per-session and untouched.
+  rpc ClearTerminalStatusIfLive(ClearTerminalStatusIfLiveRequest) returns (ClearTerminalStatusIfLiveResponse) {}
+
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
 
@@ -4730,6 +4736,22 @@ message ArchiveSessionRequest {
 }
 
 message ArchiveSessionResponse {}
+
+message ClearTerminalStatusIfLiveRequest {
+  // Session UUIDs or titles. At least one is required.
+  repeated string session_ids = 1;
+}
+
+message ClearTerminalStatusIfLiveResult {
+  string session_id = 1;
+  // One of: cleared, not_live, archived, not_terminal, not_found, error.
+  string outcome = 2;
+  string message = 3;
+}
+
+message ClearTerminalStatusIfLiveResponse {
+  repeated ClearTerminalStatusIfLiveResult results = 1;
+}
 
 message UnarchiveSessionRequest {
   string session_id = 1;
