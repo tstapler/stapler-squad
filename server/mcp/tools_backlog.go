@@ -2094,11 +2094,13 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	}
 
 	verdictData := session.ReviewVerdictData{
-		ItemSessionID:  itemSession.ID,
-		OverallOutcome: overallOutcome,
-		PerCriterion:   string(perCriterionJSON),
-		Summary:        summary,
-		DiffHash:       h.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ItemSessionID:     itemSession.ID,
+		OverallOutcome:    overallOutcome,
+		PerCriterion:      string(perCriterionJSON),
+		Summary:           summary,
+		DiffHash:          h.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ReviewedCommitSha: h.storage.ComputeReviewedCommitSha(ctx, itemID),
+		DiffTruncated:     itemSession.DiffTruncated,
 	}
 
 	if saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID, verdictData); saveErr != nil {

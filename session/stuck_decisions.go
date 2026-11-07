@@ -447,3 +447,22 @@ func PendingDuplicateRef(sessions []ItemSessionSummary) string {
 	}
 	return ""
 }
+
+// IsNoProgressReview reports whether the two most recent review verdicts
+// (most recent first) are both non-PASS and reviewed the same non-empty
+// commit — the agent resubmitted without committing anything new. False when
+// either SHA is empty (unknown), either diff was truncated (the reviewer saw
+// only part of the change), either verdict is a manual override (a human
+// decision, not a deadlock), or either verdict is a PASS.
+func IsNoProgressReview(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	for _, v := range []ReviewVerdictSummary{latest, prior} {
+		if v.OverallOutcome == string(ReviewVerdictPass) || v.DiffTruncated || v.OverrideBy != "" || v.ReviewedCommitSha == "" {
+			return false
+		}
+	}
+	return latest.ReviewedCommitSha == prior.ReviewedCommitSha
+}

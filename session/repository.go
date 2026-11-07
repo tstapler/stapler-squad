@@ -183,17 +183,18 @@ type ProjectData struct {
 
 // ReviewVerdictSummary is a domain DTO for a review verdict embedded in ItemSessionSummary.
 type ReviewVerdictSummary struct {
-	ID             string
-	OverallOutcome string
-	PerCriterion   string // JSON []CriterionVerdict
-	Summary        string
-	DiffHash       string
-	DiffTokenCount int
-	DiffTruncated  bool
-	OverrideBy     string
-	OverrideReason string
-	OverrideAt     *time.Time
-	CreatedAt      time.Time
+	ID                string
+	OverallOutcome    string
+	PerCriterion      string // JSON []CriterionVerdict
+	Summary           string
+	DiffHash          string
+	DiffTokenCount    int
+	DiffTruncated     bool
+	ReviewedCommitSha string
+	OverrideBy        string
+	OverrideReason    string
+	OverrideAt        *time.Time
+	CreatedAt         time.Time
 }
 
 // ItemSessionSummary is the domain DTO replacing *ent.ItemSession in Storage returns.
@@ -253,6 +254,7 @@ type ItemSessionSummary struct {
 	TriageResult        string // raw JSON stored in triage_result column
 	TriageResultSummary string // summary field parsed from TriageResult
 	VerificationNotes   string // freeform verification evidence reported via request_review
+	DiffTruncated       bool   // review session: diff handed to the reviewer was truncated
 	OverallOutcome      string // from linked review_verdict (empty if none)
 	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
