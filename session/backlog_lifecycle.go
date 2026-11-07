@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1944,33 +1943,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 // falsely marking 0f5d760b (and the others) shipped. A branch mismatch falls
 // through to the branch-name lookup below, same as the worktree-gone case.
 func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
-	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
-	if err != nil {
-		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session", "session", sessionUUID, "error", err)
-		return ""
-	}
-	if wt.WorktreePath != "" {
-		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath)
-			if branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
-				sha, headErr := GetGitHeadSHA(wt.WorktreePath)
-				if headErr == nil && sha != "" {
-					return sha
-				}
-			} else if branchErr == nil {
-				log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: worktree path now holds a different branch than the session's (path recycled?) — falling back to repo-wide branch lookup", "worktree_path", wt.WorktreePath, "branch", branch, "expected_branch", wt.BranchName)
-			}
-		}
-	}
-	if wt.BranchName == "" {
-		return ""
-	}
-	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
-	if revErr != nil {
-		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
-		return ""
-	}
-	return sha
+	return l.storage.ResolveLatestWorkCommit(ctx, sessionUUID, repoPath)
 }
 
 // ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref

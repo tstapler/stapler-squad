@@ -35,6 +35,10 @@ func (ReviewVerdict) Fields() []ent.Field {
 			Optional(),
 		field.Bool("diff_truncated").
 			Default(false),
+		field.String("reviewed_commit_sha").
+			Optional().
+			Default("").
+			Comment("Tip commit of the completed work session at verdict time. Two consecutive non-PASS verdicts sharing a non-empty value mean the agent made no progress between reviews (see IsNoProgressReview). Empty when no completed work session or commit could be resolved."),
 		field.String("override_by").
 			Optional(),
 		field.String("override_reason").

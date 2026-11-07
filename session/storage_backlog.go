@@ -227,6 +227,7 @@ type ItemSessionData struct {
 	ExecutorFallbackReason string
 	TriageResult           string
 	VerificationNotes      string  // Freeform verification evidence reported via request_review
+	DiffTruncated          bool    // Review sessions: the reviewer's diff was truncated at spawn
 	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
 	// CostUnpriced marks EstimatedCostUsd as untrustworthy (see headless.CostSink's
 	// priced signal) rather than a genuine dollar figure — e.g. an unpriced Gemini
@@ -250,9 +251,11 @@ type ReviewVerdictData struct {
 	PromptHash     string
 	DiffTokenCount int
 	DiffTruncated  bool
-	OverrideBy     string
-	OverrideReason string
-	OverrideAt     *time.Time
+	// ReviewedCommitSha is the work-session tip commit the verdict reviewed; "" when unknown.
+	ReviewedCommitSha string
+	OverrideBy        string
+	OverrideReason    string
+	OverrideAt        *time.Time
 }
 
 // --- ItemSession ---
@@ -280,6 +283,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetExecutorFallbackReason(data.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
 		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
+		SetDiffTruncated(data.DiffTruncated).
 		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
@@ -901,6 +905,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
+			SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
@@ -919,6 +924,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
+			SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
@@ -995,6 +1001,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 		SetDiffTokenCount(verdict.DiffTokenCount).
 		SetDiffTruncated(verdict.DiffTruncated).
+		SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 		SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 		SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 		SetNillableOverrideAt(verdict.OverrideAt).
@@ -1411,10 +1418,13 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			continue
 		}
 		result = append(result, ReviewVerdictSummary{
-			ID:             is.Edges.ReviewVerdict.ID.String(),
-			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
-			Summary:        is.Edges.ReviewVerdict.Summary,
-			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
+			ID:                is.Edges.ReviewVerdict.ID.String(),
+			OverallOutcome:    is.Edges.ReviewVerdict.OverallOutcome,
+			Summary:           is.Edges.ReviewVerdict.Summary,
+			DiffHash:          is.Edges.ReviewVerdict.DiffHash,
+			DiffTruncated:     is.Edges.ReviewVerdict.DiffTruncated,
+			ReviewedCommitSha: is.Edges.ReviewVerdict.ReviewedCommitSha,
+			OverrideBy:        is.Edges.ReviewVerdict.OverrideBy,
 		})
 	}
 	return result, nil

@@ -349,3 +349,30 @@ func TestMostRecentCompletedWorkSession_should_returnNil_When_NoCompletedWorkSes
 	reviewOnly := []ItemSessionSummary{{ID: "s1", Role: SessionRoleReview, EndedAt: &time.Time{}}}
 	assert.Nil(t, MostRecentCompletedWorkSession(reviewOnly))
 }
+
+func TestIsNoProgressReview(t *testing.T) {
+	t.Parallel()
+	fail := string(ReviewOutcomeFail)
+	pass := string(ReviewOutcomePass)
+	tests := []struct {
+		name   string
+		recent []ReviewVerdictSummary
+		want   bool
+	}{
+		{"same sha both fail", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, true},
+		{"different sha", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "b"}}, false},
+		{"latest empty sha", []ReviewVerdictSummary{{OverallOutcome: fail}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"both empty sha", []ReviewVerdictSummary{{OverallOutcome: fail}, {OverallOutcome: fail}}, false},
+		{"latest truncated", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a", DiffTruncated: true}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"prior truncated", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a", DiffTruncated: true}}, false},
+		{"latest pass", []ReviewVerdictSummary{{OverallOutcome: pass, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"override set", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a", OverrideBy: "user"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"fewer than two", []ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsNoProgressReview(tc.recent))
+		})
+	}
+}

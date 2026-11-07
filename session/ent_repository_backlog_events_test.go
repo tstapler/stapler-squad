@@ -1077,3 +1077,28 @@ func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_
 		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
 	}
 }
+
+func TestSaveReviewVerdict_should_persistCommitShaAndTruncation_When_Set(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{Title: "verdict sha round trip", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: session.SessionRoleReview, DiffTruncated: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, is.DiffTruncated, "spawn-time truncation must round-trip on the item session")
+
+	require.NoError(t, repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictFail, ReviewedCommitSha: "abc123", DiffTruncated: true,
+	}))
+
+	recent, err := repo.GetRecentReviewVerdictSummaries(ctx, item.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	assert.Equal(t, "abc123", recent[0].ReviewedCommitSha)
+	assert.True(t, recent[0].DiffTruncated)
+}
