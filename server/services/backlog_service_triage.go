@@ -3584,10 +3584,11 @@ Do not modify the code. Only write the review verdict.
 
 	// 11. Create ItemSession with role=review.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleReview,
-		AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+		ItemID:        item.ID,
+		SessionUUID:   inst.UUID,
+		SessionRole:   session.SessionRoleReview,
+		AcSnapshot:    session.AcCriteriaJSON(acSnapshotJSON),
+		DiffTruncated: diffTruncated,
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create re-review item session: %w", err))

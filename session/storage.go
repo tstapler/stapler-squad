@@ -1670,8 +1670,11 @@ func (s *Storage) resolveReviewedCommits(ctx context.Context, itemID string) (re
 	if err != nil {
 		return "", "", ""
 	}
-	if headSHA == "" && workUUID != "" && repoPath != "" {
-		headSHA = s.ResolveLatestWorkCommit(ctx, workUUID, repoPath)
+	// Prefer the live tip: a stored last_commit_sha can predate commits made after the last reconcile tick.
+	if workUUID != "" && repoPath != "" {
+		if live := s.ResolveLatestWorkCommit(ctx, workUUID, repoPath); live != "" {
+			headSHA = live
+		}
 	}
 	return repoPath, baseSHA, headSHA
 }
