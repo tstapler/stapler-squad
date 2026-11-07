@@ -1149,15 +1149,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
-				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
-				inst.RecoverFromStopped()
-				if err := inst.Start(false); err != nil {
-					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
-				} else {
-					log.Info("Reconcile: restored session (was terminal, now Running)", "session", inst.Title)
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-				}
+			title, status := inst.Title, inst.GetLifecycleStatus()
+			outcome, err := session.HotRestoreIfLive(inst, inst.IsLiveOrStoredSessionLive)
+			switch {
+			case err != nil:
+				log.Warn("Reconcile: hot-restore failed", "session", title, "err", err)
+			case outcome == session.HotRestoreCleared:
+				log.Info("Reconcile: restored session (was terminal, now Running)", "session", title, "was", status)
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
 		}
 
@@ -2267,11 +2266,6 @@ func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherCo
 	e.Start(ctx)
 	session.SetWorktreeEnricher(e)
 	return e
-}
-
-// hotRestoreEligible probes persisted backend identity before a pane is attached.
-func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
-	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
 }
 
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.
