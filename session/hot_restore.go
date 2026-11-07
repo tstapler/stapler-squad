@@ -1,5 +1,14 @@
 package session
 
+import (
+	"fmt"
+	"sync"
+)
+
+// hotRestoreLocks serializes HotRestoreIfLive per instance so concurrent RPCs
+// and boot reconcile cannot both pass the recoverable check and double-attach.
+var hotRestoreLocks sync.Map // *Instance -> *sync.Mutex
+
 // HotRestoreOutcome is the per-session result of HotRestoreIfLive.
 type HotRestoreOutcome string
 
@@ -23,7 +32,11 @@ func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, er
 		return HotRestoreError, nil
 	}
 	// Archived sessions are deliberately retired: adopting one would flip it
-	// back off its terminal status (ADR-001).
+	// back off its terminal status (ADR-001); checked under the lock below.
+	mu, _ := hotRestoreLocks.LoadOrStore(inst, &sync.Mutex{})
+	lock := mu.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
 	if inst.IsArchived() {
 		return HotRestoreArchived, nil
 	}
@@ -33,9 +46,15 @@ func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, er
 	if !isLive() {
 		return HotRestoreNotLive, nil
 	}
+	prev := inst.GetLifecycleStatus()
 	inst.RecoverFromStopped()
-	if err := inst.Start(false); err != nil { //nolint:noarchivedrevival IsArchived checked above
-		return HotRestoreError, err
+	if err := inst.Start(false); err != nil {
+		// Leave the prior terminal status so a failed attach stays retryable
+		// instead of stranding the session in Creating for the stale sweeper.
+		if inst.GetLifecycleStatus() == Creating {
+			inst.ForceStatus(prev)
+		}
+		return HotRestoreError, fmt.Errorf("hot attach: %w", err)
 	}
 	return HotRestoreCleared, nil
 }

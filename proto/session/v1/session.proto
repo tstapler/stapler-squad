@@ -690,6 +690,8 @@ service SessionService {
   // whose backing process (tymux pane or tmux session) is still alive, by
   // hot-attaching without restarting the process or the service. Not-live,
   // archived and non-terminal sessions are reported per-session and untouched.
+  // A request with exactly one id that is not cleared fails instead
+  // (FailedPrecondition/NotFound/Internal); at most 100 ids per request.
   rpc ClearTerminalStatusIfLive(ClearTerminalStatusIfLiveRequest) returns (ClearTerminalStatusIfLiveResponse) {}
 
   // UnarchiveSession clears archived_at, restoring the session to the default list.

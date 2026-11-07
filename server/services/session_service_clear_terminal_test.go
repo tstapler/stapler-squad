@@ -43,8 +43,8 @@ func TestClearTerminalStatusOne_Outcomes(t *testing.T) {
 		{"archived is rejected without probing", &session.Instance{Title: "x", Status: session.Failed, ArchivedAt: &now}, true, "archived", false, session.Failed},
 		{"active is not terminal", &session.Instance{Title: "x", Status: session.Active}, true, "not_terminal", false, session.Active},
 		// No process manager is wired, so the hot attach itself fails: proves the
-		// live seam reached Start rather than short-circuiting.
-		{"live reaches hot attach", &session.Instance{Title: "x", Status: session.Failed}, true, "error", true, session.Creating},
+		// live seam reached Start, and the prior terminal status is restored.
+		{"live reaches hot attach and failure restores status", &session.Instance{Title: "x", Status: session.Failed}, true, "error", true, session.Failed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -53,9 +53,7 @@ func TestClearTerminalStatusOne_Outcomes(t *testing.T) {
 			res := svc.clearTerminalStatusOne("x", probeOf(tc.live, &probed))
 			assert.Equal(t, tc.want, res.Outcome, res.Message)
 			assert.Equal(t, tc.wantProbe, probed)
-			if tc.want != "error" {
-				assert.Equal(t, tc.want0, tc.inst.GetLifecycleStatus())
-			}
+			assert.Equal(t, tc.want0, tc.inst.GetLifecycleStatus())
 		})
 	}
 }

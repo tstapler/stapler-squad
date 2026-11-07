@@ -12,7 +12,10 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
-const clearTerminalOutcomeNotFound = "not_found"
+const (
+	clearTerminalOutcomeNotFound = "not_found"
+	maxClearTerminalBatch        = 100
+)
 
 // +api: session:clear-terminal-status-if-live
 // ClearTerminalStatusIfLive hot-attaches sessions that are terminal in the DB
@@ -26,6 +29,9 @@ func (s *SessionService) ClearTerminalStatusIfLive(
 	ids := req.Msg.GetSessionIds()
 	if len(ids) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_ids is required"))
+	}
+	if len(ids) > maxClearTerminalBatch {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("at most %d session_ids per request", maxClearTerminalBatch))
 	}
 	results := make([]*sessionv1.ClearTerminalStatusIfLiveResult, 0, len(ids))
 	for _, id := range ids {

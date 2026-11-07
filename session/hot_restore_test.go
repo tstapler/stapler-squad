@@ -51,6 +51,15 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 	}
 }
 
+func TestHotRestoreIfLive_FailedAttachRestoresTerminalStatus(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t", Status: PermanentlyFailed} // no process manager: Start fails
+	got, err := HotRestoreIfLive(inst, func() bool { return true })
+	require.Error(t, err)
+	assert.Equal(t, HotRestoreError, got)
+	assert.Equal(t, PermanentlyFailed, inst.GetLifecycleStatus())
+}
+
 func TestHotRestoreIfLive_NilInstance(t *testing.T) {
 	t.Parallel()
 	got, _ := HotRestoreIfLive(nil, func() bool { return true })
