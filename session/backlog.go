@@ -152,6 +152,7 @@ const (
 	AcStatusInProgress = domain.AcStatusInProgress
 	AcStatusDone       = domain.AcStatusDone
 	AcStatusFail       = domain.AcStatusFail
+	AcStatusWaived     = domain.AcStatusWaived
 )
 
 // AcCriteriaJSON is the JSON-serialized form of []AcCriterion stored in the DB.

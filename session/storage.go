@@ -1963,6 +1963,26 @@ func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, cr
 	return s.repo.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
+// WaiveAcCriterion records an owner waiver (status waived + reason) on one criterion.
+func (s *Storage) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
+	return s.repo.WaiveAcCriterion(ctx, itemID, criterionIndex, reason)
+}
+
+// RecordAcAudit appends an AC audit row for an attempt refused before reaching the criterion.
+func (s *Storage) RecordAcAudit(ctx context.Context, d AcAuditEventData) error {
+	return s.repo.RecordAcAudit(ctx, d)
+}
+
+// PruneAcAuditOlderThan deletes AC audit rows older than cutoff and returns the count removed.
+func (s *Storage) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	return s.repo.PruneAcAuditOlderThan(ctx, cutoff)
+}
+
+// ListAcAudit returns an item's AC audit trail, oldest first.
+func (s *Storage) ListAcAudit(ctx context.Context, itemID string) ([]AcAuditEventData, error) {
+	return s.repo.ListAcAudit(ctx, itemID)
+}
+
 // AppendProgressNote records a single report_progress call as an immutable history
 // entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
 func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {

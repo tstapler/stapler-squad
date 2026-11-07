@@ -42,6 +42,7 @@ export const ROUTE_META: Record<RoutePath, RouteMetaEntry> = {
   "/login": { title: "Sign In - Stapler Squad" },
   "/logs": { title: "Logs - Stapler Squad" },
   "/notifications": { title: "Notifications - Stapler Squad" },
+  "/owner-inbox": { title: "Owner Inbox - Stapler Squad" },
   "/resolve": { title: ROOT_TITLE },
   "/review-queue": { title: "Review Queue - Stapler Squad" },
   "/rules": { title: "Approval Rules - Stapler Squad" },

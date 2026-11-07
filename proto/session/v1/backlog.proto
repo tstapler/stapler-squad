@@ -9,7 +9,12 @@ import "session/v1/types.proto";
 message AcCriterion {
   int32 index = 1;
   string text = 2;
-  string status = 3; // "pending", "in_progress", "done"
+  string status = 3; // "pending", "in_progress", "done", "fail", "waived"
+  // Justification given with the waiver; set only when status is "waived".
+  string waiver_reason = 4;
+  // Who waived (display label of the recorded caller identity) and when (RFC 3339 UTC).
+  string waived_by = 5;
+  string waived_at = 6;
 }
 
 // CriterionVerdict holds the review outcome for a single acceptance criterion.
@@ -764,6 +769,8 @@ enum PrAssociationResult {
 message UpdateBacklogItemResponse {
   BacklogItem item = 1;
   PrAssociationResult pr_association = 2;
+  // Waivers dropped by this update because their criterion text changed or was removed.
+  repeated AcCriterion cleared_waivers = 3;
 }
 
 message ArchiveBacklogItemRequest {
@@ -772,6 +779,47 @@ message ArchiveBacklogItemRequest {
 
 message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
+}
+
+message WaiveAcceptanceCriterionRequest {
+  string item_id = 1;
+  int32 criterion_index = 2;
+  // Mandatory and non-blank.
+  string reason = 3;
+}
+
+message WaiveAcceptanceCriterionResponse {
+  BacklogItem item = 1;
+}
+
+// AcAuditEvent is one append-only record of an attempted acceptance-criterion change.
+message AcAuditEvent {
+  string id = 1;
+  string item_id = 2;
+  int32 criterion_index = 3;
+  string previous_status = 4;
+  string new_status = 5;
+  string reason = 6;
+  // "applied", or "denied:<why>" / "rejected:<why>" when nothing changed.
+  string outcome = 7;
+  // authenticated_session_cookie, authenticated_bearer_token, agent_session, mcp_session,
+  // system or unverified. A claim about the caller, not proof of who the owner is.
+  string actor_class = 8;
+  string actor_session_uuid = 9;
+  bool session_verified = 10;
+  // ui, api or mcp; ui/api and remote_addr are self-reported hints, not evidence.
+  string source = 11;
+  string remote_addr = 12;
+  string user_agent = 13;
+  google.protobuf.Timestamp created_at = 14;
+}
+
+message ListAcAuditEventsRequest {
+  string item_id = 1;
+}
+
+message ListAcAuditEventsResponse {
+  repeated AcAuditEvent events = 1;
 }
 
 message UnarchiveBacklogItemRequest {
@@ -1636,6 +1684,16 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // WaiveAcceptanceCriterion records an audited waiver of one acceptance criterion with a
+  // reason; a waived criterion satisfies the request_review gate. Agent-originated requests
+  // that carry an identity are denied; plain loopback callers are recorded as unverified.
+  // No MCP tool exposes it.
+  rpc WaiveAcceptanceCriterion(WaiveAcceptanceCriterionRequest) returns (WaiveAcceptanceCriterionResponse) {}
+
+  // ListAcAuditEvents returns the read-only audit trail of acceptance-criterion
+  // status changes and waiver attempts for an item, oldest first.
+  rpc ListAcAuditEvents(ListAcAuditEventsRequest) returns (ListAcAuditEventsResponse) {}
 
   // UnarchiveBacklogItem restores a previously archived item to the "idea"
   // status and clears archived_at. It does not restore any prior status

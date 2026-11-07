@@ -51,6 +51,46 @@ export const checkboxDone = style({
   borderColor: vars.statusBadge.completeBorder,
 });
 
+export const checkboxWaived = style({
+  background: vars.color.surfaceMuted,
+  color: vars.color.textMuted,
+  borderStyle: "dashed",
+});
+
+export const itemWrap = style({ listStyle: "none" });
+
+export const waiverReason = style({
+  margin: `0 0 ${vars.space["1"]} 28px`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const waiveButton = style({
+  flexShrink: 0,
+  fontSize: vars.fontSize.xs,
+  padding: `0 ${vars.space["2"]}`,
+  minHeight: "28px",
+  cursor: "pointer",
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderMuted}`,
+  background: "transparent",
+  color: vars.color.textPrimary,
+});
+
+export const waiveForm = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+  margin: `0 0 ${vars.space["2"]} 28px`,
+});
+
+export const waiveInput = style({
+  flex: "1 1 200px",
+  minHeight: "32px",
+  fontSize: "16px",
+  padding: `0 ${vars.space["2"]}`,
+});
+
 export const criterionIndex = style({
   color: vars.color.textMuted,
   fontFamily: vars.font.mono,
@@ -92,6 +132,12 @@ export const statusLabelInProgress = style({
 export const statusLabelDone = style({
   color: vars.statusBadge.completeFg,
   background: vars.statusBadge.completeBg,
+});
+
+export const statusLabelWaived = style({
+  color: vars.color.textMuted,
+  background: vars.color.surfaceMuted,
+  border: `1px dashed ${vars.color.borderMuted}`,
 });
 
 export const empty = style({

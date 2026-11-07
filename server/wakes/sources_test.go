@@ -301,6 +301,38 @@ func TestGuidanceSource_should_ClaimOnce_When_AnswerListenerRunsThenRestartRecon
 	assert.Equal(t, 1, strings.Count(text, "<wake "))
 }
 
+func TestGuidanceSource_should_DeliverChosenResponse_When_OperatorAnswersOwnerAction(t *testing.T) {
+	t.Parallel()
+	r := newSourceRig(t)
+	r.start(r.d)
+	r.guidance.open("g4", "owner-1")
+	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g4"}, "owner action answered")
+	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerGuidanceAnswered, "g4")) == 1 })
+
+	r.guidance.answer("g4", GuidanceFacts{Answer: "record waiver"})
+	r.d.OnGuidanceAnswered(context.Background(), "g4")
+
+	r.eventually(r.delivered(row.ID))
+	require.Len(t, r.steerer.pane.written(), 1)
+	assert.Contains(t, r.steerer.pane.written()[0], "answered by the operator: record waiver")
+}
+
+func TestGuidanceSource_should_SkipAsArchived_When_OwnerArchivedBeforeOperatorAnswers(t *testing.T) {
+	t.Parallel()
+	r := newSourceRig(t)
+	r.start(r.d)
+	r.guidance.open("g3", "owner-1")
+	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g3"}, "owner action answered")
+	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerGuidanceAnswered, "g3")) == 1 })
+
+	r.owners.set("owner-1", OwnerFacts{Exists: true, Live: true, Archived: true, WorkspaceKey: "ws-a"})
+	r.guidance.answer("g3", GuidanceFacts{Answer: "record waiver"})
+	r.d.OnGuidanceAnswered(context.Background(), "g3")
+
+	r.eventually(func() bool { return r.status(row.ID) == domain.WakeStatusSkipped })
+	assert.Empty(t, r.steerer.pane.written())
+}
+
 func TestGuidanceSource_should_DeliverViaReconcile_When_AnsweredBeforeDispatcherRan(t *testing.T) {
 	t.Parallel()
 	r := newSourceRig(t)

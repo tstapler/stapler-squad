@@ -18,7 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp}
+var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp, toolRequestOwnerAction}
 
 // probeArgs satisfies every tool's argument validation, so a call that reaches
 // the handler would act.
@@ -38,7 +38,7 @@ func refusesUnverified(t *testing.T, s *mcpserver.MCPServer, name string) bool {
 	return resultCode(parseResult(t, res)) == CodeIdentityUnverified
 }
 
-func TestIdentityGatedTools_should_BeExactlyTheFiveWakeToolsPlusReportPRCreated(t *testing.T) {
+func TestIdentityGatedTools_should_BeExactlyTheWakeToolsPlusOwnerActionAndReportPRCreated(t *testing.T) {
 	t.Parallel()
 	assert.ElementsMatch(t, append(slices.Clone(newToolNames), toolReportPRCreated), slices.Collect(maps.Keys(identityGatedTools)))
 	hidden := []callerRole{roleTriage, roleReview, roleDiagnose}

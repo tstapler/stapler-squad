@@ -29,6 +29,7 @@ export const routeTable = {
   "/login": { load: () => import("./login/page") },
   "/logs": { load: () => import("./logs/page") },
   "/notifications": { load: () => import("./notifications/page") },
+  "/owner-inbox": { load: () => import("./owner-inbox/page") },
   "/resolve": { load: () => import("./resolve/page") },
   "/review-queue": { load: () => import("./review-queue/page") },
   "/rules": { load: () => import("./rules/page") },

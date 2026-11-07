@@ -106,7 +106,7 @@ func NewCore(
 		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder, eventBus: eventBus})
 	}
 	if storage != nil {
-		registerIdentityGatedTools(s, storage)
+		registerIdentityGatedTools(s, storage, eventBus)
 	}
 	if prCache != nil {
 		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})

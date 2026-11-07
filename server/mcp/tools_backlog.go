@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1170,7 +1171,14 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		acStatus = "in_progress"
 	}
 
-	if err := h.storage.UpdateAcCriterionStatus(ctx, itemID, criteriaIndex, acStatus, note); err != nil {
+	_, verified := verifiedCallerSessionUUID(ctx)
+	auditCtx := session.WithAcActor(ctx, session.AcActor{
+		Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
+	})
+	if err := h.storage.UpdateAcCriterionStatus(auditCtx, itemID, criteriaIndex, acStatus, note); err != nil {
+		if errors.Is(err, session.ErrAcCriterionWaived) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d was waived and needs no further work", criteriaIndex), ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
@@ -1789,7 +1797,7 @@ func unmetAcCriteriaError(item *session.BacklogItemData) error {
 	}
 	var unmet []string
 	for _, c := range criteria {
-		if c.Status != session.AcStatusDone {
+		if !c.Status.IsSatisfied() {
 			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
 		}
 	}
@@ -2885,6 +2893,13 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if status == "" {
 					status = "pending"
 				}
+				// Waivers are recorded only through the audited WaiveAcCriterion path.
+				if session.AcStatus(status) == session.AcStatusWaived {
+					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: status %q cannot be set from an agent tool", i, status), ""), nil
+				}
+				if slices.ContainsFunc(existing, func(c session.AcCriterion) bool { return c.Index == idx && c.Status == session.AcStatusWaived }) {
+					continue // keep the recorded waiver; an agent edit cannot overwrite it
+				}
 				incomingCriteria = append(incomingCriteria, session.AcCriterion{Index: idx, Text: ac.Text, Status: session.AcStatus(status)})
 			}
 
@@ -2897,7 +2912,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil || itemUpdate.Priority != nil || itemUpdate.Category != nil {
-		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, itemUpdate, nil); updateErr != nil {
+		_, triageVerified := verifiedCallerSessionUUID(ctx)
+		triageCtx := session.WithAcActor(ctx, session.AcActor{Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: triageVerified, Source: "mcp"})
+		if _, updateErr := h.storage.UpdateBacklogItem(triageCtx, itemID, itemUpdate, nil); updateErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("update backlog item: %v", updateErr), ""), nil
 		}
 	}

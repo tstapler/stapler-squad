@@ -1157,8 +1157,15 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
+	// One transaction: the criteria read-merge-write below must not race a concurrent waiver.
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin backlog item update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	// Fetch current item for precondition check.
-	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	current, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
@@ -1175,7 +1182,8 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		}
 	}
 
-	u := r.client.BacklogItem.UpdateOneID(parsedID)
+	var clearedWaivers []AcCriterion
+	u := tx.BacklogItem.UpdateOneID(parsedID)
 	if update.Title != nil {
 		u.SetTitle(*update.Title)
 	}
@@ -1183,7 +1191,15 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		u.SetDescription(*update.Description)
 	}
 	if update.AcceptanceCriteria != nil {
-		u.SetAcceptanceCriteria(string(*update.AcceptanceCriteria))
+		merged, cleared, rejectErr := r.reconcileAcUpdate(ctx, tx, current, *update.AcceptanceCriteria)
+		if rejectErr != nil {
+			if commitErr := tx.Commit(); commitErr != nil { // keep the rejection's audit row
+				return nil, errors.Join(rejectErr, commitErr)
+			}
+			return nil, rejectErr
+		}
+		u.SetAcceptanceCriteria(string(merged))
+		clearedWaivers = cleared
 	}
 	if update.Priority != nil {
 		u.SetPriority(*update.Priority)
@@ -1314,6 +1330,18 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if err != nil {
 		return nil, fmt.Errorf("failed to update backlog item %s: %w", id, err)
 	}
+	for _, c := range clearedWaivers {
+		if err := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: c.Index,
+			PreviousStatus: string(AcStatusWaived), Reason: c.WaiverReason,
+			Outcome: "waiver_cleared:criterion_removed_or_text_changed",
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit backlog item update: %w", err)
+	}
 	result := backlogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the update itself.
@@ -1322,7 +1350,37 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
 
+	result.ClearedAcWaivers = clearedWaivers
 	return &result, nil
+}
+
+// reconcileAcUpdate applies the waiver invariant to a whole-list criteria rewrite inside tx and
+// returns the list to store plus the waivers that did not survive (to be audited on commit). A
+// refused rewrite writes its own audit row on tx before returning the error.
+func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, current *ent.BacklogItem, incomingJSON AcCriteriaJSON) (AcCriteriaJSON, []AcCriterion, error) {
+	incoming, err := ParseAcCriteria(incomingJSON)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid acceptance criteria: %w", err)
+	}
+	existing, _ := ParseAcCriteria(AcCriteriaJSON(current.AcceptanceCriteria)) // an unreadable stored list pins nothing
+	merged, cleared, err := reconcileAcWaivers(existing, incoming)
+	if err != nil {
+		if auditErr := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: current.ID.String(), ItemPublicID: current.PublicID, NewStatus: string(AcStatusWaived),
+			Outcome: "rejected:" + ErrAcWaiverViaUpdate.Error(),
+		}); auditErr != nil {
+			return "", nil, errors.Join(err, auditErr)
+		}
+		return "", nil, err
+	}
+	if len(merged) == 0 {
+		return incomingJSON, cleared, nil
+	}
+	out, err := SerializeAcCriteria(merged)
+	if err != nil {
+		return "", nil, fmt.Errorf("serialize acceptance criteria: %w", err)
+	}
+	return out, cleared, nil
 }
 
 // updatedFieldsFromBacklogItemUpdate computes which fields a BacklogItemUpdate

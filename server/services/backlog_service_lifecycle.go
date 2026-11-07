@@ -106,6 +106,16 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 	return string(merged), nil
 }
 
+// checkNoNewWaivers is the early, user-facing error for a rewrite that introduces a waiver; the
+// repository re-checks authoritatively inside its transaction and carries existing waivers
+// forward by criterion text, so nothing here rewrites the list.
+func checkNoNewWaivers(incoming, existing session.AcCriteriaJSON) error {
+	if incoming == "" {
+		return nil
+	}
+	return session.CheckNoNewAcWaivers(existing, incoming)
+}
+
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
 func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON, error) {
 	if len(protoAC) == 0 {
@@ -117,6 +127,10 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON,
 			Index:  int(c.Index),
 			Text:   c.Text,
 			Status: session.AcStatus(c.Status),
+
+			WaiverReason: c.WaiverReason,
+			WaivedBy:     c.WaivedBy,
+			WaivedAt:     c.WaivedAt,
 		}
 	}
 	b, err := json.Marshal(criteria)
@@ -183,6 +197,9 @@ func (s *BacklogService) CreateBacklogItem(
 	}
 
 	acJSON, err := acCriteriaToJSON(req.Msg.AcceptanceCriteria)
+	if err == nil {
+		err = checkNoNewWaivers(acJSON, "")
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
@@ -280,6 +297,11 @@ func (s *BacklogService) UpdateBacklogItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
+	}
+
+	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	if err = checkNoNewWaivers(acJSON, existing.AcceptanceCriteria); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
 
 	update := session.BacklogItemUpdate{}
@@ -437,6 +459,10 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, precondition)
+	var clearedWaivers []session.AcCriterion
+	if updated != nil {
+		clearedWaivers = updated.ClearedAcWaivers
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -509,8 +535,9 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item:          backlogItemToProto(updated, s.engine, s.buildCostLookup()),
-		PrAssociation: prAssociation,
+		Item:           backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		PrAssociation:  prAssociation,
+		ClearedWaivers: acCriteriaToProto(clearedWaivers),
 	}), nil
 }
 
@@ -588,6 +615,71 @@ func (s *BacklogService) UnarchiveBacklogItem(
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
 		Item: backlogItemToProto(unarchived, s.engine, s.buildCostLookup()),
+	}), nil
+}
+
+const maxWaiverReason = 2000
+
+// --- WaiveAcceptanceCriterion ---
+
+// WaiveAcceptanceCriterion records an audited waiver of one acceptance criterion. No MCP tool
+// exposes it, and a request that carries an agent-session identity is denied. The Connect surface
+// has no per-caller identity of its own, so a plain loopback caller is recorded as "unverified",
+// not trusted and not blocked: every attempt, applied or refused, is written to the AC audit trail.
+// This is an audit control, not owner-only enforcement.
+// +api: WaiveAcceptanceCriterion
+func (s *BacklogService) WaiveAcceptanceCriterion(
+	ctx context.Context,
+	req *connect.Request[sessionv1.WaiveAcceptanceCriterionRequest],
+) (*connect.Response[sessionv1.WaiveAcceptanceCriterionResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	m := req.Msg
+	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	idx := int(m.CriterionIndex)
+
+	current, err := s.storage.GetBacklogItem(ctx, m.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) || ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item: %w", err))
+	}
+	deny := func(code connect.Code, outcome string, cause error) (*connect.Response[sessionv1.WaiveAcceptanceCriterionResponse], error) {
+		s.recordDeniedAcAttempt(ctx, current.ID, idx, m.Reason, outcome)
+		return nil, connect.NewError(code, cause)
+	}
+	switch {
+	case session.AcActorFrom(ctx).Class == session.AcActorAgentSession:
+		return deny(connect.CodePermissionDenied, "denied:agent_session",
+			errors.New("acceptance criteria cannot be waived from a request carrying an agent-session identity"))
+	case current.ArchivedAt != nil || current.Status == string(session.BacklogStatusDone) || current.Status == string(session.BacklogStatusArchived):
+		return deny(connect.CodeFailedPrecondition, "denied:item_terminal",
+			fmt.Errorf("backlog item %q is %s; its criteria can no longer be waived", m.ItemId, current.Status))
+	case strings.TrimSpace(m.Reason) == "":
+		return deny(connect.CodeInvalidArgument, "rejected:reason_required", session.ErrWaiverReasonRequired)
+	case len(m.Reason) > maxWaiverReason:
+		return deny(connect.CodeInvalidArgument, "rejected:reason_too_long", fmt.Errorf("waiver reason is limited to %d bytes", maxWaiverReason))
+	}
+
+	err = s.storage.WaiveAcCriterion(ctx, m.ItemId, idx, m.Reason)
+	switch {
+	case errors.Is(err, session.ErrNotFound):
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
+	case errors.Is(err, session.ErrAcCriterionAlreadyDone), errors.Is(err, session.ErrAcCriterionAlreadyWaived):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, session.ErrWaiverReasonRequired), errors.Is(err, session.ErrAcCriterionOutOfRange):
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	case err != nil:
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to waive criterion: %w", err))
+	}
+	item, err := s.storage.GetBacklogItem(ctx, m.ItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload item: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.WaiveAcceptanceCriterionResponse{
+		Item: backlogItemToProto(item, s.engine, s.buildCostLookup()),
 	}), nil
 }
 

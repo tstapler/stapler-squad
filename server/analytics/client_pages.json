@@ -16,6 +16,7 @@
  "login",
  "logs",
  "notifications",
+ "owner-inbox",
  "resolve",
  "review-queue",
  "rules",

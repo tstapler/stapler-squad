@@ -18,6 +18,7 @@ import {
   Import,
   FileText,
   Gauge,
+  Inbox,
   Package,
 } from "lucide-react";
 import { routes } from "./routes";
@@ -59,6 +60,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.reviewQueue,   label: "Review Queue",  shortLabel: "Review", icon: ClipboardCheck, bottomNavPrimary: true, group: "work" },
   // Notifications is custom-rendered in BottomNav (badge logic) — marked primary to keep it out of the More sheet
   { href: routes.notifications, label: "Notifications", shortLabel: "Alerts", icon: Bell, bottomNavPrimary: true, group: "work" },
+  { href: routes.ownerInbox,    label: "Owner Inbox",   icon: Inbox, headerNav: false, group: "work" },
   { href: routes.settings,      label: "Settings",      icon: Settings, headerNav: false, group: "settings" },
   // Secondary — hamburger / More-sheet only
   { href: routes.insights, label: "Insights", icon: BarChart2, headerNav: false, group: "insights" },

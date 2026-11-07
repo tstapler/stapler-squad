@@ -42,12 +42,16 @@ const PR_ASSOCIATION: Record<PrAssociationResult, PrAssociation> = {
   [PrAssociationResult.ALREADY_TRACKED]: "already_tracked",
 };
 
-export type AcCriterionStatus = "pending" | "in_progress" | "done";
+export type AcCriterionStatus = "pending" | "in_progress" | "done" | "waived";
 
 export interface AcCriterion {
   index: number;
   text: string;
   status: AcCriterionStatus;
+  /** Justification recorded with the waiver; set when status is "waived". */
+  waiverReason?: string;
+  waivedBy?: string;
+  waivedAt?: string;
 }
 
 export interface TriageSuggestion {
@@ -489,6 +493,9 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
     index: c.index,
     text: c.text,
     status: (c.status || "pending") as AcCriterionStatus,
+    waiverReason: c.waiverReason || undefined,
+    waivedBy: c.waivedBy || undefined,
+    waivedAt: c.waivedAt || undefined,
   };
 }
 
@@ -744,6 +751,9 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
     index: c.index,
     text: c.text,
     status: c.status,
+    waiverReason: c.waiverReason ?? "",
+    waivedBy: c.waivedBy ?? "",
+    waivedAt: c.waivedAt ?? "",
   }));
 }
 
@@ -858,6 +868,8 @@ interface UseBacklogServiceReturn {
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
+  /** Audited waiver of one acceptance criterion with a mandatory reason. Returns the refreshed item. */
+  waiveAcceptanceCriterion: (id: string, criterionIndex: number, reason: string) => Promise<BacklogItem | null>;
   /**
    * updateBacklogItem for a pr_url/pr_number write: reports what the server did with the link and throws the
    * server's error (e.g. FailedPrecondition outside review/pr_pending) instead of swallowing it into lastError.
@@ -1108,6 +1120,22 @@ export function useBacklogService(): UseBacklogServiceReturn {
   const associatePullRequest = useCallback(
     (id: string, data: Partial<BacklogItemInput> & { prUrl: string; prNumber: number }) => sendBacklogItemUpdate(id, data),
     [sendBacklogItemUpdate]
+  );
+
+  const waiveAcceptanceCriterion = useCallback(
+    async (id: string, criterionIndex: number, reason: string): Promise<BacklogItem | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.waiveAcceptanceCriterion({ itemId: id, criterionIndex, reason });
+        return resp.item ? mapBacklogItem(resp.item) : null;
+      } catch (err) {
+        console.error("[useBacklogService] waiveAcceptanceCriterion:", err);
+        setLastError(new Error(getErrorMessage(err, "Failed to waive criterion.")));
+        return null;
+      }
+    },
+    []
   );
 
   const archiveBacklogItem = useCallback(async (id: string): Promise<boolean> => {
@@ -1567,6 +1595,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
+      waiveAcceptanceCriterion,
       associatePullRequest,
       archiveBacklogItem,
       unarchiveBacklogItem,

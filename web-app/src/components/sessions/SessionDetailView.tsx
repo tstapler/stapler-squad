@@ -477,6 +477,19 @@ export function SessionDetailView({
   const tabRowRef = useRef<HTMLDivElement>(null);
   usePublishStackTopOffset(tabRowRef, measureEnabled);
 
+  // Vertical wheel -> horizontal scroll on the tab strip (needs a non-passive listener).
+  useEffect(() => {
+    const strip = tabRowRef.current?.querySelector<HTMLElement>('[role="tablist"]');
+    if (!strip) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaX !== 0 || strip.scrollWidth <= strip.clientWidth) return;
+      e.preventDefault();
+      strip.scrollLeft += e.deltaY;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, []);
+
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
   const notifiedShellExitsRef = useRef<Set<string>>(new Set());
