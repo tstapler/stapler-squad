@@ -5341,11 +5341,11 @@ func TestRemediatePRFixWithBackoffGate_AlwaysFailingSpawn_ExhaustsAndNotifiesOnc
 		clock.Add(conflictRetryInterval)
 	}
 	assert.Equal(t, attempts, spawner.callCount, "no spawn after exhaustion")
-	paused := 0
-	for _, title := range n.titles() {
-		if title == "Auto-rework paused" {
-			paused++
+	exhausted := 0
+	for _, c := range n.calls {
+		if strings.Contains(c.Message, "survived") && strings.Contains(c.Message, "needs manual attention") {
+			exhausted++
 		}
 	}
-	assert.Equal(t, 1, paused, "needs-manual-attention notice fires exactly once")
+	assert.Equal(t, 1, exhausted, "ledger-exhaustion needs-manual-attention notice fires exactly once")
 }

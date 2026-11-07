@@ -120,13 +120,12 @@ const (
 	// ephemeral notification (onAutonomousDriverComplete), invisible to the
 	// Unfinished tab's durable stuck-reason system.
 	StuckReasonAutonomousStuck StuckReason = "autonomous_stuck"
-	// StuckReasonSpawnFailed: an item was moved to in_progress, SpawnSessionFromItem
-	// failed, AND the scoped rollback to the prior status also failed (its precondition
-	// no longer matched — something else touched the item in the interim). Callers:
-	// AutoReopenAfterFailedReview (rollback -> review), AutoReopenForPRFix (rollback ->
-	// pr_pending), and DequeueNextQueuedItems (rollback -> fromStatus). Without the row
-	// the item sat at in_progress with no work session and no visible error, invisible to
-	// every other stuck detector.
+	// StuckReasonSpawnFailed: SpawnSessionFromItem failed after an item was moved to
+	// in_progress. Callers: AutoReopenAfterFailedReview (rollback -> review),
+	// AutoReopenForPRFix (rollback -> pr_pending), DequeueNextQueuedItems (rollback ->
+	// fromStatus). In the first two, and in Dequeue when its rollback also fails, the row
+	// marks an item stranded at in_progress with no session; after a successful Dequeue
+	// rollback it instead carries the retry backoff.
 	StuckReasonSpawnFailed StuckReason = "spawn_failed"
 	// StuckReasonPlanNotApproved: DequeueNextQueuedItems' planning gate
 	// (SkipPlanning=false, PlanApproved=false) refuses to claim a queued item
