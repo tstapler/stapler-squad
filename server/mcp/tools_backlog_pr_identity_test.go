@@ -27,8 +27,8 @@ func reportPRIdentityRig(t *testing.T) (mcpserver.ToolHandlerFunc, *session.Stor
 	storage := newTestBacklogStorage(t)
 	item, workUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	h := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},

@@ -524,6 +524,23 @@ func TestMaintenance_ShouldStopTicker_WhenContextCancelled(t *testing.T) {
 	assert.Equal(t, 0, countLinks(t, repo))
 }
 
+func TestMaintenance_ShouldNotCountFailure_WhenShutdownInterruptsBoot(t *testing.T) {
+	storage, repo := newMaintenanceStorage(t)
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	clock := &prMaintenanceClock{}
+	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error {
+		cancel() // SIGTERM arrives mid-pass
+		return errors.New("busy")
+	}))
+	storage.StopPRMaintenance()
+
+	assert.Equal(t, int64(0), storage.PRMaintenanceFailures(), "an interrupted boot is not a maintenance failure")
+	assert.Empty(t, clock.sleeps, "no backoff after cancellation")
+}
+
 func TestMaintenance_ShouldResetVerifyCountersOnlyAfterImport(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
 	ref := mustPRRef(t, "", "acme", "app", 40)

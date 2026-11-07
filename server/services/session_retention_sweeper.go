@@ -2,15 +2,12 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -48,6 +45,8 @@ type SessionRetentionSweeper struct {
 	// reverifyClosed asks GitHub whether a PR the store has as closed-unmerged was
 	// reopened; nil uses a conditional GET. An error holds the session.
 	reverifyClosed func(ctx context.Context, ref session.PRRef) (reopened bool, err error)
+	// reverify is the per-sweep GitHub budget and the unverifiable-PR tracker.
+	reverify closedPRReverifier
 }
 
 // NewSessionRetentionSweeper constructs a sweeper. svc is used to perform the actual
@@ -112,6 +111,8 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 		}
 	}
 
+	s.reverify.startSweep(s.now())
+
 	pr, err := loadSweepPRData(ctx, s.prSource, expiredUUIDs(dataSlice, cutoff))
 	if err != nil {
 		log.Error("session retention sweeper: PR evidence unavailable, deleting nothing this cycle", "err", err)
@@ -175,57 +176,6 @@ func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session
 		return false, reason
 	}
 	return s.closedPRsStayClosed(ctx, d, fresh)
-}
-
-// closedPRsStayClosed re-asks GitHub about every closed-unmerged PR the session
-// or its items hold. The store keeps a closed PR terminal against anything but a
-// reopened webhook, so a missed webhook would otherwise let a reopened PR's
-// worktree be deleted. Any lookup error holds the session.
-func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d session.InstanceData, p *sweepPRData) (bool, string) {
-	if s.reverifyClosed == nil {
-		return true, ""
-	}
-	var views []session.PRView
-	views = append(views, p.views[d.UUID]...)
-	for _, id := range p.itemIDs[d.UUID] {
-		views = append(views, p.guards[id].Direct...)
-	}
-	for _, v := range views {
-		if v.State != session.PRStateClosed {
-			continue
-		}
-		reopened, err := s.reverifyClosed(ctx, v.Ref)
-		if err != nil {
-			return false, fmt.Sprintf("could not re-verify closed PR %s: %v", v.Ref, err)
-		}
-		if reopened {
-			return false, fmt.Sprintf("PR %s was reopened on GitHub", v.Ref)
-		}
-	}
-	return true, ""
-}
-
-// newClosedPRReverifier is the production reverifyClosed: one conditional GET
-// per PR, with a process-lifetime ETag cache so repeat sweeps cost a 304.
-func newClosedPRReverifier() func(context.Context, session.PRRef) (bool, error) {
-	cache := githubpkg.NewETagCache()
-	return func(ctx context.Context, ref session.PRRef) (bool, error) {
-		repo, err := githubpkg.NewRepoRefWithHost(ref.Owner(), ref.Repo(), ref.Host())
-		if err != nil {
-			return false, err
-		}
-		info, _, err := githubpkg.GetPRInfoConditional(ctx, repo, ref.Number(), cache)
-		if err != nil {
-			return false, err
-		}
-		switch strings.ToLower(info.State) {
-		case "closed", "merged":
-			return false, nil
-		case "open":
-			return true, nil
-		}
-		return false, fmt.Errorf("unrecognized PR state %q", info.State)
-	}
 }
 
 // surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
