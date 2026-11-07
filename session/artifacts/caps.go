@@ -1,6 +1,9 @@
 package artifacts
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"unicode/utf8"
+)
 
 // Blob size bounds (pre-mortem #9): kinds are capped individually, oldest first,
 // then the whole blob is trimmed until it fits MaxBlobBytes.
@@ -114,9 +117,14 @@ func (b *SessionArtifactsBlob) dropOldestOfLargestKind() bool {
 	return true
 }
 
+// truncateBytes cuts s to at most n bytes without splitting a multi-byte rune:
+// a mid-rune cut yields invalid UTF-8, which proto marshalling rejects.
 func truncateBytes(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

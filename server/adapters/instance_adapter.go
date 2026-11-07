@@ -60,9 +60,9 @@ func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTr
 		return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
 	}
 	return &sessionv1.SessionArtifacts{
-		PrUrls:              a.PRURLs,
-		CommitShas:          a.CommitSHAs,
-		ExternalUrls:        a.ExternalURLs,
+		PrUrls:              validUTF8All(a.PRURLs),
+		CommitShas:          validUTF8All(a.CommitSHAs),
+		ExternalUrls:        validUTF8All(a.ExternalURLs),
 		LastScannedAt:       timestamppb.New(a.LastScannedAt),
 		ScanState:           string(a.State()),
 		TranscriptSupported: true,

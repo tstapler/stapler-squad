@@ -84,7 +84,7 @@ func ExtractFromBashCommand(command string) *CommandArtifact {
 
 func truncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + "…"
+		return truncateBytes(s, n) + "…"
 	}
 	return s
 }

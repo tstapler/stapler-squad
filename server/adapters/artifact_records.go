@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,35 +25,35 @@ func artifactRecordsToProto(recs artifacts.RecordList) []*sessionv1.ArtifactReco
 }
 
 func artifactRecordToProto(r artifacts.ArtifactRecord) *sessionv1.ArtifactRecordProto {
-	p := &sessionv1.ArtifactRecordProto{Kind: string(r.Kind())}
+	p := &sessionv1.ArtifactRecordProto{Kind: u(string(r.Kind()))}
 	switch v := r.(type) {
 	case artifacts.PRRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Pr{Pr: &sessionv1.ArtifactPRRecord{
-			Host: v.Host, Owner: v.Owner, Repo: v.Repo, Number: int32(v.Number), //#nosec G115 -- PR numbers are far below int32 max
-			Source: string(v.Source), Branch: v.Branch, Base: v.Base,
+			Host: u(v.Host), Owner: u(v.Owner), Repo: u(v.Repo), Number: int32(v.Number), //#nosec G115 -- PR numbers are far below int32 max
+			Source: u(string(v.Source)), Branch: u(v.Branch), Base: u(v.Base),
 		}}
 	case artifacts.BranchRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
-		p.Record = &sessionv1.ArtifactRecordProto_Branch{Branch: &sessionv1.ArtifactBranchRecord{Name: v.Name, Action: v.Action}}
+		p.Record = &sessionv1.ArtifactRecordProto_Branch{Branch: &sessionv1.ArtifactBranchRecord{Name: u(v.Name), Action: u(v.Action)}}
 	case artifacts.CommitRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
-		p.Record = &sessionv1.ArtifactRecordProto_Commit{Commit: &sessionv1.ArtifactCommitRecord{Sha: v.SHA, Subject: v.Subject, Branch: v.Branch}}
+		p.Record = &sessionv1.ArtifactRecordProto_Commit{Commit: &sessionv1.ArtifactCommitRecord{Sha: u(v.SHA), Subject: u(v.Subject), Branch: u(v.Branch)}}
 	case artifacts.IssueRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Issue{Issue: &sessionv1.ArtifactIssueRecord{
-			Host: v.Host, Owner: v.Owner, Repo: v.Repo, Number: int32(v.Number), Relation: v.Relation, //#nosec G115 -- issue numbers are far below int32 max
+			Host: u(v.Host), Owner: u(v.Owner), Repo: u(v.Repo), Number: int32(v.Number), Relation: u(v.Relation), //#nosec G115 -- issue numbers are far below int32 max
 		}}
 	case artifacts.PlanDocRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
-		p.Record = &sessionv1.ArtifactRecordProto_PlanDoc{PlanDoc: &sessionv1.ArtifactPlanDocRecord{Path: v.Path}}
+		p.Record = &sessionv1.ArtifactRecordProto_PlanDoc{PlanDoc: &sessionv1.ArtifactPlanDocRecord{Path: u(v.Path)}}
 	case artifacts.CILinkRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
-		p.Record = &sessionv1.ArtifactRecordProto_CiLink{CiLink: &sessionv1.ArtifactCILinkRecord{Url: v.URL}}
+		p.Record = &sessionv1.ArtifactRecordProto_CiLink{CiLink: &sessionv1.ArtifactCILinkRecord{Url: u(v.URL)}}
 	case artifacts.CommandRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Command{Command: &sessionv1.ArtifactCommandRecord{
-			Type: v.Type, Command: v.Command, Detail: v.Detail, Result: v.Result,
+			Type: u(v.Type), Command: u(v.Command), Detail: u(v.Detail), Result: u(v.Result),
 		}}
 	default:
 		return nil
@@ -71,4 +72,19 @@ func seenAt(t time.Time) *timestamppb.Timestamp {
 // ArtifactRecordToProto maps one typed record to the wire (nil for an unknown variant).
 func ArtifactRecordToProto(r artifacts.ArtifactRecord) *sessionv1.ArtifactRecordProto {
 	return artifactRecordToProto(r)
+}
+
+// u replaces invalid UTF-8 with U+FFFD: proto3 string fields reject it, and one bad
+// transcript-derived value would otherwise fail the whole ListSessions response.
+func u(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
+
+func validUTF8All(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = u(s)
+	}
+	return out
 }
