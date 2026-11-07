@@ -33,8 +33,12 @@ type conflictRetryState struct {
 	rowAttempts       int32 // the pr_needs_fix row's attempt counter at the last take
 }
 
-// conflictRetryLedger remembers conflict-only fix grants per item. In-memory: a
-// restart grants up to conflictRetryMaxAttempts more.
+// conflictRetryLedger remembers conflict-only fix grants per item. Deliberately
+// in-memory: the durable pr_needs_fix row (RemediationDue) still gates every dispatch, so a
+// restart only re-arms up to conflictRetryMaxAttempts more hourly grants for that item.
+// Revisit if a live incident shows >12 conflict spawns for one item; the persistent option
+// is a conflict_grants int column on BacklogStuckState (needs an ent schema change, and
+// Reset must zero it alongside the row's attempt counter).
 type conflictRetryLedger struct {
 	mu    sync.Mutex
 	items map[string]*conflictRetryState

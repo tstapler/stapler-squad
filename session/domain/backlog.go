@@ -120,14 +120,13 @@ const (
 	// ephemeral notification (onAutonomousDriverComplete), invisible to the
 	// Unfinished tab's durable stuck-reason system.
 	StuckReasonAutonomousStuck StuckReason = "autonomous_stuck"
-	// StuckReasonSpawnFailed: AutoReopenAfterFailedReview transitioned an item
-	// to in_progress, then SpawnSessionFromItem failed AND the scoped rollback
-	// to "review" also failed (its precondition no longer matched — something
-	// else touched the item in the interim). Previously this left the item
-	// silently stranded at in_progress with no work session and no visible
-	// error (server/services/backlog_service_triage.go's rollback branch only
-	// logged it) — invisible to every other stuck detector, since none of them
-	// check "in_progress with zero live sessions and no error surfaced."
+	// StuckReasonSpawnFailed: an item was moved to in_progress, SpawnSessionFromItem
+	// failed, AND the scoped rollback to the prior status also failed (its precondition
+	// no longer matched — something else touched the item in the interim). Callers:
+	// AutoReopenAfterFailedReview (rollback -> review), AutoReopenForPRFix (rollback ->
+	// pr_pending), and DequeueNextQueuedItems (rollback -> fromStatus). Without the row
+	// the item sat at in_progress with no work session and no visible error, invisible to
+	// every other stuck detector.
 	StuckReasonSpawnFailed StuckReason = "spawn_failed"
 	// StuckReasonPlanNotApproved: DequeueNextQueuedItems' planning gate
 	// (SkipPlanning=false, PlanApproved=false) refuses to claim a queued item
