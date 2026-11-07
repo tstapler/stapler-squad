@@ -2186,8 +2186,8 @@ func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -2234,8 +2234,8 @@ func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
 	require.NoError(t, repo.Close())
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -2274,8 +2274,8 @@ func TestReportPRCreated_should_RejectCall_When_ItemStatusIneligible(t *testing.
 
 			verifyCalled := false
 			handler := &backlogHandlers{
-				storage:              storage,
-				resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+				storage:            storage,
+				resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 				verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 					verifyCalled = true
 					return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -2339,8 +2339,8 @@ func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
 
 	verifyCalled := false
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -2413,8 +2413,8 @@ func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, _ int, expectedBranch string) (PRVerification, error) {
 			assert.Equal(t, "backlog/ship-it", expectedBranch)
 			// definitive mismatch — a real PR exists, but for a different branch/number
@@ -2455,8 +2455,8 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return PRVerification{}, fmt.Errorf("GitHub API: rate limited (403)")
 		},
@@ -2546,9 +2546,9 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 	}
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		getBacklogItemFn:     getBacklogItemFn,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		getBacklogItemFn:   getBacklogItemFn,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -3017,8 +3017,8 @@ func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOve
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(origLogger) })
 
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3071,8 +3071,8 @@ func TestReportPRCreated_should_RejectCall_When_FallbackBranchMissingOverrideRea
 
 	loginCalled := false
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3118,8 +3118,8 @@ func TestReportPRCreated_should_DocumentOverrideWorkaround_When_BranchMismatchRe
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3158,8 +3158,8 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedClosedPRWithOverrideRea
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3203,8 +3203,8 @@ func TestReportPRCreated_should_RejectCall_When_UnrelatedPRAuthorMismatch(t *tes
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3251,8 +3251,8 @@ func TestReportPRCreated_should_RejectCall_When_PRNumberDoesNotExist(t *testing.
 
 	loginCalled := false
 	handler := &backlogHandlers{
-		storage: storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) {
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) {
 			return "backlog/stapler-squad-ci-status-diff-viewer", nil
 		},
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
@@ -3336,8 +3336,8 @@ func TestReportPRCreated_should_ReassignPR_When_AlreadyPRPendingWithOverrideReas
 	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -3381,8 +3381,8 @@ func TestReportPRCreated_should_RejectReassignment_When_AlreadyPRPendingMissingO
 	verifyCalled := false
 	loginCalled := false
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			verifyCalled = true
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -3429,8 +3429,8 @@ func TestReportPRCreated_should_RejectReassignment_When_CurrentPRAlreadyMerged(t
 	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateMerged, "tstapler"), nil
@@ -3492,9 +3492,9 @@ func TestReportPRCreated_should_RejectSecondReassignment_When_ConcurrentCASRace(
 	}
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		getBacklogItemFn:     getBacklogItemFn,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		getBacklogItemFn:   getBacklogItemFn,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -3575,8 +3575,8 @@ func TestReportPRCreated_should_RecordDistinctAuditNote_When_Reassigned(t *testi
 	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -3620,8 +3620,8 @@ func TestReportPRCreated_should_ClearPrFeedbackAddressedAt_When_Reassigned(t *te
 	require.NotNil(t, item.PrFeedbackAddressedAt, "fixture must seed pr_feedback_addressed_at")
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -3671,9 +3671,9 @@ func TestReportPRCreated_should_ReturnFriendlyError_When_CASFailsOutOfBand(t *te
 	}
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		getBacklogItemFn:     getBacklogItemFn,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		getBacklogItemFn:   getBacklogItemFn,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -3710,8 +3710,8 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 	item, sessionUUID := setupReportPRCreatedReassignmentFixture(t, storage, 100, false)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(_ context.Context, _ githubpkg.RepoRef, prNumber int, _ string) (PRVerification, error) {
 			if prNumber == 100 {
 				return NewPRVerification(true, false, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
@@ -4797,8 +4797,8 @@ func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenRepo
 	item, sessionUUID := setupReportDuplicateFixture(t, storage, session.BacklogStatusReview)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -7519,8 +7519,8 @@ func TestResumeWork_ThenReportPRCreated_Succeeds(t *testing.T) {
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReady)
 
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},

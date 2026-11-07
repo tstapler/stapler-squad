@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -393,4 +394,64 @@ func TestRetentionSweeper_ShouldSurfaceSessionPRHold_OnceWhenOverMax(t *testing.
 	assert.Equal(t, afterFirst, sweeper.sessionHolds.reportedTotal, "reported once per hold window, not every sweep")
 	assert.Positive(t, SessionPRHoldOverMaxCount())
 	assert.True(t, hasStoredTitle(t, fix, "held"))
+}
+
+func TestClassifyReverifyError_ShouldSortOutcomes(t *testing.T) {
+	t.Parallel()
+	for err, want := range map[error]reverifyOutcome{
+		githubpkg.ErrNotAuthenticated:                                      reverifyUnverifiable,
+		fmt.Errorf("%w: gone", githubpkg.ErrGitHubRefNotFound):             reverifyUnverifiable,
+		errors.New("GitHub API: unauthorized (401)"):                       reverifyUnverifiable,
+		errors.New("GitHub API: forbidden (403)"):                          reverifyUnverifiable,
+		errors.New("GitHub API: primary rate limit exhausted (403)"):       reverifyTransient,
+		errors.New("GitHub API: secondary rate limit (403)"):               reverifyTransient,
+		errors.New("GitHub API: rate limited (429)"):                       reverifyTransient,
+		errors.New("conditional PR request failed: dial tcp: i/o timeout"): reverifyTransient,
+		errors.New("HTTP 502 bad gateway"):                                 reverifyTransient,
+	} {
+		assert.Equal(t, want, classifyReverifyError(err), err.Error())
+	}
+}
+
+func TestRetentionSweeper_ShouldReleaseSession_OnlyAfterClosedPRStaysUnverifiable(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+	addArchivedWithUUID(t, fix, "no-token", "u-nt")
+	linkPR(t, fix, "u-nt", 81, session.PRStateClosed, true)
+	addArchivedWithUUID(t, fix, "rate-limited", "u-rl")
+	linkPR(t, fix, "u-rl", 82, session.PRStateClosed, true)
+
+	sweeper, _ := newPRSweeper(fix)
+	clock := time.Now()
+	sweeper.now = func() time.Time { return clock }
+	sweeper.reverifyClosed = func(_ context.Context, ref session.PRRef) (bool, error) {
+		if ref.Number() == 81 {
+			return false, githubpkg.ErrNotAuthenticated
+		}
+		return false, errors.New("GitHub API: rate limited (429)")
+	}
+	before := ClosedPRUnverifiableCount()
+	for i := 0; i < session.VerifyAttemptLimit; i++ {
+		assert.True(t, hasStoredTitle(t, fix, "no-token"), "held on sweep %d", i)
+		sweeper.sweep(context.Background())
+		clock = clock.Add(reverifyUnverifiableSpan/2 + time.Minute)
+	}
+	assert.False(t, hasStoredTitle(t, fix, "no-token"), "released once unverifiable for the count and span")
+	assert.True(t, hasStoredTitle(t, fix, "rate-limited"), "a transient failure never releases")
+	assert.GreaterOrEqual(t, ClosedPRUnverifiableCount()-before, int64(session.VerifyAttemptLimit))
+}
+
+func TestClosedPRReverifier_ShouldBoundChecksPerSweep(t *testing.T) {
+	t.Parallel()
+	var r closedPRReverifier
+	now := time.Now()
+	r.startSweep(now)
+	for i := 0; i < reverifyMaxChecksPerSweep; i++ {
+		require.True(t, r.take(now))
+	}
+	assert.False(t, r.take(now), "check budget")
+	r.startSweep(now)
+	assert.True(t, r.take(now))
+	assert.False(t, r.take(now.Add(reverifyBudgetPerSweep+time.Second)), "time budget")
 }

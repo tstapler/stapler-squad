@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -66,8 +67,8 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 
 	t.Run("linked caller is accepted", func(t *testing.T) {
 		h := &backlogHandlers{
-			storage:              storage,
-			resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+			storage:            storage,
+			resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 			verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 				return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 			},
@@ -125,7 +126,7 @@ func additiveHandler(storage *session.Storage, scopeOn bool) *backlogHandlers {
 	return &backlogHandlers{
 		storage:               storage,
 		backlogReaderOverride: func() bool { return scopeOn },
-		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		resolveSessionRepo:    testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -252,4 +253,88 @@ func TestReportPRCreated_ShouldNotStampProvenance_WhenReassignedToForeignRepo(t 
 func callReportPR(h *backlogHandlers, ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	uuid, _ := sessionUUIDFromContext(ctx)
 	return h.reportPRCreated(ctx, uuid, req)
+}
+
+// testSessionRepo is the repo every fixture session works in.
+func testSessionRepo(context.Context, string) (githubpkg.RepoRef, error) {
+	return githubpkg.NewRepoRef("tstapler", "stapler-squad")
+}
+
+func TestReportPRCreated_ShouldRequireOverride_WhenFirstPRIsInForeignOrUnresolvedRepo(t *testing.T) {
+	for name, repoFn := range map[string]func(context.Context, string) (githubpkg.RepoRef, error){
+		"foreign repo": func(context.Context, string) (githubpkg.RepoRef, error) {
+			return githubpkg.NewRepoRef("tstapler", "other-project")
+		},
+		"unresolvable session repo": func(context.Context, string) (githubpkg.RepoRef, error) {
+			return githubpkg.RepoRef{}, errors.New("no origin remote")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+			host, err := session.LoadOrCreateHostIdentity(t.TempDir())
+			require.NoError(t, err)
+			storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
+			var posted int
+			h := additiveHandler(storage, true)
+			h.resolveSessionRepo = repoFn
+			h.postPRComment = func(context.Context, githubpkg.RepoRef, int, string) error { posted++; return nil }
+			ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+			result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, nil)))
+			require.NoError(t, err)
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			assert.Contains(t, m["error"].(map[string]interface{})["message"], "override_reason")
+			assert.Zero(t, posted, "no provenance comment")
+			fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
+			require.NoError(t, gerr)
+			assert.Zero(t, fetched.PrNumber, "the foreign PR did not become the item's anchor")
+
+			h.resolveCallerGitHubLogin = func(context.Context) (string, error) { return "someone-else", nil }
+			result, err = callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{"override_reason": "fork work"})))
+			require.NoError(t, err)
+			require.False(t, parseResult(t, result)["success"].(bool), "a PR the operator did not author is refused even with a reason")
+			assert.Zero(t, posted)
+
+			h.resolveCallerGitHubLogin = func(context.Context) (string, error) { return "tstapler", nil }
+			result, err = callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{"override_reason": "fork work"})))
+			require.NoError(t, err)
+			require.False(t, result.IsError, "%v", result.Content)
+			assert.Zero(t, posted, "an accepted off-repo PR is still never stamped")
+		})
+	}
+}
+
+func TestReportPRCreated_ShouldAcceptSchemelessURL_AndNormalizeRepoIdentity(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	h := additiveHandler(storage, true)
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
+		"pr_url": "github.com/tstapler/stapler-squad/pull/42",
+	})))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "%v", result.Content)
+
+	a, _ := githubpkg.NewRepoRefWithHost("Acme", "App.git", "www.GitHub.com")
+	b, _ := githubpkg.NewRepoRef("acme", "app")
+	assert.True(t, sameRepo(a, b))
+	assert.Equal(t, "https://github.com/o/r/pull/5", normalizeReportedPRURL(" github.com/o/r/pull/5 "))
+	assert.Equal(t, "o/r#5", normalizeReportedPRURL("o/r#5"))
+}
+
+func TestReportPRCreated_ShouldNameUnparseableTrackedURL_WhenAdditive(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	pendingItemWithPR21(t, storage, item.ID)
+	n, bad := 21, "not a url"
+	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &bad}, nil)
+	require.NoError(t, err)
+	h := additiveHandler(storage, true)
+	result, err := callReportPR(h, WithSessionUUID(context.Background(), sessionUUID), makeToolReq(reportPRArgs(item.ID, nil)))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Contains(t, m["error"].(map[string]interface{})["message"], "could not determine the repository")
 }

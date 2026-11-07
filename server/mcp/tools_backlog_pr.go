@@ -310,8 +310,11 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
-	if u, uErr := url.Parse(strings.TrimSpace(prURL)); uErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
+	prURL = normalizeReportedPRURL(prURL)
+	if strings.Contains(prURL, "://") {
+		if u, uErr := url.Parse(prURL); uErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
+		}
 	}
 	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
@@ -339,13 +342,27 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 	// VerifyPRMatchesBranch matches on head-branch name alone, so any repo with a
 	// same-named branch would pass. Anchor on the repo of the PR the item already
-	// tracks: an additive PR must live there, and provenance is stamped only there.
-	inItemRepo := h.prInItemRepo(item, repoRef)
+	// tracks, else on the session's own repo. An additional PR must live in the
+	// anchor repo; a first or replacement PR elsewhere (or with no resolvable anchor)
+	// must take the override path: override_reason plus the operator's own authorship.
+	anchor, anchorErr := h.itemAnchorRepo(ctx, item, callerUUID)
+	inItemRepo := anchorErr == nil && sameRepo(anchor, repoRef)
+	foreignRepo := !inItemRepo && !additive
 	if additive && !inItemRepo {
+		if anchorErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not determine the repository of the PR this item already tracks, so PR #%d cannot be added as an additional PR: %v", prNumber, anchorErr), ""), nil
+		}
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
-			"PR #%d is in %s/%s, not the repository of the PR this item already tracks — an additional PR must be in the same repository. "+
+			"PR #%d is in %s/%s, not the repository of the PR this item already tracks (%s) — an additional PR must be in the same repository. "+
 				"To move the item to a PR in another repository, use replaces_pr_number with override_reason.",
-			prNumber, ref.Owner, ref.Repo), ""), nil
+			prNumber, ref.Owner, ref.Repo, anchor), ""), nil
+	}
+	if foreignRepo && !isReassignment && overrideReason == "" {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"PR #%d is in %s/%s, which is not this item's repository (%s) — refusing to record it without override_reason. "+
+				"Retry with override_reason explaining why; the PR must also be authored by your own GitHub identity.",
+			prNumber, ref.Owner, ref.Repo, anchorLabel(anchor, anchorErr)), ""), nil
 	}
 	verification, verifyErr := h.verifyPR(ctx, repoRef, prNumber, branch)
 	if verifyErr != nil {
@@ -363,7 +380,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// branch matches — isReassignment is already only ever true here with a
 	// non-empty overrideReason (the early reject above guarantees it).
 	var callerLogin string
-	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
+	if verification.Exists && overrideReason != "" && (isReassignment || foreignRepo || !verification.Matched) {
 		login, loginErr := h.callerGitHubLogin(ctx, repoRef.Host())
 		if loginErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
@@ -371,7 +388,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		callerLogin = login
 	}
 
-	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment)
+	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment || foreignRepo)
 	if !accept {
 		var msg string
 		switch code {
@@ -443,7 +460,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		h.stampPRProvenance(ctx, item, repoRef, prNumber)
 	}
 
-	if isReassignment || !verification.Matched {
+	if isReassignment || foreignRepo || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit
 		// it, since this path has no technical human gate. Gated on
 		// isReassignment too (not just !verification.Matched): a
@@ -473,17 +490,68 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	)), nil
 }
 
-// prInItemRepo reports whether repoRef is the repository of the PR the item
-// already tracks. With no tracked PR (the item's first) there is nothing to
-// compare against, so it is true; an unparseable tracked URL fails closed.
-func (h *backlogHandlers) prInItemRepo(item *session.BacklogItemData, repoRef githubpkg.RepoRef) bool {
-	if item.PrURL == "" {
-		return true
+// itemAnchorRepo is the repository a reported PR must live in: the repo of the
+// PR the item already tracks, else the session's own repo. An error means no
+// anchor could be resolved, which callers treat as "not in the item's repo".
+func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *session.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
+	if item.PrURL != "" {
+		cur, err := session.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
+		if err != nil {
+			return githubpkg.RepoRef{}, fmt.Errorf("tracked PR URL %q is unparseable: %w", item.PrURL, err)
+		}
+		return githubpkg.NewRepoRefWithHost(cur.Owner, cur.Repo, cur.Host)
 	}
-	cur, err := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
+	return h.sessionRepo(ctx, sessionUUID)
+}
+
+// sessionRepo resolves the GitHub repo the session works in: the worktree's
+// origin remote, else the session's recorded github_owner/github_repo. The
+// resolveSessionRepo seam replaces it in tests.
+func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (githubpkg.RepoRef, error) {
+	if h.resolveSessionRepo != nil {
+		return h.resolveSessionRepo(ctx, sessionUUID)
+	}
+	if wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID); err == nil && wt.RepoPath != "" {
+		if owner, repo, host, ok := session.OriginGitHubRepo(wt.RepoPath); ok {
+			return githubpkg.NewRepoRefWithHost(owner, repo, host)
+		}
+	}
+	data, err := h.storage.FindInstanceDataByID(sessionUUID)
 	if err != nil {
-		return false
+		return githubpkg.RepoRef{}, fmt.Errorf("find session: %w", err)
 	}
-	curRef, err := githubpkg.NewRepoRefWithHost(cur.Owner, cur.Repo, cur.Host)
-	return err == nil && curRef.PRKey(0) == repoRef.PRKey(0)
+	if data.GitHubOwner == "" || data.GitHubRepo == "" {
+		return githubpkg.RepoRef{}, errors.New("the session has no resolvable GitHub repository")
+	}
+	return githubpkg.NewRepoRefWithHost(data.GitHubOwner, data.GitHubRepo, data.GitHubHost)
+}
+
+// sameRepo compares two repos by host, owner and repo, ignoring case, a "www."
+// host prefix and a ".git" repo suffix.
+func sameRepo(a, b githubpkg.RepoRef) bool { return repoIdentity(a) == repoIdentity(b) }
+
+func repoIdentity(r githubpkg.RepoRef) string {
+	host := strings.TrimPrefix(githubpkg.NormalizeHost(r.Host()), "www.")
+	return host + "/" + strings.ToLower(r.Owner()) + "/" + strings.TrimSuffix(strings.ToLower(r.Repo()), ".git")
+}
+
+func anchorLabel(anchor githubpkg.RepoRef, err error) string {
+	if err != nil {
+		return "unresolved"
+	}
+	return anchor.String()
+}
+
+// normalizeReportedPRURL trims the agent's pr_url and prefixes https:// onto a
+// scheme-less host form such as "github.com/o/r/pull/5", which older agents send.
+// "o/r#5" shorthand has no dot in its first segment and is left for the parser.
+func normalizeReportedPRURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "://") {
+		return raw
+	}
+	if first, _, _ := strings.Cut(raw, "/"); strings.Contains(first, ".") && !strings.ContainsAny(first, ":@") {
+		return "https://" + raw
+	}
+	return raw
 }

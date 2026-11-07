@@ -79,6 +79,10 @@ func (s *Storage) runPRStartupMaintenance(ctx context.Context, cfg prMaintenance
 	if s.runPRMaintenancePassWithRetries(ctx, cfg) {
 		return
 	}
+	if ctx.Err() != nil {
+		log.Info("session pr startup maintenance interrupted by shutdown; not retrying", "err", ctx.Err())
+		return
+	}
 	m.failures.Add(1)
 	log.Error("session pr startup maintenance failed; retrying in the background", "interval", cfg.interval)
 	m.wg.Add(1)

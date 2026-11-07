@@ -330,6 +330,9 @@ type backlogHandlers struct {
 	// session.Storage has no public seam for constructing worktree data
 	// without spawning and starting a real Instance (real git/tmux calls).
 	resolveSessionBranch func(ctx context.Context, sessionUUID string) (string, error)
+	// resolveSessionRepo resolves the GitHub repo a session works in, the anchor
+	// for a first reported PR. Defaults to the worktree's origin remote; tests override.
+	resolveSessionRepo func(ctx context.Context, sessionUUID string) (githubpkg.RepoRef, error)
 	// listItemSessionsFn backs request_review's FR2 active-reviewer guard.
 	// Defaults to h.storage.ListItemSessions when nil; overridable in tests to
 	// force a storage error — session.Storage.ListItemSessions type-asserts

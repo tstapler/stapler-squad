@@ -60,7 +60,8 @@ func ParseItemPRRef(prURL string, prNumber int) (PRRef, error) {
 	if err != nil || n != prNumber {
 		return bad()
 	}
-	ref, err := NewPRRef(u.Host, parts[0], parts[1], n)
+	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	ref, err := NewPRRef(host, parts[0], strings.TrimSuffix(parts[1], ".git"), n)
 	if err != nil {
 		return bad()
 	}
