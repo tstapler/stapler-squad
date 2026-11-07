@@ -266,7 +266,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 }
 
 // branchRegisteredToDeadPath reports whether g.branchName is registered in git's
-// worktree admin to a path that no longer exists on disk.
+// worktree admin to a path that no longer exists on disk and that git can prune.
 func (g *GitWorktree) branchRegisteredToDeadPath() bool {
 	entries, err := nativeListWorktrees(g.repoPath)
 	if err != nil {
@@ -274,10 +274,9 @@ func (g *GitWorktree) branchRegisteredToDeadPath() bool {
 	}
 	branchRef := plumbing.NewBranchReferenceName(g.branchName).String()
 	for _, entry := range entries {
-		if entry.BranchRef != branchRef {
-			continue
-		}
-		if _, statErr := os.Stat(CanonicalizeWorktreePath(entry.WorktreePath)); statErr != nil {
+		// Prunable (missing dir and not locked) is exactly what PruneWorktrees removes;
+		// a locked entry with a missing dir would survive the prune and fail the retry.
+		if entry.BranchRef == branchRef && entry.Prunable {
 			return true
 		}
 	}
