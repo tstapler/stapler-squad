@@ -49,7 +49,7 @@ func ParseItemPRRef(prURL string, prNumber int) (PRRef, error) {
 		return PRRef{}, fmt.Errorf("%w: url %q number %d", ErrItemBadPRRef, prURL, prNumber)
 	}
 	u, err := url.Parse(strings.TrimSpace(prURL))
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return bad()
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")

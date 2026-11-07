@@ -123,9 +123,9 @@ func pendingItemWithPR21(t *testing.T, storage *session.Storage, itemID string) 
 
 func additiveHandler(storage *session.Storage, scopeOn bool) *backlogHandlers {
 	return &backlogHandlers{
-		storage:              storage,
-		multiPRBacklog:       func() bool { return scopeOn },
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:               storage,
+		backlogReaderOverride: func() bool { return scopeOn },
+		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -178,6 +178,73 @@ func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumbe
 		require.False(t, m["success"].(bool), name)
 		assert.Contains(t, m["error"].(map[string]interface{})["message"], "requires override_reason", name)
 	}
+}
+
+func TestReportPRCreated_ShouldStoreCanonicalURL_AndRejectNonHTTPScheme(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	h := additiveHandler(storage, true)
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
+		"pr_url": "javascript://github.com/tstapler/stapler-squad/pull/42",
+	})))
+	require.NoError(t, err)
+	assert.False(t, parseResult(t, result)["success"].(bool))
+
+	result, err = callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
+		"pr_url": "https://github.com/tstapler/stapler-squad/pull/42/files",
+	})))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "%v", result.Content)
+	fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/42", fetched.PrURL)
+}
+
+func TestReportPRCreated_ShouldRejectAdditivePR_WhenInForeignRepo(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	pendingItemWithPR21(t, storage, item.ID)
+	var posted int
+	h := additiveHandler(storage, true)
+	h.postPRComment = func(context.Context, githubpkg.RepoRef, int, string) error { posted++; return nil }
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
+		"pr_url": "https://github.com/victim/other/pull/42",
+	})))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Contains(t, m["error"].(map[string]interface{})["message"], "same repository")
+	assert.Zero(t, posted, "no provenance comment on a foreign repo")
+	views, lerr := storage.ItemPRs(context.Background(), item.ID)
+	require.NoError(t, lerr)
+	for _, v := range views {
+		assert.NotEqual(t, 42, v.Ref.Number(), "the foreign PR was not attached")
+	}
+}
+
+func TestReportPRCreated_ShouldNotStampProvenance_WhenReassignedToForeignRepo(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	pendingItemWithPR21(t, storage, item.ID)
+	host, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	require.NoError(t, err)
+	storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
+	var posted int
+	h := additiveHandler(storage, true)
+	h.resolveCallerGitHubLogin = func(context.Context) (string, error) { return "tstapler", nil }
+	h.postPRComment = func(context.Context, githubpkg.RepoRef, int, string) error { posted++; return nil }
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
+		"pr_url": "https://github.com/other/repo/pull/42", "replaces_pr_number": float64(21), "override_reason": "moved the work",
+	})))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "%v", result.Content)
+	assert.Zero(t, posted, "provenance is stamped only in the item's own repo")
 }
 
 // callReportPR drives the inner handler with the UUID carried on ctx, standing in

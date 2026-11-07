@@ -43,6 +43,7 @@ func staleSession(t *testing.T, storage *Storage, title, uuid string, ref PRRef)
 }
 
 func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
@@ -58,14 +59,17 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	require.Equal(t, PRStateUnknown, inst.Snapshot().GitHub.PRs[0].State, "the snapshot is stale on purpose")
 
 	t.Run("update path", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, storage.UpdateInstance(inst))
 		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "UpdateInstance")
 	})
 	t.Run("save instances", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "SaveInstances")
 	})
 	t.Run("prPersistPending flush", func(t *testing.T) {
+		t.Parallel()
 		inst.prPersistPending.Store(true)
 		storage.saved.reset() // an unchanged row would otherwise skip the write the flush rides on
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -73,10 +77,12 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "pending flush")
 	})
 	t.Run("create path for another session with a stale snapshot", func(t *testing.T) {
+		t.Parallel()
 		staleSession(t, storage, "stale-create", "uuid-stale-create", ref)
 		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "create")
 	})
 	t.Run("archived session with a stale snapshot", func(t *testing.T) {
+		t.Parallel()
 		archived := staleSession(t, storage, "stale-archived", "uuid-stale-archived", ref)
 		at := prRepoT0
 		archived.SetArchivedAt(&at)
@@ -85,6 +91,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "archived")
 	})
 	t.Run("suspended session with a stale snapshot", func(t *testing.T) {
+		t.Parallel()
 		suspended := staleSession(t, storage, "stale-suspended", "uuid-stale-suspended", ref)
 		require.True(t, suspended.Snapshot().Status.IsSuspended())
 		require.NoError(t, storage.SaveInstances([]*Instance{suspended}))
@@ -173,7 +180,9 @@ func nonTestGoSources(t *testing.T) map[string]string {
 }
 
 func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t *testing.T) {
+	t.Parallel()
 	t.Run("the repository passes", func(t *testing.T) {
+		t.Parallel()
 		offenders := disallowedCallers(nonTestGoSources(t), stateWriterRules)
 		require.Empty(t, offenders, "invariant I1: only session/pr_status_poller.go (and the Storage wrapper) may call "+
 			"UpdatePullRequestState, and only RunPRStartupMaintenance may call ResetVerifyCounters. "+
@@ -181,6 +190,7 @@ func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t
 	})
 
 	t.Run("a new caller of either method fails", func(t *testing.T) {
+		t.Parallel()
 		sources := map[string]string{
 			"session/pr_status_poller.go":       "func a() { s.UpdatePullRequestState(ctx, ref, obs) }",
 			"session/session_pr_maintenance.go": "func b() { r.ResetVerifyCounters(ctx) }",
@@ -197,6 +207,7 @@ func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t
 // ---- the artifact scan never creates a session PR (U-128) ------------------------
 
 func TestOnScanComplete_ShouldNeverCreateSessionPR_WhenFlagOff(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(moduleRoot(t), "server", "artifact_scan_complete.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	require.NoError(t, err)
