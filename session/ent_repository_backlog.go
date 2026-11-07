@@ -180,17 +180,18 @@ func reviewVerdictToSummary(rv *ent.ReviewVerdict) *ReviewVerdictSummary {
 		return nil
 	}
 	return &ReviewVerdictSummary{
-		ID:             rv.ID.String(),
-		OverallOutcome: rv.OverallOutcome,
-		PerCriterion:   rv.PerCriterion,
-		Summary:        rv.Summary,
-		DiffHash:       rv.DiffHash,
-		DiffTokenCount: rv.DiffTokenCount,
-		DiffTruncated:  rv.DiffTruncated,
-		OverrideBy:     rv.OverrideBy,
-		OverrideReason: rv.OverrideReason,
-		OverrideAt:     rv.OverrideAt,
-		CreatedAt:      rv.CreatedAt,
+		ID:                rv.ID.String(),
+		OverallOutcome:    rv.OverallOutcome,
+		PerCriterion:      rv.PerCriterion,
+		Summary:           rv.Summary,
+		DiffHash:          rv.DiffHash,
+		DiffTokenCount:    rv.DiffTokenCount,
+		DiffTruncated:     rv.DiffTruncated,
+		ReviewedCommitSha: rv.ReviewedCommitSha,
+		OverrideBy:        rv.OverrideBy,
+		OverrideReason:    rv.OverrideReason,
+		OverrideAt:        rv.OverrideAt,
+		CreatedAt:         rv.CreatedAt,
 	}
 }
 
@@ -251,6 +252,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		TriageResult:             is.TriageResult,
 		TriageResultSummary:      triageResultSummary,
 		VerificationNotes:        is.VerificationNotes,
+		DiffTruncated:            is.DiffTruncated,
 		OverallOutcome:           overallOutcome,
 		ReviewVerdict:            reviewVerdictToSummary(is.Edges.ReviewVerdict),
 		ClaimantHostID:           is.ClaimantHostID,
@@ -527,7 +529,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 }
 
 // GetRepoPathAndLatestCompletedWorkSessionCommits returns itemID's RepoPath
-// plus the Base/LastCommitSha of its most recent completed (session_role ==
+// plus the Base/LastCommitSha (and session UUID) of its most recent completed (session_role ==
 // work, ended_at set) ItemSession — the minimal data
 // Storage.ComputeCurrentDiffHash needs. Unlike GetBacklogItem (which also
 // eager-loads StatusEvents/ProgressNotes) and ListItemSessions (unbounded,
@@ -537,10 +539,10 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 // accumulated, rather than O(sessions_for_item) work on every review-verdict
 // save. baseSHA/headSHA are both "" (no error) when the item has no
 // completed work session yet.
-func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA string, err error) {
+func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA, workSessionUUID string, err error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return "", "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
 
 	item, err := r.client.BacklogItem.Query().
@@ -548,9 +550,9 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return "", "", "", fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return "", "", "", "", fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
 		}
-		return "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
+		return "", "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}
 
 	ws, err := r.client.ItemSession.Query().
@@ -562,12 +564,12 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
 		First(ctx)
 	if ent.IsNotFound(err) {
-		return item.RepoPath, "", "", nil
+		return item.RepoPath, "", "", "", nil
 	}
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to query latest completed work session for item %s: %w", itemID, err)
+		return "", "", "", "", fmt.Errorf("failed to query latest completed work session for item %s: %w", itemID, err)
 	}
-	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, nil
+	return item.RepoPath, ws.BaseCommitSha, ws.LastCommitSha, ws.SessionUUID, nil
 }
 
 // AddBacklogItemDependency records that edge.BlockedID may not be

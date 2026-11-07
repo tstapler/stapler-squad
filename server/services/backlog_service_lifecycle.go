@@ -1337,12 +1337,13 @@ func (s *BacklogService) OverrideVerdict(
 	// 4. Save/upsert the ReviewVerdict with override fields.
 	now := time.Now()
 	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
-		OverallOutcome: outcome,
-		Summary:        fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
-		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, itemID),
-		OverrideBy:     "user",
-		OverrideReason: req.Msg.OverrideReason,
-		OverrideAt:     &now,
+		OverallOutcome:    outcome,
+		Summary:           fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
+		DiffHash:          s.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(ctx, itemID),
+		OverrideBy:        "user",
+		OverrideReason:    req.Msg.OverrideReason,
+		OverrideAt:        &now,
 	}); verdictErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save review verdict: %w", verdictErr))
 	}
@@ -1464,13 +1465,14 @@ func (s *BacklogService) SubmitManualReview(
 		SessionRole: session.SessionRoleReview,
 		AcSnapshot:  item.AcceptanceCriteria,
 	}, session.ReviewVerdictData{
-		OverallOutcome: overall,
-		PerCriterion:   string(perCriterionJSON),
-		Summary:        req.Msg.Summary,
-		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
-		OverrideBy:     "user",
-		OverrideReason: "manual review",
-		OverrideAt:     &now,
+		OverallOutcome:    overall,
+		PerCriterion:      string(perCriterionJSON),
+		Summary:           req.Msg.Summary,
+		DiffHash:          s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
+		ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(ctx, req.Msg.ItemId),
+		OverrideBy:        "user",
+		OverrideReason:    "manual review",
+		OverrideAt:        &now,
 	})
 	if createErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))

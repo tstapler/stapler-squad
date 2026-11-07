@@ -3186,7 +3186,7 @@ func (s *BacklogService) TriggerReReview(
 	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions. Read AFTER
 	// the drift precondition above (5c) so a just-synced branch's diff reflects the
 	// merge rather than the stale pre-sync state.
-	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
+	workSessionDiff, diffTruncated := s.getWorkSessionDiffTruncated(ctx, item.RepoPath, mostRecentWorkSession)
 
 	verificationNotes := ""
 	if mostRecentWorkSession != nil {
@@ -3472,10 +3472,12 @@ Do not modify the code. Only write the review verdict.
 			ConfiguredProgram:      reviewConfiguredProgram,
 			ExecutorFallbackReason: reviewFallbackReason,
 		}, session.ReviewVerdictData{
-			OverallOutcome: overall,
-			PerCriterion:   string(perCriterionJSON),
-			Summary:        reviewSummary,
-			DiffHash:       s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
+			OverallOutcome:    overall,
+			PerCriterion:      string(perCriterionJSON),
+			Summary:           reviewSummary,
+			DiffHash:          s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
+			ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(cleanupCtx, item.ID),
+			DiffTruncated:     diffTruncated,
 		})
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
@@ -3867,8 +3869,15 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 // session's dedicated worktree path and base SHA; falls back to the item's repo when
 // the worktree directory is gone (commits remain accessible via the shared object store).
 func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) string {
+	diff, _ := s.getWorkSessionDiffTruncated(ctx, repoPath, workSession)
+	return diff
+}
+
+// getWorkSessionDiffTruncated is getWorkSessionDiff plus whether the diff was
+// truncated to fit the review budget.
+func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) (string, bool) {
 	if workSession == nil {
-		return ""
+		return "", false
 	}
 	diffDir := repoPath
 	diffBaseSHA := ""
@@ -3891,9 +3900,9 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	}
 	if haveWorktree {
 		// Try the dedicated worktree first.
-		diff, _, diffErr := session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+		diff, truncated, diffErr := session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
-			return diff
+			return diff, truncated
 		}
 		// Worktree path is gone — fall through to repo fallback using the same base SHA
 		// and an explicit branch ref: repoPath's own checked-out HEAD is not the work
@@ -3911,9 +3920,9 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
 		diffBaseSHA = workSession.BaseCommitSha
 	}
-	diff, _, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
+	diff, truncated, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
-		return diff
+		return diff, truncated
 	}
 	log.Warn("[TriggerReReview] GetGitDiff fallback failed", "dir", diffDir, "error", diffErr)
 
@@ -3940,7 +3949,7 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	if diffHeadRef != "" {
 		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
 			log.Warn("[TriggerReReview] RecoverBaseCommitSHA failed", "dir", recoverDir, "error", recoverErr)
-		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := session.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
 			log.Warn("[TriggerReReview] retry with recovered base failed", "base", recoveredSHA, "dir", recoverDir, "error", retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -3950,10 +3959,10 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 			log.Warn("[TriggerReReview] recovered base produced an empty diff — not trusting it", "base", recoveredSHA, "ref", diffHeadRef)
 		} else {
 			log.Info("[TriggerReReview] auto-repaired broken base commit", "ref", diffHeadRef, "recovered", recoveredSHA, "recorded", diffBaseSHA)
-			return recoveredDiff
+			return recoveredDiff, recoveredTruncated
 		}
 	}
-	return ""
+	return "", false
 }
 
 // resolveACSnapshot returns the acceptance criteria to use for a re-review. It prefers

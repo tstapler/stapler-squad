@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -1639,8 +1640,8 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 // missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
 // unknown, never as a false match.
 func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
-	repoPath, baseSHA, headSHA, err := s.repo.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
-	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
+	repoPath, baseSHA, headSHA := s.resolveReviewedCommits(ctx, itemID)
+	if repoPath == "" || baseSHA == "" || headSHA == "" {
 		return ""
 	}
 	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
@@ -1649,6 +1650,63 @@ func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) str
 		return ""
 	}
 	return hash
+}
+
+// ComputeReviewedCommitSha returns the tip commit of itemID's most recent
+// completed work session — the commit a review verdict saved now reviews.
+// Best-effort: "" when there is no completed work session or no resolvable
+// commit.
+func (s *Storage) ComputeReviewedCommitSha(ctx context.Context, itemID string) string {
+	_, _, headSHA := s.resolveReviewedCommits(ctx, itemID)
+	return headSHA
+}
+
+// resolveReviewedCommits returns the repo path and base/head SHAs of itemID's
+// latest completed work session. When last_commit_sha is empty (the session
+// ended between reconcile ticks, so refreshWorkSessionGitActivity never ran)
+// head is resolved live from the session's worktree/branch instead.
+func (s *Storage) resolveReviewedCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA string) {
+	repoPath, baseSHA, headSHA, workUUID, err := s.repo.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	if err != nil {
+		return "", "", ""
+	}
+	if headSHA == "" && workUUID != "" && repoPath != "" {
+		headSHA = s.ResolveLatestWorkCommit(ctx, workUUID, repoPath)
+	}
+	return repoPath, baseSHA, headSHA
+}
+
+// ResolveLatestWorkCommit returns the current tip commit of a work session,
+// read from its worktree HEAD or, when the worktree is gone, its branch tip
+// in repoPath. Returns "" when neither can be resolved.
+func (s *Storage) ResolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
+	wt, err := s.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		log.Warn("[Storage] ResolveLatestWorkCommit: no worktree data for session", "session", sessionUUID, "error", err)
+		return ""
+	}
+	if wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath)
+			if branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
+				sha, headErr := GetGitHeadSHA(wt.WorktreePath)
+				if headErr == nil && sha != "" {
+					return sha
+				}
+			} else if branchErr == nil {
+				log.Warn("[Storage] ResolveLatestWorkCommit: worktree path now holds a different branch than the session's (path recycled?) — falling back to repo-wide branch lookup", "worktree_path", wt.WorktreePath, "branch", branch, "expected_branch", wt.BranchName)
+			}
+		}
+	}
+	if wt.BranchName == "" {
+		return ""
+	}
+	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
+	if revErr != nil {
+		log.Warn("[Storage] ResolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
+		return ""
+	}
+	return sha
 }
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
