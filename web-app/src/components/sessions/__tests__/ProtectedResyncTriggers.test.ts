@@ -47,7 +47,9 @@ describe("protected resync triggers", () => {
       "          // Double RAF ensures layout is stable before FitAddon measures dimensions",
     ].join("\n");
     expect(xtermTerminalSrc).toContain(mountTimeFitSnippet);
-    expect(xtermTerminalSrc).toContain("          fitAddon.fit();\n          updateScrollbar(terminal);");
+    // The fit is wrapped in safeFit (skips instead of throwing when the renderer is not
+    // measurable yet); timing, position and the following updateScrollbar are unchanged.
+    expect(xtermTerminalSrc).toContain("          safeFit(fitAddon);\n          updateScrollbar(terminal);");
 
     // Trigger 2: manual Reconnect button handler (TerminalOutput.tsx).
     // Pinned at web-app/src/components/sessions/TerminalOutput.tsx:1159-1164.
