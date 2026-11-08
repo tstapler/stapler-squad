@@ -21,6 +21,9 @@ type Tracker struct {
 
 	mu       sync.Mutex
 	lastNote map[string]time.Time
+	// lastEver outlives the interactive window: it ranks sessions by recency of use (for example
+	// which terminal to attach first after a reload). One entry per session ever typed into.
+	lastEver map[string]time.Time
 	// firstDeferred is when a named background job was first deferred in the current streak;
 	// it bounds starvation (see Defer).
 	firstDeferred map[string]time.Time
@@ -59,6 +62,7 @@ func NewTracker(now func() time.Time, window time.Duration) *Tracker {
 	return &Tracker{
 		now: now, window: window,
 		lastNote:      make(map[string]time.Time),
+		lastEver:      make(map[string]time.Time),
 		firstDeferred: make(map[string]time.Time),
 		watchers:      make(map[int]func()),
 	}
@@ -131,10 +135,18 @@ func (t *Tracker) Note(key string) {
 	at, had := t.lastNote[key]
 	wasLive := had && now.Sub(at) <= t.window
 	t.lastNote[key] = now
+	t.lastEver[key] = now
 	t.mu.Unlock()
 	if !wasLive {
 		t.notify()
 	}
+}
+
+// LastInteraction is when session key last received input, or the zero time if never.
+func (t *Tracker) LastInteraction(key string) time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastEver[key]
 }
 
 // Forget drops a session's state when its hub goes away.

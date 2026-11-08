@@ -2428,7 +2428,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return err
 	}
 
-	processAlive, err := h.ensureHubBackendAlive(instance, sessionID)
+	processAlive, err := gatedAttach(connCtx, attachLimiter, stream.latency.labels(), tmuxSessionName, func() (bool, error) {
+		return h.ensureHubBackendAlive(instance, sessionID)
+	})
 	if err != nil {
 		return err
 	}

@@ -81,6 +81,17 @@ func TestTracker_should_ClassifyActivity(t *testing.T) {
 	assert.Equal(t, ActivityBackground, tr.ActivityOf("b"))
 }
 
+func TestTracker_should_RememberLastInteraction_PastTheWindow(t *testing.T) {
+	t.Parallel()
+	tr, f := newFake()
+	assert.True(t, tr.LastInteraction("a").IsZero())
+	tr.Note("a")
+	noted := f.now()
+	f.advance(time.Hour)
+	assert.False(t, tr.Interactive("a"))
+	assert.Equal(t, noted, tr.LastInteraction("a"))
+}
+
 func TestTracker_should_DropSession_When_Forgotten(t *testing.T) {
 	t.Parallel()
 	tr, _ := newFake()

@@ -14,6 +14,7 @@ import (
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -110,6 +111,10 @@ type tymuxGRPCSession struct {
 	captureReviveGen atomic.Uint64
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
+	// adoptFlight coalesces concurrent AdoptForViewing calls; viewRPCBudget overrides
+	// defaultViewRPCBudget (tests).
+	adoptFlight   singleflight.Group
+	viewRPCBudget time.Duration
 	// activity caches the pane.activity_hint capability and sender (pane_activity.go).
 	activity activityHintState
 
@@ -824,8 +829,43 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 // AdoptForViewing makes the persisted pane readable without creating or reviving it.
 // Name lookup is deliberately excluded: a retained screen must belong to this exact record.
 func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
-	defer cancel()
+	// Concurrent callers (a reload reconnects the same terminal repeatedly) share one attach,
+	// which is detached from any single caller so the first one leaving does not fail the rest.
+	ch := s.adoptFlight.DoChan("adopt", func() (any, error) {
+		return nil, s.adoptForViewingWithRetry(context.WithoutCancel(ctx))
+	})
+	select {
+	case r := <-ch:
+		return r.Err
+	case <-ctx.Done():
+		return classifyRPCError("AdoptForViewing", ctx.Err())
+	}
+}
+
+// defaultViewRPCBudget bounds each RPC of a viewing attach. It is per RPC, not shared: the old
+// single 3s budget covered ListSessions and the stream open together, so one slow daemon reply
+// timed the whole attach out and the client reconnected into the same wait.
+const defaultViewRPCBudget = 10 * time.Second
+
+func (s *tymuxGRPCSession) viewRPCTimeout() time.Duration {
+	if s.viewRPCBudget > 0 {
+		return s.viewRPCBudget
+	}
+	return defaultViewRPCBudget
+}
+
+// adoptForViewingWithRetry retries once when an RPC ran out of budget (a busy daemon, not a
+// missing pane). Any other failure, including not-found, is final.
+func (s *tymuxGRPCSession) adoptForViewingWithRetry(ctx context.Context) error {
+	err := s.adoptForViewingOnce(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) && connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		return err
+	}
+	log.Warn("tymux: viewing attach timed out, retrying once", "error", err)
+	return s.adoptForViewingOnce(ctx)
+}
+
+func (s *tymuxGRPCSession) adoptForViewingOnce(ctx context.Context) error {
 	s.mu.RLock()
 	id, closed, ready := s.storedID, s.closed, s.paneID != ""
 	s.mu.RUnlock()
@@ -842,7 +882,9 @@ func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
 		}
 		return nil
 	}
-	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	listCtx, cancelList := context.WithTimeout(ctx, s.viewRPCTimeout())
+	defer cancelList()
+	resp, err := s.transport.ListSessions(listCtx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return classifyRPCError("AdoptForViewing", err)
 	}
