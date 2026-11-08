@@ -241,13 +241,53 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 			return nil
 		}
 
-		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
+		// The branch may still be registered to a worktree whose directory was deleted
+		// out from under git (e.g. pause_session); git refuses to reuse it until the
+		// stale admin entry is pruned. Setup()/SetupLocked() already hold the repo lock.
+		if !g.branchRegisteredToDeadPath() {
+			return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
+		}
+		log.Info("branch registered to a worktree path missing on disk, pruning and retrying", "branch", g.branchName)
+		if pruneErr := g.pruneWorktrees(); pruneErr != nil {
+			log.Warn("worktree prune failed", "branch", g.branchName, "err", pruneErr)
+			return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
+		}
+		retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer retryCancel()
+		if retryErr := g.gitBackend().AddWorktreeForExistingBranch(retryCtx, repoLoc, backend.WorktreePath(g.worktreePath), backend.BranchName(g.branchName)); retryErr != nil {
+			return fmt.Errorf("failed to create worktree from branch %s after prune: %w", g.branchName, retryErr)
+		}
 	}
 
 	// Worktree created successfully — record the base commit for diff tracking.
 	g.initBaseCommitSHA()
 
 	return nil
+}
+
+// branchRegisteredToDeadPath reports whether g.branchName is registered in git's
+// worktree admin to a path that no longer exists on disk and that git can prune.
+func (g *GitWorktree) branchRegisteredToDeadPath() bool {
+	entries, err := nativeListWorktrees(g.repoPath)
+	if err != nil {
+		return false
+	}
+	branchRef := plumbing.NewBranchReferenceName(g.branchName).String()
+	for _, entry := range entries {
+		// Prunable (missing dir and not locked) is exactly what PruneWorktrees removes;
+		// a locked entry with a missing dir would survive the prune and fail the retry.
+		if entry.BranchRef == branchRef && entry.Prunable {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *GitWorktree) pruneWorktrees() error {
+	if g.worktreePruner != nil {
+		return g.worktreePruner(g.repoPath)
+	}
+	return nativeWorktreePrune(g.repoPath)
 }
 
 // unlockWorktree clears git's "initializing" lock on g.worktreePath left by an interrupted

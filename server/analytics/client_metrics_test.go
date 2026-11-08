@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -238,4 +239,43 @@ func TestObserve_should_AggregateAndConsumeRoutineFallbacks_ButStoreRealOnes(t *
 
 	real := Event{EventName: eventWsUnaryFallback, Labels: map[string]string{"reason": "ws-call-timeout"}}
 	assert.False(t, cm.observe(ctx, real), "true fallbacks keep being stored")
+}
+
+func termTotal(stage, backend, listener string) uint64 {
+	for _, s := range termlat.Default.Report() {
+		if s.Stage == stage && s.Backend == backend && s.Listener == listener {
+			return s.Total
+		}
+	}
+	return 0
+}
+
+func TestTermLatencyFeedsRecorderAndRejectsServerStages(t *testing.T) {
+	cm, r := newTestClientMetrics(t)
+	ctx := context.Background()
+	before := termTotal(termlat.StageEchoPaint, "tymux", "local")
+
+	assert.True(t, cm.observe(ctx, Event{EventName: eventTermLatency, DurationMs: ms(42),
+		Labels: map[string]string{"stage": "echo_paint", "backend": "tymux", "listener": "local"}}))
+	assert.Equal(t, before+1, termTotal(termlat.StageEchoPaint, "tymux", "local"))
+
+	serverTotal := termTotal(termlat.StageInputTotal, "tymux", "local")
+	cm.observe(ctx, Event{EventName: eventTermLatency, DurationMs: ms(1),
+		Labels: map[string]string{"stage": "input_total", "backend": "tymux", "listener": "local"}})
+	cm.observe(ctx, Event{EventName: eventTermLatency, Labels: map[string]string{"stage": "echo_paint"}})
+	assert.Equal(t, serverTotal, termTotal(termlat.StageInputTotal, "tymux", "local"), "a browser cannot write server-side stages")
+
+	var rejected int64
+	for _, dp := range sumPoints(collect(t, r)["client.metrics.rejected"]) {
+		rejected += dp.Value
+	}
+	assert.Equal(t, int64(2), rejected)
+}
+
+func TestTermLatencyRejectsThrottledTabValues(t *testing.T) {
+	cm, _ := newTestClientMetrics(t)
+	before := termTotal(termlat.StageTTFPFirstPaint, "tymux", "local")
+	cm.observe(context.Background(), Event{EventName: eventTermLatency, DurationMs: ms(maxTermLatencyMs + 1),
+		Labels: map[string]string{"stage": "ttfp_first_paint", "backend": "tymux", "listener": "local"}})
+	assert.Equal(t, before, termTotal(termlat.StageTTFPFirstPaint, "tymux", "local"))
 }

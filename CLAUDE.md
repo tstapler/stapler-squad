@@ -374,9 +374,12 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
+| Escape events: batched writes, short raw window, hourly/daily rollups, backfill, range-edge rules | `docs/explanation/escape-events-rollups.md` |
+| Operate escape-event rollups: check state, metrics, backup, rollback | `docs/how-to/operate-escape-event-rollups.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
+| `session/git` policy: complete git parity, fix the go-git fork instead of working around it, how to verify against the git CLI and ship a fork change | `session/git/AGENTS.md` |
 | Unfinished-scanner caches: `/actuator/unfinished-scanner` counters, shadow verify, per-flag rollback | `docs/how-to/tune-unfinished-scanner-caches.md` |
 | Start a git backend cohort shadow soak (`git_backend_cohorts`), read counters (`/actuator/git-backend`, `make git-soak-status`), flip criteria, revert | `docs/how-to/flip-git-backend-cohort.md` |
 | Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
@@ -386,6 +389,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
+| Terminal input/output latency per stage, backend and listener: `/actuator/terminal-latency`, `terminal_latency.stage_duration`, echo p95 alert | `docs/reference/terminal-latency-telemetry.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |

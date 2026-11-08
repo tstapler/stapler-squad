@@ -29,6 +29,16 @@ describe("PullRequestChip", () => {
     expect(screen.getByRole("button", { name: "2 more pull requests, open pull request list" })).toBeInTheDocument();
   });
 
+  it("badge_should_linkToGitHub_When_ListFormOmitsUrl", async () => {
+    const open = jest.spyOn(window, "open").mockImplementation(() => null);
+    render(<PullRequestChip pullRequests={[makePr({ number: 1470, isActive: true, url: "" })]} onOpenList={jest.fn()} />);
+    const link = screen.getByTestId("pr-chip");
+    expect(link).toHaveAttribute("href", "https://github.com/acme/app/pull/1470");
+    await userEvent.click(link);
+    expect(open).toHaveBeenCalledWith("https://github.com/acme/app/pull/1470", "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
+
   it("chip_should_renderNoPlusN_When_OnlyOnePr", () => {
     render(<PullRequestChip pullRequests={[three[0]]} onOpenList={jest.fn()} />);
     expect(screen.queryByTestId("pr-more-button")).not.toBeInTheDocument();
