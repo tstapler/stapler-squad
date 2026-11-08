@@ -73,7 +73,7 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	defer h.resizeApplyMu.Unlock()
 
 	sub.recordResizeVote(size)
-	votes := h.collectResizeVotes()
+	votes := h.preferInteractive(h.collectResizeVotes())
 	negotiated := negotiateSize(votes)
 
 	h.resizeMu.Lock()

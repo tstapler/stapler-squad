@@ -2522,6 +2522,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				log.Warn("[streamViaHub] send permission denied", "session", sessionID)
 				return
 			}
+			hub.NoteInteractive(subscriberID)
 			keystrokeDelivery{
 				instance:    instance,
 				latency:     &stream.latency,
