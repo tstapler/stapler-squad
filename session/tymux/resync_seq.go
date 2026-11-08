@@ -43,6 +43,7 @@ var errTailEvicted = errors.New("tymux: resync: output after the snapshot is no 
 // resyncSnap is one CapturePane result plus its rendered redraw.
 type resyncSnap struct {
 	epoch  uint64 // coordinator epoch when the capture started
+	seqGen uint64 // fanout sequence generation when the capture started
 	snap   *v1.PaneSnapshot
 	redraw []byte
 	at     time.Time
@@ -136,14 +137,14 @@ func (s *tymuxGRPCSession) runFlight(f *resyncFlight) {
 	c.captures.Add(1)
 	ctx, cancel := s.interruptibleContext()
 	ctx, cancelTimeout := context.WithTimeout(ctx, orDefault(c.captureBudget, defaultResyncCaptureBudget))
-	gapGen := s.fanout.GapGeneration()
+	gapGen, seqGen := s.fanout.GapGeneration(), s.fanout.SeqGeneration()
 	snap, err := s.capturePaneWith(ctx, 0, f.revive)
 	cancelTimeout()
 	cancel()
 	if err == nil {
 		var redraw string
 		if redraw, err = RenderSnapshotRedraw(snap); err == nil {
-			f.res = &resyncSnap{epoch: f.epoch, snap: snap, redraw: []byte(redraw), at: time.Now(), gapGen: gapGen}
+			f.res = &resyncSnap{epoch: f.epoch, seqGen: seqGen, snap: snap, redraw: []byte(redraw), at: time.Now(), gapGen: gapGen}
 		}
 	}
 	f.err = err
@@ -279,7 +280,7 @@ func (s *tymuxGRPCSession) spliceResyncCtx(ctx context.Context, need uint64, sco
 	switch {
 	case hasSeq && s.fanout.SeqValid():
 		var ok bool
-		if n, ok = s.fanout.ResyncAt(seq, snap.redraw, scope); !ok {
+		if n, ok = s.fanout.ResyncAt(seq, snap.seqGen, snap.redraw, scope); !ok {
 			s.resync.mu.Lock()
 			s.resync.last = nil // too old to extend; the retry must capture again
 			s.resync.mu.Unlock()
@@ -312,7 +313,7 @@ func (s *tymuxGRPCSession) snapshotForSplice(ctx context.Context, need uint64, r
 	last := c.last
 	c.mu.Unlock()
 	if last != nil && last.epoch >= need && time.Since(last.at) < orDefault(c.freshFor, defaultResyncFreshFor) &&
-		last.gapGen == s.fanout.GapGeneration() {
+		last.gapGen == s.fanout.GapGeneration() && last.seqGen == s.fanout.SeqGeneration() {
 		recordStreamResync(reason, resyncOutcomeFresh)
 		return last, false, nil
 	}

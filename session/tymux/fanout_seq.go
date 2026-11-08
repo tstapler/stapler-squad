@@ -24,6 +24,9 @@ type seqState struct {
 	// not counted as a second, unannounced gap.
 	gapSignaled bool
 	gaps        uint64 // monotonic count of gaps (signaled or not)
+	// gen changes whenever the sequence space may have restarted (reseed, daemon restart), so a
+	// snapshot captured under an older gen is never spliced against the new numbering.
+	gen uint64
 }
 
 func (st *seqState) push(seq uint64, data []byte) {
@@ -66,6 +69,7 @@ func (f *ClientFanout) ResetSeq(base uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq.valid, f.seq.last, f.seq.gapSignaled = true, base, false
+	f.seq.gen++
 	f.seq.clearRing()
 }
 
@@ -75,7 +79,16 @@ func (f *ClientFanout) DisableSeq() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq.valid = false
+	f.seq.gen++
 	f.seq.clearRing()
+}
+
+// SeqGeneration identifies the current sequence space; read it before a capture and pass it to
+// ResyncAt.
+func (f *ClientFanout) SeqGeneration() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seq.gen
 }
 
 // SeqValid reports whether resyncs can be spliced by sequence number.
@@ -146,11 +159,15 @@ const (
 // ResyncAt splices a snapshot taken at snapSeq into the stream: each selected subscriber's
 // queue is replaced with redraw followed by every output chunk after snapSeq, and chunks <=
 // snapSeq arriving later are discarded for it. dirtyOnly limits it to subscribers that lost a
-// frame. ok is false (nothing changed) when the stream is unsequenced or the ring no longer
+// frame. gen is SeqGeneration as read before the capture. ok is false (nothing changed) when the
+// stream is unsequenced, the sequence space was reseeded since gen, or the ring no longer
 // reaches back to snapSeq+1; the caller retries with a newer snapshot.
-func (f *ClientFanout) ResyncAt(snapSeq uint64, redraw []byte, scope ResyncScope) (n int, ok bool) {
+func (f *ClientFanout) ResyncAt(snapSeq, gen uint64, redraw []byte, scope ResyncScope) (n int, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if gen != f.seq.gen {
+		return 0, false
+	}
 	tail, ok := f.seq.tailSince(snapSeq)
 	if !ok {
 		return 0, false

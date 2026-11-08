@@ -32,7 +32,7 @@ func TestFanoutResyncAt_ReplacesQueueWithRedrawThenOutputAfterSnapshot(t *testin
 		f.BroadcastSeq(uint64(i+1), []byte(s))
 	}
 
-	n, ok := f.ResyncAt(2, []byte("R"), ScopeAll) // snapshot already contains a, b
+	n, ok := f.ResyncAt(2, f.SeqGeneration(), []byte("R"), ScopeAll) // snapshot already contains a, b
 
 	require.True(t, ok)
 	assert.Equal(t, 1, n)
@@ -46,7 +46,7 @@ func TestFanoutResyncAt_DiscardsLaterArrivalsThatTheSnapshotContains(t *testing.
 	f, ch := seqFanout(0)
 	f.BroadcastSeq(1, []byte("a"))
 
-	_, ok := f.ResyncAt(3, []byte("R"), ScopeAll) // snapshot is already at seq 3, stream is at 1
+	_, ok := f.ResyncAt(3, f.SeqGeneration(), []byte("R"), ScopeAll) // snapshot is already at seq 3, stream is at 1
 	require.True(t, ok)
 	f.BroadcastSeq(2, []byte("b"))
 	f.BroadcastSeq(3, []byte("c"))
@@ -66,7 +66,7 @@ func TestFanoutResyncAt_ScopeDroppedLeavesHealthySubscribersAlone(t *testing.T) 
 		<-healthy // the healthy subscriber keeps up; the slow one overflows
 	}
 
-	n, ok := f.ResyncAt(uint64(subscriberBufferSize), []byte("R"), ScopeDropped)
+	n, ok := f.ResyncAt(uint64(subscriberBufferSize), f.SeqGeneration(), []byte("R"), ScopeDropped)
 
 	require.True(t, ok)
 	assert.Equal(t, 1, n)
@@ -83,7 +83,7 @@ func TestFanoutResyncAt_FailsWhenOutputAfterSnapshotWasEvicted(t *testing.T) {
 		<-ch
 	}
 
-	_, ok := f.ResyncAt(1, []byte("R"), ScopeAll)
+	_, ok := f.ResyncAt(1, f.SeqGeneration(), []byte("R"), ScopeAll)
 
 	assert.False(t, ok, "frames 2.. no longer fit the ring; caller must capture again")
 	assert.Empty(t, drain(ch), "a failed resync changes nothing")
@@ -108,8 +108,23 @@ func TestFanoutDisableSeq_MakesResyncAtDecline(t *testing.T) {
 	f, _ := seqFanout(0)
 	f.DisableSeq()
 
-	_, ok := f.ResyncAt(0, []byte("R"), ScopeAll)
+	_, ok := f.ResyncAt(0, f.SeqGeneration(), []byte("R"), ScopeAll)
 
 	assert.False(t, ok)
 	assert.False(t, f.SeqValid())
+}
+
+// After a reseed (daemon restart, reattach) the numbering may restart; a capture taken under the
+// old numbering must not be spliced, or its high seq would make every later chunk look stale.
+func TestFanoutResyncAt_RejectsASnapshotFromBeforeAReseed(t *testing.T) {
+	t.Parallel()
+	f, ch := seqFanout(0)
+	gen := f.SeqGeneration()
+	f.ResetSeq(0)
+
+	_, ok := f.ResyncAt(900, gen, []byte("R"), ScopeAll)
+
+	assert.False(t, ok)
+	f.BroadcastSeq(1, []byte("a"))
+	assert.Equal(t, []string{"a"}, drain(ch), "output after the reseed still flows")
 }

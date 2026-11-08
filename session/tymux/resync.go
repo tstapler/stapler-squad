@@ -133,7 +133,7 @@ func (s *tymuxGRPCSession) applyPrimingSnapshot(snap *v1.PaneSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("tymux: resync: RenderSnapshotRedraw: %w", err)
 	}
-	if _, ok := s.fanout.ResyncAt(snap.GetSeq(), []byte(redraw), ScopeAll); !ok {
+	if _, ok := s.fanout.ResyncAt(snap.GetSeq(), s.fanout.SeqGeneration(), []byte(redraw), ScopeAll); !ok {
 		return fmt.Errorf("tymux: resync: sequenced stream not ready after reseed")
 	}
 	recordAttachEvent(attachEventSnapshotRedraw)
