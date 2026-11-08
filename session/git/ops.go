@@ -745,6 +745,11 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	return fileStatsBetweenCtx(context.Background(), repo, repoPath, baseSHA, headSHA)
 }
 
+// diffStatRenameLimit caps content-similarity rename detection (like git's diff.renameLimit):
+// past this many added or deleted files only exact renames are detected, because go-git's
+// similarity matrix reads every candidate blob and is O(added x deleted).
+const diffStatRenameLimit uint = 100
+
 // fileStatsBetweenCtx is FileStatsBetween over an already-open repo, diffing
 // one changed file at a time so ctx can stop it between files (go-git's
 // whole-tree Patch takes no ctx per file and cannot be interrupted).
@@ -765,7 +770,11 @@ func fileStatsBetweenCtx(ctx context.Context, repo *git.Repository, repoPath, ba
 	if err != nil {
 		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 	}
-	changes, err := baseTree.DiffContext(ctx, headTree)
+	changes, err := object.DiffTreeWithOptions(ctx, baseTree, headTree, &object.DiffTreeOptions{
+		DetectRenames: true,
+		RenameScore:   object.DefaultDiffTreeOptions.RenameScore,
+		RenameLimit:   diffStatRenameLimit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 	}
