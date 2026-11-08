@@ -894,3 +894,51 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	_, err = repo.Reference(plumbing.NewBranchReferenceName(branchName), false)
 	require.NoError(t, err, "branch must exist once the race resolves")
 }
+
+// TestSetupFromExistingBranch_PrunesStaleRegistration_AndSucceeds: a branch registered to a
+// worktree path deleted from disk makes `worktree add` refuse; the stale admin entry must be
+// pruned once and the add retried.
+func TestSetupFromExistingBranch_PrunesStaleRegistration_AndSucceeds(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/stale-registration"
+	stalePath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "stale-worktree"))
+
+	staleWt := NewGitWorktreeFromStorageWithExecutor(repoDir, stalePath, "test-stale-registration-old", branchName, "")
+	require.NoError(t, staleWt.nativeSetupNewWorktree())
+	require.NoError(t, os.RemoveAll(stalePath))
+
+	newPath := filepath.Join(t.TempDir(), "new-worktree")
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, newPath, "test-stale-registration-new", branchName, "")
+	pruneCalls := 0
+	wt.worktreePruner = func(repoPath string) error {
+		pruneCalls++
+		return nativeWorktreePrune(repoPath)
+	}
+
+	require.NoError(t, wt.setupFromExistingBranch())
+	assert.Equal(t, 1, pruneCalls, "prune must run exactly once")
+	_, err := os.Stat(newPath)
+	assert.NoError(t, err, "worktree must exist at the new path")
+}
+
+// TestSetupFromExistingBranch_LiveWorktreeReusedWithoutPrune: a branch registered to a live
+// path must keep the existing reuse-in-place behavior and never prune.
+func TestSetupFromExistingBranch_LiveWorktreeReusedWithoutPrune(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/live-registration"
+	livePath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "live-worktree"))
+
+	liveWt := NewGitWorktreeFromStorageWithExecutor(repoDir, livePath, "test-live-registration-old", branchName, "")
+	require.NoError(t, liveWt.nativeSetupNewWorktree())
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "other-worktree"), "test-live-registration-new", branchName, "")
+	wt.worktreePruner = func(string) error {
+		t.Error("prune must not be called when the branch is registered to a live path")
+		return nil
+	}
+
+	require.NoError(t, wt.setupFromExistingBranch())
+	assert.Equal(t, livePath, wt.worktreePath, "must adopt the live worktree path")
+}

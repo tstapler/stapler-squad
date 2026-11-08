@@ -8,6 +8,7 @@ import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
+import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
@@ -25,7 +26,7 @@ const DEFAULT_FONT_SIZE = 14;
  * (ghostty-web's FitAddon observes the container itself).
  */
 let ghosttyReady: Promise<typeof GhosttyModule> | null = null;
-function loadGhostty(): Promise<typeof GhosttyModule> {
+export function loadGhostty(): Promise<typeof GhosttyModule> {
   ghosttyReady ??= import("ghostty-web")
     .then(async (mod) => {
       await mod.init();
@@ -84,6 +85,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     let disposed = false;
     let term: GhosttyWebTerminal | null = null;
     let disposeIme: (() => void) | undefined;
+    let detachRenderGate: (() => void) | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
       if (disposed) return;
@@ -113,6 +115,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       for (const chunk of pendingWritesRef.current.splice(0)) surface?.write(chunk);
       fit.fit();
       fit.observeResize();
+      detachRenderGate = attachRenderGate(term, container);
       onResizeRef.current?.(term.cols, term.rows);
     }).catch((err) => {
       pendingWritesRef.current.length = 0;
@@ -122,6 +125,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     return () => {
       disposed = true;
       disposeIme?.();
+      detachRenderGate?.();
       terminalRef.current = null;
       compatRef.current = null;
       fitRef.current?.dispose?.();

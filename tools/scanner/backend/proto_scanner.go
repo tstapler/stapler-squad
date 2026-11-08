@@ -269,6 +269,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"FindSessionsByPullRequest": "FindSessionsByPullRequest",
 	"GetTCCEnrichmentStatus":    "GetTCCEnrichmentStatus",
 	"ContinueTCCEnrichment":     "ContinueTCCEnrichment",
+	"WaiveAcceptanceCriterion":  "WaiveAcceptanceCriterion",
+	"ListAcAuditEvents":         "ListAcAuditEvents",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",

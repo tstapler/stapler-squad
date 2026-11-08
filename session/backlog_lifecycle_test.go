@@ -5298,3 +5298,54 @@ func TestNotifyAutoRemediating_should_UseStampedPathWhenImplementedAndFallBackTo
 		t.Fatalf("fallback should call Notify once, got %+v", plain.calls)
 	}
 }
+
+// Drives remediatePRFixWithBackoffGate directly with a spawner that always fails the way a
+// stale worktree does. Failed starts are refunded only conflictRetryMaxRefunds times, so
+// the budget (conflictRetryMaxAttempts net grants) is spent after
+// conflictRetryMaxRefunds+conflictRetryMaxAttempts spawn attempts; the next call is
+// exhausted, spawns nothing, and notifies exactly once.
+func TestRemediatePRFixWithBackoffGate_AlwaysFailingSpawn_ExhaustsAndNotifiesOnce(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, item := conflictOnlyListener(t, storage, 9318)
+	spawner.err = errors.New("failed to create worktree from branch backlog/x: branch already used by worktree at /gone")
+
+	call := func() (bool, error) {
+		return listener.remediatePRFixWithBackoffGate(ctx, storage.repo, spawner, item.ID, item.Title, "## Merge conflict\n", true)
+	}
+	ledger := func() conflictRetryState {
+		listener.conflictRetries.mu.Lock()
+		defer listener.conflictRetries.mu.Unlock()
+		return *listener.conflictRetries.items[item.ID]
+	}
+
+	const attempts = conflictRetryMaxRefunds + conflictRetryMaxAttempts
+	for i := 1; i <= attempts; i++ {
+		attempted, err := call()
+		require.True(t, attempted, "call %d must attempt a spawn", i)
+		require.Error(t, err, "call %d must surface the spawn error", i)
+		require.Equal(t, i, spawner.callCount)
+		clock.Add(conflictRetryInterval)
+	}
+	s := ledger()
+	assert.Equal(t, conflictRetryMaxRefunds, s.refunds, "refund called (and honored) up to its cap")
+	assert.Equal(t, conflictRetryMaxAttempts, s.grants, "net grants consumed")
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no dead-end notice before exhaustion")
+
+	for i := 0; i < 3; i++ {
+		attempted, err := call()
+		assert.False(t, attempted, "exhausted: no spawn attempted")
+		assert.NoError(t, err)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, attempts, spawner.callCount, "no spawn after exhaustion")
+	exhausted := 0
+	for _, c := range n.calls {
+		if strings.Contains(c.Message, "survived") && strings.Contains(c.Message, "needs manual attention") {
+			exhausted++
+		}
+	}
+	assert.Equal(t, 1, exhausted, "ledger-exhaustion needs-manual-attention notice fires exactly once")
+}
