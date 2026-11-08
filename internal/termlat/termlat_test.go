@@ -107,3 +107,18 @@ func TestRecord_should_BeSafeConcurrently(t *testing.T) {
 	wg.Wait()
 	assert.EqualValues(t, 16000, r.Report()[0].Total)
 }
+
+func TestCountResync_should_BoundLabelsAndSortRows(t *testing.T) {
+	t.Parallel()
+	r, _ := newTest()
+	r.CountResync(ResyncVisibility, "tymux")
+	r.CountResync(ResyncVisibility, "tymux")
+	r.CountResync(ResyncSkippedFresh, "tmux")
+	r.CountResync("made-up-by-a-client", "weird")
+
+	got := r.ResyncCounts()
+	require.Len(t, got, 3)
+	assert.Equal(t, ResyncCount{Reason: "skipped_fresh", Backend: "tmux", Total: 1}, got[0])
+	assert.Equal(t, ResyncCount{Reason: "unknown", Backend: "unknown", Total: 1}, got[1])
+	assert.Equal(t, ResyncCount{Reason: "visibility", Backend: "tymux", Total: 2}, got[2])
+}

@@ -41,6 +41,7 @@ const (
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
 	eventTermLatency       = "cm.term_latency"
+	eventTermResync        = "cm.term_resync"
 	maxClientDurationMs    = 10 * 60 * 1000
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
@@ -259,6 +260,8 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 		}
 	case name == eventTermLatency:
 		c.observeTermLatency(ctx, ev)
+	case name == eventTermResync:
+		termlat.Default.CountResync(ev.Labels["reason"], ev.Labels["backend"])
 	case consumed:
 		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "unknown_event")))
 	}

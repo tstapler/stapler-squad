@@ -271,3 +271,18 @@ func TestTermLatencyFeedsRecorderAndRejectsServerStages(t *testing.T) {
 	}
 	assert.Equal(t, int64(2), rejected)
 }
+
+func TestTermResyncEventIsCountedByBoundedReason(t *testing.T) {
+	cm, _ := newTestClientMetrics(t)
+	count := func() uint64 {
+		for _, c := range termlat.Default.ResyncCounts() {
+			if c.Reason == termlat.ResyncSkippedFresh && c.Backend == "unknown" {
+				return c.Total
+			}
+		}
+		return 0
+	}
+	before := count()
+	assert.True(t, cm.observe(context.Background(), Event{EventName: eventTermResync, Labels: map[string]string{"reason": "skipped_fresh"}}))
+	assert.Equal(t, before+1, count())
+}

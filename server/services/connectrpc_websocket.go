@@ -3369,6 +3369,7 @@ func handleCurrentPaneRequestFrame(
 	defer span.End()
 
 	log.Debug("[runInputReadLoop] received mid-stream currentPaneRequest frame", "session", sessionID, "resync_id", paneReq.GetResyncId())
+	countServerResync(stream, paneReq)
 
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
@@ -3562,6 +3563,9 @@ func handleBatchedCurrentPaneRequestFrame(
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) error {
+	for _, req := range batchReq.GetRequests() {
+		countServerResync(stream, req)
+	}
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
 	outputs, endErr := handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest)
