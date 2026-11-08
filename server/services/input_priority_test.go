@@ -59,7 +59,7 @@ func TestInputBookkeeper_should_CoalesceKeystrokesIntoOneFlushWithTheLatestChunk
 	assert.Empty(t, sink.updates, "nothing touches the instance on the typing path")
 
 	(*timers)[0]()
-	assert.Equal(t, []string{"\r"}, sink.updates)
+	assert.Equal(t, []string{"s"}, sink.updates) // the trailing Enter is blank and must not displace "s"
 	assert.Equal(t, 1, sink.marks)
 
 	b.note([]byte("x"))
@@ -225,4 +225,25 @@ func TestLatestResize_should_ApplyOnlyTheNewestSizeAndNeverBlockThePusher(t *tes
 	mu.Lock()
 	assert.Equal(t, [][2]int{{80, 24}, {100, 35}}, applied, "the superseded 90x30 is never applied")
 	mu.Unlock()
+}
+
+func TestSlowRequestLane_should_NotBlockSubmittersAfterAFailure(t *testing.T) {
+	t.Parallel()
+	failed := make(chan struct{})
+	lane := newSlowRequestLane(make(chan error, 2), func() { close(failed) })
+	lane.submit(func() error { return errors.New("boom") })
+	<-failed
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < slowLaneDepth*3; i++ { // more than the queue holds, with no worker left
+			lane.submit(func() error { return nil })
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("submit blocked on a dead lane; the read loop would never see its deadline")
+	}
 }

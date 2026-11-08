@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,7 +47,11 @@ func newInputBookkeeper(sink humanInputSink, latency *streamLatency) *inputBookk
 // note records that data was just typed. It returns without waiting on the instance.
 func (b *inputBookkeeper) note(data []byte) {
 	b.mu.Lock()
-	b.latest = string(data)
+	// Keep the newest chunk, but a blank one (Enter) must not displace typed text: blank content
+	// does not count as terminal activity, so the flush would lose the window's signal.
+	if chunk := string(data); strings.TrimSpace(chunk) != "" || strings.TrimSpace(b.latest) == "" {
+		b.latest = chunk
+	}
 	schedule := !b.scheduled
 	b.scheduled = true
 	b.mu.Unlock()
@@ -111,6 +116,7 @@ func (l *slowRequestLane) fail(err error) {
 	case l.errChan <- err:
 	default: // the stream is already ending with another error
 	}
+	l.close() // no worker is left: unblock any submit parked on a full queue
 	if l.onFail != nil {
 		l.onFail()
 	}
