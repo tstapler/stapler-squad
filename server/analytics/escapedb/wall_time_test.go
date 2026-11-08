@@ -17,9 +17,9 @@ import (
 func TestFlushBatch_StoresWallTimeWithoutMonotonicSuffix(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	client := openForTest(ctx, t, dir)
+	client, drv := openStoreForTest(ctx, t, dir)
 
-	w := NewEscapeEventBatchWriter(client, 100)
+	w := NewEscapeEventBatchWriter(drv)
 	w.flushBatch(ctx, []pkganalytics.EscapeEventRecord{{
 		SessionID: "s1", Stage: "input", SequenceType: "csi", ByteLen: 1,
 		WallTime: time.Now(), SessionSeq: 1,

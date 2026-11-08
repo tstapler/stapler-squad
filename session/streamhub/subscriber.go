@@ -1,6 +1,7 @@
 package streamhub
 
 import (
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,7 +93,7 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 // the channel itself.
 func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 	s.writerOnce.Do(func() {
-		go func() {
+		go proflabel.Do("streamhub_writer", func() {
 			defer close(s.done)
 			if !s.drainPending(onSendError) {
 				return
@@ -103,7 +104,7 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 					return
 				}
 			}
-		}()
+		})
 	})
 }
 
