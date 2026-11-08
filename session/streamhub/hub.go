@@ -205,6 +205,9 @@ type StreamHub struct {
 	// scope ("Registry consolidation & observability"), not this epic's.
 	slowSubscriberDropsTotal atomic.Int64
 
+	// resyncPending is true while a repaint for dropped frames is scheduled or running.
+	resyncPending atomic.Bool
+
 	// snapshotMu guards lastSnapshot — kept separate from mu (the
 	// subscriber-registry lock) for the same reason resizeMu is separate:
 	// AttachSubscriber reads it, and applyNegotiatedSize writes it, and
@@ -660,6 +663,9 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 	}
 	if !delivered {
 		h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
+		if sub.hasDropped() {
+			h.requestResync()
+		}
 	}
 
 	if !sub.markSlow(h.clock.Now()) {
@@ -680,6 +686,76 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 		}
 		sub.clearSlow()
 	})
+}
+
+// resyncDebounce lets one repaint cover a burst of drops, and gives the stalled writer a moment
+// to start draining before the repaint queues behind it.
+const resyncDebounce = 50 * time.Millisecond
+
+// requestResync schedules one repaint of every subscriber that has lost a frame.
+func (h *StreamHub) requestResync() {
+	if !h.resyncPending.CompareAndSwap(false, true) {
+		return
+	}
+	h.clock.AfterFunc(resyncDebounce, h.runResync)
+}
+
+// runResync repaints each subscriber that lost a frame with a fresh full-screen capture,
+// replacing whatever stale frames it still has queued. Subscribers that lost nothing are not
+// touched. Frames dropped while the capture runs re-flag their subscriber and schedule another
+// pass.
+func (h *StreamHub) runResync() {
+	defer func() {
+		h.resyncPending.Store(false)
+		h.mu.Lock()
+		again := false
+		for _, sub := range h.subscribers {
+			again = again || sub.hasDropped()
+		}
+		h.mu.Unlock()
+		if again && h.State() != HubTornDown {
+			h.requestResync()
+		}
+	}()
+
+	h.mu.Lock()
+	var stale []*subscriber
+	for _, sub := range h.subscribers {
+		if sub.takeDropped() {
+			stale = append(stale, sub)
+		}
+	}
+	h.mu.Unlock()
+	if len(stale) == 0 || h.controller == nil {
+		return
+	}
+
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	repaint, ok := h.captureRepaint(ctx)
+	if !ok {
+		return
+	}
+	log.Warn("streamhub: repainting subscribers after dropped frames", "session", h.sessionName, "subscribers", len(stale))
+	for _, sub := range stale {
+		sub.supersede(repaint)
+	}
+}
+
+// captureRepaint returns a full-screen repaint: the controller's full-state redraw, else a
+// prepared text capture.
+func (h *StreamHub) captureRepaint(ctx context.Context) ([]byte, bool) {
+	if redraw, ok := h.captureRedrawContext(ctx); ok {
+		return redraw, true
+	}
+	content, err := h.controller.CapturePaneContentRawContext(ctx)
+	if err != nil || content == "" {
+		log.Warn("streamhub: repaint after dropped frames failed", "session", h.sessionName, "error", err)
+		return nil, false
+	}
+	return []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller)), true
 }
 
 // SlowSubscriberDropsTotal returns the number of times a subscriber has been
@@ -963,6 +1039,8 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 // publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not
 // touch the text-snapshot cache.
 func (h *StreamHub) publishSnapshot(prepared []byte) {
+	// Bytes still waiting in the batch predate this snapshot and are already in it.
+	h.batchWindow.Discard()
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself

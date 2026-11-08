@@ -10,6 +10,13 @@ import (
 // memory if a subscriber stops reading entirely.
 const subscriberBufferSize = 64
 
+// fanoutSubscriber is one subscriber's channel plus whether Broadcast has dropped a frame for it
+// since its last repaint.
+type fanoutSubscriber struct {
+	ch      chan []byte
+	dropped bool
+}
+
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
 // standing Attach stream's output events (Story 2.3.2): the GoF Observer
 // pattern per Pattern Decisions, satisfying SubscribeToControlModeUpdates'
@@ -20,15 +27,26 @@ const subscriberBufferSize = 64
 // stall the standing stream's reader goroutine — matching the existing
 // lossy-broadcast precedent tymuxd's own output_gap semantics already
 // establish server-side (ADR-003-adjacent design, see Attach's proto doc).
+// A drop leaves a hole in a byte stream the consumer parses statefully, so
+// it is reported through SetOnDrop and healed with RepaintDropped.
 type ClientFanout struct {
 	mu          sync.Mutex
-	subscribers map[string]chan []byte
+	subscribers map[string]*fanoutSubscriber
 	nextID      uint64
+	onDrop      func()
 }
 
 // NewClientFanout constructs an empty ClientFanout.
 func NewClientFanout() *ClientFanout {
-	return &ClientFanout{subscribers: make(map[string]chan []byte)}
+	return &ClientFanout{subscribers: make(map[string]*fanoutSubscriber)}
+}
+
+// SetOnDrop registers fn to run (outside the fanout's lock, on the broadcasting goroutine)
+// whenever a Broadcast drops a frame for a full subscriber. fn must not block.
+func (f *ClientFanout) SetOnDrop(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onDrop = fn
 }
 
 // Subscribe registers a new subscriber and returns its id (for
@@ -40,7 +58,7 @@ func (f *ClientFanout) Subscribe() (string, chan []byte) {
 	f.nextID++
 	id := strconv.FormatUint(f.nextID, 10)
 	ch := make(chan []byte, subscriberBufferSize)
-	f.subscribers[id] = ch
+	f.subscribers[id] = &fanoutSubscriber{ch: ch}
 	return id, ch
 }
 
@@ -49,9 +67,9 @@ func (f *ClientFanout) Subscribe() (string, chan []byte) {
 func (f *ClientFanout) Unsubscribe(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if ch, ok := f.subscribers[id]; ok {
+	if sub, ok := f.subscribers[id]; ok {
 		delete(f.subscribers, id)
-		close(ch)
+		close(sub.ch)
 	}
 }
 
@@ -61,13 +79,45 @@ func (f *ClientFanout) Unsubscribe(id string) {
 // goroutine).
 func (f *ClientFanout) Broadcast(data []byte) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, ch := range f.subscribers {
+	dropped := false
+	for _, sub := range f.subscribers {
 		select {
-		case ch <- data:
+		case sub.ch <- data:
 		default:
+			sub.dropped = true
+			dropped = true
 		}
 	}
+	onDrop := f.onDrop
+	f.mu.Unlock()
+	if dropped && onDrop != nil {
+		onDrop()
+	}
+}
+
+// RepaintDropped replaces the queued, stale output of every subscriber that has lost a frame
+// with repaint (a full-screen redraw that already contains it), clears their dropped flag, and
+// returns how many it repainted. Subscribers that lost nothing are untouched.
+func (f *ClientFanout) RepaintDropped(repaint []byte) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, sub := range f.subscribers {
+		if !sub.dropped {
+			continue
+		}
+		sub.dropped = false
+		for drained := false; !drained; {
+			select {
+			case <-sub.ch:
+			default:
+				drained = true
+			}
+		}
+		sub.ch <- repaint // the channel was just emptied under f.mu, so this cannot block
+		n++
+	}
+	return n
 }
 
 // count reports the current subscriber count — test-only introspection.

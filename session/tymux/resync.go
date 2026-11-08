@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/log"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 )
 
@@ -28,6 +29,34 @@ func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 	s.fanout.Broadcast([]byte(redraw))
 	recordAttachEvent(attachEventSnapshotRedraw)
 	return nil
+}
+
+// scheduleDropRepaint is the fanout's drop callback: a subscriber channel overflowed, so its
+// byte stream has a hole the browser's terminal cannot detect. It repaints, in the background and
+// coalesced, only the subscribers that lost output.
+func (s *tymuxGRPCSession) scheduleDropRepaint() {
+	if !s.dropRepaintPending.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.dropRepaintPending.Store(false)
+		ctx, cancel := s.interruptibleContext()
+		defer cancel()
+		snap, err := s.capturePaneNoRevive(ctx, 0)
+		if err != nil {
+			log.Warn("tymux: repaint after dropped output failed", "session_id", s.GetSessionIdentifier(), "error", err)
+			return
+		}
+		redraw, err := RenderSnapshotRedraw(snap)
+		if err != nil {
+			log.Warn("tymux: repaint after dropped output failed", "session_id", s.GetSessionIdentifier(), "error", err)
+			return
+		}
+		if n := s.fanout.RepaintDropped([]byte(redraw)); n > 0 {
+			recordAttachEvent(attachEventSnapshotRedraw)
+			log.Warn("tymux: repainted subscribers after dropped output", "session_id", s.GetSessionIdentifier(), "subscribers", n)
+		}
+	}()
 }
 
 // resyncViaCapturePane is the resync entry point for the OutputGap event

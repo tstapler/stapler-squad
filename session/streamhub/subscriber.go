@@ -57,6 +57,9 @@ type subscriber struct {
 	mu        sync.Mutex
 	closed    bool
 	slowSince time.Time // zero value means "not currently observed as slow"
+	// dropped is set when a frame was discarded because outbound was full: the client's byte
+	// stream now has a hole, so the hub repaints it (see StreamHub.runResync).
+	dropped bool
 
 	// resizeMu guards hasVoted/lastVote — this subscriber's last ResizeVote
 	// (Story 1.3.1). Kept separate from mu (the send-path lock) so a
@@ -141,7 +144,48 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 		s.slowSince = time.Time{}
 		return true, false
 	default:
+		s.dropped = true
 		return false, false
+	}
+}
+
+// takeDropped reports whether a frame was dropped since the last call, and clears the flag.
+func (s *subscriber) takeDropped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.dropped
+	s.dropped = false
+	return d
+}
+
+// hasDropped reports whether a dropped frame is waiting to be repainted.
+func (s *subscriber) hasDropped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
+}
+
+// supersede replaces everything queued but not yet sent with data, a full-screen repaint that
+// already contains it. A subscriber still waiting for its first paint or replaying one keeps its
+// own ordering rules and is left alone.
+func (s *subscriber) supersede(data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.painting || s.awaitingFirstPaint.Load() {
+		return
+	}
+drain:
+	for {
+		select {
+		case <-s.outbound:
+		default:
+			break drain
+		}
+	}
+	select {
+	case s.outbound <- data:
+		s.slowSince = time.Time{}
+	default:
 	}
 }
 

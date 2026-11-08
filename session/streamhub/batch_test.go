@@ -3,6 +3,7 @@ package streamhub
 import (
 	"bytes"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -353,5 +354,71 @@ func TestStreamHub_should_RunCoalesceStepExactlyOnce_When_ThreeSubscribersReceiv
 		if !bytes.Equal(frames[0], want) {
 			t.Fatalf("subscriber %d: delivered frame = %q, want the exact %d-event concatenation %q", i, frames[0], eventCount, want)
 		}
+	}
+}
+
+// A flush that is preempted between taking its bytes and delivering them must not be overtaken
+// by a later flush: delivery order has to match byte order, or a TUI's cursor moves apply to the
+// wrong screen state.
+func TestBatchWindow_should_DeliverInByteOrder_When_FlushesRace(t *testing.T) {
+	t.Parallel()
+	var (
+		mu        sync.Mutex
+		delivered []string
+	)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	b := NewBatchWindow(func(u BroadcastUnit) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		mu.Lock()
+		delivered = append(delivered, string(u.Data))
+		mu.Unlock()
+	}, WithMaxBatchWindow(time.Hour))
+
+	b.Add([]byte("A"))
+	go b.TryFlush()
+	<-entered // flush A holds its bytes and is stalled before delivering
+
+	b.Add([]byte("B"))
+	bDone := make(chan struct{})
+	go func() { b.TryFlush(); close(bDone) }()
+	select {
+	case <-bDone: // B was delivered while A was still in flight
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-bDone
+
+	if !waitForBatch(t, 5*time.Second, func() bool { mu.Lock(); defer mu.Unlock(); return len(delivered) == 2 }) {
+		t.Fatalf("want 2 deliveries, got %v", delivered)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if delivered[0] != "A" || delivered[1] != "B" {
+		t.Fatalf("delivery order = %v, want [A B]", delivered)
+	}
+}
+
+// Bytes still pending when a snapshot supersedes them are already in the snapshot; flushing them
+// after it would apply them to the screen twice.
+func TestBatchWindow_Discard_should_DropPendingBytes(t *testing.T) {
+	t.Parallel()
+	var got [][]byte
+	var mu sync.Mutex
+	b := NewBatchWindow(func(u BroadcastUnit) { mu.Lock(); got = append(got, u.Data); mu.Unlock() }, WithMaxBatchWindow(time.Hour))
+	b.Add([]byte("stale"))
+	b.Discard()
+	b.TryFlush()
+	b.Bypass([]byte("snap"))
+	b.Add([]byte("live"))
+	b.TryFlush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 || string(got[0]) != "snap" || string(got[1]) != "live" {
+		t.Fatalf("got %q, want [snap live]", got)
 	}
 }
