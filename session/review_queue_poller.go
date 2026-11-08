@@ -5,6 +5,7 @@ import "github.com/linkdata/deadlock"
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -307,7 +308,7 @@ func (rqp *ReviewQueuePoller) Start(ctx context.Context) {
 	rqp.checkSessions()
 
 	rqp.wg.Add(1)
-	go rqp.pollLoop()
+	go proflabel.Do("review_queue_poller", rqp.pollLoop)
 
 	log.Info("ReviewQueuePoller started", "poll_interval", rqp.config.PollInterval)
 }

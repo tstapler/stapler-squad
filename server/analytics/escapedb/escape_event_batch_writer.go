@@ -4,86 +4,147 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"sync/atomic"
 	"time"
+
+	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/dbobs"
-	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
-// escapeFlushBatchSize is the queued-event count that triggers an immediate flush.
-const escapeFlushBatchSize = 100
+const (
+	// DefaultFlushRows is the queued-event count that triggers an immediate flush.
+	DefaultFlushRows = 500
+	// DefaultFlushInterval is the longest an event waits in memory before it is written.
+	DefaultFlushInterval = 5 * time.Second
+	// DefaultQueueSize bounds the in-memory queue; events beyond it are dropped and counted.
+	DefaultQueueSize = 10000
 
-// EscapeEventBatchWriter persists escape events to SQLite via batched ent writes.
-// It implements pkganalytics.EscapeEventWriter.
+	// insertChunkRows keeps one multi-row INSERT at 14 bind variables per row, well under SQLite's limit.
+	insertChunkRows = 500
+
+	slowFlushWarn = time.Second
+)
+
+// EscapeEventBatchWriter persists escape events to SQLite. It implements
+// pkganalytics.EscapeEventWriter.
+//
+// Each flush is one transaction holding multi-row INSERTs of the raw events plus an
+// additive upsert of their hourly rollups, so history survives raw-row eviction.
+// Per-session caps and age eviction are not done here: see Retention.
 type EscapeEventBatchWriter struct {
-	ch                chan pkganalytics.EscapeEventRecord
-	client            *ent.Client
-	maxRowsPerSession int
-	sessionRowCounts  map[string]int
-	dropped           int64 // atomic counter for dropped events
+	ch  chan pkganalytics.EscapeEventRecord
+	drv dialect.Driver
+
+	createdAt  time.Time
+	flushRows  int
+	flushEvery time.Duration
+	newTicker  func(time.Duration) (<-chan time.Time, func())
+
+	enqueued, dropped, flushes, rowsWritten, failedRows atomic.Int64
+	lastFlushNanos, maxFlushNanos                       atomic.Int64
+	lastDropWarned                                      atomic.Int64
 }
 
-// NewEscapeEventBatchWriter creates a new batch writer. Call Start to begin processing.
-func NewEscapeEventBatchWriter(client *ent.Client, maxRowsPerSession int) *EscapeEventBatchWriter {
-	return &EscapeEventBatchWriter{
-		ch:                make(chan pkganalytics.EscapeEventRecord, 1000),
-		client:            client,
-		maxRowsPerSession: maxRowsPerSession,
-		sessionRowCounts:  make(map[string]int),
+// WriterOption customizes an EscapeEventBatchWriter.
+type WriterOption func(*EscapeEventBatchWriter)
+
+// WithFlushRows sets the queued-event count that triggers an immediate flush.
+func WithFlushRows(n int) WriterOption {
+	return func(w *EscapeEventBatchWriter) { w.flushRows = max(n, 1) }
+}
+
+// WithFlushInterval sets the time-based flush period.
+func WithFlushInterval(d time.Duration) WriterOption {
+	return func(w *EscapeEventBatchWriter) { w.flushEvery = d }
+}
+
+// WithQueueSize sets the bounded queue capacity.
+func WithQueueSize(n int) WriterOption {
+	return func(w *EscapeEventBatchWriter) { w.ch = make(chan pkganalytics.EscapeEventRecord, max(n, 1)) }
+}
+
+// WithTicker injects the flush timer so tests drive time deterministically.
+func WithTicker(f func(time.Duration) (<-chan time.Time, func())) WriterOption {
+	return func(w *EscapeEventBatchWriter) { w.newTicker = f }
+}
+
+// NewEscapeEventBatchWriter creates a batch writer over drv (the escape-events database
+// driver, with the rollup schema already created by Open). Call Start to begin processing.
+func NewEscapeEventBatchWriter(drv dialect.Driver, opts ...WriterOption) *EscapeEventBatchWriter {
+	w := &EscapeEventBatchWriter{
+		ch:         make(chan pkganalytics.EscapeEventRecord, DefaultQueueSize),
+		drv:        drv,
+		createdAt:  time.Now(),
+		flushRows:  DefaultFlushRows,
+		flushEvery: DefaultFlushInterval,
+		newTicker: func(d time.Duration) (<-chan time.Time, func()) {
+			t := time.NewTicker(d)
+			return t.C, t.Stop
+		},
 	}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
 }
 
-// WriteEscapeEvent enqueues an event. Non-blocking: drops if channel is full.
+// WriteEscapeEvent enqueues an event. Never blocks the terminal path: when the queue is
+// full the event is dropped and counted.
 func (w *EscapeEventBatchWriter) WriteEscapeEvent(_ context.Context, event pkganalytics.EscapeEventRecord) {
 	select {
 	case w.ch <- event:
+		w.enqueued.Add(1)
 	default:
-		atomic.AddInt64(&w.dropped, 1)
+		w.dropped.Add(1)
 	}
 }
 
-// Start begins the background flush goroutine. Returns when ctx is cancelled.
+// Start begins the background flush loop and returns when ctx is cancelled, after
+// persisting what is still queued.
 func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	var batch []pkganalytics.EscapeEventRecord
-
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		flushCtx := ctx
-		if ctx.Err() != nil { // shutdown drain: the cancelled ctx would fail the insert
-			var cancel context.CancelFunc
-			flushCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-		}
-		w.flushBatch(flushCtx, batch)
-		batch = batch[:0]
+	tick, stop := w.newTicker(w.flushEvery)
+	defer stop()
+	registerWriterMetrics(w)
+	defer unregisterWriterMetrics(w)
+	// Normally a no-op (Open stamps live_since). Stamping at construction time keeps events queued
+	// before Start on the live side of the cut.
+	if _, err := ensureRollupState(ctx, w.drv, w.createdAt); err != nil {
+		log.Warn("escape analytics: rollup state init failed", "err", err)
 	}
 
+	batch := make([]pkganalytics.EscapeEventRecord, 0, w.flushRows)
+	flush := func(c context.Context) {
+		if len(batch) > 0 {
+			w.flushBatch(c, batch)
+			batch = batch[:0]
+		}
+	}
 	for {
 		select {
 		case ev := <-w.ch:
 			batch = append(batch, ev)
-			if len(batch) >= escapeFlushBatchSize {
-				flush()
+			if len(batch) >= w.flushRows {
+				flush(ctx)
 			}
-		case <-ticker.C:
-			flush()
+		case <-tick:
+			flush(ctx)
 		case <-ctx.Done():
-			// Drain remaining, applying the same per-session row cap as normal processing.
+			// The cancelled ctx would fail the insert, so drain on a bounded fresh one.
+			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
 			for {
 				select {
 				case ev := <-w.ch:
 					batch = append(batch, ev)
+					if len(batch) >= w.flushRows {
+						flush(drainCtx)
+					}
 				default:
-					flush()
+					flush(drainCtx)
 					return
 				}
 			}
@@ -91,113 +152,109 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 	}
 }
 
-// DroppedCount returns the number of events dropped due to backpressure.
-func (w *EscapeEventBatchWriter) DroppedCount() int64 {
-	return atomic.LoadInt64(&w.dropped)
+// WriterStats is a point-in-time copy of the writer's counters.
+type WriterStats struct {
+	Enqueued, Dropped, Flushes, RowsWritten, FailedRows int64
+	QueueDepth, QueueCapacity                           int
+	LastFlush, MaxFlush                                 time.Duration
 }
 
+// Stats returns the writer's counters.
+func (w *EscapeEventBatchWriter) Stats() WriterStats {
+	return WriterStats{
+		Enqueued: w.enqueued.Load(), Dropped: w.dropped.Load(), Flushes: w.flushes.Load(),
+		RowsWritten: w.rowsWritten.Load(), FailedRows: w.failedRows.Load(),
+		QueueDepth: len(w.ch), QueueCapacity: cap(w.ch),
+		LastFlush: time.Duration(w.lastFlushNanos.Load()), MaxFlush: time.Duration(w.maxFlushNanos.Load()),
+	}
+}
+
+// DroppedCount returns the number of events dropped due to backpressure.
+func (w *EscapeEventBatchWriter) DroppedCount() int64 { return w.dropped.Load() }
+
+// flushBatch writes batch and its hourly rollups in one transaction. On failure nothing is
+// written (the raw rows and their counts stay consistent) and the batch is counted as failed.
 func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganalytics.EscapeEventRecord) {
 	if len(batch) == 0 {
 		return
 	}
-
-	creators := make([]*ent.EscapeEventCreate, 0, len(batch))
-	addedBySession := make(map[string]int)
+	began := time.Now()
+	rollups := make(rollupSet)
 	for _, ev := range batch {
-		id := generateEscapeEventID()
-		c := w.client.EscapeEvent.Create().
-			SetID(id).
-			SetSessionID(ev.SessionID).
-			SetStage(string(ev.Stage)).
-			SetSequenceType(ev.SequenceType).
-			SetByteLength(ev.ByteLen).
-			SetMangled(ev.Mangled).
-			SetWallTime(ev.WallTime.Round(0)).
-			SetSessionSeq(ev.SessionSeq)
-
-		if ev.ProjectPath != "" {
-			c = c.SetProjectPath(ev.ProjectPath)
-		}
-		if ev.SequenceSubtype != "" {
-			c = c.SetSequenceSubtype(ev.SequenceSubtype)
-		}
-		if ev.SequenceSignature != "" {
-			c = c.SetSequenceSignature(ev.SequenceSignature)
-		}
-		if ev.PayloadHash != "" {
-			c = c.SetPayloadHash(ev.PayloadHash)
-		}
-		if len(ev.RawBytes) > 0 {
-			c = c.SetRawBytes(ev.RawBytes)
-		}
-		if ev.MangleType != "" {
-			c = c.SetMangleType(ev.MangleType)
-		}
-
-		creators = append(creators, c)
-		addedBySession[ev.SessionID]++
+		rollups.add(RollupHourSecs, eventFacts{
+			SessionID: ev.SessionID, ProjectPath: ev.ProjectPath, SequenceType: ev.SequenceType,
+			Stage: string(ev.Stage), MangleType: ev.MangleType, Mangled: ev.Mangled,
+			ByteLen: int64(ev.ByteLen), At: ev.WallTime,
+		})
 	}
 
-	// ent nests one stack frame per bulk row, hiding this frame from dbobs' stack walk.
 	ctx = dbobs.WithCaller(ctx, "server/analytics.EscapeEventBatchWriter.flushBatch")
-	if err := w.client.EscapeEvent.CreateBulk(creators...).Exec(ctx); err != nil {
-		log.Warn("escape analytics: flush batch failed", "err", err, "batch_size", len(batch))
-		return
-	}
-	if w.maxRowsPerSession <= 0 {
-		return
-	}
-	for sessionID, added := range addedBySession {
-		w.enforceSessionCap(ctx, sessionID, added)
-	}
-}
-
-// enforceSessionCap keeps the in-memory row count for sessionID current and
-// trims the session back to the cap once it exceeds the cap plus slack. The count
-// is seeded from the database the first time a session is seen (after the insert,
-// so it already includes added), then moves with inserts and deletes.
-func (w *EscapeEventBatchWriter) enforceSessionCap(ctx context.Context, sessionID string, added int) {
-	count, known := w.sessionRowCounts[sessionID]
-	if known {
-		count += added
-	} else {
-		var err error
-		if count, err = w.countRows(ctx, sessionID); err != nil {
-			return
-		}
-	}
-	if count > escapeEvictionThreshold(w.maxRowsPerSession) {
-		// The cached count can drift high when the hourly retention pass also
-		// deletes; re-count so eviction never trims below the cap.
-		if known {
-			var err error
-			if count, err = w.countRows(ctx, sessionID); err != nil {
-				delete(w.sessionRowCounts, sessionID) // reseed on the next flush
-				return
+	err := withTx(ctx, w.drv, func(tx dialect.Tx) error {
+		for start := 0; start < len(batch); start += insertChunkRows {
+			if err := insertEvents(ctx, tx, batch[start:min(start+insertChunkRows, len(batch))]); err != nil {
+				return err
 			}
 		}
-		if excess := count - w.maxRowsPerSession; excess > 0 {
-			deleted, err := evictOldestEscapeEvents(ctx, w.client, sessionID, excess, w.writerBusy)
-			count -= deleted
-			if err != nil {
-				log.Warn("escape analytics: enforce per-session row cap failed", "err", err, "session_id", sessionID)
-			}
-		}
-	}
-	w.sessionRowCounts[sessionID] = count
+		return upsertRollups(ctx, tx, rollups)
+	})
+	w.recordFlush(time.Since(began), len(batch), len(rollups), err)
 }
 
-func (w *EscapeEventBatchWriter) countRows(ctx context.Context, sessionID string) (int, error) {
-	count, err := w.client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
+func (w *EscapeEventBatchWriter) recordFlush(elapsed time.Duration, rows, rollupRows int, err error) {
+	w.lastFlushNanos.Store(int64(elapsed))
+	if int64(elapsed) > w.maxFlushNanos.Load() {
+		w.maxFlushNanos.Store(int64(elapsed))
+	}
 	if err != nil {
-		log.Warn("escape analytics: count rows for cap failed", "err", err, "session_id", sessionID)
+		w.failedRows.Add(int64(rows))
+		log.Warn("escape analytics: flush batch failed", "err", err, "batch_size", rows)
+		return
 	}
-	return count, err
+	w.flushes.Add(1)
+	w.rowsWritten.Add(int64(rows))
+	if elapsed > slowFlushWarn {
+		log.Warn("escape analytics: slow flush", "batch_size", rows, "rollup_rows", rollupRows, "elapsed", elapsed)
+	}
+	if d := w.dropped.Load(); d > w.lastDropWarned.Load() {
+		log.Warn("escape analytics: events dropped under backpressure", "dropped_total", d, "queue_capacity", cap(w.ch))
+		w.lastDropWarned.Store(d)
+	}
 }
 
-// writerBusy reports a full batch already queued: eviction yields to the next
-// insert flush rather than delaying it.
-func (w *EscapeEventBatchWriter) writerBusy() bool { return len(w.ch) >= escapeFlushBatchSize }
+const insertEventPrefix = "INSERT INTO `escape_events` (`id`, `session_id`, `project_path`, `stage`, `sequence_type`, `sequence_subtype`, `sequence_signature`, `byte_length`, `payload_hash`, `raw_bytes`, `mangled`, `mangle_type`, `wall_time`, `session_seq`) VALUES "
+
+// insertEvents writes events as one multi-row INSERT. Optional columns are NULL when empty,
+// matching what ent's builder wrote.
+func insertEvents(ctx context.Context, q dialect.ExecQuerier, events []pkganalytics.EscapeEventRecord) error {
+	var sb strings.Builder
+	sb.WriteString(insertEventPrefix)
+	args := make([]any, 0, len(events)*14)
+	for i, ev := range events {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, generateEscapeEventID(), ev.SessionID, nullIfEmpty(ev.ProjectPath), string(ev.Stage),
+			ev.SequenceType, nullIfEmpty(ev.SequenceSubtype), nullIfEmpty(ev.SequenceSignature), ev.ByteLen,
+			nullIfEmpty(ev.PayloadHash), nullIfEmptyBytes(ev.RawBytes), ev.Mangled, nullIfEmpty(ev.MangleType),
+			ev.WallTime.Round(0), ev.SessionSeq)
+	}
+	return q.Exec(ctx, sb.String(), args, nil)
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullIfEmptyBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
 
 func generateEscapeEventID() string {
 	b := make([]byte, 8)

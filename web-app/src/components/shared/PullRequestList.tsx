@@ -5,7 +5,7 @@ import type { PrHold, SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
 import type { PrActionResult, PrTarget, PullRequestActions } from "@/lib/pr/actionResult";
 import { PULL_REQUESTS_ANCHOR, usePullRequestsAnchor } from "@/lib/pr/anchor";
-import { holdsFor, planRows, prKey, prTarget, toRef } from "@/lib/pr/pullRequests";
+import { holdsFor, planRows, prKey, prTarget, prUrl, toRef } from "@/lib/pr/pullRequests";
 import { holdLine } from "@/lib/pr/rowCopy";
 import { usePullRequestAnnouncements } from "@/lib/pr/usePullRequestAnnouncements";
 import { ConfirmPrDialog, MergeDialog, TrackPrDialog } from "./PullRequestDialogs";
@@ -129,7 +129,7 @@ export function PullRequestList(props: PullRequestListProps) {
     const result = await actions.detach(asTarget(pr));
     if (result.ok) {
       toastFocus.current = dialogFocus.current;
-      showToast(`Stopped tracking #${pr.number}.`, "Undo, or use Track a PR by URL.", () => void actions.attachByUrl(pr.url), keyboard);
+      showToast(`Stopped tracking #${pr.number}.`, "Undo, or use Track a PR by URL.", () => void actions.attachByUrl(prUrl(pr)), keyboard);
     }
     return result;
   };
@@ -149,7 +149,7 @@ export function PullRequestList(props: PullRequestListProps) {
         break;
       }
       case "copyLink":
-        void copyText(pr.url).then((ok) => setNote(ok ? { text: `Copied link to ${prTarget(pr)}.`, alert: false } : { text: "Couldn't copy link", alert: true }));
+        void copyText(prUrl(pr)).then((ok) => setNote(ok ? { text: `Copied link to ${prTarget(pr)}.`, alert: false } : { text: "Couldn't copy link", alert: true }));
         break;
     }
   };
@@ -265,7 +265,7 @@ export function PullRequestList(props: PullRequestListProps) {
           target={prTarget(dialog.pr)}
           baseBranch={dialog.pr.baseBranch}
           isActive={dialog.pr.isActive}
-          url={dialog.pr.url}
+          url={prUrl(dialog.pr)}
           onMerge={(method) => actions.merge(asTarget(dialog.pr), method)}
           onClose={cancelDialog}
           onDone={finishDialog}
