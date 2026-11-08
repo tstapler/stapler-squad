@@ -117,10 +117,13 @@ describe("useWatchBacklogItems", () => {
     mockListBacklogItems.mockReset();
     mockWatchBacklogItems.mockReset();
     mockListBacklogItems.mockResolvedValue({ items: [] });
+    // Backoff delay is jittered in [base/2, base]; pin to the top so the exact-delay asserts hold.
+    jest.spyOn(Math, "random").mockReturnValue(1);
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   // R11 happy — Task 4.2.1a/b

@@ -22,6 +22,7 @@ import {
 } from "@connectrpc/connect/protocol-connect";
 import { recordReaderQueueDepth } from "@/lib/perf/perfDebug";
 import { recordWsLifecycle } from "@/lib/telemetry/rpcTiming";
+import { watchSocketBudget } from "./ws-budget";
 
 function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   const buf = new Uint8Array(5 + data.length);
@@ -82,6 +83,8 @@ export async function* fromWebSocket(
     }
   } finally {
     signal?.removeEventListener("abort", abortHandler);
+    // Every exit path (error, end-stream, consumer abandoning the iterator) must free the socket.
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
   }
 }
 
@@ -138,26 +141,46 @@ export function createWatchTransport(opt: ConnectTransportOptions): Transport {
         next: async (req) => {
           const wsUrl = req.url.replace(/^http/, "ws");
 
+          // Queue behind the per-tab budget so we never hit the browser's socket limit.
+          const release = await watchSocketBudget.acquire(signal);
+          // Aborted between the slot being granted and this continuation running.
+          if (signal?.aborted) {
+            release();
+            throw new ConnectError("aborted", Code.Canceled);
+          }
           const ws = new WebSocket(wsUrl);
           ws.binaryType = "arraybuffer";
+          ws.addEventListener("close", release);
 
-          await new Promise<void>((resolve, reject) => {
-            ws.onopen = () => {
-              recordWsLifecycle("watch", "open");
-              resolve();
-            };
-            ws.onerror = () =>
-              reject(new ConnectError("WebSocket connection failed", Code.Unavailable));
-          });
+          // Until fromWebSocket takes over, an abort or any failure must close the
+          // socket itself, or it leaks (e.g. unmount while still CONNECTING).
+          const abortWhileConnecting = () => ws.close();
+          signal?.addEventListener("abort", abortWhileConnecting, { once: true });
+          try {
+            await new Promise<void>((resolve, reject) => {
+              ws.onopen = () => {
+                recordWsLifecycle("watch", "open");
+                resolve();
+              };
+              const fail = () =>
+                reject(new ConnectError("WebSocket connection failed", Code.Unavailable));
+              ws.onerror = fail;
+              ws.onclose = fail;
+            });
+            if (signal?.aborted) throw new ConnectError("aborted", Code.Canceled);
 
-          // Read the first (and only) request message and send it as a Connect envelope.
-          const iter = req.message[Symbol.asyncIterator]();
-          const first = await iter.next();
-          if (first.done) {
+            // Read the first (and only) request message and send it as a Connect envelope.
+            const iter = req.message[Symbol.asyncIterator]();
+            const first = await iter.next();
+            if (first.done) throw new ConnectError("missing request message", Code.Internal);
+            ws.send(encodeEnvelope(0, serialize(first.value)));
+          } catch (e) {
             ws.close();
-            throw new ConnectError("missing request message", Code.Internal);
+            release();
+            throw e;
+          } finally {
+            signal?.removeEventListener("abort", abortWhileConnecting);
           }
-          ws.send(encodeEnvelope(0, serialize(first.value)));
 
           const trailer = new Headers();
 
