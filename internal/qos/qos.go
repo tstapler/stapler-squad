@@ -146,13 +146,17 @@ func (t *Tracker) Forget(key string) {
 }
 
 // Interactive reports whether session key received input within the window.
-func (t *Tracker) Interactive(key string) bool { return t.anyLive(func(k string) bool { return k == key }) }
+func (t *Tracker) Interactive(key string) bool {
+	return t.anyLive(func(k string) bool { return k == key })
+}
 
 // AnyInteractive reports whether any session received input within the window.
 func (t *Tracker) AnyInteractive() bool { return t.anyLive(func(string) bool { return true }) }
 
 // OtherInteractive reports whether a session other than key is interactive.
-func (t *Tracker) OtherInteractive(key string) bool { return t.anyLive(func(k string) bool { return k != key }) }
+func (t *Tracker) OtherInteractive(key string) bool {
+	return t.anyLive(func(k string) bool { return k != key })
+}
 
 // anyLive expires stale entries, then reports whether any live session satisfies match.
 func (t *Tracker) anyLive(match func(key string) bool) bool {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -169,6 +170,16 @@ func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string,
 	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) {
 		return b.mgr.CapturePaneContentWithOptions(start, end)
 	})
+}
+
+// SetPaneActivity makes TymuxBackend a PaneActivityHinter. It no-ops when the manager cannot send
+// the hint (older daemon or client), so callers never branch on backend or version.
+func (b *TymuxBackend) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
+	h, ok := b.mgr.(PaneActivityHinter)
+	if !ok {
+		return nil
+	}
+	return h.SetPaneActivity(ctx, activity)
 }
 
 // CapturePaneRedraw makes TymuxBackend a RedrawCapturer: the daemon's emulator holds the pane's

@@ -110,6 +110,8 @@ type tymuxGRPCSession struct {
 	captureReviveGen atomic.Uint64
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
+	// activity caches the pane.activity_hint capability and sender (pane_activity.go).
+	activity activityHintState
 
 	// killFailedID is the session a Close could not kill (daemon unreachable): it is still
 	// running, so PersistedSessionID keeps reporting it instead of dropping ownership.
