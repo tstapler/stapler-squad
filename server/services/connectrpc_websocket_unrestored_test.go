@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ type unrestoredTymuxPM struct {
 	session.ProcessManager // nil; any unlisted method must not be reached
 	restored               atomic.Int32
 	attached               atomic.Bool
+	exitCallbackSet        atomic.Int32
 }
 
 func (p *unrestoredTymuxPM) HasSession() bool            { return p.attached.Load() }
@@ -30,6 +32,16 @@ func (p *unrestoredTymuxPM) RestoreWithWorkDir(string) error {
 	return nil
 }
 func (p *unrestoredTymuxPM) GetPTY() (*os.File, error) { return os.Stdin, nil }
+func (p *unrestoredTymuxPM) ResetExitOnce()            {}
+func (p *unrestoredTymuxPM) SetOnExitCallback(func(string)) {
+	p.exitCallbackSet.Add(1)
+}
+
+// ptylessUnrestoredPM restores a pane (RestoreWithWorkDir returns nil, like the real
+// RestoreProcess) but has no PTY attached.
+type ptylessUnrestoredPM struct{ *unrestoredTymuxPM }
+
+func (p *ptylessUnrestoredPM) GetPTY() (*os.File, error) { return nil, errors.New("pty attach failed") }
 
 type retainedTymuxPM struct {
 	*unrestoredTymuxPM
@@ -132,6 +144,7 @@ func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreS
 		require.NoError(t, err)
 		require.True(t, alive, "a restore that attached a pane is alive; the started gate must not veto it")
 		require.True(t, inst.Started(), "attach must leave the restored instance started so input is accepted")
+		require.Equal(t, int32(1), pm.exitCallbackSet.Load(), "startLocked never ran, so marking started must register the exit callback")
 	})
 
 	t.Run("ensureControlModeStarted", func(t *testing.T) {
@@ -141,5 +154,32 @@ func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreS
 		require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
 
 		require.True(t, inst.Started(), "attach must leave the restored instance started so input is accepted")
+		require.Equal(t, int32(1), pm.exitCallbackSet.Load(), "startLocked never ran, so marking started must register the exit callback")
 	})
+}
+
+// RestoreProcess returns nil when the PTY attach fails, so a nil error alone must not mark the
+// instance started: input would be accepted for a pane with nothing attached.
+func TestEnsureControlModeStarted_should_NotMarkStarted_When_RestoredWithoutPTY(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	pm := &ptylessUnrestoredPM{&unrestoredTymuxPM{}}
+	inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-control-nopty", pm)
+	var started atomic.Int32
+	inst.RegisterLifecycleListener(startedCounter{&started})
+	streamer := &pumpTestController{}
+
+	require.NoError(t, h.ensureControlModeStarted(inst, "sess", streamer))
+
+	require.Equal(t, int32(1), pm.restored.Load())
+	require.False(t, inst.Started(), "a PTY-less restore must not mark the instance started")
+	require.Zero(t, started.Load(), "no EventStarted without a PTY")
+	require.Equal(t, int32(1), streamer.startControlModeCalls.Load(), "control mode still starts, as before")
+}
+
+type startedCounter struct{ n *atomic.Int32 }
+
+func (c startedCounter) OnLifecycleEvent(e session.LifecycleEvent, _ string) {
+	if e == session.EventStarted {
+		c.n.Add(1)
+	}
 }
