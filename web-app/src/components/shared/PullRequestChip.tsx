@@ -3,7 +3,7 @@
 import type { MouseEvent } from "react";
 import type { SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { chipView } from "@/lib/pr/chipView";
-import { activePullRequest, moreCount, sortPullRequests } from "@/lib/pr/pullRequests";
+import { activePullRequest, moreCount, prUrl, sortPullRequests } from "@/lib/pr/pullRequests";
 import { badge, compact as compactClass, icon, prBadge, text } from "./GitHubBadge.css";
 import { PrStateGlyph } from "./PrStateGlyph";
 import { chipLink, chipRow, moreButton, staleMark, stateClass, stateLabel } from "./PullRequestChip.css";
@@ -26,7 +26,7 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
   const openGitHub = (e: MouseEvent<HTMLAnchorElement>) => {
     e.stopPropagation();
     e.preventDefault(); // the anchor's own href+target would otherwise open a second tab
-    window.open(shown.url, "_blank", "noopener,noreferrer");
+    window.open(prUrl(shown), "_blank", "noopener,noreferrer");
   };
 
   const handleMore = (e: MouseEvent<HTMLButtonElement>) => {
@@ -39,7 +39,7 @@ export function PullRequestChip({ pullRequests, onOpenList, compact = true }: Pu
     <span className={chipRow} data-testid="pr-chip-group">
       <span className={chipLink}>
         <a
-          href={shown.url}
+          href={prUrl(shown)}
           target="_blank"
           rel="noopener noreferrer"
           className={`${badge} ${prBadge} ${stateClass[view.state]} ${compact ? compactClass : ""}`}

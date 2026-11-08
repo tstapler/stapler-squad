@@ -2,12 +2,11 @@ package escapedb
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,180 +15,158 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
-// TestDeleteOldestRows_QueryPlanAvoidsSort guards the CPU fix: with a session at its
-// row cap, every flush runs "oldest N by wall_time for one session". That must be an
-// ordered index scan, not a read-and-temp-sort of all the session's rows.
-func TestDeleteOldestRows_QueryPlanAvoidsSort(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	client := openForTest(ctx, t, dir)
-	defer client.Close()
-
-	db, err := sql.Open("sqlite", "file:"+Path(dir)+"?mode=ro")
-	require.NoError(t, err)
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN SELECT id FROM escape_events WHERE session_id = ? ORDER BY wall_time LIMIT 100", "s")
-	require.NoError(t, err)
-	defer rows.Close()
-	var plan []string
-	for rows.Next() {
-		var id, parent, notused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
-		plan = append(plan, detail)
-	}
-	require.NoError(t, rows.Err())
-	joined := strings.Join(plan, " | ")
-	assert.NotContains(t, joined, "TEMP B-TREE", "oldest-rows query sorts all of a session's rows: %s", joined)
-	assert.Contains(t, joined, "session_id_wall_time", "oldest-rows query should use the (session_id, wall_time) index: %s", joined)
-}
-
-// TestFlushBatch_EnforcesPerSessionCap_DeletingOldestFirst pins the behaviour the index
-// must not change: over the cap, the oldest rows by wall_time go and the newest stay.
-func TestFlushBatch_EnforcesPerSessionCap_DeletingOldestFirst(t *testing.T) {
-	ctx := context.Background()
-	client := openForTest(ctx, t, t.TempDir())
-	defer client.Close()
-
-	const cap = 5
-	w := NewEscapeEventBatchWriter(client, cap)
-	base := time.Now().Add(-time.Hour)
-	batch := func(from, n int) []pkganalytics.EscapeEventRecord {
-		var out []pkganalytics.EscapeEventRecord
-		for i := from; i < from+n; i++ {
-			out = append(out, pkganalytics.EscapeEventRecord{
-				SessionID: "s1", Stage: "input", SequenceType: "csi", ByteLen: 1,
-				WallTime: base.Add(time.Duration(i) * time.Second), SessionSeq: int64(i),
-			})
-		}
-		return out
-	}
-	w.flushBatch(ctx, batch(0, 4))
-	w.flushBatch(ctx, batch(4, 4)) // 8 rows total -> trim to the cap
-
-	got, err := client.EscapeEvent.Query().Where(escapeevent.SessionID("s1")).Order(escapeevent.ByWallTime()).All(ctx)
-	require.NoError(t, err)
-	require.Len(t, got, cap)
-	seqs := make([]string, 0, len(got))
-	for _, e := range got {
-		seqs = append(seqs, fmt.Sprint(e.SessionSeq))
-	}
-	assert.Equal(t, "3 4 5 6 7", strings.Join(seqs, " "), "the %d newest rows should remain", cap)
-}
-
-func escapeBatch(session string, base time.Time, from, n int) []pkganalytics.EscapeEventRecord {
-	out := make([]pkganalytics.EscapeEventRecord, 0, n)
-	for i := from; i < from+n; i++ {
-		out = append(out, pkganalytics.EscapeEventRecord{
-			SessionID: session, Stage: "input", SequenceType: "csi", ByteLen: 1,
-			WallTime: base.Add(time.Duration(i) * time.Second), SessionSeq: int64(i),
-		})
-	}
-	return out
-}
-
-func dbCount(t *testing.T, ctx context.Context, w *EscapeEventBatchWriter, session string) int {
+func rollupTotals(t *testing.T, ctx context.Context, q interface {
+	Query(ctx context.Context, query string, args, v any) error
+}) (rows, events, bytes int64) {
 	t.Helper()
-	n, err := w.client.EscapeEvent.Query().Where(escapeevent.SessionID(session)).Count(ctx)
-	require.NoError(t, err)
-	return n
+	var r entsql.Rows
+	require.NoError(t, q.Query(ctx, "SELECT COUNT(*), COALESCE(SUM(event_count),0), COALESCE(SUM(byte_total),0) FROM "+rollupTable, []any{}, &r))
+	defer r.Close()
+	require.True(t, r.Next())
+	require.NoError(t, r.Scan(&rows, &events, &bytes))
+	return rows, events, bytes
 }
 
-// The slack lets a session overshoot the cap between trims, but never the
-// threshold; a trim lands exactly on the cap and keeps the newest rows. The
-// writer's cached count must equal a brute-force COUNT after every flush.
-func TestFlushBatch_SlackBoundsOvershootAndTrimsToCap_KeepingNewest(t *testing.T) {
+func TestFlushBatch_WritesRawRowsAndHourlyRollupsTogether(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	client := openForTest(ctx, t, t.TempDir())
-	defer client.Close()
+	client, drv := openStoreForTest(ctx, t, t.TempDir())
+	events := genEvents(testBase, 30, 20*time.Minute) // spans 10 hours
 
-	const cap = 100
-	threshold := escapeEvictionThreshold(cap)
-	w := NewEscapeEventBatchWriter(client, cap)
-	base := time.Now().Add(-time.Hour)
-	next := map[string]int{}
-	trims := 0
-	for step := 0; step < 60; step++ {
-		for _, s := range []string{"a", "b"} {
-			n := 3 + step%5
-			before := dbCount(t, ctx, w, s)
-			w.flushBatch(ctx, escapeBatch(s, base, next[s], n))
-			next[s] += n
-			got := dbCount(t, ctx, w, s)
-			require.LessOrEqual(t, got, threshold, "session %s overshoot", s)
-			require.Equal(t, got, w.sessionRowCounts[s], "cached count drifted from COUNT(*) for %s", s)
-			if got == cap && before+n > threshold {
-				trims++
-			}
-		}
-	}
-	assert.Positive(t, trims, "scenario should have triggered trims")
+	NewEscapeEventBatchWriter(drv).flushBatch(ctx, events)
 
-	// Force a final trim, then check the cap and the newest-survive invariant.
-	for prev := -1; prev < dbCount(t, ctx, w, "a") || prev == -1; {
-		prev = dbCount(t, ctx, w, "a")
-		w.flushBatch(ctx, escapeBatch("a", base, next["a"], 1))
-		next["a"]++
-	}
-	require.Equal(t, cap, dbCount(t, ctx, w, "a"))
-	rows, err := client.EscapeEvent.Query().Where(escapeevent.SessionID("a")).Order(escapeevent.ByWallTime()).All(ctx)
+	n, err := client.EscapeEvent.Query().Where(escapeevent.SessionIDIn("a", "b")).Count(ctx)
 	require.NoError(t, err)
-	for i, r := range rows {
-		assert.Equal(t, int64(next["a"]-cap+i), r.SessionSeq, "row %d should be among the newest", i)
+	assert.Equal(t, 30, n)
+	_, total, bytes := rollupTotals(t, ctx, drv)
+	var wantBytes int64
+	for _, e := range events {
+		wantBytes += int64(e.ByteLen)
 	}
+	assert.EqualValues(t, 30, total)
+	assert.Equal(t, wantBytes, bytes)
 }
 
-// Steady state at the cap must not cost a delete round trip per flush.
-func TestFlushBatch_AtCap_IssuesFewStatementsPerFlush(t *testing.T) {
+func TestFlushBatch_StatementCountIsIndependentOfBatchSize(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	client := openForTest(ctx, t, t.TempDir())
-	defer client.Close()
+	_, drv := openStoreForTest(ctx, t, t.TempDir())
+	w := NewEscapeEventBatchWriter(drv)
 
-	const cap, flushes = 100, 300
-	w := NewEscapeEventBatchWriter(client, cap)
-	base := time.Now().Add(-time.Hour)
-	w.flushBatch(ctx, escapeBatch("s", base, 0, cap))
 	countCtx, counter := dbobs.WithQueryCounter(ctx)
-	for i := 0; i < flushes; i++ {
-		w.flushBatch(countCtx, escapeBatch("s", base, cap+i, 1))
-	}
-	// Per-flush trimming issued INSERT + select + delete (3) per flush: 900.
-	assert.Less(t, counter.Count(), int64(flushes*3/2), "statements over %d flushes", flushes)
-	assert.LessOrEqual(t, dbCount(t, ctx, w, "s"), escapeEvictionThreshold(cap))
+	w.flushBatch(countCtx, genEvents(testBase, 400, time.Second)) // one hour, 8 distinct keys
+	// BEGIN + INSERT + rollup upsert + COMMIT; the old path issued INSERT + COUNT + DELETE per flush.
+	assert.LessOrEqual(t, counter.Count(), int64(5), "statements for one 400-event flush")
 }
 
-// Eviction yields while a full batch is queued, and finishes on a later flush.
-func TestFlushBatch_EvictionYieldsToQueuedBatch_ThenResumes(t *testing.T) {
+func TestFlushBatch_FailureRollsBackRawRowsAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	client := openForTest(ctx, t, t.TempDir())
-	defer client.Close()
+	client, drv := openStoreForTest(ctx, t, t.TempDir())
+	require.NoError(t, drv.Exec(ctx, "DROP TABLE "+rollupTable, []any{}, nil))
+	w := NewEscapeEventBatchWriter(drv)
 
-	const cap = 300
-	w := NewEscapeEventBatchWriter(client, cap)
-	base := time.Now().Add(-time.Hour)
-	for i := 0; i < escapeFlushBatchSize; i++ { // a full batch waiting behind this flush
-		w.ch <- escapeBatch("s", base, 0, 1)[0]
-	}
-	w.flushBatch(ctx, escapeBatch("s", base, 0, 1000)) // excess 700 = three chunks
-	assert.Equal(t, 1000-escapeEvictChunkRows, dbCount(t, ctx, w, "s"), "one chunk, then yield")
-	assert.Equal(t, 1000-escapeEvictChunkRows, w.sessionRowCounts["s"])
+	w.flushBatch(ctx, genEvents(testBase, 10, time.Second))
 
-	for len(w.ch) > 0 {
-		<-w.ch
-	}
-	w.flushBatch(ctx, escapeBatch("s", base, 1000, 1))
-	assert.Equal(t, cap, dbCount(t, ctx, w, "s"))
+	n, err := client.EscapeEvent.Query().Where(escapeevent.SessionIDIn("a", "b")).Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n, "raw rows must not outlive a failed rollup upsert")
+	assert.EqualValues(t, 10, w.Stats().FailedRows)
+	assert.Zero(t, w.Stats().RowsWritten)
 }
 
-// Statements issued for a large bulk insert carry the writer's name, not "unknown".
+func TestWriteEscapeEvent_DropsAndCountsWhenQueueFull_WithoutBlocking(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, drv := openStoreForTest(ctx, t, t.TempDir())
+	w := NewEscapeEventBatchWriter(drv, WithQueueSize(2))
+
+	for _, ev := range genEvents(testBase, 5, time.Second) { // no consumer: a blocking write would hang
+		w.WriteEscapeEvent(ctx, ev)
+	}
+
+	assert.EqualValues(t, 3, w.DroppedCount())
+	s := w.Stats()
+	assert.EqualValues(t, 2, s.Enqueued)
+	assert.Equal(t, 2, s.QueueDepth)
+	assert.Equal(t, 2, s.QueueCapacity)
+}
+
+// Events wait for the interval tick rather than being written one flush per event.
+func TestStart_WritesOnIntervalTick_NotPerEvent(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, drv := openStoreForTest(ctx, t, t.TempDir())
+	tick := make(chan time.Time)
+	w := NewEscapeEventBatchWriter(drv, WithTicker(func(time.Duration) (<-chan time.Time, func()) { return tick, func() {} }))
+	done := make(chan struct{})
+	go func() { defer close(done); w.Start(ctx) }()
+
+	for _, ev := range genEvents(testBase, 3, time.Second) {
+		w.WriteEscapeEvent(ctx, ev)
+	}
+	count := func() int {
+		n, err := client.EscapeEvent.Query().Where(escapeevent.SessionIDIn("a", "b")).Count(ctx)
+		require.NoError(t, err)
+		return n
+	}
+	assert.Zero(t, count(), "nothing is written before the tick")
+
+	require.Eventually(t, func() bool { return w.Stats().QueueDepth == 0 }, 10*time.Second, time.Millisecond)
+	tick <- time.Time{} // unbuffered: the loop received it
+	tick <- time.Time{} // second receive proves the first flush finished
+	assert.Equal(t, 3, count())
+	assert.EqualValues(t, 1, w.Stats().Flushes, "one transaction for the whole batch")
+	cancel()
+	<-done
+}
+
+func TestStart_FlushesImmediatelyAtRowThreshold(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, drv := openStoreForTest(ctx, t, t.TempDir())
+	w := NewEscapeEventBatchWriter(drv, WithFlushRows(4),
+		WithTicker(func(time.Duration) (<-chan time.Time, func()) { return make(chan time.Time), func() {} }))
+	done := make(chan struct{})
+	go func() { defer close(done); w.Start(ctx) }()
+
+	for _, ev := range genEvents(testBase, 4, time.Second) {
+		w.WriteEscapeEvent(ctx, ev)
+	}
+	require.Eventually(t, func() bool { return w.Stats().RowsWritten == 4 }, 10*time.Second, time.Millisecond)
+	cancel()
+	<-done
+}
+
+// Events queued at shutdown are persisted, not lost to the cancelled context.
+func TestStart_ShutdownDrainPersistsQueuedEvents(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	client, drv := openStoreForTest(context.Background(), t, t.TempDir())
+	w := NewEscapeEventBatchWriter(drv)
+	for _, ev := range genEvents(testBase, 7, time.Second) {
+		w.WriteEscapeEvent(ctx, ev)
+	}
+	cancel()
+
+	w.Start(ctx)
+
+	n, err := client.EscapeEvent.Query().Where(escapeevent.SessionIDIn("a", "b")).Count(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 7, n)
+	_, total, _ := rollupTotals(t, context.Background(), drv)
+	assert.EqualValues(t, 7, total)
+}
+
+// Statements for a bulk insert carry the writer's name, not "unknown".
 func TestFlushBatch_BulkInsertIsAttributedToWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	client := openForTest(ctx, t, t.TempDir())
-	defer client.Close()
+	_, drv := openStoreForTest(ctx, t, t.TempDir())
 
-	w := NewEscapeEventBatchWriter(client, 0)
-	w.flushBatch(ctx, escapeBatch("s", time.Now(), 0, 100))
+	NewEscapeEventBatchWriter(drv).flushBatch(ctx, genEvents(testBase, 100, time.Second))
 
 	found := false
 	for _, pool := range dbobs.Snapshot() {
@@ -202,18 +179,20 @@ func TestFlushBatch_BulkInsertIsAttributedToWriter(t *testing.T) {
 	assert.True(t, found, "escape_events INSERT not attributed to flushBatch")
 }
 
-// Events queued at shutdown are persisted, not lost to the cancelled context.
-func TestStart_ShutdownDrainPersistsQueuedEvents(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	client := openForTest(context.Background(), t, t.TempDir())
-	defer client.Close()
+func TestFlushBatch_StoresOptionalColumnsAsNullAndReadsBackThroughEnt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client, drv := openStoreForTest(ctx, t, t.TempDir())
+	ev := genEvents(testBase, 1, time.Second)[0]
+	ev.ProjectPath, ev.MangleType = "", ""
+	ev.SequenceSignature, ev.RawBytes = "CSI:?25h", []byte{1, 2}
 
-	w := NewEscapeEventBatchWriter(client, 100)
-	for _, ev := range escapeBatch("s", time.Now(), 0, 7) {
-		w.WriteEscapeEvent(ctx, ev)
-	}
-	cancel()
-	w.Start(ctx) // drains and returns
+	NewEscapeEventBatchWriter(drv).flushBatch(ctx, []pkganalytics.EscapeEventRecord{ev})
 
-	assert.Equal(t, 7, dbCount(t, context.Background(), w, "s"))
+	got, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(ev.SessionID)).Only(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "CSI:?25h", got.SequenceSignature)
+	assert.Equal(t, []byte{1, 2}, got.RawBytes)
+	assert.Empty(t, got.ProjectPath)
+	assert.True(t, got.WallTime.Equal(ev.WallTime), "wall_time round trip: %v vs %v", got.WallTime, ev.WallTime)
 }
