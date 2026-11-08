@@ -82,28 +82,28 @@ describe("showBrowserNotification", () => {
   // ── FR-4: Close-before-open dedup ─────────────────────────────────────────
 
   it("showBrowserNotification_should_closeFirst_When_sameTagCalledTwice", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("A", { tag: "sess:fork" });
+    await showBrowserNotification("A", { tag: "sess:fork" });
     expect(notifInstances).toHaveLength(1);
 
-    await showBrowserNotification!("B", { tag: "sess:fork" });
+    await showBrowserNotification("B", { tag: "sess:fork" });
     expect(notifInstances).toHaveLength(2);
     // First notification should have been closed before second was created
     expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
   });
 
   it("showBrowserNotification_should_notCloseOther_When_differentTagUsed", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("A", { tag: "sess:fork" });
-    await showBrowserNotification!("B", { tag: "sess:tmux" });
+    await showBrowserNotification("A", { tag: "sess:fork" });
+    await showBrowserNotification("B", { tag: "sess:tmux" });
 
     expect(notifInstances).toHaveLength(2);
     // Different tags — first notification should NOT be closed
@@ -111,13 +111,13 @@ describe("showBrowserNotification", () => {
   });
 
   it("showBrowserNotification_should_dedupUntagged_When_noTagProvided", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("A"); // no tag → __untagged__
-    await showBrowserNotification!("B"); // no tag → same __untagged__ slot
+    await showBrowserNotification("A"); // no tag → __untagged__
+    await showBrowserNotification("B"); // no tag → same __untagged__ slot
 
     expect(notifInstances).toHaveLength(2);
     expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
@@ -126,12 +126,12 @@ describe("showBrowserNotification", () => {
   // ── FR-3: Auto-close via setTimeout ───────────────────────────────────────
 
   it("showBrowserNotification_should_closeHighPriority_When_30sElapsed", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("X", { tag: "t1", autoCloseMs: 30_000 });
+    await showBrowserNotification("X", { tag: "t1", autoCloseMs: 30_000 });
     expect(notifInstances).toHaveLength(1);
 
     jest.advanceTimersByTime(29_999);
@@ -142,13 +142,13 @@ describe("showBrowserNotification", () => {
   });
 
   it("showBrowserNotification_should_closeMediumPriority_When_15sElapsed", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
     // No autoCloseMs → defaults to NATIVE_MEDIUM_TTL_MS (15_000)
-    await showBrowserNotification!("X", { tag: "t2" });
+    await showBrowserNotification("X", { tag: "t2" });
 
     jest.advanceTimersByTime(14_999);
     expect(notifInstances[0].close).not.toHaveBeenCalled();
@@ -158,13 +158,13 @@ describe("showBrowserNotification", () => {
   });
 
   it("showBrowserNotification_should_closeActionable_When_5minElapsed", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
     // requireInteraction: true → defaults to NATIVE_ACTIONABLE_TTL_MS (300_000)
-    await showBrowserNotification!("X", { tag: "t3", requireInteraction: true });
+    await showBrowserNotification("X", { tag: "t3", requireInteraction: true });
 
     jest.advanceTimersByTime(299_999);
     expect(notifInstances[0].close).not.toHaveBeenCalled();
@@ -174,13 +174,13 @@ describe("showBrowserNotification", () => {
   });
 
   it("showBrowserNotification_should_clearMapEntry_When_timerFires", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
     // First notification with explicit autoCloseMs
-    await showBrowserNotification!("X", { tag: "t4", autoCloseMs: 15_000 });
+    await showBrowserNotification("X", { tag: "t4", autoCloseMs: 15_000 });
     expect(notifInstances).toHaveLength(1);
 
     // Fire the timer — Map entry should be removed
@@ -188,7 +188,7 @@ describe("showBrowserNotification", () => {
     expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
 
     // Second notification with same tag — since Map was cleared, should NOT close first again
-    await showBrowserNotification!("Y", { tag: "t4" });
+    await showBrowserNotification("Y", { tag: "t4" });
     expect(notifInstances).toHaveLength(2);
     // notifInstances[0].close should still be 1 (called once by timer, not by second show)
     expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
@@ -197,12 +197,12 @@ describe("showBrowserNotification", () => {
   // ── onclose callback cleans up the Map ───────────────────────────────────
 
   it("should_clearMapEntry_When_oscloseFires", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("X", { tag: "t6" });
+    await showBrowserNotification("X", { tag: "t6" });
     expect(notifInstances).toHaveLength(1);
 
     // Simulate OS closing the notification via onclose.
@@ -212,7 +212,7 @@ describe("showBrowserNotification", () => {
 
     // Next call with the same tag should NOT close notifInstances[0] again
     // (the Map entry was already cleared by onclose)
-    await showBrowserNotification!("Y", { tag: "t6" });
+    await showBrowserNotification("Y", { tag: "t6" });
     expect(notifInstances).toHaveLength(2);
     // close on notifInstances[0] should not have been called (Map was empty)
     expect(notifInstances[0].close).not.toHaveBeenCalled();
@@ -227,12 +227,12 @@ describe("showBrowserNotification", () => {
       value: { getRegistration: jest.fn().mockResolvedValue({ showNotification }) },
       configurable: true,
     });
-    let show: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let show!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       show = await importShowBrowserNotification();
     });
 
-    await expect(show!("Hi", { tag: "android" })).resolves.toBeUndefined();
+    await expect(show("Hi", { tag: "android" })).resolves.toBeUndefined();
     expect(showNotification).toHaveBeenCalledWith("Hi", expect.objectContaining({ tag: "android" }));
   });
 
@@ -245,12 +245,12 @@ describe("showBrowserNotification", () => {
       configurable: true,
     });
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
-    let show: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let show!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       show = await importShowBrowserNotification();
     });
 
-    await expect(show!("Hi", { tag: "android" })).resolves.toBeUndefined();
+    await expect(show("Hi", { tag: "android" })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("no service worker registration"));
     warn.mockRestore();
   });
@@ -261,12 +261,12 @@ describe("showBrowserNotification", () => {
     });
     const getRegistration = jest.fn();
     Object.defineProperty(navigator, "serviceWorker", { value: { getRegistration }, configurable: true });
-    let show: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let show!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       show = await importShowBrowserNotification();
     });
 
-    await show!("Hi", { tag: "x" }).catch(() => {});
+    await show("Hi", { tag: "x" }).catch(() => {});
     expect(getRegistration).not.toHaveBeenCalled();
   });
 
@@ -274,12 +274,12 @@ describe("showBrowserNotification", () => {
 
   it("should_notShowNotification_When_notificationsDisabled", async () => {
     localStorage.setItem("notifications-enabled", "false");
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    let showBrowserNotification!: Awaited<ReturnType<typeof importShowBrowserNotification>>;
     await jest.isolateModulesAsync(async () => {
       showBrowserNotification = await importShowBrowserNotification();
     });
 
-    await showBrowserNotification!("X", { tag: "disabled" });
+    await showBrowserNotification("X", { tag: "disabled" });
     expect(notifInstances).toHaveLength(0);
   });
 });
