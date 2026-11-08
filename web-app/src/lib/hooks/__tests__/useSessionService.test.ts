@@ -23,7 +23,7 @@ import remotesReducer, {
   remoteHealthChanged,
   selectRemoteConnectionState,
 } from "@/lib/store/remotesSlice";
-import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
+import { type Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
 import { RemoteConnectionState } from "@/gen/session/v1/remote_pb";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────

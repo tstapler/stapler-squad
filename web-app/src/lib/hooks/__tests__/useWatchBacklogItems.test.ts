@@ -91,7 +91,7 @@ function makeControllableStream() {
             notify = r;
           });
         }
-        const item = queue.shift()!;
+        const item = queue.shift() as (typeof queue)[number];
         if (item.kind === "done") return { done: true, value: undefined };
         if (item.kind === "error") throw item.error;
         return { done: false, value: item.value };
