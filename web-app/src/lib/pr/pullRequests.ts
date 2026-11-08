@@ -21,6 +21,14 @@ export function prKey(pr: Pick<PullRequestRef, "host" | "owner" | "repo" | "numb
   return `${prHost(pr)}/${pr.owner}/${pr.repo}#${pr.number}`;
 }
 
+/**
+ * The PR's GitHub URL. The list-response form of SessionPullRequest omits `url` (K11), so derive it
+ * from host/owner/repo/number rather than render an empty href that opens about:blank.
+ */
+export function prUrl(pr: Pick<PullRequestRef, "host" | "owner" | "repo" | "number"> & { url?: string }): string {
+  return pr.url || `https://${prHost(pr)}/${pr.owner}/${pr.repo}/pull/${pr.number}`;
+}
+
 /** "#12 acme/app": how every action names its PR (ux.md target phrase). */
 export function prTarget(pr: Pick<PullRequestRef, "owner" | "repo" | "number">): string {
   return `#${pr.number} ${pr.owner}/${pr.repo}`;
