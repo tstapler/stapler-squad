@@ -2497,6 +2497,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			}
 			instance.UpdateTerminalTimestamps(string(data), true)
 			instance.MarkUserResponded()
+			hub.NoteInteractive(subscriberID)
 
 			sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = writer.SendInput(sendCtx, PaneInput{
