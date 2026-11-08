@@ -1,0 +1,49 @@
+# Terminal latency telemetry
+
+Per-stage latency for the terminal input and output path, measured in the browser and on the
+server, with no metrics backend needed to read it.
+
+```
+curl -s localhost:8543/actuator/terminal-latency?format=text
+curl -s localhost:8543/actuator/terminal-latency | jq '.alerting, .stages'
+```
+
+The same observations feed the OTel histogram `terminal_latency.stage_duration`
+(VictoriaMetrics: `terminal_latency_stage_duration_milliseconds_*`) with labels `stage`,
+`backend` (`tmux`, `tymux`, `native`, `unknown`) and `listener` (`local`, `remote`, `unknown`).
+Every label is a fixed enum (`internal/termlat`); the browser cannot add a series.
+
+The actuator shows p50/p95/p99 over the last 5 minutes per stage x backend x listener, `max`
+since process start, and an `alerting` list.
+
+## Stages
+
+| Stage | Where | Meaning |
+|---|---|---|
+| `input_total` | server | keystroke frame handled -> backend send returned |
+| `input_send` | server | the backend send alone (daemon ack for tymux, control-mode write for tmux) |
+| `input_bookkeep` | server | per-keystroke bookkeeping done before the send; the number that must stay near 0 |
+| `echo_server` | server | keystroke received -> next output write to the socket (heuristic, see below) |
+| `ws_write_wait` | server | waiting for the per-stream socket write lock |
+| `ws_write` | server | one socket write (mux queue or TCP) returning |
+| `output_send` | server | hub batch handed to the transport -> write returned (hub path only) |
+| `output_queue_depth` | server | frames already queued for a subscriber at each enqueue (a count, hub path only) |
+| `echo_arrive` | browser | keystroke sent -> next output frame reached the component |
+| `echo_paint` | browser | keystroke sent -> echo painted (two animation frames after arrival): input-to-paint |
+| `ttfp_connect`, `ttfp_first_data`, `ttfp_first_paint` | browser | terminal mounted -> stream open / first output / first paint |
+
+Browser stages arrive as `cm.term_latency` analytics events (`lib/telemetry/terminalLatency.ts`),
+at most one echo sample per 250 ms and 60 events per minute per tab, carrying only a stage name,
+a duration and `listener`. The browser does not know the session backend, so its rows are under
+`backend="unknown"`; use `echo_server` for a tymux-vs-tmux echo comparison. Long main-thread
+tasks while typing are the existing `client_long_task_duration_*` metric.
+
+Echo stages pair a keystroke with the next output after it. That is an upper bound when other
+output is streaming, which is exactly the "input behind bulk output" case worth seeing. A reply
+over 2 s (`echo_server`) or 3 s (browser) is dropped as unrelated.
+
+## Alerts
+
+A rolling p95 over its limit with at least 20 samples logs `terminal latency p95 over threshold`
+at most once a minute and appears in `alerting`. Limits: `echo_paint` and `echo_server` 150 ms
+(`STAPLER_SQUAD_TERMINAL_ECHO_P95_MS`), `input_total` 100 ms.

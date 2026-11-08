@@ -107,7 +107,7 @@ func TestUDSDefault_BothListenersUp_TrafficUsesOnlyTheSocket(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, snap.Msg.GetGrid(), 2)
 
-	require.Equal(t, selecting.Unix, tr.(*selecting.Client).Active())
+	require.Equal(t, selecting.Unix, tr.(*splitTransport).Active())
 	require.Positive(t, d.unixHits.Load())
 	require.Zero(t, d.tcpHits.Load(), "the unauthenticated TCP listener saw no request")
 	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()))
@@ -122,7 +122,7 @@ func TestUDSDefault_SocketGone_FallsBackToTCP_AndSupervisorTreatsItAsNoSocket(t 
 	_, err := tr.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
 
 	require.NoError(t, err)
-	require.Equal(t, selecting.TCP, tr.(*selecting.Client).Active())
+	require.Equal(t, selecting.TCP, tr.(*splitTransport).Active())
 	require.Positive(t, d.tcpHits.Load())
 	require.Equal(t, daemonProbeHealthy, probeDaemon(context.Background(), ResolveDaemonConfig()), "no socket file: an older daemon, not degraded")
 }
@@ -141,7 +141,7 @@ func TestUDSDefault_SocketDeniesAccess_HardErrorNoTCP(t *testing.T) {
 	require.ErrorIs(t, err, ErrTymuxdSocketAccessDenied)
 	require.ErrorIs(t, err, syscall.EACCES)
 	require.Zero(t, d.tcpHits.Load(), "EACCES must never reach the unauthenticated listener")
-	require.Equal(t, selecting.Unix, tr.(*selecting.Client).Active())
+	require.Equal(t, selecting.Unix, tr.(*splitTransport).Active())
 }
 
 // The fixture's stop must leave nothing listening the instant it returns, even when it races the
