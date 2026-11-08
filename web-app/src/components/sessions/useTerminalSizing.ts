@@ -87,11 +87,12 @@ export function useTerminalResizeHandler({
   } = refs;
 
   return useCallback((cols: number, rows: number) => {
-    console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
     onTerminalResized?.(cols, rows);
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
+    // Log only real changes: unchanged refits fire in bursts per pane and drowned the console.
+    if (sizeChanged) console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
 
     if (sizeChanged) {
       lastResizeRef.current = { cols, rows };
@@ -174,10 +175,7 @@ export function useTerminalResizeHandler({
       return;
     }
 
-    if (!sizeChanged) {
-      console.log(`[TerminalOutput] Resize blocked - unchanged (${cols}x${rows})`);
-      return;
-    }
+    if (!sizeChanged) return;
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
