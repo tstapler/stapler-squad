@@ -43,6 +43,7 @@ const (
 	eventTermLatency       = "cm.term_latency"
 	eventTermResync        = "cm.term_resync"
 	maxClientDurationMs    = 10 * 60 * 1000
+	maxTermLatencyMs       = 10 * 1000 // a longer keystroke/paint sample is a throttled tab, not latency
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
 	maxFallbackCount       = 100000
@@ -386,7 +387,7 @@ var clientTermStages = map[string]bool{
 // paint) into the same recorder the server-side stages use, so one actuator shows both.
 func (c *clientMetrics) observeTermLatency(ctx context.Context, ev Event) {
 	stage := ev.Labels["stage"]
-	if ev.DurationMs == nil || !clientTermStages[stage] {
+	if ev.DurationMs == nil || !clientTermStages[stage] || *ev.DurationMs > maxTermLatencyMs {
 		c.reject(ctx, "bad_term_latency")
 		return
 	}

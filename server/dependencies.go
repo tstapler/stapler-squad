@@ -1110,23 +1110,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Stagger starts by 200ms each to avoid a fork burst that saturates the
 		// cgroup pids.max limit when many sessions restore simultaneously.
 		for i, inst := range instances {
-			// Archived sessions are deliberately retired: never auto-start one
-			// (ADR-001, superseded-rework-session-retirement).
-			if inst == nil || inst.IsArchived() {
+			if !shouldBootStart(inst) {
 				continue
 			}
-			if !inst.Started() && !deferToReconcile(inst) {
-				if i > 0 {
-					time.Sleep(200 * time.Millisecond)
+			if i > 0 {
+				time.Sleep(200 * time.Millisecond)
+				// A client's lazy restore (or an archive) may have landed during the stagger.
+				if !shouldBootStart(inst) {
+					continue
 				}
-				if err := inst.Start(false); err != nil {
-					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
-				} else {
-					log.Info("started loaded instance", "session", inst.Title)
-					// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
-					// connection that raced this loop's stagger, instead of only polling.
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-				}
+			}
+			if err := inst.Start(false); err != nil {
+				log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
+			} else {
+				log.Info("started loaded instance", "session", inst.Title)
+				// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
+				// connection that raced this loop's stagger, instead of only polling.
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
 		}
 
@@ -1149,15 +1149,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
-				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
-				inst.RecoverFromStopped()
-				if err := inst.Start(false); err != nil {
-					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
-				} else {
-					log.Info("Reconcile: restored session (was terminal, now Running)", "session", inst.Title)
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-				}
+			title, status := inst.Title, inst.GetLifecycleStatus()
+			outcome, err := session.HotRestoreIfLive(inst, inst.IsLiveOrStoredSessionLive)
+			switch {
+			case err != nil:
+				log.Warn("Reconcile: hot-restore failed", "session", title, "err", err)
+			case outcome == session.HotRestoreCleared:
+				log.Info("Reconcile: restored session (was terminal, now Running)", "session", title, "was", status)
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
 		}
 
@@ -2269,14 +2268,16 @@ func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherCo
 	return e
 }
 
-// hotRestoreEligible probes persisted backend identity before a pane is attached.
-func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
-	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
-}
-
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.
 // Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
 // cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+// shouldBootStart reports whether the boot loop should Start(false) inst. Archived sessions are
+// deliberately retired and never auto-started (ADR-001, superseded-rework-session-retirement).
+// Re-evaluated after the boot stagger sleep because the answer can change while it sleeps.
+func shouldBootStart(inst *session.Instance) bool {
+	return inst != nil && !inst.IsArchived() && !inst.Started() && !deferToReconcile(inst)
+}
+
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
 	case session.PermanentlyFailed, session.Failed:

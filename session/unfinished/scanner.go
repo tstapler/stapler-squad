@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"path/filepath"
 	"sort"
@@ -333,9 +334,9 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
-		s.wg.Go(func() { s.worker(ctx) })
+		s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.worker(ctx) }) })
 	}
-	s.wg.Go(func() { s.coordinator(ctx) })
+	s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.coordinator(ctx) }) })
 	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
 	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 

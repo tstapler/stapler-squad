@@ -33,6 +33,7 @@ import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cur
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -946,7 +947,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Setup event handlers using refs to avoid recreating terminal
       sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
       const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
+      const imeSupport = terminal.element
+        ? attachTerminalImeSupport(terminal.element, "xterm", (data) => onDataRef.current?.(data), (text) => terminal.paste(text))
+        : undefined;
       const dataDisposable = terminal.onData((data) => {
+        imeSupport?.traceData(data);
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
@@ -1617,6 +1622,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
+        imeSupport?.dispose();
         sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
