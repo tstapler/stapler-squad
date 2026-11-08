@@ -21,12 +21,19 @@ export function prKey(pr: Pick<PullRequestRef, "host" | "owner" | "repo" | "numb
   return `${prHost(pr)}/${pr.owner}/${pr.repo}#${pr.number}`;
 }
 
+const HOSTNAME = /^[a-z0-9.-]+(:\d{1,5})?$/i;
+
 /**
  * The PR's GitHub URL. The list-response form of SessionPullRequest omits `url` (K11), so derive it
- * from host/owner/repo/number rather than render an empty href that opens about:blank.
+ * from host/owner/repo/number rather than render an empty href that opens about:blank. The server
+ * always sends the normalized host; an empty host means github.com. A malformed host yields "" rather
+ * than a link to the wrong site.
  */
 export function prUrl(pr: Pick<PullRequestRef, "host" | "owner" | "repo" | "number"> & { url?: string }): string {
-  return pr.url || `https://${prHost(pr)}/${pr.owner}/${pr.repo}/pull/${pr.number}`;
+  if (pr.url) return pr.url;
+  const host = prHost(pr);
+  if (!HOSTNAME.test(host)) return "";
+  return `https://${host}/${encodeURIComponent(pr.owner)}/${encodeURIComponent(pr.repo)}/pull/${pr.number}`;
 }
 
 /** "#12 acme/app": how every action names its PR (ux.md target phrase). */

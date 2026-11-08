@@ -76,4 +76,9 @@ describe("prUrl", () => {
     expect(prUrl(makePr({ number: 3, url: "" }))).toBe("https://github.com/acme/app/pull/3");
     expect(prUrl(makePr({ number: 3, url: "", host: "github.example.net" }))).toBe("https://github.example.net/acme/app/pull/3");
   });
+  it("encodes_owner_and_repo_and_rejects_a_malformed_host", () => {
+    expect(prUrl(makePr({ number: 3, url: "", owner: "a b", repo: "c/d" }))).toBe("https://github.com/a%20b/c%2Fd/pull/3");
+    expect(prUrl(makePr({ number: 3, url: "", host: "evil.com/x?y" }))).toBe("");
+    expect(prUrl(makePr({ number: 3, url: "", host: "ghe.example.net:8443" }))).toBe("https://ghe.example.net:8443/acme/app/pull/3");
+  });
 });
