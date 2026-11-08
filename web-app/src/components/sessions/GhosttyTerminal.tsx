@@ -24,7 +24,7 @@ const DEFAULT_FONT_SIZE = 14;
  * (ghostty-web's FitAddon observes the container itself).
  */
 let ghosttyReady: Promise<typeof GhosttyModule> | null = null;
-function loadGhostty(): Promise<typeof GhosttyModule> {
+export function loadGhostty(): Promise<typeof GhosttyModule> {
   ghosttyReady ??= import("ghostty-web")
     .then(async (mod) => {
       await mod.init();
