@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"regexp"
 	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,26 +80,68 @@ func (r *slowOpRecorder) fire(op string, backend backendLabel) {
 }
 
 // blockedStacks returns the goroutines running this module's code, minus the recorder itself,
-// capped in count and size so a dump stays a log line, not a log file.
+// ranked before capping so the blocked op's goroutine survives a busy process.
 func blockedStacks() string {
 	var buf bytes.Buffer
 	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
 		return err.Error()
 	}
-	var out []string
-	for _, g := range strings.Split(buf.String(), "\n\n") {
+	return rankBlockedStacks(buf.String())
+}
+
+// slowOpFrames mark a goroutine inside a timed backend op; those always outrank the rest.
+var slowOpFrames = []string{"timeBackendOp", "timedBackendOp"} //nolint:gochecknoglobals // constant list
+
+// rankBlockedStacks keeps module goroutines from a debug=2 dump: timed-op goroutines first,
+// then the longest-waiting, capped in count and size so a dump stays a log line.
+func rankBlockedStacks(dump string) string {
+	type ranked struct {
+		stack string
+		inOp  bool
+		wait  int // minutes from the "[chan receive, 5 minutes]" header; 0 when unstated
+	}
+	var gs []ranked
+	for _, g := range strings.Split(dump, "\n\n") {
 		if !strings.Contains(g, "stapler-squad/") || strings.Contains(g, "slowOpRecorder") {
 			continue
 		}
-		if len(g) > slowOpMaxStackBytes {
-			g = g[:slowOpMaxStackBytes] + "...(truncated)"
+		r := ranked{stack: g, wait: goroutineWaitMinutes(g)}
+		for _, f := range slowOpFrames {
+			if strings.Contains(g, f) {
+				r.inOp = true
+				break
+			}
 		}
-		out = append(out, g)
-		if len(out) == slowOpMaxGoroutines {
-			break
+		gs = append(gs, r)
+	}
+	sort.SliceStable(gs, func(i, j int) bool {
+		if gs[i].inOp != gs[j].inOp {
+			return gs[i].inOp
+		}
+		return gs[i].wait > gs[j].wait
+	})
+	if len(gs) > slowOpMaxGoroutines {
+		gs = gs[:slowOpMaxGoroutines]
+	}
+	out := make([]string, len(gs))
+	for i, r := range gs {
+		out[i] = r.stack
+		if len(out[i]) > slowOpMaxStackBytes {
+			out[i] = out[i][:slowOpMaxStackBytes] + "...(truncated)"
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+var goroutineWaitRe = regexp.MustCompile(`^goroutine \d+ \[[^\]]*?, (\d+) minutes`)
+
+func goroutineWaitMinutes(g string) int {
+	m := goroutineWaitRe.FindStringSubmatch(strings.TrimLeft(g, "\n"))
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
 }
 
 func logSlowOp(r slowOpReport) {
