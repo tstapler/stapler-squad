@@ -1,9 +1,9 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // renameFixture commits `dels` files under a/, then replaces them with `adds` files under b/.
@@ -52,7 +54,7 @@ func renameFixture(t *testing.T, adds, dels int, exact bool) (work, baseSHA, hea
 // gitStdout is runGit without stderr: git prints its "exhaustive rename detection was skipped" warning there.
 func gitStdout(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...).Output()
 	require.NoError(t, err)
 	return string(out)
 }
