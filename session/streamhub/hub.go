@@ -54,9 +54,15 @@ const (
 	// promptly instead of waiting out this ceiling.
 	captureTimeout = 5 * time.Second
 
+	// defaultResizeApplyTimeout bounds the whole SetWindowSize+capture of one resize. Live output
+	// is suppressed for that long (h.resizing), including the echo of what the user is typing, and
+	// a snapshot that misses its budget costs only a stale screen until the next redraw, so it is
+	// far shorter than captureTimeout.
+	defaultResizeApplyTimeout = 2 * time.Second
+
 	// captureRetryTimeout bounds the single post-resize capture retry; the resize
 	// apply lock is held across it, so it is shorter than the first attempt.
-	captureRetryTimeout = 2 * time.Second
+	captureRetryTimeout = 1 * time.Second
 )
 
 // HubOption configures a StreamHub at construction time. Tests use these to
@@ -81,6 +87,12 @@ func WithSlowSubscriberGrace(d time.Duration) HubOption {
 // subscriber detaches before tearing down.
 func WithTeardownGrace(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.teardownGrace = d }
+}
+
+// WithResizeApplyTimeout overrides the budget for one resize's SetWindowSize and capture
+// (default 2s); tests shrink it to exercise the timeout path in milliseconds.
+func WithResizeApplyTimeout(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.resizeApplyTimeout = d }
 }
 
 // WithQuiescenceTimeout overrides the hard deadline a resize's
@@ -132,6 +144,7 @@ type StreamHub struct {
 	teardownGrace         time.Duration
 	clock                 Clock
 	quiescenceTimeout     time.Duration
+	resizeApplyTimeout    time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 	outputObserver        func([]byte)
@@ -270,6 +283,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		teardownGrace:         DefaultHubTeardownGrace,
 		clock:                 realClock{},
 		quiescenceTimeout:     defaultQuiescenceTimeout,
+		resizeApplyTimeout:    defaultResizeApplyTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
 		batchMaxWindow:        MaxBatchWindow,
 		state:                 HubStarting,
@@ -871,7 +885,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// stops this pipeline immediately instead of waiting out a fixed
 	// ceiling neither call could otherwise be told about.
 	callerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
+	ctx, cancel := context.WithTimeout(ctx, h.resizeApplyTimeout)
 	defer cancel()
 
 	h.resizeMu.Lock()
@@ -929,7 +943,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		// Our own budget ran out while the caller is still connected. Dropping the
 		// capture would leave subscribers on the pre-resize screen (output was
 		// suppressed during the resize and nothing re-arms a capture), so retry once.
-		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureRetryTimeout)
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, min(captureRetryTimeout, h.resizeApplyTimeout))
 		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
 		retryCancel()
 	}

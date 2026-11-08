@@ -131,3 +131,33 @@ func (l *slowRequestLane) close() {
 		close(l.stop)
 	})
 }
+
+// latestResize coalesces resize requests to the newest size and applies them on the slow lane:
+// hub.RequestResize resizes the pane and captures it (seconds under load), and running it in the
+// read loop would hold keystrokes behind every resize a refitting or flapping client sends.
+type latestResize struct {
+	mu      sync.Mutex
+	req     resizeReq
+	pending bool
+}
+
+// push records the newest size and, unless a run is already queued, queues apply on lane.
+// apply always receives the newest size at the time it runs.
+func (r *latestResize) push(lane *slowRequestLane, cols, rows int, apply func(cols, rows int)) {
+	r.mu.Lock()
+	r.req = resizeReq{cols, rows}
+	queued := r.pending
+	r.pending = true
+	r.mu.Unlock()
+	if queued {
+		return
+	}
+	lane.submit(func() error {
+		r.mu.Lock()
+		req := r.req
+		r.pending = false
+		r.mu.Unlock()
+		apply(req.cols, req.rows)
+		return nil
+	})
+}

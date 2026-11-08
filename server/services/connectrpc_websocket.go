@@ -2504,6 +2504,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		_ = stream.conn.SetReadDeadline(time.Now())
 	})
 	defer slowLane.close()
+	var resizes latestResize
 	runInputReadLoop(inputReadLoopParams{
 		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
@@ -2535,12 +2536,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			if writer == nil {
 				return
 			}
-			size, sizeErr := streamhub.NewTerminalSize(cols, rows)
-			if sizeErr != nil {
+			if _, sizeErr := streamhub.NewTerminalSize(cols, rows); sizeErr != nil {
 				log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
 				return
 			}
-			hub.RequestResize(connCtx, subscriberID, size)
+			resizes.push(slowLane, cols, rows, func(cols, rows int) {
+				if size, err := streamhub.NewTerminalSize(cols, rows); err == nil {
+					hub.RequestResize(connCtx, subscriberID, size)
+				}
+			})
 		},
 		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
 			return scrollbackResultForRequest(scrollbackRequestParams{

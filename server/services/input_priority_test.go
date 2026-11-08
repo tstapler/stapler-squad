@@ -181,3 +181,48 @@ func TestDispatchInputReadLoopFrame_should_ReturnWhileAScrollbackCaptureIsInFlig
 	<-started // the capture is running on the lane while the read loop is free
 	close(gate)
 }
+
+func TestLatestResize_should_ApplyOnlyTheNewestSizeAndNeverBlockThePusher(t *testing.T) {
+	t.Parallel()
+	lane := newSlowRequestLane(make(chan error, 1), nil)
+	t.Cleanup(lane.close)
+	var r latestResize
+
+	gate := make(chan struct{})
+	started := make(chan struct{})
+	var mu sync.Mutex
+	var applied [][2]int
+	apply := func(cols, rows int) {
+		mu.Lock()
+		applied = append(applied, [2]int{cols, rows})
+		first := len(applied) == 1
+		mu.Unlock()
+		if first {
+			close(started)
+			<-gate // the first resize is stuck in SetWindowSize/capture
+		}
+	}
+
+	pushed := make(chan struct{})
+	go func() {
+		r.push(lane, 80, 24, apply)
+		<-started
+		r.push(lane, 90, 30, apply) // superseded
+		r.push(lane, 100, 35, apply)
+		close(pushed)
+	}()
+	select {
+	case <-pushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push blocked behind an in-flight resize")
+	}
+	close(gate)
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(applied) == 2
+	}, 5*time.Second, time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, [][2]int{{80, 24}, {100, 35}}, applied, "the superseded 90x30 is never applied")
+	mu.Unlock()
+}

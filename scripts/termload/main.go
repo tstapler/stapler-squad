@@ -43,6 +43,7 @@ type config struct {
 	cols     int
 	rows     int
 	resync   time.Duration
+	resize   time.Duration
 }
 
 func main() {
@@ -56,6 +57,7 @@ func main() {
 	flag.IntVar(&c.cols, "cols", 120, "terminal columns")
 	flag.IntVar(&c.rows, "rows", 40, "terminal rows")
 	flag.DurationVar(&c.resync, "resync-every", 0, "send a mid-stream CurrentPaneRequest this often (a refit/resync storm); 0 disables")
+	flag.DurationVar(&c.resize, "resize-every", 0, "alternate the terminal height this often, like a second viewer of another size; 0 disables")
 	flag.Parse()
 	if c.session == "" {
 		fmt.Fprintln(os.Stderr, "-session is required")
@@ -171,6 +173,25 @@ func (cl *client) resyncLoop(d time.Duration, c config, stop <-chan struct{}) {
 	}
 }
 
+// resizeLoop alternates between the configured size and a shorter one every d until stop closes.
+func (cl *client) resizeLoop(d time.Duration, c config, stop <-chan struct{}) {
+	rows := c.rows
+	for {
+		select {
+		case <-stop:
+			return
+		case <-time.After(d):
+			rows = map[bool]int{true: c.rows - 13, false: c.rows}[rows == c.rows]
+			td := &sessionv1.TerminalData{SessionId: cl.session, Data: &sessionv1.TerminalData_Resize{
+				Resize: &sessionv1.TerminalResize{Cols: int32(c.cols), Rows: int32(rows)},
+			}}
+			if body, err := proto.Marshal(td); err == nil {
+				_ = cl.write(protocol.CreateEnvelope(0, body))
+			}
+		}
+	}
+}
+
 // awaitMarker drains output until a frame contains the marker byte, or the timeout passes.
 func (cl *client) awaitMarker(timeout time.Duration) bool {
 	deadline := time.After(timeout)
@@ -208,6 +229,12 @@ func run(c config) error {
 		stop := make(chan struct{})
 		defer close(stop)
 		go cl.resyncLoop(c.resync, c, stop)
+	}
+
+	if c.resize > 0 {
+		stop := make(chan struct{})
+		defer close(stop)
+		go cl.resizeLoop(c.resize, c, stop)
 	}
 
 	var res results
