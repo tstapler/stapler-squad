@@ -26,7 +26,7 @@ case "$mode" in
   test)
     # A filter that matches nothing still "passes", so require the filter to add tests over a
     # baseline run that matches nothing (the second run reuses the compile cache).
-    count() { "$zig" build test-lib-vt "-Dtest-filter=$1" $common --summary all 2>&1 | sed -n 's/.*steps succeeded; [0-9]*\\/\\([0-9]*\\) tests passed.*/\\1/p' | head -n1; }
+    count() { "$zig" build test-lib-vt "-Dtest-filter=$1" $common --summary all > "$tmp/out.txt" 2>&1 || true; sed -n 's/.*steps succeeded; [0-9]*\\/\\([0-9]*\\) tests passed.*/\\1/p' "$tmp/out.txt" | head -n1; tail -n 25 "$tmp/out.txt" >&2; }
     base="$(count NO_SUCH_TEST_NAME_EVER)"
     with="$(count "$5")"
     echo "baseline=$base with_filter=$with" >&2
