@@ -99,7 +99,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       term.loadAddon(fit);
       term.open(container);
       const ime = term.element
-        ? attachTerminalImeSupport(term.element, "ghostty", (data) => onDataRef.current?.(data))
+        ? attachTerminalImeSupport(term.element, "ghostty", (data) => onDataRef.current?.(data), (text) => term?.paste(text))
         : undefined;
       disposeIme = () => ime?.dispose();
       term.onData((data) => {

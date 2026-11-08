@@ -333,12 +333,17 @@ export async function showBrowserNotification(
     let notif: Notification;
     try {
       notif = new Notification(title, init);
-    } catch {
+    } catch (ctorErr) {
       // Android Chrome throws "Illegal constructor" for page-created notifications; only the
       // service worker may show them. Those can't be closed from here, so skip the bookkeeping.
+      if (!(ctorErr instanceof TypeError && /illegal constructor/i.test(ctorErr.message))) throw ctorErr;
       try {
         const reg = await navigator.serviceWorker?.getRegistration();
-        await reg?.showNotification(title, init);
+        if (!reg) {
+          console.warn("[notifications] no service worker registration; notification dropped");
+          return;
+        }
+        await reg.showNotification(title, init);
       } catch (e) {
         console.warn("[notifications] showNotification fallback failed:", e);
       }

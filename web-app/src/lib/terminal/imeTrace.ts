@@ -1,7 +1,8 @@
 // Diagnostics for terminal soft-keyboard input: a ring buffer of the last input-path events on the
 // terminal root, shipped to the server log through the client-log shipper (console.warn, tag
-// "[ime-trace]") when the page is Android or has ?imeTrace=1. Lets us read the exact event sequence
-// a phone produced instead of inferring it.
+// "[ime-trace]") only when the page has ?imeTrace=1. Lets us read the exact event sequence a phone
+// produced instead of inferring it. PRIVACY: never record typed content (data or key values), since
+// passwords and tokens typed on a phone would land in the server log; only types, lengths and flags.
 
 const RING_SIZE = 50;
 const FLUSH_DELAY_MS = 800;
@@ -10,9 +11,11 @@ const EVENT_TYPES = [
   "beforeinput", "input", "focusin", "focusout",
 ] as const;
 
-export function imeTraceEnabled(ua: string = navigator.userAgent, search: string = location.search): boolean {
-  return /Android/i.test(ua) || new URLSearchParams(search).has("imeTrace");
+export function imeTraceEnabled(search: string = location.search): boolean {
+  return new URLSearchParams(search).get("imeTrace") === "1";
 }
+
+const dataLen = (data: string | null | undefined) => (data == null ? "none" : String([...data].length));
 
 function describe(e: Event): string {
   const t = e.target instanceof Element ? e.target.tagName.toLowerCase() : "?";
@@ -22,15 +25,15 @@ function describe(e: Event): string {
   switch (e.type) {
     case "keydown":
     case "keyup":
-      return `${e.type} key=${k.key} code=${k.keyCode} comp=${k.isComposing} t=${t}`;
+      return `${e.type} kc=${k.keyCode === 229 ? "229" : "other"} comp=${k.isComposing} t=${t}`;
     case "beforeinput":
     case "input":
-      return `${e.type} type=${i.inputType} data=${JSON.stringify(i.data)} comp=${i.isComposing} cancel=${e.cancelable} t=${t}`;
+      return `${e.type} type=${i.inputType} len=${dataLen(i.data)} comp=${i.isComposing} cancel=${e.cancelable} t=${t}`;
     case "focusin":
     case "focusout":
       return `${e.type} t=${t}`;
     default:
-      return `${e.type} data=${JSON.stringify(c.data)} t=${t}`;
+      return `${e.type} len=${dataLen(c.data)} t=${t}`;
   }
 }
 

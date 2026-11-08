@@ -1,26 +1,32 @@
 import { attachImeTrace, imeTraceEnabled } from "../imeTrace";
 
 describe("imeTrace", () => {
-  it("enables on Android or ?imeTrace", () => {
-    expect(imeTraceEnabled("Mozilla/5.0 (Linux; Android 10)", "")).toBe(true);
-    expect(imeTraceEnabled("Mozilla/5.0 (Macintosh)", "?imeTrace=1")).toBe(true);
-    expect(imeTraceEnabled("Mozilla/5.0 (Macintosh)", "")).toBe(false);
+  it("is opt-in via ?imeTrace=1 only (not on by default for Android)", () => {
+    expect(imeTraceEnabled("?imeTrace=1")).toBe(true);
+    expect(imeTraceEnabled("?imeTrace=0")).toBe(false);
+    expect(imeTraceEnabled("")).toBe(false);
   });
 
   it("ships the recorded input-path events as one [ime-trace] warning on dispose", () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const root = document.createElement("div");
     const trace = attachImeTrace(root, "ghostty");
-    root.dispatchEvent(new KeyboardEvent("keydown", { key: "Unidentified", keyCode: 229, bubbles: true }));
-    root.dispatchEvent(new CompositionEvent("compositionupdate", { data: "hi", bubbles: true }));
+    root.dispatchEvent(new KeyboardEvent("keydown", { key: "p", keyCode: 229, bubbles: true }));
+    root.dispatchEvent(new CompositionEvent("compositionupdate", { data: "hunter2", bubbles: true }));
+    root.dispatchEvent(new InputEvent("beforeinput", { data: "s3cret", inputType: "insertText", bubbles: true }));
     trace.note("onData len=2");
     trace.dispose();
     expect(warn).toHaveBeenCalledTimes(1);
     const msg = String(warn.mock.calls[0][0]);
     expect(msg).toContain("[ime-trace] renderer=ghostty");
-    expect(msg).toContain("keydown key=Unidentified code=229");
-    expect(msg).toContain("compositionupdate data=\\\"hi\\\"");
+    expect(msg).toContain("keydown kc=229");
+    expect(msg).toContain("compositionupdate len=7");
+    expect(msg).toContain("beforeinput type=insertText len=6");
     expect(msg).toContain("onData len=2");
+    // Privacy: typed content must never be recorded.
+    expect(msg).not.toContain("hunter2");
+    expect(msg).not.toContain("s3cret");
+    expect(msg).not.toMatch(/key=/);
     warn.mockRestore();
   });
 

@@ -948,7 +948,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
       const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
       const imeSupport = terminal.element
-        ? attachTerminalImeSupport(terminal.element, "xterm", (data) => onDataRef.current?.(data))
+        ? attachTerminalImeSupport(terminal.element, "xterm", (data) => onDataRef.current?.(data), (text) => terminal.paste(text))
         : undefined;
       const dataDisposable = terminal.onData((data) => {
         imeSupport?.traceData(data);
