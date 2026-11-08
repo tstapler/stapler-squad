@@ -5,11 +5,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/internal/termlat"
 )
 
 // noProgressCheck is a droppedAtSent sentinel: the writer has already shown progress, so the
 // next repaint need not wait for more.
 const noProgressCheck = ^uint64(0)
+
+// latencyLabeler is implemented by a Transport that knows which backend and listener its
+// observations belong to; others are recorded under "unknown".
+type latencyLabeler interface{ LatencyLabels() termlat.Labels }
 
 // subscriber is the hub-side handle for one attached Transport: a bounded
 // outbound queue drained by a dedicated writer goroutine, plus the
@@ -114,8 +120,12 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 			if !s.drainPending(onSendError) {
 				return
 			}
+			labels := s.latencyLabels()
 			for data := range s.outbound {
-				if err := s.transport.Send(data); err != nil {
+				sendStart := time.Now()
+				err := s.transport.Send(data)
+				termlat.Default.Record(termlat.StageOutputSend, labels, time.Since(sendStart))
+				if err != nil {
 					onSendError(s.id, err)
 					return
 				}
@@ -123,6 +133,13 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 			}
 		})
 	})
+}
+
+func (s *subscriber) latencyLabels() termlat.Labels {
+	if l, ok := s.transport.(latencyLabeler); ok {
+		return l.LatencyLabels()
+	}
+	return termlat.Labels{}
 }
 
 // trySend attempts a non-blocking enqueue of data onto the subscriber's
@@ -133,16 +150,26 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 // stalled is true when the frame was accepted into the replay backlog but the backlog is past
 // drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
 func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
+	delivered, stalled, queueDepth := s.enqueueLocked(data)
+	if queueDepth >= 0 {
+		// Recorded after s.mu is released: telemetry must not extend the hub's per-frame lock hold.
+		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(queueDepth))
+	}
+	return delivered, stalled
+}
+
+// enqueueLocked does trySend's work under s.mu; queueDepth is -1 unless a frame went onto outbound.
+func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueDepth int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false, false
+		return false, false, -1
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true, false
+		return true, false, -1
 	}
 	if s.painting {
 		stalled = s.paintDone && len(s.pending) >= s.drainLimit
@@ -152,7 +179,7 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 			s.pending = append(s.pending, data)
 			s.pendingBytes += len(data)
 		}
-		return true, stalled
+		return true, stalled, -1
 	}
 	if s.resyncing {
 		if len(s.held) < cap(s.outbound)-1 {
@@ -160,18 +187,18 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 		} else {
 			s.heldLost = true
 		}
-		return true, false
+		return true, false, -1
 	}
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
-		return true, false
+		return true, false, len(s.outbound)
 	default:
 		if !s.dropped {
 			s.droppedAtSent = s.sentFrames.Load()
 		}
 		s.dropped = true
-		return false, false
+		return false, false, -1
 	}
 }
 
