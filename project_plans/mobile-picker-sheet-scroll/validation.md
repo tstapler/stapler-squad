@@ -8,7 +8,7 @@
 
 ### R2 — Pane list scrollable
 - Confirm `mobilePickerPaneList` has `overflowY: "auto"` and `flex: 1`
-- Test: 10 panes → `mobile-picker-pane-list` has 10 child buttons
+- Test: 16 panes → `mobile-picker-pane-list` has ≥15 child buttons, fixed actions and Cancel outside it
 
 ### R3 — Fixed actions always visible
 - "Open existing pane" (when present), "New full-screen pane", "Temporary modal" are

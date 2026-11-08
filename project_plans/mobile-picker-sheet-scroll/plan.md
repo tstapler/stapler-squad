@@ -3,8 +3,8 @@
 ## Summary
 
 Two-file change: add flex + maxHeight/overflow to the CSS, and wrap the per-pane list
-in a scrollable `<div>` in the JSX. Update two brittle test assertions. Estimated
-effort: ~2h.
+in a scrollable `<div>` in the JSX. Add two tests; the existing sibling-order assertions stay valid. Cost class: XS
+(one small worker run).
 
 ## Implementation Steps
 
@@ -26,7 +26,7 @@ export const mobilePickerSheet = style({
   // NEW:
   display: "flex",
   flexDirection: "column",
-  maxHeight: "65dvh",
+  maxHeight: "60dvh",  // 60 not 65: see Adversarial Review (keyboard-open headroom)
   // dvh falls back to vh on Safari < 15.4; acceptable degradation
 });
 ```
@@ -36,9 +36,10 @@ export const mobilePickerSheet = style({
 ```ts
 export const mobilePickerPaneList = style({
   overflowY: "auto",
-  flex: 1,
-  // WebKit momentum scrolling
-  WebkitOverflowScrolling: "touch",
+  flex: "1 1 auto",
+  minHeight: 0,
+  overscrollBehavior: "contain",
+  borderTop: `1px solid ${vars.color.borderColor}`,
 });
 ```
 
@@ -108,9 +109,9 @@ Test 3: `expect(screen.getByTestId("mobile-picker-new-pane").nextElementSibling)
 Add a new test:
 ```ts
 it("renders a scrollable pane list when many panes are present", () => {
-  // 10 panes: check mobile-picker-pane-list exists and has 10 children
+  // 16-pane tree: list has >=15 children; fixed actions and Cancel are outside it
   const paneList = screen.getByTestId("mobile-picker-pane-list");
-  expect(paneList.children).toHaveLength(10);
+  expect(paneList.children.length).toBeGreaterThanOrEqual(15);
 });
 ```
 
@@ -145,11 +146,14 @@ prevents scroll chaining to the body when the list reaches its top/bottom.
 ```ts
 export const mobilePickerPaneList = style({
   overflowY: "auto",
-  flex: 1,
+  flex: "1 1 auto",
+  minHeight: 0,
   overscrollBehavior: "contain",
   borderTop: `1px solid ${vars.color.borderColor}`,
 });
 ```
+
+(Implemented as written; `minHeight: 0` was added so the flex child can shrink below its content.)
 
 ## Files Changed
 
