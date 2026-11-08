@@ -8,6 +8,7 @@ import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
+import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
 
@@ -82,6 +83,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     if (!container) return;
     let disposed = false;
     let term: GhosttyWebTerminal | null = null;
+    let detachRenderGate: (() => void) | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
       if (disposed) return;
@@ -104,6 +106,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       for (const chunk of pendingWritesRef.current.splice(0)) surface?.write(chunk);
       fit.fit();
       fit.observeResize();
+      detachRenderGate = attachRenderGate(term, container);
       onResizeRef.current?.(term.cols, term.rows);
     }).catch((err) => {
       pendingWritesRef.current.length = 0;
@@ -112,6 +115,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
 
     return () => {
       disposed = true;
+      detachRenderGate?.();
       terminalRef.current = null;
       compatRef.current = null;
       fitRef.current?.dispose?.();
