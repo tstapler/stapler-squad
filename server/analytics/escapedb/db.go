@@ -23,7 +23,7 @@ func Path(configDir string) string {
 }
 
 // Open opens db/escape_events.db through the dbpool registry (own single writer,
-// WAL, synchronous=NORMAL) and creates only the escape_events table. Closing the
+// WAL, synchronous=NORMAL) and creates the escape_events and rollup tables. Closing the
 // returned client closes the database.
 func Open(ctx context.Context, configDir string) (*ent.Client, *dbpool.Database, error) {
 	h, err := dbpool.OpenEscapeEvents(Path(configDir))
@@ -36,6 +36,9 @@ func Open(ctx context.Context, configDir string) (*ent.Client, *dbpool.Database,
 	session.EntSchemaCreateMu.Lock()
 	err = migrate.Create(ctx, migrate.NewSchema(h.Driver()), []*schema.Table{migrate.EscapeEventsTable})
 	session.EntSchemaCreateMu.Unlock()
+	if err == nil {
+		err = EnsureRollupSchema(ctx, h.Driver())
+	}
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("escape events db: schema migration: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
@@ -1291,9 +1292,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
 	// Escape events have their own database and retention.
+	var escapeDriver dialect.Driver // nil keeps escape analytics on raw rows only (tests wire a client without the DB handle)
+	if deps.EscapeEventsDB != nil {
+		escapeDriver = deps.EscapeEventsDB.Driver()
+	}
 	if deps.EscapeEventsClient != nil {
-		escapedb.StartRetentionEnforcer(serverCtx, deps.EscapeEventsClient,
-			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+		escapedb.NewRetention(deps.EscapeEventsClient, escapeDriver, escapedb.RetentionConfig{
+			RawRetentionDays:  cfg.EscapeAnalyticsRetentionDays,
+			MaxRowsPerSession: cfg.EscapeAnalyticsMaxRowsPerSession,
+		}).Start(serverCtx, &srv.backgroundTasksWG)
 		srv.closeAfterJoin = append(srv.closeAfterJoin, func() {
 			if err := deps.EscapeEventsClient.Close(); err != nil {
 				log.Warn("escape events DB close failed", "err", err)
@@ -1306,8 +1313,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
-	if deps.EscapeEventsClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
-		escapeWriter := escapedb.NewEscapeEventBatchWriter(deps.EscapeEventsClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+	if escapeDriver != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := escapedb.NewEscapeEventBatchWriter(escapeDriver)
 		srv.goBackground(func() { escapeWriter.Start(serverCtx) })
 		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
 		log.Info("Escape analytics batch writer started",
@@ -1321,6 +1328,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
 	if deps.EscapeEventsClient != nil {
 		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
+		deps.SessionService.SetEscapeAggregateReader(escapedb.NewReader(deps.EscapeEventsClient, escapeDriver, escapedb.RollupTiers{}, nil))
 		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 
