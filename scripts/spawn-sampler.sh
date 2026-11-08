@@ -3,6 +3,8 @@
 # Usage: scripts/spawn-sampler.sh [seconds=60] [interval=0.5]
 # Polls `ps` (no sudo), counts PIDs first seen per sample. Processes that live
 # shorter than the interval are missed, so the result is a LOWER BOUND.
+# Each sample itself execs ~10 short processes (ps, awk, sort, ...): the sampler
+# adds load to the host it measures, so use a longer interval on a busy machine.
 set -euo pipefail
 dur=${1:-60}; iv=${2:-0.5}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

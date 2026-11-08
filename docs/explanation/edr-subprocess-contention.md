@@ -72,7 +72,7 @@ the same order as everything the sampler could see. Because these processes live
 At the same moment `ps` showed: one `/tmp/r2_bench/pr86-*` binary at about 420% CPU with 14 `yes` and 13 busy `sh -c 'while :'`
 loops, a 3 h 45 min old `xargs -P 12` flake hunt (`rp_dbg.test`, 12 processes, 2.4 GB), 117 leaked `git-daemon` test servers,
 42 `chrome-headless-shell`, and about 38 each of `kibitzer`, `consolette`, `stapler-mcp`, `bun` per-session helpers. Run
-`ps -axo pcpu,rss,comm` before blaming the EDR: these account for more CPU than Falcon (about 190%).
+`ps -axo pcpu,rss,comm` before blaming the EDR: in that snapshot these appeared to use more CPU than Falcon (INFERRED: the Falcon figure was read once from `ps` and is not in the measurements table; re-measure with step 4 below).
 
 ## How to measure the EDR's share
 
