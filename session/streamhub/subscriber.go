@@ -4,7 +4,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/internal/termlat"
 )
+
+// latencyLabeler is implemented by a Transport that knows which backend and listener its
+// observations belong to; others are recorded under "unknown".
+type latencyLabeler interface{ LatencyLabels() termlat.Labels }
 
 // subscriber is the hub-side handle for one attached Transport: a bounded
 // outbound queue drained by a dedicated writer goroutine, plus the
@@ -97,14 +103,25 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 			if !s.drainPending(onSendError) {
 				return
 			}
+			labels := s.latencyLabels()
 			for data := range s.outbound {
-				if err := s.transport.Send(data); err != nil {
+				sendStart := time.Now()
+				err := s.transport.Send(data)
+				termlat.Default.Record(termlat.StageOutputSend, labels, time.Since(sendStart))
+				if err != nil {
 					onSendError(s.id, err)
 					return
 				}
 			}
 		}()
 	})
+}
+
+func (s *subscriber) latencyLabels() termlat.Labels {
+	if l, ok := s.transport.(latencyLabeler); ok {
+		return l.LatencyLabels()
+	}
+	return termlat.Labels{}
 }
 
 // trySend attempts a non-blocking enqueue of data onto the subscriber's
@@ -139,6 +156,7 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
+		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(len(s.outbound)))
 		return true, false
 	default:
 		return false, false
