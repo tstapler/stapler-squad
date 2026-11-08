@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -1754,6 +1755,13 @@ func (s *Server) Shutdown() error {
 	if s.finalStatsFlush != nil {
 		defer s.finalStatsFlush()
 	}
+	// Return every pane the QoS hints boosted or demoted to Normal: tymuxd keeps hints until it
+	// restarts, so a stopped squad must not leave one behind.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tymux.ResetPaneActivities(ctx)
+	}()
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.

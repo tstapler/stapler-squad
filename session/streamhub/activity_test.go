@@ -70,6 +70,26 @@ func TestHub_should_SendInteractiveOnce_ThenNormalWhenTypingStops(t *testing.T) 
 	assert.Equal(t, qos.ActivityNormal, rig.next(t))
 }
 
+func TestHub_should_ResendTheHint_Periodically_WhileTypingContinues(t *testing.T) {
+	t.Parallel()
+	rig := newActivityRig()
+	hub := rig.hub("a")
+	defer hub.ForceTeardown()
+
+	hub.NoteInteractive("viewer")
+	require.Equal(t, qos.ActivityInteractive, rig.next(t))
+	for elapsed := time.Duration(0); elapsed < 50*time.Second; elapsed += 4 * time.Second {
+		rig.clock.Advance(4 * time.Second)
+		hub.NoteInteractive("viewer")
+	}
+	rig.none(t)
+	for elapsed := time.Duration(0); elapsed < 12*time.Second; elapsed += 4 * time.Second {
+		rig.clock.Advance(4 * time.Second)
+		hub.NoteInteractive("viewer")
+	}
+	assert.Equal(t, qos.ActivityInteractive, rig.next(t), "a restarted daemon forgot the hint; the refresh restores it")
+}
+
 func TestHub_should_BeBackground_WhileAnotherSessionIsInteractive(t *testing.T) {
 	t.Parallel()
 	rig := newActivityRig()

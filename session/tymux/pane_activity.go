@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
@@ -35,6 +36,9 @@ type activityHintState struct {
 	capability atomic.Int32
 	loggedOnce atomic.Bool
 	sender     atomic.Pointer[paneActivitySender]
+	// lastSent is the last hint the daemon accepted (a qos.Activity), so shutdown only has to
+	// clear panes that are actually boosted or demoted.
+	lastSent atomic.Int32
 }
 
 // SetPaneActivity tells tymuxd how latency-sensitive this session's pane is right now. It is an
@@ -56,7 +60,37 @@ func (s *tymuxGRPCSession) SetPaneActivity(ctx context.Context, activity qos.Act
 		s.logActivityHintOnce("daemon rejected SetPaneActivity as unimplemented")
 		return nil
 	}
+	if err == nil {
+		s.activity.lastSent.Store(int32(activity))
+	}
 	return err
+}
+
+// resetActivityTimeout bounds each best-effort reset RPC at startup and shutdown.
+const resetActivityTimeout = 2 * time.Second
+
+// resetPaneActivityAsync clears whatever hint a previous squad left on this pane: the daemon
+// keeps hints until it restarts, so a squad that died while a pane was Background would
+// otherwise leave it demoted. Fire-and-forget; a no-op on daemons without the capability.
+func (s *tymuxGRPCSession) resetPaneActivityAsync() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), resetActivityTimeout)
+		defer cancel()
+		_ = s.SetPaneActivity(ctx, qos.ActivityNormal)
+	}()
+}
+
+// ResetPaneActivities returns every hinted pane to Normal. Call it on shutdown, after the hubs
+// have stopped sending, so a stopped squad never leaves a pane boosted or demoted.
+func ResetPaneActivities(ctx context.Context) {
+	claimedSessions.Range(func(_, v any) bool {
+		s, ok := v.(*tymuxGRPCSession)
+		if !ok || qos.Activity(s.activity.lastSent.Load()) == qos.ActivityNormal {
+			return true
+		}
+		_ = s.SetPaneActivity(ctx, qos.ActivityNormal)
+		return true
+	})
 }
 
 // activityHintAvailable is true when a sender exists and the daemon advertises the capability.

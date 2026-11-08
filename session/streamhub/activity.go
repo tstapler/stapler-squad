@@ -23,6 +23,11 @@ type ActivityHinter interface {
 	SetPaneActivity(ctx context.Context, activity qos.Activity) error
 }
 
+// activityRefreshInterval is how often a non-Normal hint is re-sent. The daemon keeps hints until
+// it restarts and forgets them then, so a refresh bounds how long a restarted daemon runs a
+// boosted or demoted pane at Normal.
+const activityRefreshInterval = time.Minute
+
 // activityHintTimeout bounds one hint RPC; hints are advisory, so a slow daemon just misses one.
 const activityHintTimeout = 2 * time.Second
 
@@ -49,6 +54,8 @@ type activityState struct {
 	unwatch  func()
 	expiryMu sync.Mutex
 	expiry   Timer
+	refresh  Timer // guarded by expiryMu
+	force    atomic.Bool
 	closed   atomic.Bool
 }
 
@@ -127,6 +134,23 @@ func (h *StreamHub) refreshActivity() {
 	h.kickActivityPump()
 }
 
+// armActivityRefresh re-sends a non-Normal hint every activityRefreshInterval until it changes.
+func (h *StreamHub) armActivityRefresh(sent qos.Activity) {
+	h.activity.expiryMu.Lock()
+	defer h.activity.expiryMu.Unlock()
+	if h.activity.refresh != nil {
+		h.activity.refresh.Stop()
+		h.activity.refresh = nil
+	}
+	if sent == qos.ActivityNormal || h.activity.closed.Load() {
+		return
+	}
+	h.activity.refresh = h.clock.AfterFunc(activityRefreshInterval, func() {
+		h.activity.force.Store(true)
+		h.kickActivityPump()
+	})
+}
+
 func (h *StreamHub) kickActivityPump() {
 	if !h.activity.pending.CompareAndSwap(false, true) {
 		return
@@ -137,9 +161,10 @@ func (h *StreamHub) kickActivityPump() {
 func (h *StreamHub) pumpActivity() {
 	for {
 		want := qos.Activity(h.activity.desired.Load())
-		if want != h.activity.lastSent {
+		if refresh := h.activity.force.Swap(false); want != h.activity.lastSent || (refresh && want != qos.ActivityNormal) {
 			h.activity.lastSent = want
 			h.activitySink(want)
+			h.armActivityRefresh(want)
 		}
 		sent := h.activity.lastSent // read before releasing ownership of lastSent
 		h.activity.pending.Store(false)
@@ -160,6 +185,10 @@ func (h *StreamHub) closeQoS() {
 	if h.activity.expiry != nil {
 		h.activity.expiry.Stop()
 		h.activity.expiry = nil
+	}
+	if h.activity.refresh != nil {
+		h.activity.refresh.Stop()
+		h.activity.refresh = nil
 	}
 	h.activity.expiryMu.Unlock()
 	if h.activity.unwatch != nil {

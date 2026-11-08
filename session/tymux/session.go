@@ -346,6 +346,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.restartIsPending = false
 	s.closed = false
+	s.resetPaneActivityAsync()
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
 	// a second RestoreWithWorkDir()) doesn't carry a stale closing flag,
