@@ -11,6 +11,9 @@ import (
 // InteractiveWindow is how long after its last input a session still counts as interactive.
 const InteractiveWindow = 5 * time.Second
 
+// BackgroundMaxDeferral bounds how long a poller yields to typing before it runs once anyway.
+const BackgroundMaxDeferral = 30 * time.Second
+
 // Tracker is a process-wide record of recently typed-into sessions. Use NewTracker or Default.
 type Tracker struct {
 	now    func() time.Time

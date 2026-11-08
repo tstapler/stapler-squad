@@ -18,6 +18,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/internal/dirwatch"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -525,6 +526,9 @@ func (s *Scanner) coordinator(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			if qos.Default.Defer("unfinished_scanner", qos.BackgroundMaxDeferral) {
+				continue
+			}
 			s.enqueueAll(false)
 		case <-s.triggerCh:
 			s.enqueueAll(true)
