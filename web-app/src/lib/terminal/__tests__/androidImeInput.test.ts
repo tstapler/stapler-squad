@@ -31,12 +31,14 @@ function gboard(ta: HTMLTextAreaElement) {
     },
     insertText(text: string) {
       keydown();
+      ta.dispatchEvent(new InputEvent("beforeinput", { data: text, inputType: "insertText", bubbles: true, cancelable: true, composed: true }));
       ta.value += text;
       ta.dispatchEvent(new InputEvent("input", { data: text, inputType: "insertText", bubbles: true, composed: true }));
       keyup();
     },
     backspace() {
       keydown();
+      ta.dispatchEvent(new InputEvent("beforeinput", { inputType: "deleteContentBackward", bubbles: true, cancelable: true, composed: true }));
       ta.value = ta.value.slice(0, -1);
       ta.dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward", bubbles: true, composed: true }));
       keyup();

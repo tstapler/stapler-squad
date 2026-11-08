@@ -218,6 +218,24 @@ describe("showBrowserNotification", () => {
     expect(notifInstances[0].close).not.toHaveBeenCalled();
   });
 
+  it("falls_back_to_service_worker_showNotification_When_constructor_throws_illegal_constructor", async () => {
+    MockNotification.mockImplementation(() => {
+      throw new TypeError("Failed to construct 'Notification': Illegal constructor.");
+    });
+    const showNotification = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "serviceWorker", {
+      value: { getRegistration: jest.fn().mockResolvedValue({ showNotification }) },
+      configurable: true,
+    });
+    let show: Awaited<ReturnType<typeof importShowBrowserNotification>>;
+    await jest.isolateModulesAsync(async () => {
+      show = await importShowBrowserNotification();
+    });
+
+    await expect(show!("Hi", { tag: "android" })).resolves.toBeUndefined();
+    expect(showNotification).toHaveBeenCalledWith("Hi", expect.objectContaining({ tag: "android" }));
+  });
+
   // ── localStorage disabled ─────────────────────────────────────────────────
 
   it("should_notShowNotification_When_notificationsDisabled", async () => {

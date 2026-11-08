@@ -1,6 +1,6 @@
 // Android soft keyboards (Gboard) never send per-key keydown for letters: every letter is a keydown with
 // keyCode 229 / key "Unidentified", and the text arrives as composition + `input` events on xterm's helper
-// textarea. xterm.js only emits a composed word at compositionend (space, punctuation, picking a
+// textarea (or ghostty-web's contenteditable root). xterm.js only emits a composed word at compositionend (space, punctuation, picking a
 // suggestion), so typing letters looks dead until then. This streams each composition change to the
 // terminal as it happens and keeps xterm's own composition/diff paths out of the way (no double send).
 // Real keys (Enter, Tab, Backspace with a real keyCode) are untouched and still go through xterm.
@@ -22,68 +22,63 @@ export function compositionDelta(previous: string, next: string): string {
 }
 
 /**
- * Attach to the element that contains xterm's helper textarea (`terminal.element`). Listens in the
- * capture phase so it runs, and can stop propagation, before xterm's own textarea listeners.
+ * Attach to the element that holds the IME target: `terminal.element` for xterm.js (contains the helper
+ * textarea) or ghostty-web's contenteditable root. Works from event data only, never textarea.value.
+ * Listens in the capture phase so it runs, and can stop propagation, before the renderer's own listeners.
  * Returns a disposer.
  */
 export function attachAndroidImeInput(root: HTMLElement, send: (data: string) => void): () => void {
   let composing = false;
-  let compositionStart = 0; // textarea.value.length when the composition began
   let sent = ""; // composition text already forwarded
 
-  const textarea = (e: Event): HTMLTextAreaElement | null =>
-    e.target instanceof HTMLTextAreaElement ? e.target : null;
-
-  const flushComposition = (ta: HTMLTextAreaElement) => {
-    const current = ta.value.slice(compositionStart);
-    const delta = compositionDelta(sent, current);
-    sent = current;
+  const flushComposition = (text: string) => {
+    const delta = compositionDelta(sent, text);
+    sent = text;
     if (delta) send(delta);
   };
 
-  const swallow = (e: Event) => e.stopImmediatePropagation();
-
   const onKeyDown = (e: Event) => {
-    if (!textarea(e) || (e as KeyboardEvent).keyCode !== IME_KEYCODE) return;
-    // xterm would diff the textarea on a 229 keydown and double-send what the input listener forwards.
-    swallow(e);
+    // The renderer would otherwise diff/reinterpret a 229 keydown and double-send.
+    if ((e as KeyboardEvent).keyCode === IME_KEYCODE) e.stopImmediatePropagation();
   };
 
   const onCompositionStart = (e: Event) => {
-    const ta = textarea(e);
-    if (!ta) return;
     composing = true;
-    compositionStart = ta.value.length;
     sent = "";
-    swallow(e);
+    e.stopImmediatePropagation();
   };
 
   const onCompositionUpdate = (e: Event) => {
-    if (textarea(e)) swallow(e);
+    if (composing) flushComposition((e as CompositionEvent).data ?? sent);
+    e.stopImmediatePropagation();
   };
 
   const onCompositionEnd = (e: Event) => {
-    const ta = textarea(e);
-    if (!ta) return;
-    if (composing) flushComposition(ta);
+    if (composing) flushComposition((e as CompositionEvent).data ?? sent);
     composing = false;
     sent = "";
-    swallow(e);
+    e.stopImmediatePropagation();
+    // ghostty-web's root is contenteditable and accumulates the composed text nodes.
+    if (!(e.target instanceof HTMLTextAreaElement)) {
+      for (const node of Array.from(root.childNodes)) if (node.nodeType === Node.TEXT_NODE) root.removeChild(node);
+    }
   };
 
-  const onInput = (e: Event) => {
-    const ta = textarea(e);
-    if (!ta) return;
+  const onBeforeInput = (e: Event) => {
     const { inputType, data } = e as InputEvent;
-    if (composing && inputType === "insertCompositionText") {
-      flushComposition(ta);
-      swallow(e);
-    } else if (!composing && inputType === "insertText" && data) {
-      send(data);
-      swallow(e);
-    } else if (!composing && inputType === "deleteContentBackward") {
-      send(DEL);
-      swallow(e);
+    if (composing) return;
+    if (inputType === "insertText" && data) send(data);
+    else if (inputType === "deleteContentBackward") send(DEL);
+    else return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+
+  // xterm sends insertText from `input` once keydown was swallowed (keyDownSeen is false), so swallow it too.
+  const onInput = (e: Event) => {
+    const { inputType } = e as InputEvent;
+    if (inputType === "insertText" || inputType === "insertCompositionText" || inputType === "deleteContentBackward") {
+      e.stopImmediatePropagation();
     }
   };
 
@@ -92,6 +87,7 @@ export function attachAndroidImeInput(root: HTMLElement, send: (data: string) =>
     ["compositionstart", onCompositionStart],
     ["compositionupdate", onCompositionUpdate],
     ["compositionend", onCompositionEnd],
+    ["beforeinput", onBeforeInput],
     ["input", onInput],
   ];
   for (const [type, fn] of listeners) root.addEventListener(type, fn, true);
