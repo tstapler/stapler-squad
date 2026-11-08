@@ -33,6 +33,7 @@ import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cur
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { attachAndroidImeInput, isAndroidUserAgent } from "@/lib/terminal/androidImeInput";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -950,6 +951,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
+      // Gboard delivers letters only as composition/input events; stock xterm waits for compositionend.
+      const androidImeDispose =
+        isAndroidUserAgent() && terminal.element
+          ? attachAndroidImeInput(terminal.element, (data) => onDataRef.current?.(data))
+          : undefined;
 
       // Show floating Copy button on selection change via direct DOM mutation (no setState).
       // onSelectionChange fires at up to 60fps during mouse drag — setState here would cause
@@ -1617,6 +1623,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
+        androidImeDispose?.();
         sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
