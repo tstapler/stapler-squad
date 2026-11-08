@@ -21,11 +21,12 @@ type interactivity struct {
 func (h *StreamHub) NoteInteractive(id SubscriberID) {
 	now := h.clock.Now()
 	h.interactive.mu.Lock()
-	defer h.interactive.mu.Unlock()
 	if h.interactive.lastAt == nil {
 		h.interactive.lastAt = make(map[SubscriberID]time.Time)
 	}
 	h.interactive.lastAt[id] = now
+	h.interactive.mu.Unlock()
+	h.noteTypingForQoS()
 }
 
 // preferInteractive narrows votes to the subscribers that recently sent input, so a hidden or

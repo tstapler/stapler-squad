@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/resize"
 )
@@ -144,6 +145,9 @@ type StreamHub struct {
 	teardownGrace         time.Duration
 	clock                 Clock
 	interactive           interactivity // see qos.go
+	qos                   *qos.Tracker
+	activitySink          func(qos.Activity)
+	activity              activityState // see activity.go
 	quiescenceTimeout     time.Duration
 	resizeApplyTimeout    time.Duration
 	quiescenceQuietPeriod time.Duration
@@ -294,6 +298,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		opt(h)
 	}
 	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow), withBatchClock(h.clock))
+	h.initQoS()
 
 	incActiveHubs()
 	recordHubCreated()
@@ -781,6 +786,7 @@ func (h *StreamHub) forceTeardown(reason TeardownReason) error {
 		decActiveHubs()
 	}
 	recordHubTeardown(reason)
+	h.closeQoS()
 
 	for _, sub := range subs {
 		sub.close()
@@ -862,6 +868,9 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 // A no-op if nothing is buffered (e.g. a resize is in progress and
 // OnRawOutput has been suppressing every frame).
 func (h *StreamHub) TryFlush() {
+	if h.backgrounded() {
+		return // the stretched ceiling flushes it; an idle pane must not race the typist's echo
+	}
 	h.batchWindow.TryFlush()
 }
 

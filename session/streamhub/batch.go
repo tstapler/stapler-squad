@@ -158,6 +158,14 @@ func (b *BatchWindow) Add(data []byte) {
 	}
 }
 
+// SetMaxWindow changes the ceiling for windows armed from now on; a window already pending keeps
+// the ceiling it was armed with.
+func (b *BatchWindow) SetMaxWindow(d time.Duration) {
+	b.mu.Lock()
+	b.maxWindow = d
+	b.mu.Unlock()
+}
+
 // armCeilingLocked starts the ceiling timer. Callers must hold b.mu; only
 // called from Add's empty-to-non-empty transition, so at most one
 // outstanding timer exists per BatchWindow at any time.
