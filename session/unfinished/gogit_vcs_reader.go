@@ -67,7 +67,7 @@ var blobCacheTotalTargetFraction int64 = 8 // 1/8th of the repoCache budget
 // cache lives inside one cachedRepo, whose total cost that constant already
 // budgets for.
 const (
-	blobCacheMaxBytesFloor   = 2 * 1024 * 1024              // 2MB: room for a handful of typical changed files
+	blobCacheMaxBytesFloor   = 2 * 1024 * 1024  // 2MB: room for a handful of typical changed files
 	blobCacheMaxBytesCeiling = 24 * 1024 * 1024 // independent of approxBytesPerCachedRepo (blob caches are the one per-entry cost that is not ~150 B/file)
 )
 
