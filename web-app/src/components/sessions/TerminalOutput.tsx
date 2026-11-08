@@ -125,6 +125,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const { track } = useAnalytics();
   const trackRef = useRef(track);
   trackRef.current = track;
+  const lastOutputAtRef = useRef(0);
+  const getMsSinceOutput = useCallback(() => (lastOutputAtRef.current ? Date.now() - lastOutputAtRef.current : Infinity), []);
   const [latencyProbe] = useState(() => createTerminalLatencyProbe({ track: (e) => trackRef.current(e) }));
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
@@ -772,6 +774,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
     latencyProbe.noteOutput();
+    lastOutputAtRef.current = Date.now();
 
     // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
     // tagged resync request tracked via EITHER hook's resync flow (resize or
@@ -958,6 +961,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setShowReconnectBanner,
     scheduleResync,
     outstandingResyncIdsRef,
+    getMsSinceOutput,
   });
   useEffect(() => {
     notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;

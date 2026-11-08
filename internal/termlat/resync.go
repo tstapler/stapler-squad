@@ -19,6 +19,11 @@ const (
 	ResyncResize             = "resize"              // client sent one after a settled resize
 	ResyncSkippedFresh       = "skipped_fresh"       // focus/visibility, but size unchanged and the last sync is recent
 	ResyncSkippedUnavailable = "skipped_unavailable" // focus/visibility, but the terminal could not be measured
+	ResyncStaleShown         = "stale_shown"         // a pane that was hidden at a focus/visibility event resynced when shown
+	ResyncDeferredHidden     = "deferred_hidden"     // focus/visibility reached a hidden pane: marked stale, no resync
+	ResyncSkippedOutput      = "skipped_output"      // focus/visibility, but output was flowing on a connected stream
+	ResyncWatchdogRetry      = "watchdog_retry"      // a stalled resync was re-sent once instead of dropping the stream
+	ResyncWatchdogDisconnect = "watchdog_disconnect" // a resync stalled twice and the stream was dropped and re-attached
 	ResyncServerStaleDims    = "server_stale_dims"   // server received a request the client flagged as same-size
 	ResyncServerRequest      = "server_request"      // server received any other CurrentPaneRequest
 )
@@ -26,7 +31,7 @@ const (
 // NormalizeResyncReason returns r if it is a known reason, else "unknown".
 func NormalizeResyncReason(r string) string {
 	switch r {
-	case ResyncVisibility, ResyncResize, ResyncSkippedFresh, ResyncSkippedUnavailable, ResyncServerStaleDims, ResyncServerRequest:
+	case ResyncVisibility, ResyncResize, ResyncStaleShown, ResyncDeferredHidden, ResyncSkippedOutput, ResyncWatchdogRetry, ResyncWatchdogDisconnect, ResyncSkippedFresh, ResyncSkippedUnavailable, ResyncServerStaleDims, ResyncServerRequest:
 		return r
 	}
 	return unknown

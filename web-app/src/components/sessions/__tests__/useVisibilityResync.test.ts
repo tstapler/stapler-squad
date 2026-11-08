@@ -1,5 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
 import { useVisibilityResync } from '../useVisibilityResync';
+import { resyncGate } from '@/lib/terminal/resyncGate';
 
 // Mock useFeatureFlag — default to false (terminal:resync-visibility-scope
 // off), overridden per-test for the Epic 2.1 (AC1) flag-on cases. Mirrors the
@@ -30,6 +31,7 @@ function makeParams(overrides: Partial<Parameters<typeof useVisibilityResync>[0]
     requestFullResync: jest.fn(),
     markResyncComplete: jest.fn(),
     markPaneResponseReceived: jest.fn(),
+    stallFloorMs: 4000,
     setShowReconnectButton: jest.fn(),
     setShowReconnectBanner: jest.fn(),
     ...overrides,
@@ -43,6 +45,7 @@ describe('useVisibilityResync', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
     (useFeatureFlag as jest.Mock).mockReturnValue(false);
+    resyncGate.reset();
   });
   afterEach(() => {
     jest.useRealTimers();
@@ -172,21 +175,22 @@ describe('useVisibilityResync', () => {
     expect(params.connect).not.toHaveBeenCalled();
   });
 
-  it('handleVisibilityOrFocusResyncInner_should_CallRequestFullResync_When_IsVisibleFalseAndFlagOff', () => {
-    (useFeatureFlag as jest.Mock).mockReturnValue(false);
+  it('handleVisibilityOrFocusResyncInner_should_DeferAHiddenPaneUntilShown_RegardlessOfTheScopeFlag', () => {
+    mockTrack.mockClear();
     const params = makeParams({ isVisible: false });
-    renderHook(() => useVisibilityResync(params));
+    const { rerender } = renderHook((p: typeof params) => useVisibilityResync(p), { initialProps: params });
 
     act(() => {
       Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
     });
     act(() => { jest.advanceTimersByTime(300); });
+    expect(params.requestFullResync).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'deferred_hidden' } }));
 
-    // Flag off ⇒ unchanged pre-project behavior: every mounted instance
-    // resyncs on visibility/focus regardless of isVisible.
+    rerender({ ...params, isVisible: true });
     expect(params.requestFullResync).toHaveBeenCalledTimes(1);
-    expect(params.requestFullResync).toHaveBeenCalledWith(true, true);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'stale_shown' } }));
   });
 
   // ── Story 2.1.2 (AC4) ────────────────────────────────────────────────────
@@ -252,7 +256,7 @@ describe('useVisibilityResync', () => {
     });
     act(() => { jest.advanceTimersByTime(300); });
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(params.disconnect).toHaveBeenCalledTimes(1);
     // flush the disconnect().then(connect) chain
@@ -298,7 +302,7 @@ describe('useVisibilityResync', () => {
       act(() => { jest.advanceTimersByTime(300); });
     }).not.toThrow();
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
@@ -523,7 +527,7 @@ describe('useVisibilityResync', () => {
     expect(params.markPaneResponseReceived).not.toHaveBeenCalled();
 
     // The watchdog must still be live since pending state was never cleared.
-    act(() => { jest.advanceTimersByTime(4000); });
+    act(() => { jest.advanceTimersByTime(8000); });
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -570,7 +574,7 @@ describe('useVisibilityResync', () => {
     // The watchdog was re-armed (not left stale) by the reset: advancing a
     // full new 4s window from the reset point fires it, proving resetStallWatchdog
     // actually rearmed rather than being a no-op.
-    act(() => { jest.advanceTimersByTime(4000); });
+    act(() => { jest.advanceTimersByTime(8000); });
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -760,7 +764,7 @@ describe('useVisibilityResync', () => {
     // watchdog fires — this is the scenario the test name asserts against.
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(mockTrack).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -817,5 +821,62 @@ describe('useVisibilityResync', () => {
     });
 
     expect(debugSpy).toHaveBeenCalledWith(expect.stringMatching(/resync completed in \d+ms/));
+  });
+
+  // ── Thundering herd ──────────────────────────────────────────────────────
+
+  function focusEvent() {
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => { jest.advanceTimersByTime(300); });
+  }
+
+  it('ten visible terminals focusing at once keep at most two resyncs in flight', () => {
+    const all = Array.from({ length: 10 }, () => makeParams());
+    all.forEach((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    const sent = () => all.filter((p) => (p.requestFullResync as jest.Mock).mock.calls.length > 0).length;
+    expect(sent()).toBe(2);
+    expect(resyncGate.depth()).toBe(8);
+  });
+
+  it('a stalled resync is re-sent once and only the second stall drops the stream', async () => {
+    mockTrack.mockClear();
+    const params = makeParams();
+    renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    expect(params.requestFullResync).toHaveBeenCalledTimes(1);
+
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(2); // the retry
+    expect(params.disconnect).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'watchdog_retry' } }));
+
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.disconnect).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'watchdog_disconnect' } }));
+  });
+
+  it('a stall across ten terminals drops streams one at a time, not all at once', async () => {
+    const all = Array.from({ length: 10 }, () => makeParams());
+    all.forEach((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    // Nothing answers: run both watchdog expiries for everything that got a slot, then keep
+    // releasing slots as streams are dropped.
+    await act(async () => { jest.advanceTimersByTime(8000); });
+    const dropped = () => all.filter((p) => (p.disconnect as jest.Mock).mock.calls.length > 0).length;
+    expect(dropped()).toBeLessThan(10);
+    expect(dropped()).toBeLessThanOrEqual(2);
+  });
+
+  it('skips the resync when output is flowing on a connected stream', () => {
+    mockTrack.mockClear();
+    const params = makeParams({ getMsSinceOutput: () => 1000 });
+    renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    expect(params.requestFullResync).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'skipped_output' } }));
   });
 });

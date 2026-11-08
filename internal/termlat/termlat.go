@@ -32,14 +32,15 @@ const (
 	StageBookkeepFlush  = "bookkeep_flush" // deferred bookkeeping flush; includes the i.mu wait it used to impose on typing
 	StageOutputSend     = "output_send"    // one batch handed to the transport -> write returned
 	StageOutputQueue    = "output_queue_depth"
-	StageEchoServer     = "echo_server"      // server: keystroke received -> next output write to the socket
-	StageWSWriteWait    = "ws_write_wait"    // server: waiting for the per-stream socket write lock
-	StageWSWrite        = "ws_write"         // server: one socket write (mux queue or TCP) returning
-	StageEchoArrive     = "echo_arrive"      // browser: keystroke sent -> next output frame reaches the component
-	StageEchoPaint      = "echo_paint"       // browser: keystroke sent -> next frame painted (input-to-paint)
-	StageTTFPConnect    = "ttfp_connect"     // browser: terminal mounted -> stream open
-	StageTTFPFirstData  = "ttfp_first_data"  // browser: terminal mounted -> first output frame
-	StageTTFPFirstPaint = "ttfp_first_paint" // browser: terminal mounted -> first frame painted
+	StageEchoServer     = "echo_server"        // server: keystroke received -> next output write to the socket
+	StageWSWriteWait    = "ws_write_wait"      // server: waiting for the per-stream socket write lock
+	StageWSWrite        = "ws_write"           // server: one socket write (mux queue or TCP) returning
+	StageEchoArrive     = "echo_arrive"        // browser: keystroke sent -> next output frame reaches the component
+	StageEchoPaint      = "echo_paint"         // browser: keystroke sent -> next frame painted (input-to-paint)
+	StageResyncQueue    = "resync_queue_depth" // browser: resyncs waiting for one of the client-wide in-flight slots (a count)
+	StageTTFPConnect    = "ttfp_connect"       // browser: terminal mounted -> stream open
+	StageTTFPFirstData  = "ttfp_first_data"    // browser: terminal mounted -> first output frame
+	StageTTFPFirstPaint = "ttfp_first_paint"   // browser: terminal mounted -> first frame painted
 )
 
 const unknown = "unknown"
@@ -48,7 +49,7 @@ const unknown = "unknown"
 func NormalizeStage(s string) string {
 	switch s {
 	case StageInputTotal, StageInputSend, StageInputBookkeep, StageBookkeepFlush, StageOutputSend,
-		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint,
+		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint, StageResyncQueue,
 		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint:
 		return s
 	}
