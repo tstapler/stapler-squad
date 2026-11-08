@@ -15,6 +15,9 @@ const subscriberBufferSize = 64
 type fanoutSubscriber struct {
 	ch      chan []byte
 	dropped bool
+	// skipThrough discards sequenced frames with seq <= it: a resync already delivered them
+	// inside its redraw (see fanout_seq.go).
+	skipThrough uint64
 }
 
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
@@ -34,6 +37,7 @@ type ClientFanout struct {
 	subscribers map[string]*fanoutSubscriber
 	nextID      uint64
 	onDrop      func()
+	seq         seqState // guarded by mu; see fanout_seq.go
 }
 
 // NewClientFanout constructs an empty ClientFanout.
@@ -79,15 +83,7 @@ func (f *ClientFanout) Unsubscribe(id string) {
 // goroutine).
 func (f *ClientFanout) Broadcast(data []byte) {
 	f.mu.Lock()
-	dropped := false
-	for _, sub := range f.subscribers {
-		select {
-		case sub.ch <- data:
-		default:
-			sub.dropped = true
-			dropped = true
-		}
-	}
+	dropped := f.deliverLocked(data, 0)
 	onDrop := f.onDrop
 	f.mu.Unlock()
 	if dropped && onDrop != nil {
