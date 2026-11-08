@@ -11,26 +11,28 @@ const DECSTR = "\x1b[!p";
 export interface CursorPos {
   x: number;
   y: number;
+  /** True when `x` is the last column, where the cursor may be in the deferred-wrap state (not exposed by ghostty-web). */
+  atLastColumn: boolean;
 }
+
+const MODES_AFTER_MARGINS =
+  "\x1b[?25h" + // DECTCEM: cursor visible
+  "\x1b[4l" + // IRM: replace mode
+  "\x1b[?7h" + // DECAWM: autowrap on (matches xterm.js)
+  "\x1b[?1l\x1b>" + // DECCKM off, DECKPNM numeric keypad
+  "\x1b(B\x1b)B\x0f" + // G0/G1 = ASCII, shift-in
+  "\x1b[0m"; // SGR reset
 
 /**
  * Explicit equivalent of DECSTR that leaves the cursor at `cursor` (0-based, absolute). Resetting
- * DECOM and DECSTBM both home the cursor, so it is put back with an absolute CUP at the end.
+ * DECOM and DECSTBM both home the cursor, so the default path puts it back with an absolute CUP and
+ * re-saves the DECSC slot at home (DECSTR resets it). At the last column the cursor may be waiting to
+ * wrap, which CUP would clear; there DECSC/DECRC keep that state instead, and the saved cursor and
+ * an active origin mode are left as they were.
  */
 export function softResetSequence(cursor: CursorPos): string {
-  return (
-    "\x1b[?6l" + // DECOM: absolute origin (homes the cursor)
-    "\x1b[r" + // DECSTBM: full-screen scroll region
-    "\x1b[?25h" + // DECTCEM: cursor visible
-    "\x1b[4l" + // IRM: replace mode
-    "\x1b[?7h" + // DECAWM: autowrap on (matches xterm.js)
-    "\x1b[?1l\x1b>" + // DECCKM off, DECKPNM numeric keypad
-    "\x1b(B\x1b)B\x0f" + // G0/G1 = ASCII, shift-in
-    "\x1b[0m" + // SGR reset
-    // A saved cursor (DECSC) restores to home with defaults after DECSTR; re-save at home, then move back.
-    "\x1b[H\x1b7" +
-    `\x1b[${cursor.y + 1};${cursor.x + 1}H`
-  );
+  if (cursor.atLastColumn) return "\x1b7\x1b[?6l\x1b[r\x1b8" + MODES_AFTER_MARGINS;
+  return `\x1b[?6l\x1b[r${MODES_AFTER_MARGINS}\x1b[H\x1b7\x1b[${cursor.y + 1};${cursor.x + 1}H`;
 }
 
 export interface SoftResetRewriter {

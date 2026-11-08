@@ -44,6 +44,7 @@ const curated: Record<string, string[]> = {
   "DECSTR split across chunks": ["ab", `${E}[3;5r${E}[?6h`, `${E}`, "[", "!", "p", `${E}[1;1Hq`],
   "DECSTR re-enables autowrap": [`${E}[?7l`, `${E}[!p`, "w".repeat(35)],
   "DECSTR resets insert mode": ["abcdef", `${E}[4h`, `${E}[!p`, `${E}[1;1HZ`],
+  "DECSTR after filling a row (pending wrap)": ["w".repeat(30), `${E}[!p`, "next"],
   "DECSTR resets the saved cursor": ["abc\r\ndef", `${E}7`, "\r\nxyz", `${E}[!p`, `${E}8`, "Q"],
 };
 
@@ -66,7 +67,7 @@ describe("ghostty-web vs xterm.js: curated TUI streams", () => {
     expect(show(g)).toBe(show(x));
   });
 
-  it.each(Object.entries(curated))("%s (byte-at-a-time chunking)", async (_name, chunks) => {
+  it.each(Object.entries(curated))("%s (1-3 code-point chunks)", async (_name, chunks) => {
     const split = rechunk(chunks, 7, 3);
     const { x, g } = await both(split);
     expect(show(g)).toBe(show(x));
@@ -74,9 +75,9 @@ describe("ghostty-web vs xterm.js: curated TUI streams", () => {
 });
 
 describe("ghostty-web vs xterm.js: known gaps", () => {
-  it.failing.each(Object.entries(knownGaps))("%s", async (_name, chunks) => {
+  it.each(Object.entries(knownGaps))("%s still differs", async (_name, chunks) => {
     const { x, g } = await both(chunks);
-    expect(show(g)).toBe(show(x));
+    expect(show(g)).not.toBe(show(x)); // fails when a ghostty-web upgrade fixes the gap: delete the entry
   });
 });
 

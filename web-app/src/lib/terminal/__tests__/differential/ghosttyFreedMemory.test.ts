@@ -37,6 +37,15 @@ describe("ghostty-web freed WASM memory", () => {
     next.free();
   });
 
+  it("FRESH_TERMINAL_SCRUB also covers rows and columns added by the first fit", () => {
+    freedTerminalWithOutput();
+    const next = ghostty.createTerminal(30, ROWS, { scrollbackLimit: 100 });
+    next.write(FRESH_TERMINAL_SCRUB);
+    next.resize(60, ROWS + 6); // production order: scrub, then FitAddon.fit()
+    expect(everything(next, 30)).not.toContain("STALE");
+    next.free();
+  });
+
   it("FRESH_TERMINAL_SCRUB leaves no stale cells, even in rows that scroll in later", () => {
     freedTerminalWithOutput();
     const next = ghostty.createTerminal(30, ROWS, { scrollbackLimit: 100 });

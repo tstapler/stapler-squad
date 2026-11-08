@@ -166,7 +166,7 @@ export function asXtermCompatible(term: GhosttyWebTerminal, onReply?: (data: str
         return;
       }
       const active = term.buffer.active;
-      softReset.feed(data, (part) => facade.write(part), () => ({ x: active.cursorX, y: active.cursorY }));
+      softReset.feed(data, (part) => facade.write(part), () => ({ x: active.cursorX, y: active.cursorY, atLastColumn: active.cursorX === term.cols - 1 }));
       if (callback) queueMicrotask(callback);
     },
     clear: facade.clear,

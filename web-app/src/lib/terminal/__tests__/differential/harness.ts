@@ -52,7 +52,7 @@ export function renderGhostty(ghostty: Ghostty, input: readonly string[], o: Ren
   const rewriter = o.softReset === false ? undefined : createSoftResetRewriter();
   const write = (d: string): void => term.write(d);
   for (const c of chunks) {
-    if (rewriter) rewriter.feed(c, write, () => term.getCursor());
+    if (rewriter) rewriter.feed(c, write, () => ({ ...term.getCursor(), atLastColumn: term.getCursor().x === o.cols - 1 }));
     else if (c) write(c);
   }
   term.update();
