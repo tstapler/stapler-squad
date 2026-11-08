@@ -33,7 +33,7 @@ import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cur
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
-import { attachAndroidImeInput, isAndroidUserAgent } from "@/lib/terminal/androidImeInput";
+import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -947,15 +947,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Setup event handlers using refs to avoid recreating terminal
       sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
       const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
+      const imeSupport = terminal.element
+        ? attachTerminalImeSupport(terminal.element, "xterm", (data) => onDataRef.current?.(data))
+        : undefined;
       const dataDisposable = terminal.onData((data) => {
+        imeSupport?.traceData(data);
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
-      // Gboard delivers letters only as composition/input events; stock xterm waits for compositionend.
-      const androidImeDispose =
-        isAndroidUserAgent() && terminal.element
-          ? attachAndroidImeInput(terminal.element, (data) => onDataRef.current?.(data))
-          : undefined;
 
       // Show floating Copy button on selection change via direct DOM mutation (no setState).
       // onSelectionChange fires at up to 60fps during mouse drag — setState here would cause
@@ -1623,7 +1622,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
-        androidImeDispose?.();
+        imeSupport?.dispose();
         sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
