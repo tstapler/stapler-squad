@@ -173,3 +173,79 @@ func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 	assert.Equal(t, 1, counts[HotRestoreNotTerminal])
 	assert.EqualValues(t, 1, restores.Load(), "RestoreWithWorkDir runs once")
 }
+
+func TestHotRestoreIfLive_FailedAttachRestoresStartedFlag(t *testing.T) {
+	t.Parallel()
+	pm := &failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}
+	inst := &Instance{Title: "t", Status: PermanentlyFailed, processManager: pm}
+	inst.started.Store(true) // a runtime failure: the session had started
+	_, err := HotRestoreIfLive(inst, func() bool { return true })
+	require.Error(t, err)
+	assert.True(t, inst.Started(), "rollback must restore started or Destroy would leak the pane and worktree")
+	assert.Equal(t, PermanentlyFailed, inst.GetLifecycleStatus())
+}
+
+func TestHotRestoreIfLive_ArchivedRaceRestoresStartedFlag(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t", Status: Failed}
+	inst.started.Store(true)
+	got, _ := HotRestoreIfLive(inst, func() bool {
+		now := time.Now()
+		inst.mu.Lock()
+		inst.ArchivedAt = &now
+		inst.mu.Unlock()
+		return true
+	})
+	assert.Equal(t, HotRestoreArchived, got)
+	assert.True(t, inst.Started())
+}
+
+func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t", Status: Failed, processManager: &fakeLivenessProcessManager{alive: true}}
+	inst.mu.Lock()
+	inst.NextRetryAt = time.Now().Add(time.Hour)
+	inst.RetryAttempt = 2
+	inst.LastFailureReason = "boom"
+	inst.mu.Unlock()
+	require.True(t, inst.IsRetryPending())
+
+	got, err := HotRestoreIfLive(inst, func() bool { return true })
+	require.NoError(t, err)
+	require.Equal(t, HotRestoreCleared, got)
+	assert.False(t, inst.IsRetryPending(), "a pending retry would later Restart the healthy pane")
+	pending, _ := inst.retryPendingElapsed(time.Now().Add(2 * time.Hour))
+	assert.False(t, pending)
+	assert.Zero(t, inst.RetryAttempt)
+}
+
+// closeCountingPM is a dead backing process that records any launch/kill attempt.
+type closeCountingPM struct {
+	fakeLivenessProcessManager
+	starts, closes atomic.Int32
+}
+
+func (m *closeCountingPM) Start(string) error { m.starts.Add(1); return nil }
+func (m *closeCountingPM) Close() error       { m.closes.Add(1); return nil }
+
+func TestHotRestoreIfLive_NeverColdLaunchesWhenProcessDiedAfterProbe(t *testing.T) {
+	t.Parallel()
+	pm := &closeCountingPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: false}}
+	inst := &Instance{Title: "t", Status: Failed, processManager: pm}
+	got, err := HotRestoreIfLive(inst, func() bool { return true })
+	require.Error(t, err)
+	assert.Equal(t, HotRestoreError, got)
+	assert.Zero(t, pm.starts.Load(), "hot attach must not launch a new process")
+	assert.Equal(t, Failed, inst.GetLifecycleStatus())
+}
+
+type panickingAttachPM struct{ fakeLivenessProcessManager }
+
+func (m *panickingAttachPM) RestoreWithWorkDir(string) error { panic("attach exploded") }
+
+func TestStartHotAttach_ClearsFlagWhenStartPanics(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t", Status: Creating, processManager: &panickingAttachPM{fakeLivenessProcessManager{alive: true}}}
+	assert.Panics(t, func() { _ = inst.startHotAttach() })
+	assert.False(t, inst.hotAttaching.Load(), "a panic must not leave the release-only flag stuck")
+}

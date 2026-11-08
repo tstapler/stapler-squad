@@ -1697,6 +1697,11 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
+			// A hot attach only adopts a live process; never cold-launch a new one.
+			if i.hotAttaching.Load() {
+				setupErr = fmt.Errorf("hot attach: backing process is no longer alive")
+				return setupErr
+			}
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
 			hasClaudeSession := i.HasClaudeSession()
 			if hasClaudeSession {
