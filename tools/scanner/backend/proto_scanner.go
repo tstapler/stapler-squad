@@ -27,8 +27,6 @@ type BackendFeature struct {
 // methodToID maps proto RPC method names to their canonical feature IDs.
 var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CreateSession":             "session:create",
-	"GetTCCEnrichmentStatus":    "tcc:enrichment-status",
-	"ContinueTCCEnrichment":     "tcc:continue-enrichment",
 	"GetSession":                "session:get",
 	"UpdateSession":             "session:update",
 	"DeleteSession":             "session:delete",
@@ -271,6 +269,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"FindSessionsByPullRequest": "FindSessionsByPullRequest",
 	"GetTCCEnrichmentStatus":    "GetTCCEnrichmentStatus",
 	"ContinueTCCEnrichment":     "ContinueTCCEnrichment",
+	"WaiveAcceptanceCriterion":  "WaiveAcceptanceCriterion",
+	"ListAcAuditEvents":         "ListAcAuditEvents",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",
