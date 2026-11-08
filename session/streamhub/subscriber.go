@@ -13,6 +13,12 @@ import (
 // observations belong to; others are recorded under "unknown".
 type latencyLabeler interface{ LatencyLabels() termlat.Labels }
 
+// queuedFrame stamps each enqueue so the writer can record how long the frame waited.
+type queuedFrame struct {
+	data []byte
+	at   time.Time
+}
+
 // subscriber is the hub-side handle for one attached Transport: a bounded
 // outbound queue drained by a dedicated writer goroutine, plus the
 // SubscriberCapability and slow-eviction bookkeeping the hub needs to manage
@@ -25,7 +31,7 @@ type subscriber struct {
 	// upgraded, when set, supersedes capability (see StreamHub.UpgradeSubscriber).
 	upgraded atomic.Pointer[SubscriberCapability]
 
-	outbound  chan []byte
+	outbound  chan queuedFrame
 	done      chan struct{}
 	closeOnce sync.Once
 
@@ -82,7 +88,7 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 		id:         id,
 		transport:  transport,
 		capability: capability,
-		outbound:   make(chan []byte, bufferSize),
+		outbound:   make(chan queuedFrame, bufferSize),
 		done:       make(chan struct{}),
 	}
 	s.awaitingFirstPaint.Store(capability.ManualFirstPaint)
@@ -105,9 +111,10 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 				return
 			}
 			labels := s.latencyLabels()
-			for data := range s.outbound {
+			for f := range s.outbound {
 				sendStart := time.Now()
-				err := s.transport.Send(data)
+				termlat.Default.Record(termlat.StageOutputQueueWait, labels, sendStart.Sub(f.at))
+				err := s.transport.Send(f.data)
 				termlat.Default.Record(termlat.StageOutputSend, labels, time.Since(sendStart))
 				if err != nil {
 					onSendError(s.id, err)
@@ -155,11 +162,12 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 		return true, stalled
 	}
 	select {
-	case s.outbound <- data:
+	case s.outbound <- queuedFrame{data: data, at: time.Now()}:
 		s.slowSince = time.Time{}
 		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(len(s.outbound)))
 		return true, false
 	default:
+		termlat.Default.CountDrop(termlat.DropHubQueueFull, s.latencyLabels().Backend)
 		return false, false
 	}
 }

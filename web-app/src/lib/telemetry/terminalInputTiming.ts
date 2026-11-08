@@ -1,0 +1,49 @@
+/** What the browser knows about one terminal input frame at the moment it is handed to the socket. */
+export interface InputSendSample {
+  /** Time from the keystroke entering the send queue to the socket send. */
+  queuedMs: number;
+  /** Bytes the socket had not yet put on the wire when this frame was sent. */
+  bufferedBytes: number;
+}
+
+export interface InputSendTimer {
+  /** A terminal input message entered the send queue. */
+  markQueued(): void;
+  /** The oldest queued input message was passed to the socket. */
+  markSent(bufferedBytes: number): void;
+  subscribe(listener: (s: InputSendSample) => void): () => void;
+  pending(): number;
+}
+
+/** Bounds the queue if sends never happen (a socket that never opens). */
+const MAX_PENDING = 256;
+
+/**
+ * Pairs each queued input message with its send, FIFO. The transport iterates messages in
+ * order, so the nth send belongs to the nth queued input; frames with nothing queued (resize,
+ * credit, handshake) are not input and are ignored.
+ */
+export function createInputSendTimer(now: () => number = () => performance.now()): InputSendTimer {
+  const queued: number[] = [];
+  const listeners = new Set<(s: InputSendSample) => void>();
+  return {
+    markQueued() {
+      if (queued.length >= MAX_PENDING) queued.shift();
+      queued.push(now());
+    },
+    markSent(bufferedBytes) {
+      const at = queued.shift();
+      if (at === undefined) return;
+      const sample = { queuedMs: Math.max(0, now() - at), bufferedBytes };
+      listeners.forEach((l) => l(sample));
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    pending: () => queued.length,
+  };
+}
+
+/** Shared by the terminal hook (queue side) and the WebSocket transport (send side). */
+export const terminalInputTimer = createInputSendTimer();

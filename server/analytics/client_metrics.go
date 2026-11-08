@@ -380,6 +380,7 @@ func closeCodeLabel(s string) string {
 var clientTermStages = map[string]bool{
 	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true,
 	termlat.StageTTFPConnect: true, termlat.StageTTFPFirstData: true, termlat.StageTTFPFirstPaint: true,
+	termlat.StageInputQueue: true, termlat.StageEchoRender: true, termlat.StageWSBufferedKiB: true, termlat.StageEventLoopLag: true,
 }
 
 // observeTermLatency feeds a browser-measured terminal stage (keystroke echo, time to first

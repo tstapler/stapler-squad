@@ -1,15 +1,20 @@
 import type { AnalyticsProvider } from "@/lib/analytics/types";
+import type { InputSendSample } from "./terminalInputTiming";
 
 /** One keystroke is sampled per this gap, so a held key or a paste costs one probe, not hundreds. */
 export const ECHO_MIN_GAP_MS = 250;
 /** A reply later than this is unrelated output (a silent prompt, a long command), not an echo. */
 export const ECHO_TIMEOUT_MS = 3000;
 /** Most terminal-latency events one tab may send per minute. */
-export const MAX_TERM_EVENTS_PER_MINUTE = 60;
+export const MAX_TERM_EVENTS_PER_MINUTE = 150;
 
 export type TermLatencyStage =
   | "echo_arrive"
   | "echo_paint"
+  | "echo_render"
+  | "input_queue"
+  | "ws_buffered_kib"
+  | "eventloop_lag"
   | "ttfp_connect"
   | "ttfp_first_data"
   | "ttfp_first_paint";
@@ -21,6 +26,8 @@ export interface TerminalLatencyProbe {
   noteOutput(): void;
   /** The stream opened. */
   noteConnected(): void;
+  /** An input frame reached the socket; counts only for the keystroke currently being sampled. */
+  noteInputSent(sample: InputSendSample): void;
 }
 
 export interface TerminalLatencyProbeOptions {
@@ -52,6 +59,7 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
   const listener = opts.listener ?? defaultListener;
   const mountedAt = now();
   let pendingInputAt: number | null = null;
+  let sendNoted = false;
   let lastSampledAt = -Infinity;
   let windowStart = mountedAt;
   let sent = 0;
@@ -83,7 +91,14 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       if (pendingInputAt !== null && t - pendingInputAt <= ECHO_TIMEOUT_MS) return;
       if (t - lastSampledAt < ECHO_MIN_GAP_MS) return;
       pendingInputAt = t;
+      sendNoted = false;
       lastSampledAt = t;
+    },
+    noteInputSent(sample) {
+      if (pendingInputAt === null || sendNoted) return;
+      sendNoted = true;
+      emit("input_queue", sample.queuedMs);
+      emit("ws_buffered_kib", sample.bufferedBytes / 1024);
     },
     noteOutput() {
       const arrivedAt = now();
@@ -97,7 +112,11 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       pendingInputAt = null;
       if (arrivedAt - sentAt > ECHO_TIMEOUT_MS) return;
       emit("echo_arrive", arrivedAt - sentAt);
-      afterPaint(() => emit("echo_paint", now() - sentAt));
+      afterPaint(() => {
+        const paintedAt = now();
+        emit("echo_paint", paintedAt - sentAt);
+        emit("echo_render", paintedAt - arrivedAt);
+      });
     },
     noteConnected() {
       if (connected) return;

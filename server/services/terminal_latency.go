@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -112,6 +114,32 @@ func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	termlat.Default.Record(termlat.StageInputBookkeep, labels, sendStart.Sub(start))
 	termlat.Default.Record(termlat.StageInputSend, labels, end.Sub(sendStart))
 	termlat.Default.Record(termlat.StageInputTotal, labels, end.Sub(start))
+	if c, slow := k.slowCall(labels, k.tmuxSession, start, sendStart, end); slow {
+		termlat.EmitSlowSpan(context.Background(), c)
+	}
+}
+
+// slowCall describes this keystroke as a slow-call span tree when it took longer than
+// termlat.SlowCallThreshold, so Tempo holds the slow ones and nothing else. The backend call
+// shows up beside it as a session.backend.* span for the same session.
+func (k keystrokeDelivery) slowCall(labels termlat.Labels, sessionID string, start, sendStart, end time.Time) (termlat.SlowCall, bool) {
+	if end.Sub(start) < termlat.SlowCallThreshold() {
+		return termlat.SlowCall{}, false
+	}
+	return termlat.SlowCall{
+		Name:     "terminal.input",
+		Start:    start,
+		Duration: end.Sub(start),
+		Attrs: []attribute.KeyValue{
+			attribute.String("backend", labels.Backend),
+			attribute.String("listener", labels.Listener),
+			attribute.String("session", sessionID),
+		},
+		Stages: []termlat.StageSpan{
+			{Name: "terminal.input.bookkeep", Start: start, End: sendStart},
+			{Name: "terminal.input.send", Start: sendStart, End: end},
+		},
+	}, true
 }
 
 // countServerResync counts one mid-stream CurrentPaneRequest. A request the client flagged as

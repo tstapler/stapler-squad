@@ -1,5 +1,6 @@
 "use client";
 
+import { terminalInputTimer } from "@/lib/telemetry/terminalInputTiming";
 import type { VisibilityResyncDecision } from "@/lib/terminal/resyncPolicy";
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -303,6 +304,7 @@ export function useTerminalStream({
   // Keep pushMessageRef in sync with current messageQueue
   useEffect(() => {
     pushMessageRef.current = (msg: TerminalData) => {
+      if (msg.data.case === "input") terminalInputTimer.markQueued();
       messageQueueRef.current?.push(msg);
     };
     return () => { pushMessageRef.current = null; };

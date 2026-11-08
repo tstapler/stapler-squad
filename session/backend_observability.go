@@ -93,6 +93,13 @@ type timedBackendOp struct {
 	attrs   metric.MeasurementOption
 	op      string
 	backend backendLabel
+	who     sessionNamer // asked for its id only when a call is slow
+}
+
+// with returns the timer bound to who, so a slow call can be attributed to a session.
+func (o timedBackendOp) with(who sessionNamer) timedBackendOp {
+	o.who = who
+	return o
 }
 
 func newTimedBackendOp(backend backendLabel, op string) timedBackendOp {
@@ -104,13 +111,24 @@ func newTimedBackendOp(backend backendLabel, op string) timedBackendOp {
 
 // begin starts timing one call and watching it for the slow-op flight recorder; the returned
 // function records the duration and ends the watch.
-func (o timedBackendOp) begin() func() {
+func (o timedBackendOp) begin(ctx context.Context) func() {
 	start := time.Now()
 	stopWatch := terminalSlowOps.watch(o.op, o.backend)
 	return func() {
 		stopWatch()
 		o.observe(start)
+		if d := time.Since(start); d >= slowCallThreshold {
+			o.reportSlow(ctx, start, d)
+		}
 	}
+}
+
+func (o timedBackendOp) reportSlow(ctx context.Context, start time.Time, d time.Duration) {
+	id := ""
+	if o.who != nil {
+		id = o.who.GetSessionIdentifier()
+	}
+	slowCallReporter(ctx, slowCallReport{op: o.op, backend: o.backend, sessionID: id, start: start, duration: d})
 }
 
 func (o timedBackendOp) observe(start time.Time) {
@@ -119,13 +137,23 @@ func (o timedBackendOp) observe(start time.Time) {
 
 // timeBackendOp runs fn and records its latency under op.
 func timeBackendOp[T any](op timedBackendOp, fn func() (T, error)) (T, error) {
-	defer op.begin()()
+	return timeBackendOpCtx(context.Background(), op, fn)
+}
+
+// timeBackendOpCtx is timeBackendOp for a caller with a context, so a slow call's span joins
+// the caller's trace.
+func timeBackendOpCtx[T any](ctx context.Context, op timedBackendOp, fn func() (T, error)) (T, error) {
+	defer op.begin(ctx)()
 	return fn()
 }
 
 // timeBackendOpErr is timeBackendOp for error-only operations.
 func timeBackendOpErr(op timedBackendOp, fn func() error) error {
-	defer op.begin()()
+	return timeBackendOpErrCtx(context.Background(), op, fn)
+}
+
+func timeBackendOpErrCtx(ctx context.Context, op timedBackendOp, fn func() error) error {
+	defer op.begin(ctx)()
 	return fn()
 }
 

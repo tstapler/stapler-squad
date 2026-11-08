@@ -272,6 +272,16 @@ func TestTermLatencyFeedsRecorderAndRejectsServerStages(t *testing.T) {
 	assert.Equal(t, int64(2), rejected)
 }
 
+func TestTermLatencyAcceptsTheBrowserDecompositionStages(t *testing.T) {
+	cm, _ := newTestClientMetrics(t)
+	for _, stage := range []string{termlat.StageInputQueue, termlat.StageEchoRender, termlat.StageWSBufferedKiB, termlat.StageEventLoopLag} {
+		before := termTotal(stage, "unknown", "local")
+		assert.True(t, cm.observe(context.Background(), Event{EventName: eventTermLatency, DurationMs: ms(7),
+			Labels: map[string]string{"stage": stage, "listener": "local"}}))
+		assert.Equal(t, before+1, termTotal(stage, "unknown", "local"), stage)
+	}
+}
+
 func TestTermResyncEventIsCountedByBoundedReason(t *testing.T) {
 	cm, _ := newTestClientMetrics(t)
 	count := func() uint64 {
