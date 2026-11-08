@@ -90,14 +90,27 @@ const (
 // Tempo span (it would flood traces) and the attribute set is built once up
 // front instead of per call.
 type timedBackendOp struct {
-	attrs metric.MeasurementOption
+	attrs   metric.MeasurementOption
+	op      string
+	backend backendLabel
 }
 
 func newTimedBackendOp(backend backendLabel, op string) timedBackendOp {
-	return timedBackendOp{attrs: metric.WithAttributeSet(attribute.NewSet(
+	return timedBackendOp{op: op, backend: backend, attrs: metric.WithAttributeSet(attribute.NewSet(
 		attribute.String("backend", string(backend)),
 		attribute.String("operation", op),
 	))}
+}
+
+// begin starts timing one call and watching it for the slow-op flight recorder; the returned
+// function records the duration and ends the watch.
+func (o timedBackendOp) begin() func() {
+	start := time.Now()
+	stopWatch := terminalSlowOps.watch(o.op, o.backend)
+	return func() {
+		stopWatch()
+		o.observe(start)
+	}
 }
 
 func (o timedBackendOp) observe(start time.Time) {
@@ -106,13 +119,13 @@ func (o timedBackendOp) observe(start time.Time) {
 
 // timeBackendOp runs fn and records its latency under op.
 func timeBackendOp[T any](op timedBackendOp, fn func() (T, error)) (T, error) {
-	defer op.observe(time.Now())
+	defer op.begin()()
 	return fn()
 }
 
 // timeBackendOpErr is timeBackendOp for error-only operations.
 func timeBackendOpErr(op timedBackendOp, fn func() error) error {
-	defer op.observe(time.Now())
+	defer op.begin()()
 	return fn()
 }
 
