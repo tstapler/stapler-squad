@@ -71,6 +71,14 @@ func (f *ClientFanout) ResetSeq(base uint64) {
 	f.seq.valid, f.seq.last, f.seq.gapSignaled = true, base, false
 	f.seq.gen++
 	f.seq.clearRing()
+	f.clearSkipsLocked()
+}
+
+// clearSkipsLocked forgets every subscriber's skipThrough: it belongs to the old numbering.
+func (f *ClientFanout) clearSkipsLocked() {
+	for _, sub := range f.subscribers {
+		sub.skipThrough = 0
+	}
 }
 
 // DisableSeq marks the stream as unsequenced (an older daemon, or legacy output), so resyncs use
@@ -81,6 +89,7 @@ func (f *ClientFanout) DisableSeq() {
 	f.seq.valid = false
 	f.seq.gen++
 	f.seq.clearRing()
+	f.clearSkipsLocked()
 }
 
 // SeqGeneration identifies the current sequence space; read it before a capture and pass it to

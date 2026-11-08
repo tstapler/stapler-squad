@@ -93,6 +93,7 @@ func TestHub_should_FallBackToCapture_When_InStreamResyncFails(t *testing.T) {
 
 	assert.Equal(t, int32(1), c.calls.Load())
 	assert.Contains(t, got, "SNAP", "the legacy snapshot still repaints subscribers")
+	assert.NotContains(t, got, "late", "the fallback capture path keeps dropping output until it returns")
 }
 
 func TestHub_should_UseCapture_When_StreamIsNotSequenced(t *testing.T) {

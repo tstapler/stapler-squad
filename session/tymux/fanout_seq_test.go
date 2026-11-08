@@ -128,3 +128,18 @@ func TestFanoutResyncAt_RejectsASnapshotFromBeforeAReseed(t *testing.T) {
 	f.BroadcastSeq(1, []byte("a"))
 	assert.Equal(t, []string{"a"}, drain(ch), "output after the reseed still flows")
 }
+
+// A reopen can restart numbering without a ResyncAt; a skipThrough left over from the old
+// numbering would swallow every chunk up to it.
+func TestFanoutResetSeq_ForgetsSkipThroughFromTheOldNumbering(t *testing.T) {
+	t.Parallel()
+	f, ch := seqFanout(0)
+	_, ok := f.ResyncAt(5000, f.SeqGeneration(), []byte("R"), ScopeAll)
+	require.True(t, ok)
+	drain(ch)
+
+	f.ResetSeq(3)
+	f.BroadcastSeq(4, []byte("a"))
+
+	assert.Equal(t, []string{"a"}, drain(ch))
+}

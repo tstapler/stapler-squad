@@ -38,6 +38,8 @@ const (
 	defaultResyncCaptureBudget = 5 * time.Second
 )
 
+var errUnsequenced = errors.New("tymux: resync: stream is not sequenced")
+
 var errTailEvicted = errors.New("tymux: resync: output after the snapshot is no longer buffered")
 
 // resyncSnap is one CapturePane result plus its rendered redraw.
@@ -233,7 +235,7 @@ func (s *tymuxGRPCSession) runStreamResync(reason string) {
 			return
 		}
 		recordStreamResync(reason, resyncOutcomeRetry)
-		if !s.waitResyncBackoff(attempt) {
+		if !s.waitResyncBackoff(context.Background(), attempt) {
 			c.mu.Lock()
 			c.running = false
 			c.mu.Unlock()
@@ -242,7 +244,7 @@ func (s *tymuxGRPCSession) runStreamResync(reason string) {
 	}
 }
 
-func (s *tymuxGRPCSession) waitResyncBackoff(attempt int) bool {
+func (s *tymuxGRPCSession) waitResyncBackoff(ctx context.Context, attempt int) bool {
 	c := &s.resync
 	s.mu.RLock()
 	abort := s.abortReconnect
@@ -252,6 +254,8 @@ func (s *tymuxGRPCSession) waitResyncBackoff(attempt int) bool {
 	case <-time.After(d):
 		return true
 	case <-abort:
+		return false
+	case <-ctx.Done():
 		return false
 	}
 }
@@ -286,6 +290,8 @@ func (s *tymuxGRPCSession) spliceResyncCtx(ctx context.Context, need uint64, sco
 			s.resync.mu.Unlock()
 			return errTailEvicted
 		}
+	case reason == resyncReasonResize:
+		return errUnsequenced // the hub must not treat an unordered broadcast as an exact splice
 	case scope == ScopeAll:
 		s.fanout.Broadcast(snap.redraw)
 		recordStreamResync(reason, resyncOutcomeFallback)
@@ -336,7 +342,7 @@ const resizeResyncAttempts = 3
 // anything if it cannot, and the caller falls back.
 func (s *tymuxGRPCSession) ResyncInStream(ctx context.Context) error {
 	if !s.fanout.SeqValid() {
-		return errors.New("tymux: resync: stream is not sequenced")
+		return errUnsequenced
 	}
 	c := &s.resync
 	c.mu.Lock()
@@ -353,7 +359,7 @@ func (s *tymuxGRPCSession) ResyncInStream(ctx context.Context) error {
 			break
 		}
 		recordStreamResync(resyncReasonResize, resyncOutcomeRetry)
-		if !s.waitResyncBackoff(attempt) {
+		if !s.waitResyncBackoff(ctx, attempt) {
 			break
 		}
 	}

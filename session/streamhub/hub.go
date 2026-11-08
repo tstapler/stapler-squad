@@ -1060,6 +1060,9 @@ func (h *StreamHub) resyncInStream(ctx context.Context) bool {
 	if err := r.ResyncInStream(ctx); err != nil {
 		log.Info("streamhub: in-stream resync unavailable, falling back to a capture",
 			"session", h.sessionName, "error", err)
+		h.resizeMu.Lock()
+		h.suppressOutput = true // the capture fallback assumes output is dropped until it returns
+		h.resizeMu.Unlock()
 		return false
 	}
 	return true
