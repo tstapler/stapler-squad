@@ -293,7 +293,7 @@ func TestStreamConsistency_Baseline(t *testing.T) {
 func TestStreamConsistency_OutputGapWithOutputQueuedBehindIt(t *testing.T) {
 	for seed := int64(1); seed <= 10; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
-					h := newHarness(t, true)
+			h := newHarness(t, true)
 			rng := rand.New(rand.NewSource(seed))
 			h.emitAll(frames(rng, 20, 0))
 			h.d.emitLost(frames(rng, 10, 100), frames(rng, 10, 200))
@@ -331,7 +331,7 @@ func TestStreamConsistency_OutputKeepsFlowingWhileCaptureIsSlow(t *testing.T) {
 func TestStreamConsistency_SubscriberQueueOverflowRepaintsExactly(t *testing.T) {
 	for seed := int64(1); seed <= 5; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
-					h := newHarness(t, true)
+			h := newHarness(t, true)
 			rng := rand.New(rand.NewSource(seed))
 			h.emitAll(frames(rng, 10, 0))
 			h.c.pause()
@@ -383,16 +383,14 @@ func TestStreamConsistency_GivesUpAfterMaxAttemptsAndRecoversOnNextGap(t *testin
 	h.converge()
 }
 
-// Concurrent consumers asking for a redraw share one CapturePane, and each still gets a reply
-// that, applied to a blank terminal, reproduces the pane as of the reply.
+// Concurrent consumers asking for a redraw share one CapturePane, and each reply reproduces the
+// pane exactly as it was at the capture instant (it travels outside the stream, so it must not
+// include output the stream will still deliver).
 func TestStreamConsistency_ConcurrentRedrawRequestsShareOneCapture(t *testing.T) {
 	h := newHarness(t, true)
 	rng := rand.New(rand.NewSource(19))
 	h.emitAll(frames(rng, 40, 0))
 	h.converge()
-	h.s.resync.mu.Lock()
-	h.s.resync.last = nil
-	h.s.resync.mu.Unlock()
 
 	before := h.d.captureCalls.Load()
 	hold := make(chan struct{})
@@ -406,58 +404,56 @@ func TestStreamConsistency_ConcurrentRedrawRequestsShareOneCapture(t *testing.T)
 			defer wg.Done()
 			data, _, ok, err := h.s.CapturePaneRedraw(context.Background())
 			assert.NoError(t, err)
-			assert.True(t, ok || data == "")
+			assert.True(t, ok)
 			replies[i] = data
 		}()
 	}
 	require.Eventually(t, func() bool { return h.d.captureCalls.Load() > before }, 2*time.Second, time.Millisecond)
+	atCapture := h.d.screen()
 	h.emitAll(frames(rng, 10, 500)) // output after the capture instant, before it returns
 	close(hold)
 	wg.Wait()
 
 	assert.EqualValues(t, 1, h.d.captureCalls.Load()-before, "N concurrent requests must share one capture")
-	h.converge()
 	for i, data := range replies {
 		term := newRefTerm(harnessRows, harnessCols)
 		term.Write([]byte(data))
-		assert.Equal(t, h.d.screen(), term.Screen(), "reply %d must reproduce the current pane", i)
+		assert.Equal(t, atCapture, term.Screen(), "reply %d must be the pane at the capture instant", i)
 	}
+	h.converge()
 }
 
-func TestStreamConsistency_RecentCaptureIsReusedWithOutputThatFollowedIt(t *testing.T) {
+// A burst of subscriber overflows is repaired from one capture plus the ring while no output has
+// been lost upstream; a gap invalidates that capture.
+func TestStreamConsistency_RecentCaptureIsReusedForDropRepairUntilAGap(t *testing.T) {
 	h := newHarness(t, true)
 	h.s.resync.freshFor = time.Minute
 	rng := rand.New(rand.NewSource(23))
-	h.emitAll(frames(rng, 20, 0))
-	h.converge()
-	_, first, err := h.s.redrawFor(context.Background())
-	require.NoError(t, err)
-	_ = first
-	calls := h.d.captureCalls.Load()
+	h.emitAll(frames(rng, 10, 0))
 
-	h.emitAll(frames(rng, 15, 100))
-	h.converge()
-	_, data, err := h.s.redrawFor(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, calls, h.d.captureCalls.Load(), "no new capture while the last is fresh and nothing was lost")
-	term := newRefTerm(harnessRows, harnessCols)
-	term.Write(data)
-	assert.Equal(t, h.d.screen(), term.Screen())
+	overflow := func(base int) {
+		h.c.pause()
+		h.emitAll(frames(rng, 2*subscriberBufferSize, base))
+		h.c.resume()
+		h.converge()
+	}
+	overflow(100)
+	first := h.d.captureCalls.Load()
+	require.GreaterOrEqual(t, first, int64(1))
 
-	h.d.emitLost(frames(rng, 3, 300), nil)
+	overflow(1000)
+	assert.Equal(t, first, h.d.captureCalls.Load(), "the second overflow reuses the capture and replays the ring")
+
+	h.d.emitLost(frames(rng, 3, 2000), nil)
 	h.converge()
-	_, data, err = h.s.redrawFor(context.Background())
-	require.NoError(t, err)
-	term = newRefTerm(harnessRows, harnessCols)
-	term.Write(data)
-	assert.Equal(t, h.d.screen(), term.Screen(), "a gap invalidates the cached capture")
+	assert.Greater(t, h.d.captureCalls.Load(), first, "a gap makes the cached capture unusable")
 }
 
 // Randomized fault schedules, reproducible by seed. Every schedule must end identical.
 func TestStreamConsistency_RandomFaultSchedules(t *testing.T) {
 	for seed := int64(100); seed < 130; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
-					h := newHarness(t, true)
+			h := newHarness(t, true)
 			rng := rand.New(rand.NewSource(seed))
 			n := 0
 			next := func(k int) [][]byte { n += k; return frames(rng, k, n) }

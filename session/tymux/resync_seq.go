@@ -17,13 +17,14 @@ const (
 	resyncReasonSeqGap    = "seq_gap"    // a chunk's seq jumped with no announcement
 	resyncReasonDrop      = "drop"       // a subscriber's queue overflowed
 	resyncReasonRequest   = "request"    // a consumer asked for a full redraw (CapturePaneRedraw)
+	resyncReasonResize    = "resize"     // the stream hub finished a negotiated resize
 )
 
 // Outcomes for tymux_stream_resync_total{outcome}.
 const (
 	resyncOutcomeOK        = "ok"
 	resyncOutcomeCoalesced = "coalesced" // shared another caller's in-flight capture
-	resyncOutcomeFresh     = "fresh"     // served from a recent capture plus the output after it
+	resyncOutcomeFresh     = "fresh"     // spliced from a recent capture plus the ring, no new capture
 	resyncOutcomeRetry     = "retry"
 	resyncOutcomeGaveUp    = "gave_up"
 	resyncOutcomeFallback  = "fallback" // unsequenced stream: legacy, not exactly ordered
@@ -155,59 +156,20 @@ func (s *tymuxGRPCSession) runFlight(f *resyncFlight) {
 	close(f.done)
 }
 
-// redrawFor answers a consumer's request for a full redraw of the pane as it is now. Concurrent
-// callers share one capture; a capture under freshFor old, with no gap since, is reused. Either
-// way the reply is the capture plus every output chunk after it, so it is current, not merely
-// recent. Unsequenced streams fall back to a plain capture.
-func (s *tymuxGRPCSession) redrawFor(ctx context.Context) (*resyncSnap, []byte, error) {
-	c := &s.resync
-	for tries := 0; ; tries++ {
-		c.mu.Lock()
-		last := c.last
-		c.mu.Unlock()
-		if last != nil && time.Since(last.at) < orDefault(c.freshFor, defaultResyncFreshFor) && last.gapGen == s.fanout.GapGeneration() {
-			if data, ok := s.composeWithTail(last); ok {
-				recordStreamResync(resyncReasonRequest, resyncOutcomeFresh)
-				return last, data, nil
-			}
-		}
-		snap, joined, err := s.sharedSnapshot(ctx, 0, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		data, ok := s.composeWithTail(snap)
-		if !ok && tries < 2 {
-			c.mu.Lock()
-			c.last = nil // too old to extend; capture again
-			c.mu.Unlock()
-			continue
-		}
-		if !ok {
-			data = snap.redraw
-		}
-		if joined {
-			recordStreamResync(resyncReasonRequest, resyncOutcomeCoalesced)
-		}
-		return snap, data, nil
+// redrawFor answers a consumer's request for a full redraw of the pane. Concurrent callers share
+// one capture, so a burst of requests costs one CapturePane. The reply is the capture alone: it
+// travels outside the output stream, which carries no marker to splice at, so adding the output
+// that followed the capture would apply it twice once the stream delivers it. It is therefore as
+// old as the shared capture, a few milliseconds at most, the same window a lone capture has.
+func (s *tymuxGRPCSession) redrawFor(ctx context.Context) (*resyncSnap, error) {
+	snap, joined, err := s.sharedSnapshot(ctx, 0, true)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// composeWithTail is the snapshot's redraw followed by the output after it. ok is false when the
-// output after the snapshot is not available; for an unsequenced stream the redraw alone is
-// returned with ok=true (the legacy behavior).
-func (s *tymuxGRPCSession) composeWithTail(r *resyncSnap) ([]byte, bool) {
-	seq, hasSeq := r.seq()
-	if !hasSeq || !s.fanout.SeqValid() {
-		return r.redraw, true
+	if joined {
+		recordStreamResync(resyncReasonRequest, resyncOutcomeCoalesced)
 	}
-	tail, ok := s.fanout.TailSince(seq)
-	if !ok {
-		return nil, false
-	}
-	if len(tail) == 0 {
-		return r.redraw, true
-	}
-	return append(append(make([]byte, 0, len(r.redraw)+len(tail)), r.redraw...), tail...), true
+	return snap, nil
 }
 
 // requestStreamResync repairs every subscriber (ScopeAll, upstream output was lost) or only those
@@ -299,7 +261,11 @@ func (s *tymuxGRPCSession) waitResyncBackoff(attempt int) bool {
 func (s *tymuxGRPCSession) spliceResync(need uint64, scope ResyncScope, reason string) error {
 	ctx, cancel := s.interruptibleContext()
 	defer cancel()
-	snap, joined, err := s.snapshotForSplice(ctx, need)
+	return s.spliceResyncCtx(ctx, need, scope, reason)
+}
+
+func (s *tymuxGRPCSession) spliceResyncCtx(ctx context.Context, need uint64, scope ResyncScope, reason string) error {
+	snap, joined, err := s.snapshotForSplice(ctx, need, reason)
 	if err != nil {
 		return err
 	}
@@ -340,14 +306,56 @@ func (s *tymuxGRPCSession) spliceResync(need uint64, scope ResyncScope, reason s
 
 // snapshotForSplice reuses the last capture when it started after need, is under freshFor old
 // and no output was lost since; ResyncAt then replays what followed it from the ring.
-func (s *tymuxGRPCSession) snapshotForSplice(ctx context.Context, need uint64) (*resyncSnap, bool, error) {
+func (s *tymuxGRPCSession) snapshotForSplice(ctx context.Context, need uint64, reason string) (*resyncSnap, bool, error) {
 	c := &s.resync
 	c.mu.Lock()
 	last := c.last
 	c.mu.Unlock()
 	if last != nil && last.epoch >= need && time.Since(last.at) < orDefault(c.freshFor, defaultResyncFreshFor) &&
 		last.gapGen == s.fanout.GapGeneration() {
+		recordStreamResync(reason, resyncOutcomeFresh)
 		return last, false, nil
 	}
 	return s.sharedSnapshot(ctx, need, false)
+}
+
+// SupportsInStreamResync reports whether ResyncInStream can splice exactly: the daemon numbers
+// its output and a priming snapshot has seeded the sequence.
+func (s *tymuxGRPCSession) SupportsInStreamResync() bool {
+	return s.fanout.SeqValid()
+}
+
+// resizeResyncAttempts bounds ResyncInStream's retries; the caller has a legacy path to fall
+// back to, so it should not wait out the full background backoff.
+const resizeResyncAttempts = 3
+
+// ResyncInStream captures the pane (after any resize the caller just applied) and replaces every
+// subscriber's queue with the redraw followed by all output after the capture, so output that
+// raced the capture is neither lost nor applied twice. It returns an error without changing
+// anything if it cannot, and the caller falls back.
+func (s *tymuxGRPCSession) ResyncInStream(ctx context.Context) error {
+	if !s.fanout.SeqValid() {
+		return errors.New("tymux: resync: stream is not sequenced")
+	}
+	c := &s.resync
+	c.mu.Lock()
+	c.epoch++
+	need := c.epoch
+	c.mu.Unlock()
+
+	var err error
+	for attempt := 1; attempt <= resizeResyncAttempts; attempt++ {
+		if err = s.spliceResyncCtx(ctx, need, ScopeAll, resyncReasonResize); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil || attempt == resizeResyncAttempts {
+			break
+		}
+		recordStreamResync(resyncReasonResize, resyncOutcomeRetry)
+		if !s.waitResyncBackoff(attempt) {
+			break
+		}
+	}
+	recordStreamResync(resyncReasonResize, resyncOutcomeGaveUp)
+	return err
 }

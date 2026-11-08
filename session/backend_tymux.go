@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -184,6 +185,22 @@ func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (data string, altS
 	})
 	return r.data, r.altScreen, r.ok, err
 }
+
+// SupportsInStreamResync and ResyncInStream make TymuxBackend an InStreamResyncer when its
+// session manager can splice by sequence number (the real session; test fakes cannot).
+func (b *TymuxBackend) SupportsInStreamResync() bool {
+	r, ok := b.mgr.(InStreamResyncer)
+	return ok && r.SupportsInStreamResync()
+}
+
+func (b *TymuxBackend) ResyncInStream(ctx context.Context) error {
+	r, ok := b.mgr.(InStreamResyncer)
+	if !ok {
+		return errors.New("tymux backend: session manager cannot resync in-stream")
+	}
+	return timeBackendOpErr(tymuxIOOps.capturePane, func() error { return r.ResyncInStream(ctx) })
+}
+
 func (b *TymuxBackend) CaptureViewport(lines int) (string, error) {
 	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })
 }

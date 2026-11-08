@@ -101,14 +101,6 @@ func (f *ClientFanout) GapGeneration() uint64 {
 	return f.seq.gaps
 }
 
-// TailSince is the output delivered after seq, for composing a cached snapshot with what
-// followed it. ok is false when it can no longer be reconstructed.
-func (f *ClientFanout) TailSince(seq uint64) ([]byte, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.seq.tailSince(seq)
-}
-
 // BroadcastSeq is Broadcast for a sequenced chunk. It drops duplicates (seq already delivered),
 // skips subscribers whose resync already contained this seq, and reports gap=true when the seq
 // jumped without a preceding OutputGap (the caller must resync).

@@ -173,6 +173,10 @@ type StreamHub struct {
 	resizeMu       sync.Mutex
 	negotiatedSize TerminalSize
 	resizing       bool
+	// suppressOutput makes OnRawOutput drop frames. It equals resizing, except that an in-stream
+	// resync clears it just before splicing, so the spliced redraw and the output after the
+	// capture are not themselves dropped.
+	suppressOutput bool
 	// resizeGeneration increments once per completed applyNegotiatedSize
 	// call (success or failure), alongside resizing flipping back to
 	// false. ForwardScroll (session package, via ResizeActivity) samples
@@ -902,9 +906,9 @@ var streamEndedSentinel = []byte("\x00STREAM_ENDED\x00")
 // accumulation/coalesce pass per burst instead of each running their own.
 func (h *StreamHub) OnRawOutput(data []byte) {
 	h.resizeMu.Lock()
-	resizing := h.resizing
+	suppress := h.suppressOutput
 	h.resizeMu.Unlock()
-	if resizing {
+	if suppress {
 		h.tap.Record(TapDrop, DropCauseResizeSettling, data)
 		return
 	}
@@ -951,12 +955,12 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	defer cancel()
 
 	h.resizeMu.Lock()
-	h.resizing = true
+	h.resizing, h.suppressOutput = true, true
 	h.resizeMu.Unlock()
 	h.tap.RecordResize(size)
 	defer func() {
 		h.resizeMu.Lock()
-		h.resizing = false
+		h.resizing, h.suppressOutput = false, false
 		h.resizeGeneration++
 		h.resizeMu.Unlock()
 	}()
@@ -992,6 +996,10 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 
 	if h.allAwaitingFirstPaint() {
 		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
+		return
+	}
+
+	if h.resyncInStream(ctx) {
 		return
 	}
 
@@ -1034,6 +1042,27 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()
 	h.publishSnapshot(prepared)
+}
+
+// resyncInStream finishes a resize for a controller whose output is numbered: the capture is
+// spliced into the raw-output stream as a redraw plus everything after it, so output that arrives
+// between the capture and the end of this call is delivered once, in order, instead of dropped.
+// Suppression ends first because the spliced frame travels the same OnRawOutput path. It reports
+// false, having changed nothing, when the controller cannot (the caller takes the capture path).
+func (h *StreamHub) resyncInStream(ctx context.Context) bool {
+	r, ok := h.controller.(InStreamResyncer)
+	if !ok || !r.SupportsInStreamResync() {
+		return false
+	}
+	h.resizeMu.Lock()
+	h.suppressOutput = false
+	h.resizeMu.Unlock()
+	if err := r.ResyncInStream(ctx); err != nil {
+		log.Info("streamhub: in-stream resync unavailable, falling back to a capture",
+			"session", h.sessionName, "error", err)
+		return false
+	}
+	return true
 }
 
 // publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not

@@ -1395,7 +1395,7 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 // restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
 // mouse work in a freshly attached client before the app re-sets any of them.
 func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
-	snap, redraw, err := s.redrawFor(ctx)
+	snap, err := s.redrawFor(ctx)
 	if err != nil {
 		return "", false, false, err
 	}
@@ -1404,7 +1404,7 @@ func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, 
 	if snap.snap.GetModes() == nil {
 		return "", false, false, nil
 	}
-	return string(redraw), snap.snap.GetAltScreen(), true, nil
+	return string(snap.redraw), snap.snap.GetAltScreen(), true, nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument
