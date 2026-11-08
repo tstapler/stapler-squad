@@ -1,4 +1,5 @@
 import type { ReviewItem, Session, UnfinishedWorktree } from "@/gen/session/v1/types_pb";
+import { prUrl } from "./pullRequests";
 
 /**
  * The only place (with lib/vcs/adapters.ts) that reads the legacy single-PR scalars off a Session
@@ -46,7 +47,7 @@ export interface DisplayedPullRequest {
 export function displayedPullRequest(session: Session, multiPrUi: boolean): DisplayedPullRequest | undefined {
   if (multiPrUi && session.pullRequests.length > 0) {
     const pr = session.pullRequests.find((p) => p.isActive) ?? session.pullRequests[0];
-    return { number: pr.number, url: pr.url, owner: pr.owner, repo: pr.repo, checkConclusion: pr.checkConclusion };
+    return { number: pr.number, url: prUrl(pr), owner: pr.owner, repo: pr.repo, checkConclusion: pr.checkConclusion };
   }
   const legacy = legacyPullRequest(session);
   return legacy && legacy.url

@@ -100,12 +100,34 @@ func newRealTransport(addr string, quiet bool) (rpcTransport, func()) {
 	if quiet {
 		return newSelector(addr, sock, true)
 	}
-	return sharedTransportFor(addr+"|"+sock, func() *selecting.Client {
+	key := addr + "|" + sock
+	control := sharedTransportFor(key, func() *selecting.Client {
 		s, _ := newSelector(addr, sock, false)
 		recordTransportActive(addr, selecting.Unix)
 		return s
-	}), func() {}
+	})
+	// Quiet: the control selector already owns the transition metrics and Warn lines.
+	stream := sharedTransportFor(key+"|attach", func() *selecting.Client {
+		s, _ := newSelector(addr, sock, true)
+		return s
+	})
+	// The wrapper is thin and its selectors are shared, so a lost LoadOrStore race is harmless.
+	split, _ := sharedSplits.LoadOrStore(key, &splitTransport{Client: control, stream: stream})
+	return split.(*splitTransport), func() {}
 }
+
+// sharedSplits memoizes one splitTransport per daemon so every session gets the same value.
+var sharedSplits sync.Map
+
+// splitTransport sends the standing Attach streams over their own connection, so a pane streaming
+// a burst cannot delay CapturePane/resize/lifecycle RPCs: over one shared HTTP/2 connection they
+// queue behind the streams' frames and flow-control window.
+type splitTransport struct {
+	*selecting.Client // control RPCs
+	stream            *selecting.Client
+}
+
+func (s *splitTransport) Attach(ctx context.Context) attachStream { return s.stream.Attach(ctx) }
 
 // sharedSelectors holds one long-lived selector per daemon (addr+socket) so every session's
 // transport shares one fallback state, one probe claim and one Warn per genuine transition,

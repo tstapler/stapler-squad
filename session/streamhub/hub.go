@@ -131,6 +131,7 @@ type StreamHub struct {
 	firstPaintMaxAwait    time.Duration
 	teardownGrace         time.Duration
 	clock                 Clock
+	interactive           interactivity // see qos.go
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
