@@ -2505,6 +2505,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	})
 	defer slowLane.close()
 	var resizes latestResize
+	// Resizes run on the slow lane, so a keystroke typed after one must be ordered behind the
+	// pane resize (not behind its repaint capture) by the gate.
+	inputGate := newInputOrderGate(func(data []byte) {
+		writer := upWriter.Writer()
+		if writer == nil {
+			return
+		}
+		keystrokeDelivery{
+			instance:    instance,
+			latency:     &stream.latency,
+			bookkeeper:  bookkeeper,
+			logPrefix:   "[streamViaHub]",
+			tmuxSession: tmuxSessionName,
+			tmuxSocket:  snap.TmuxServerSocket,
+		}.deliver(writer, data)
+	})
 	runInputReadLoop(inputReadLoopParams{
 		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
@@ -2514,8 +2530,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		errChan:         errChan,
 		sessionID:       sessionID,
 		onInput: func(data []byte) {
-			writer := upWriter.Writer()
-			if writer == nil {
+			if upWriter.Writer() == nil {
 				return
 			}
 			if !instance.Permissions.CanSendCommand {
@@ -2523,14 +2538,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				return
 			}
 			hub.NoteInteractive(subscriberID)
-			keystrokeDelivery{
-				instance:    instance,
-				latency:     &stream.latency,
-				bookkeeper:  bookkeeper,
-				logPrefix:   "[streamViaHub]",
-				tmuxSession: tmuxSessionName,
-				tmuxSocket:  snap.TmuxServerSocket,
-			}.deliver(writer, data)
+			inputGate.input(data)
 		},
 		onResize: func(cols, rows int) {
 			writer := upWriter.Writer()
@@ -2541,10 +2549,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
 				return
 			}
-			resizes.push(slowLane, cols, rows, func(cols, rows int) {
-				if size, err := streamhub.NewTerminalSize(cols, rows); err == nil {
-					hub.RequestResize(connCtx, subscriberID, size)
+			resizes.pushOrdered(slowLane, inputGate, cols, rows, func(cols, rows int, paneResized func()) {
+				size, err := streamhub.NewTerminalSize(cols, rows)
+				if err != nil {
+					return
 				}
+				hub.RequestResizeNotify(connCtx, subscriberID, size, paneResized)
 			})
 		},
 		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {

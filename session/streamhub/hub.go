@@ -145,6 +145,7 @@ type StreamHub struct {
 	activity              activityState // see activity.go
 	quiescenceTimeout     time.Duration
 	resizeBudget          resizeBudget
+	paneResized           func() // see RequestResizeNotify; guarded by resizeApplyMu
 	resizeSettleDelay     time.Duration
 	settle                settleState
 	settleCaptures        atomic.Int64
@@ -925,9 +926,13 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// server/services/connectrpc_websocket.go's streamViaControlMode and
 	// streamShellViaControlMode use, consolidated so every tmux-resizing
 	// call site gets the fix instead of hand-rolling it separately.
-	if err := resize.WithForcedRedraw(func(cols, rows int) error {
+	resizeErr := resize.WithForcedRedraw(func(cols, rows int) error {
 		return h.controller.SetWindowSizeContext(ctx, cols, rows)
-	}, size.cols, size.rows); err != nil {
+	}, size.cols, size.rows)
+	if h.paneResized != nil {
+		h.paneResized()
+	}
+	if err := resizeErr; err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
 			return

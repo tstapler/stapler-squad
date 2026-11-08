@@ -150,20 +150,118 @@ type latestResize struct {
 // push records the newest size and, unless a run is already queued, queues apply on lane.
 // apply always receives the newest size at the time it runs.
 func (r *latestResize) push(lane *slowRequestLane, cols, rows int, apply func(cols, rows int)) {
+	r.pushOrdered(lane, nil, cols, rows, func(cols, rows int, _ func()) { apply(cols, rows) })
+}
+
+// pushOrdered is push for a stream whose keystrokes must not overtake its resizes. It starts a
+// hold on gate before returning (so the very next keystroke the read loop sees is held) and
+// lifts it when apply calls done, or at the latest when apply returns.
+func (r *latestResize) pushOrdered(lane *slowRequestLane, gate *inputOrderGate, cols, rows int, apply func(cols, rows int, done func())) {
 	r.mu.Lock()
 	r.req = resizeReq{cols, rows}
 	queued := r.pending
 	r.pending = true
 	r.mu.Unlock()
 	if queued {
-		return
+		return // the queued run will apply this newer size, and already holds the gate
 	}
+	gate.begin()
 	lane.submit(func() error {
 		r.mu.Lock()
 		req := r.req
 		r.pending = false
 		r.mu.Unlock()
-		apply(req.cols, req.rows)
+		var once sync.Once
+		done := func() { once.Do(gate.release) }
+		defer done()
+		apply(req.cols, req.rows, done)
 		return nil
 	})
+}
+
+// inputOrderGate keeps a keystroke typed after a resize from reaching the pane before that
+// resize does, without making the read loop wait for it: keystrokes arriving while a resize is
+// pending queue here in order and flush the moment the pane has been resized (not after the
+// repaint capture, which is what used to hold typing for seconds). A nil gate delivers directly.
+type inputOrderGate struct {
+	deliver func([]byte)
+	after   func(d time.Duration, f func())
+
+	mu      sync.Mutex
+	pending int // resizes begun and not yet released
+	epoch   int // bumped on every begin; a safety timer only acts on its own epoch
+	queue   [][]byte
+}
+
+// inputOrderGateMaxHold bounds how long a lost resize can hold typing back.
+const inputOrderGateMaxHold = 2 * time.Second
+
+func newInputOrderGate(deliver func([]byte)) *inputOrderGate {
+	return &inputOrderGate{
+		deliver: deliver,
+		after:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+	}
+}
+
+// begin starts a hold for one pending resize.
+func (g *inputOrderGate) begin() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.pending++
+	g.epoch++
+	epoch := g.epoch
+	g.mu.Unlock()
+	g.after(inputOrderGateMaxHold, func() { g.expire(epoch) })
+}
+
+// release lifts one hold; the last one flushes the queue in arrival order.
+func (g *inputOrderGate) release() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.pending > 0 {
+		g.pending--
+	}
+	if g.pending == 0 {
+		g.flushLocked()
+	}
+}
+
+// expire is the safety valve: a resize that never reported must not wedge typing.
+func (g *inputOrderGate) expire(epoch int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.epoch != epoch || g.pending == 0 {
+		return
+	}
+	g.pending = 0
+	g.flushLocked()
+}
+
+// input delivers data now, or queues it behind a pending resize. The read loop is its only
+// caller, so queue order is arrival order; delivery happens under the lock so a concurrent
+// flush cannot interleave with it.
+func (g *inputOrderGate) input(data []byte) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.pending > 0 {
+		g.queue = append(g.queue, append([]byte(nil), data...))
+		return
+	}
+	g.deliver(data)
+}
+
+func (g *inputOrderGate) flushLocked() {
+	queued := g.queue
+	g.queue = nil
+	for _, data := range queued {
+		g.deliver(data)
+	}
 }
