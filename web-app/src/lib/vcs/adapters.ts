@@ -11,7 +11,7 @@ import type {
   PrState,
   CheckConclusion,
 } from "./types";
-import { prRowState } from "@/lib/pr/pullRequests";
+import { prRowState, prUrl as prUrlOf } from "@/lib/pr/pullRequests";
 
 // toPrState/toCheckConclusion are the only places a raw GitHub string (an
 // unconstrained proto `string` field) may be narrowed to PrState/CheckConclusion.
@@ -111,7 +111,7 @@ function toPrEntries(session: Session | undefined, active: GithubSummary | null)
         : {
             owner: pr.owner,
             repo: pr.repo,
-            prUrl: pr.url,
+            prUrl: prUrlOf(pr),
             prNumber: pr.number,
             prState: toPrState(pr.state),
             isDraft: pr.isDraft,

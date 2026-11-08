@@ -46,6 +46,8 @@ const LEGACY_PR_SCALAR_ALLOWLIST = [
 ];
 
 export default [
+  // Build output from `next build` (make build/lint); linting minified bundles is meaningless noise.
+  { ignores: [".next/**", "out/**"] },
   {
     files: ["src/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
     languageOptions: {

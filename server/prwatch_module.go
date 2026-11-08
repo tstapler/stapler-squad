@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"net"
 	"os"
 	"path/filepath"
@@ -105,7 +106,7 @@ func reportPRWatchNonLoopback(w prwatchWiring) *prwatch.StatusTracker {
 // under srv.backgroundTasksWG; all end when ctx is cancelled. The resolver
 // waits for the flag so a flag-off process never calls GitHub.
 func (m *prwatchModule) Start(ctx context.Context, srv *Server) {
-	srv.goBackground(func() { m.poller.Run(ctx) })
+	srv.goBackground(func() { proflabel.Do("pr_watch_poller", func() { m.poller.Run(ctx) }) })
 	srv.goBackground(func() { m.leader.Watch(ctx) })
 	srv.goBackground(func() {
 		if !m.waitEnabled(ctx) {

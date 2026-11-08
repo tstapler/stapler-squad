@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { PrHold, SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { PollError } from "@/gen/session/v1/types_pb";
-import { isTerminal, prRowState, prTarget } from "@/lib/pr/pullRequests";
+import { isTerminal, prRowState, prTarget, prUrl } from "@/lib/pr/pullRequests";
 import { holdLine, isWarningHold, pollErrorText, reviewSummary, stateText, unverifiedLine } from "@/lib/pr/rowCopy";
 import { PrStateGlyph } from "./PrStateGlyph";
 import { usePopupMenu } from "./usePopupMenu";
@@ -73,7 +73,7 @@ function RowMenu({ pr, items, onCommand }: { pr: SessionPullRequest; items: Menu
               {item.label}
             </button>
           ))}
-          <a role="menuitem" className={s.menuItem} href={pr.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>{/* analytics-exempt */}
+          <a role="menuitem" className={s.menuItem} href={prUrl(pr)} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>{/* analytics-exempt */}
             Open on GitHub
           </a>
         </div>
@@ -106,7 +106,7 @@ export const PullRequestRow = forwardRef<HTMLLIElement, RowProps>(function PullR
           <PrStateGlyph state={state} className={`${s.glyph}`} />
           <a
             className={s.prLink}
-            href={pr.url}
+            href={prUrl(pr)}
             target="_blank"
             rel="noopener noreferrer"
             data-testid={`pr-link-${pr.number}`}

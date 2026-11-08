@@ -1,0 +1,17 @@
+{
+  "id": "session:clear-terminal-status-if-live",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ClearTerminalStatusIfLive",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_clear_terminal.go",
+  "tested": true,
+  "testIds": [
+    "TestClearTerminalStatusOne_Outcomes",
+    "TestClearTerminalStatusIfLive_RPCValidation",
+    "TestClearTerminalStatusIfLive_ClearedPublishesSessionUpdated",
+    "TestClearTerminalStatusIfLive_ShouldRefuseHiddenAndReviveVisible"
+  ],
+  "lastModified": "2026-11-06T18:32:56.278465102-08:00"
+}

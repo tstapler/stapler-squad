@@ -410,7 +410,7 @@ func TestRealTransport_UnixOnlyDaemon_RPCsSucceedOverSocket(t *testing.T) {
 	t.Setenv("TYMUXD_SOCKET_PATH", sock)
 
 	tr := NewRealTransport(addr)
-	sel, ok := tr.(*selecting.Client)
+	sel, ok := tr.(*splitTransport)
 	require.True(t, ok, "a daemon with a known socket gets the selecting transport")
 
 	info, err := tr.GetServerInfo(context.Background(), connect.NewRequest(&v1.GetServerInfoRequest{}))
