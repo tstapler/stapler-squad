@@ -7,7 +7,7 @@ import type { Terminal as XtermWebTerminal } from "@xterm/xterm";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
-import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
+import { asXtermCompatible, FRESH_TERMINAL_SCRUB, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
 
@@ -101,6 +101,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       terminalRef.current = term;
       fitRef.current = fit;
       const surface = compatTerminal();
+      surface?.write(FRESH_TERMINAL_SCRUB);
       for (const chunk of pendingWritesRef.current.splice(0)) surface?.write(chunk);
       fit.fit();
       fit.observeResize();

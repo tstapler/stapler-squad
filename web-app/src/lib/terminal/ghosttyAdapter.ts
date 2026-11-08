@@ -7,6 +7,14 @@
 import type { GhosttyCell, Terminal as GhosttyWebTerminal } from "ghostty-web";
 import type { ITerminal } from "./TerminalStreamManager";
 import { createQueryResponder } from "./ghosttyQueryResponder";
+import { createSoftResetRewriter } from "./ghosttySoftReset";
+
+/**
+ * ghostty-web 0.4.0 does not zero WASM memory a freed terminal released, so the next `createTerminal`
+ * shows the old terminal's cells, including in rows that scroll in later (probed: ED 2 does not clear
+ * them, RIS does). Send this to every new terminal before any real output.
+ */
+export const FRESH_TERMINAL_SCRUB = "\x1bc";
 
 /** `GhosttyCell.flags` bits, probed against ghostty-web@0.4.0's WASM (bold=1 … faint=128). */
 const FLAG_BOLD = 1;
@@ -148,11 +156,18 @@ export function toITerminal(term: GhosttyWebTerminal): ITerminal {
 export function asXtermCompatible(term: GhosttyWebTerminal, onReply?: (data: string) => void): GhosttyWebTerminal {
   const facade = toITerminal(term);
   const responder = createQueryResponder();
+  const softReset = createSoftResetRewriter();
   const overrides: Record<string, unknown> = {
     write: (data: string | Uint8Array, callback?: () => void) => {
       const reply = typeof data === "string" ? responder.feed(data) : "";
       if (reply) onReply?.(reply);
-      facade.write(data, callback);
+      if (typeof data !== "string") {
+        facade.write(data, callback);
+        return;
+      }
+      const active = term.buffer.active;
+      softReset.feed(data, (part) => facade.write(part), () => ({ x: active.cursorX, y: active.cursorY }));
+      if (callback) queueMicrotask(callback);
     },
     clear: facade.clear,
     refresh: facade.refresh,
