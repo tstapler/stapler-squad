@@ -594,9 +594,10 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 		SessionRole: SessionRoleReview,
 		AcSnapshot:  acSnapshot,
 	}, ReviewVerdictData{
-		OverallOutcome: outcome,
-		Summary:        summary,
-		DiffHash:       storage.ComputeCurrentDiffHash(cleanupCtx, itemID),
+		OverallOutcome:    outcome,
+		Summary:           summary,
+		DiffHash:          storage.ComputeCurrentDiffHash(cleanupCtx, itemID),
+		ReviewedCommitSha: storage.ComputeReviewedCommitSha(cleanupCtx, itemID),
 	})
 	if err != nil {
 		return ItemSessionSummary{}, err
