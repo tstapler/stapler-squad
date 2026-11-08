@@ -247,3 +247,83 @@ func TestSlowRequestLane_should_NotBlockSubmittersAfterAFailure(t *testing.T) {
 		t.Fatal("submit blocked on a dead lane; the read loop would never see its deadline")
 	}
 }
+
+type lockedTimers struct {
+	mu sync.Mutex
+	fs []func()
+}
+
+func (l *lockedTimers) add(f func()) { l.mu.Lock(); l.fs = append(l.fs, f); l.mu.Unlock() }
+func (l *lockedTimers) len() int     { l.mu.Lock(); defer l.mu.Unlock(); return len(l.fs) }
+func (l *lockedTimers) at(i int) func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fs[i]
+}
+
+func TestInputBookkeeper_should_NotPileTimersWhileTheSinkIsBlockedAndFlushLateKeystrokesAfter(t *testing.T) {
+	t.Parallel()
+	sink := &fakeInputSink{blockOn: make(chan struct{}), entered: make(chan struct{}, 1)}
+	timers := &lockedTimers{}
+	b := newInputBookkeeper(sink, &streamLatency{})
+	b.after = func(_ time.Duration, f func()) { timers.add(f) }
+
+	b.note([]byte("a"))
+	require.Equal(t, 1, timers.len())
+	flushed := make(chan struct{})
+	go func() { timers.at(0)(); close(flushed) }()
+	<-sink.entered // the sink is now waiting on the (held) instance lock
+
+	for _, k := range []string{"b", "c"} {
+		b.note([]byte(k))
+	}
+	assert.Equal(t, 1, timers.len(), "keystrokes typed while the sink blocks must not start more timers")
+
+	sink.blockOn <- struct{}{} // release the flush of "a"
+	<-flushed
+	require.Equal(t, 2, timers.len(), "the late keystrokes get a follow-up window")
+	go func() { <-sink.entered; sink.blockOn <- struct{}{} }()
+	timers.at(1)()
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	assert.Equal(t, []string{"a", "c"}, sink.updates)
+}
+
+func TestInputBookkeeper_should_NotReapplyAnOldChunkWhenTheNextWindowIsBlankOnly(t *testing.T) {
+	t.Parallel()
+	sink := &fakeInputSink{}
+	b, timers := newManualBookkeeper(sink)
+
+	b.note([]byte("x"))
+	(*timers)[0]()
+	b.note([]byte("\r"))
+	(*timers)[1]()
+	assert.Equal(t, []string{"x", "\r"}, sink.updates)
+}
+
+func TestSlowRequestLane_should_DropScrollbackInsteadOfBlockingWhenBusyAndKeepRoomForResync(t *testing.T) {
+	t.Parallel()
+	lane := newSlowRequestLane(make(chan error, 1), nil)
+	t.Cleanup(lane.close)
+	started, release := make(chan struct{}), make(chan struct{})
+	lane.submit(func() error { close(started); <-release; return nil })
+	<-started
+	t.Cleanup(func() { close(release) })
+
+	accepted := 0
+	for i := 0; i < droppableLaneDepth+5; i++ {
+		if lane.submitDroppable(func() error { return nil }) {
+			accepted++
+		}
+	}
+	assert.Equal(t, droppableLaneDepth, accepted)
+	assert.EqualValues(t, 5, lane.droppedScrollback.Load())
+
+	done := make(chan struct{})
+	go func() { lane.submit(func() error { return nil }); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a resync submit blocked behind a scrollback flood")
+	}
+}
