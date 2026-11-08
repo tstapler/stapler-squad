@@ -10,6 +10,7 @@ import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib
 import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
+import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
@@ -83,6 +84,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     if (!container) return;
     let disposed = false;
     let term: GhosttyWebTerminal | null = null;
+    let disposeIme: (() => void) | undefined;
     let detachRenderGate: (() => void) | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
@@ -98,7 +100,14 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(container);
-      term.onData((data) => onDataRef.current?.(data));
+      const ime = term.element
+        ? attachTerminalImeSupport(term.element, "ghostty", (data) => onDataRef.current?.(data), (text) => term?.paste(text))
+        : undefined;
+      disposeIme = () => ime?.dispose();
+      term.onData((data) => {
+        ime?.traceData(data);
+        onDataRef.current?.(data);
+      });
       term.onResize(({ cols, rows }) => onResizeRef.current?.(cols, rows));
       terminalRef.current = term;
       fitRef.current = fit;
@@ -115,6 +124,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
 
     return () => {
       disposed = true;
+      disposeIme?.();
       detachRenderGate?.();
       terminalRef.current = null;
       compatRef.current = null;
