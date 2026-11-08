@@ -137,6 +137,9 @@ describe("mobile picker sheet", () => {
     const cancel = screen.getByText("Cancel");
     expect(list.contains(cancel)).toBe(false);
     expect(list.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(list.children[0] as HTMLElement);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "ASSIGN_SESSION", sessionId: "session-X" }));
   });
 
   it("omits the pane list when there are no other panes", async () => {

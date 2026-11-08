@@ -102,10 +102,11 @@ export const mobilePickerSheet = style({
   borderRadius: `${vars.radii.lg} ${vars.radii.lg} 0 0`,
   padding: `${vars.space["4"]} 0 0`,
   animation: `${slideUp} 180ms ease`,
-  // Bounded height so only the pane list scrolls; dvh tracks the on-screen keyboard.
+  // Bounded height so only the pane list scrolls. 60vh is the fallback for browsers without dvh;
+  // dvh follows the browser toolbar, not necessarily the on-screen keyboard (unverified on device).
   display: "flex",
   flexDirection: "column",
-  maxHeight: "60dvh",
+  maxHeight: ["60vh", "60dvh"],
 });
 
 export const mobilePickerPaneList = style({
