@@ -119,6 +119,10 @@ describe("useWatchBacklogItems", () => {
     mockListBacklogItems.mockResolvedValue({ items: [] });
     // Backoff delay is jittered in [base/2, base]; pin to the top so the exact-delay asserts hold.
     jest.spyOn(Math, "random").mockReturnValue(1);
+    // The retry paths log stream errors; formatting those stacks runs source-map's
+    // quicksort, which uses Math.random for its pivot and goes quadratic (hangs under
+    // load) when Math.random is pinned to a constant. Silence the logs to avoid it.
+    jest.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
