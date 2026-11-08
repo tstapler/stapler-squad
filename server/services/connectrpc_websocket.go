@@ -2550,6 +2550,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				return
 			}
 			resizes.push(slowLane, cols, rows, func(cols, rows int) {
+				// Re-check: the slow lane runs after the up-writer may have been closed.
+				if writer := upWriter.Writer(); writer == nil {
+					return
+				}
 				if size, err := streamhub.NewTerminalSize(cols, rows); err == nil {
 					hub.RequestResize(connCtx, subscriberID, size)
 				}
