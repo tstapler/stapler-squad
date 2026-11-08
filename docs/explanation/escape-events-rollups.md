@@ -65,10 +65,17 @@ Real-copy result: the backfill of 728,739 rows finished inside the first 10 s re
 
 Rollup buckets are whole UTC hours or days, while requests can start at any instant.
 
-- In the hourly tier, partial hours at each end come from raw rows, so results match a raw count
-  as long as those raw rows still exist (property-tested against a brute-force count).
+- In the hourly tier, a partial hour at an end of the range comes from raw rows while that hour
+  is inside the raw retention window (`escapeAnalyticsRetentionDays`), so results match a raw
+  count (property-tested against a brute-force count, in zones with whole and fractional UTC offsets).
+- A partial hour older than the raw window snaps outward to the whole UTC hour, since its raw rows
+  are gone and counting them as zero would silently undercount. An event at exactly an
+  hour-aligned end instant in that zone is not counted (the range is half-open there).
 - Where a range reaches into the daily tier, whole UTC days that overlap it are included: the
-  edge snaps outward to day boundaries.
+  edge snaps outward to day boundaries, so a "last 30 days" range can include up to a day of
+  extra events at its start.
+- Per-session cap eviction can remove raw rows inside the raw window, so a busy session's edge
+  hour can undercount slightly there.
 - `wall_time` is stored as local-zone text (`Time.String()`) and compared as text. Raw bounds are
   converted to the local zone before binding. Before this change the summaries bound UTC times
   against local text, which shifts ranges by the zone offset.

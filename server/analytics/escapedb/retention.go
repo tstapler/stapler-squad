@@ -14,7 +14,9 @@ import (
 
 // RollupTiers sets how long each rollup tier is kept, in days. Hourly rollups older than
 // HourlyDays merge into daily ones; daily rollups older than DailyDays are deleted (0 keeps them).
-type RollupTiers struct{ HourlyDays, DailyDays int }
+// RawDays is the raw-row retention a Reader assumes when deciding whether a range edge can still
+// be read from raw rows (0: raw rows are never evicted by age).
+type RollupTiers struct{ HourlyDays, DailyDays, RawDays int }
 
 // RetentionConfig configures the periodic maintenance cycle. Zero fields take defaults.
 type RetentionConfig struct {
@@ -40,6 +42,9 @@ const (
 func (c RetentionConfig) withDefaults() RetentionConfig {
 	if c.Tiers.HourlyDays <= 0 {
 		c.Tiers.HourlyDays = defaultHourlyRollupDays
+	}
+	if c.Tiers.RawDays == 0 {
+		c.Tiers.RawDays = c.RawRetentionDays
 	}
 	if c.Tiers.DailyDays == 0 {
 		c.Tiers.DailyDays = defaultDailyRollupDays

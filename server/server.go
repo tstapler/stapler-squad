@@ -1328,7 +1328,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
 	if deps.EscapeEventsClient != nil {
 		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
-		deps.SessionService.SetEscapeAggregateReader(escapedb.NewReader(deps.EscapeEventsClient, escapeDriver, escapedb.RollupTiers{}, nil))
+		deps.SessionService.SetEscapeAggregateReader(escapedb.NewReader(deps.EscapeEventsClient, escapeDriver, escapedb.RollupTiers{RawDays: cfg.EscapeAnalyticsRetentionDays}, nil))
 		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 

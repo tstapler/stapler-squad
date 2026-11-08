@@ -52,8 +52,8 @@ func NewReader(client *ent.Client, drv dialect.ExecQuerier, tiers RollupTiers, n
 // Aggregate returns event counts grouped by session, project, sequence type, stage and mangle outcome.
 //
 // A range is served as full rollup buckets plus raw rows for the partial hours at its
-// ends. Where the range reaches into the daily tier, whole UTC days that overlap it are
-// included, so those edges are snapped outward to day boundaries.
+// ends while those raw rows are inside the raw retention window. Beyond it, and where the
+// range reaches into the daily tier, the edge snaps outward to the whole UTC hour or day.
 func (r *Reader) Aggregate(ctx context.Context, q AggregateQuery) ([]AggregateRow, error) {
 	if r.drv == nil {
 		return r.rawAggregate(ctx, q.SessionID, rawEdge{lo: q.Start, hi: q.End, hiInclusive: true})
@@ -66,14 +66,15 @@ func (r *Reader) Aggregate(ctx context.Context, q AggregateQuery) ([]AggregateRo
 		return r.rawAggregate(ctx, q.SessionID, rawEdge{lo: q.Start, hi: q.End, hiInclusive: true})
 	}
 	merged := make(map[AggregateRow]int64)
-	rolled, err := r.rollupAggregate(ctx, q)
+	plan := r.plan(q)
+	rolled, err := r.rollupAggregate(ctx, q.SessionID, plan.lo, plan.hi)
 	if err != nil {
 		return nil, err
 	}
 	for _, row := range rolled {
 		merged[AggregateRow{row.SessionID, row.ProjectPath, row.SequenceType, row.Stage, row.Mangled, row.MangleType, 0}] += row.Count
 	}
-	for _, e := range r.rawEdges(q) {
+	for _, e := range plan.edges {
 		rows, err := r.rawAggregate(ctx, q.SessionID, e)
 		if err != nil {
 			return nil, err
@@ -95,42 +96,70 @@ type rawEdge struct {
 	hiInclusive bool
 }
 
-// rawEdges lists the sub-ranges of q that rollup buckets do not cover: the partial hour at
-// each end, when that end lies in the hourly tier.
-func (r *Reader) rawEdges(q AggregateQuery) []rawEdge {
-	boundary := time.Unix(bucketStart(r.now().AddDate(0, 0, -r.tiers.HourlyDays), RollupDaySecs), 0)
-	hourOf := func(t time.Time) time.Time { return time.Unix(bucketStart(t, RollupHourSecs), 0) }
-	if q.Start != nil && q.End != nil && hourOf(*q.Start).Equal(hourOf(*q.End)) && !q.Start.Before(boundary) {
-		return []rawEdge{{lo: q.Start, hi: q.End, hiInclusive: true}}
-	}
-	var edges []rawEdge
-	if q.Start != nil && !q.Start.Before(boundary) && !q.Start.Equal(hourOf(*q.Start)) {
-		next := hourOf(*q.Start).Add(time.Hour)
-		edges = append(edges, rawEdge{lo: q.Start, hi: &next})
-	}
-	if q.End != nil && !q.End.Before(boundary) {
-		floor := hourOf(*q.End)
-		edges = append(edges, rawEdge{lo: &floor, hi: q.End, hiInclusive: true})
-	}
-	return edges
+// readPlan splits a query into the rollup bucket range [lo, hi] (unix seconds) and the raw
+// sub-ranges that cover the partial hours the buckets cannot.
+type readPlan struct {
+	lo, hi int64
+	edges  []rawEdge
 }
 
-func (r *Reader) rollupAggregate(ctx context.Context, q AggregateQuery) ([]AggregateRow, error) {
-	lo, hi := int64(math.MinInt64/2), int64(math.MaxInt64/2)
+// plan decides, per end of the range, between a raw edge and snapping outward to the whole
+// bucket. An edge is read from raw rows only while those rows can still exist (inside the raw
+// retention window); older edges snap outward so evicted rows cannot silently count as zero.
+func (r *Reader) plan(q AggregateQuery) readPlan {
+	now := r.now()
+	boundary := time.Unix(bucketStart(now.AddDate(0, 0, -r.tiers.HourlyDays), RollupDaySecs), 0)
+	var rawCutoff time.Time // zero: raw rows are never evicted by age
+	if r.tiers.RawDays > 0 {
+		rawCutoff = now.AddDate(0, 0, -r.tiers.RawDays)
+	}
+	hourOf := func(t time.Time) time.Time { return time.Unix(bucketStart(t, RollupHourSecs), 0) }
+	p := readPlan{lo: math.MinInt64 / 2, hi: math.MaxInt64 / 2}
+
+	sameHour := q.Start != nil && q.End != nil && hourOf(*q.Start).Equal(hourOf(*q.End))
+	if sameHour && !q.Start.Before(boundary) && !q.Start.Before(rawCutoff) {
+		// No whole bucket fits inside one hour: the raw rows answer it.
+		p.lo, p.hi = math.MaxInt64/2, math.MinInt64/2
+		p.edges = []rawEdge{{lo: q.Start, hi: q.End, hiInclusive: true}}
+		return p
+	}
 	if q.Start != nil {
-		lo = ceilSeconds(*q.Start)
+		p.lo = ceilSeconds(*q.Start)
+		if !q.Start.Before(boundary) && !q.Start.Equal(hourOf(*q.Start)) {
+			if q.Start.Before(rawCutoff) {
+				p.lo = hourOf(*q.Start).Unix()
+			} else {
+				next := hourOf(*q.Start).Add(time.Hour)
+				p.lo = next.Unix()
+				p.edges = append(p.edges, rawEdge{lo: q.Start, hi: &next})
+			}
+		}
 	}
 	if q.End != nil {
-		hi = q.End.Unix()
+		p.hi = q.End.Unix()
+		if !q.End.Before(boundary) {
+			floor := hourOf(*q.End)
+			switch {
+			case floor.Before(rawCutoff) && !q.End.Equal(floor):
+				p.hi = floor.Add(time.Hour).Unix()
+			case !floor.Before(rawCutoff):
+				p.hi = floor.Unix()
+				p.edges = append(p.edges, rawEdge{lo: &floor, hi: q.End, hiInclusive: true})
+			}
+		}
 	}
+	return p
+}
+
+func (r *Reader) rollupAggregate(ctx context.Context, sessionID string, lo, hi int64) ([]AggregateRow, error) {
 	// Hourly buckets count only if they lie wholly inside the range; daily ones if they overlap it.
 	where := []string{
 		"((bucket_secs = ? AND bucket_start >= ? AND bucket_start + bucket_secs <= ?) OR (bucket_secs = ? AND bucket_start + bucket_secs > ? AND bucket_start <= ?))",
 	}
 	args := []any{RollupHourSecs, lo, hi, RollupDaySecs, lo, hi}
-	if q.SessionID != "" {
+	if sessionID != "" {
 		where = append(where, "session_id = ?")
-		args = append(args, q.SessionID)
+		args = append(args, sessionID)
 	}
 	var rows entsql.Rows
 	query := "SELECT session_id, project_path, sequence_type, stage, mangled, mangle_type, SUM(event_count) FROM " + rollupTable +
