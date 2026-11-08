@@ -19,6 +19,12 @@ import (
 var (
 	reconnectCounter = mustInt64Counter("tymux_attach_stream_reconnects_total",
 		metric.WithDescription("Standing Attach stream reconnects, by cause (error = transport drop, output_gap = in-stream resync)"))
+	// Pure gRPC round trip of one control RPC. session_backend_operation_duration_ms{operation=capture_pane}
+	// minus this is squad-side time (queueing before the call, grid-to-SGR render).
+	rpcDurationMS = mustFloat64Histogram("tymux_rpc_duration_ms",
+		metric.WithDescription("Wall time of one tymuxd control RPC from squad, by method"),
+		metric.WithUnit("ms"),
+		metric.WithExplicitBucketBoundaries(0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000))
 	attachEventCounter = mustInt64Counter("tymux_attach_events_total",
 		metric.WithDescription("Notable AttachEvent handling, by kind (output_gap, gap_exceeded, snapshot_redraw)"))
 )
@@ -195,6 +201,13 @@ func mustInt64Counter(name string, opts ...metric.Int64CounterOption) metric.Int
 		panic(err) // malformed build-time constant; fail loudly in tests
 	}
 	return c
+}
+
+var capturePaneRPCAttrs = metric.WithAttributeSet(attribute.NewSet(attribute.String("method", "capture_pane")))
+
+// observeCapturePaneRPC records one CapturePane round trip started at start.
+func observeCapturePaneRPC(start time.Time) {
+	rpcDurationMS.Record(context.Background(), float64(time.Since(start).Microseconds())/1000, capturePaneRPCAttrs)
 }
 
 // recordReconnect increments tymux_attach_stream_reconnects_total{cause}.
