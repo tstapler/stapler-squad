@@ -19,7 +19,7 @@ export const pickerOverlay = style({
   alignItems: "center",
   justifyContent: "center",
   background: "rgba(0,0,0,0.55)",
-  zIndex: 20,
+  zIndex: zIndex.panePickerOverlay,
   cursor: "pointer",
   animation: `${fadeIn} 80ms ease`,
 });
@@ -29,7 +29,7 @@ export const pickerActionBar = style({
   bottom: 0,
   left: 0,
   right: 0,
-  zIndex: 25,
+  zIndex: zIndex.panePickerActionBar,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

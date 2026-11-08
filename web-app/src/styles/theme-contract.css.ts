@@ -222,6 +222,9 @@ export const zIndex = {
   terminalOverlayPill: 20,
   // Drop-zone scrim and reconnect/hard-failed banners inside the terminal pane.
   terminalBanner: 20,
+  // Desktop pane-picker scrim and action bar (inside the pane, below terminalFilterPanel's neighbours).
+  panePickerOverlay: 20,
+  panePickerActionBar: 25,
   // Absolute chrome pinned inside the terminal pane (scroll track, "Copy all", jump-to-latest,
   // scrolling panel). Must stay below `slideOver`/`toast` so the notification tray and toast
   // deck are never painted over by terminal chrome (MC-1, notification-contrast-over-xterm.spec.ts).
