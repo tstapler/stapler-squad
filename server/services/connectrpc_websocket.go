@@ -1123,10 +1123,11 @@ type connectWebSocketStream struct {
 func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) error {
 	waitStart := time.Now()
 	s.writeMutex.Lock()
-	defer s.writeMutex.Unlock()
 	writeStart := time.Now()
 	err := s.conn.WriteMessage(messageType, data)
 	end := time.Now()
+	s.writeMutex.Unlock()
+	// Record after unlock: telemetry must not extend the per-stream write critical section.
 	labels := s.latency.labels()
 	termlat.Default.Record(termlat.StageWSWriteWait, labels, writeStart.Sub(waitStart))
 	termlat.Default.Record(termlat.StageWSWrite, labels, end.Sub(writeStart))

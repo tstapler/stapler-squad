@@ -132,16 +132,26 @@ func (s *subscriber) latencyLabels() termlat.Labels {
 // stalled is true when the frame was accepted into the replay backlog but the backlog is past
 // drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
 func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
+	delivered, stalled, queueDepth := s.enqueueLocked(data)
+	if queueDepth >= 0 {
+		// Recorded after s.mu is released: telemetry must not extend the hub's per-frame lock hold.
+		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(queueDepth))
+	}
+	return delivered, stalled
+}
+
+// enqueueLocked does trySend's work under s.mu; queueDepth is -1 unless a frame went onto outbound.
+func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueDepth int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false, false
+		return false, false, -1
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true, false
+		return true, false, -1
 	}
 	if s.painting {
 		stalled = s.paintDone && len(s.pending) >= s.drainLimit
@@ -151,15 +161,14 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 			s.pending = append(s.pending, data)
 			s.pendingBytes += len(data)
 		}
-		return true, stalled
+		return true, stalled, -1
 	}
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
-		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(len(s.outbound)))
-		return true, false
+		return true, false, len(s.outbound)
 	default:
-		return false, false
+		return false, false, -1
 	}
 }
 
