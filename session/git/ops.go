@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -745,6 +746,35 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	return fileStatsBetweenCtx(context.Background(), repo, repoPath, baseSHA, headSHA)
 }
 
+// gitDefaultRenameLimit is git's built-in diff.renameLimit default.
+const gitDefaultRenameLimit uint = 1000
+
+// gitUnlimitedRenameLimit is what git substitutes for a diff.renameLimit of 0 or less
+// (diffcore-rename.c: `if (rename_limit <= 0) rename_limit = 32767`).
+const gitUnlimitedRenameLimit uint = 32767
+
+// gitRenameLimit returns the rename limit `git diff` would use in repo: diff.renameLimit from
+// the repo/global config, else git's default of 1000. The limit's semantics (git's product
+// rule) live in the go-git fork's DetectRenames; see session/git/AGENTS.md.
+func gitRenameLimit(repo *git.Repository) uint {
+	cfg, err := repo.ConfigScoped(config.GlobalScope)
+	if err != nil {
+		return gitDefaultRenameLimit
+	}
+	raw := cfg.Raw.Section("diff").Option("renamelimit")
+	if raw == "" {
+		return gitDefaultRenameLimit
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return gitDefaultRenameLimit
+	}
+	if n <= 0 {
+		return gitUnlimitedRenameLimit
+	}
+	return uint(n)
+}
+
 // fileStatsBetweenCtx is FileStatsBetween over an already-open repo, diffing
 // one changed file at a time so ctx can stop it between files (go-git's
 // whole-tree Patch takes no ctx per file and cannot be interrupted).
@@ -765,7 +795,11 @@ func fileStatsBetweenCtx(ctx context.Context, repo *git.Repository, repoPath, ba
 	if err != nil {
 		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 	}
-	changes, err := baseTree.DiffContext(ctx, headTree)
+	changes, err := object.DiffTreeWithOptions(ctx, baseTree, headTree, &object.DiffTreeOptions{
+		DetectRenames: true,
+		RenameScore:   object.DefaultDiffTreeOptions.RenameScore,
+		RenameLimit:   gitRenameLimit(repo),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
 	}

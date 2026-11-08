@@ -1288,7 +1288,9 @@ func (s *tymuxGRPCSession) capturePaneWith(ctx context.Context, scrollbackOffset
 	}
 	req := &v1.CapturePaneRequest{PaneId: paneID, ScrollbackOffset: scrollbackOffset}
 	reviveGen := s.captureReviveGen.Load()
+	callStart := time.Now()
 	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
+	observeCapturePaneRPC(callStart)
 	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
 		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
 	}
