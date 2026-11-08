@@ -95,6 +95,9 @@ type window struct {
 	n     int
 	total uint64
 	max   float64
+	// lastCheck is when the alerter last evaluated this key (unix ns), so a busy key cannot
+	// starve the others of evaluation.
+	lastCheck atomic.Int64
 }
 
 func (w *window) add(v float64, at time.Time) {
@@ -196,12 +199,13 @@ func (r *Recorder) RecordValue(stage string, l Labels, v float64) {
 		return
 	}
 	k := key{NormalizeStage(stage), NormalizeBackend(l.Backend), NormalizeListener(l.Listener)}
-	r.window(k).add(v, r.now())
+	w := r.window(k)
+	w.add(v, r.now())
 	if r.hist != nil {
 		r.hist.Record(context.Background(), v, metric.WithAttributes(
 			attribute.String("stage", k.stage), attribute.String("backend", k.backend), attribute.String("listener", k.listener)))
 	}
-	r.alerts.observe(k)
+	r.alerts.observe(k, w)
 }
 
 func (r *Recorder) window(k key) *window {
@@ -271,10 +275,8 @@ const (
 type alerter struct {
 	r         *Recorder
 	echoLimit float64
-	lastCheck atomic.Int64
 	mu        sync.Mutex
 	lastWarn  map[key]time.Time
-	active    map[key]bool
 }
 
 func newAlerter(r *Recorder) alerter {
@@ -282,7 +284,7 @@ func newAlerter(r *Recorder) alerter {
 	if v, err := strconv.ParseFloat(os.Getenv(EnvEchoP95Ms), 64); err == nil && v > 0 {
 		limit = v
 	}
-	return alerter{r: r, echoLimit: limit, lastWarn: map[key]time.Time{}, active: map[key]bool{}}
+	return alerter{r: r, echoLimit: limit, lastWarn: map[key]time.Time{}}
 }
 
 func (a *alerter) limit(stage string) float64 {
@@ -295,22 +297,25 @@ func (a *alerter) limit(stage string) float64 {
 	return 0
 }
 
-func (a *alerter) observe(k key) {
+// observe logs a rate-limited warning when k's p95 is over its limit. Each key is checked at most
+// once per alertCheckGap, independently of every other key.
+func (a *alerter) observe(k key, w *window) {
 	lim := a.limit(k.stage)
 	if lim == 0 {
 		return
 	}
 	nowNs := a.r.now().UnixNano()
-	last := a.lastCheck.Load()
-	if nowNs-last < int64(alertCheckGap) || !a.lastCheck.CompareAndSwap(last, nowNs) {
+	last := w.lastCheck.Load()
+	if nowNs-last < int64(alertCheckGap) || !w.lastCheck.CompareAndSwap(last, nowNs) {
 		return
 	}
 	p95, n := a.r.percentile95(k)
+	if n < alertMinN || p95 <= lim {
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	over := n >= alertMinN && p95 > lim
-	a.active[k] = over
-	if !over || a.r.now().Sub(a.lastWarn[k]) < alertEvery {
+	if a.r.now().Sub(a.lastWarn[k]) < alertEvery {
 		return
 	}
 	a.lastWarn[k] = a.r.now()
@@ -318,22 +323,14 @@ func (a *alerter) observe(k key) {
 		"listener", k.listener, "p95_ms", p95, "limit_ms", lim, "samples", n)
 }
 
-// Alerting lists the keys currently over their p95 limit as of the last check.
+// Alerting lists the keys whose live rolling-window p95 is over their limit right now; a key that
+// stopped receiving samples drops out once its samples age past sampleTTL.
 func (r *Recorder) Alerting() []Stats {
-	r.alerts.mu.Lock()
-	var keys []key
-	for k, on := range r.alerts.active {
-		if on {
-			keys = append(keys, k)
-		}
-	}
-	r.alerts.mu.Unlock()
 	var out []Stats
 	for _, s := range r.Report() {
-		for _, k := range keys {
-			if k.stage == s.Stage && k.backend == s.Backend && k.listener == s.Listener {
-				out = append(out, s)
-			}
+		lim := r.alerts.limit(s.Stage)
+		if lim > 0 && s.Count >= alertMinN && s.P95 > lim {
+			out = append(out, s)
 		}
 	}
 	return out

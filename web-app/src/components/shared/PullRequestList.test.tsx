@@ -399,6 +399,33 @@ describe("PullRequestList dialogs (S3)", () => {
     expect(detach).toHaveTextContent("Track a PR by URL");
   });
 
+  it("copyLink_should_copyTheDerivedUrl_When_ListFormPrHasNoUrl", async () => {
+    const user = userEvent.setup();
+    const original = navigator.clipboard;
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    try {
+      setClipboard({ writeText });
+      render(<PullRequestList pullRequests={[makePr({ number: 12, url: "", host: "ghe.example.net" })]} actions={fakeActions()} nowMs={NOW} />);
+      await user.click(screen.getByTestId("pr-menu-12"));
+      await user.click(screen.getByTestId("pr-menu-copyLink-12"));
+      await screen.findByTestId("pr-note");
+      expect(writeText).toHaveBeenCalledWith("https://ghe.example.net/acme/app/pull/12");
+    } finally {
+      setClipboard(original);
+    }
+  });
+
+  it("detach_undo_should_reattachTheDerivedUrl_When_ListFormPrHasNoUrl", async () => {
+    const user = userEvent.setup();
+    const actions = fakeActions();
+    render(<Harness initial={[makePr({ number: 12, isActive: true }), makePr({ number: 11, url: "" })]} actions={actions} />);
+    await user.click(screen.getByTestId("pr-menu-11"));
+    await user.click(screen.getByTestId("pr-menu-detach-11"));
+    await user.click(screen.getByRole("button", { name: "Not mine" }));
+    await user.click(within(await screen.findByTestId("pr-undo-toast")).getByRole("button", { name: "Undo" }));
+    expect(actions.attachByUrl).toHaveBeenCalledWith("https://github.com/acme/app/pull/11");
+  });
+
   it("detach_should_showUndoToastThatReattachesAndOfferTrackByUrl", async () => {
     const user = userEvent.setup();
     const actions = fakeActions();
