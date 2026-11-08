@@ -8,6 +8,7 @@ import {
 
 function setup() {
   let t = 1000;
+  let visible = true;
   const events: AnalyticsEvent[] = [];
   const frames: Array<() => void> = [];
   const probe = createTerminalLatencyProbe({
@@ -15,10 +16,18 @@ function setup() {
     now: () => t,
     raf: (cb) => frames.push(cb),
     listener: () => "local",
+    isVisible: () => visible,
   });
   const runFrame = () => frames.splice(0).forEach((cb) => cb());
   const stages = () => events.map((e) => `${e.labels?.stage}:${e.durationMs}`);
-  return { probe, events, advance: (ms: number) => (t += ms), runFrame, stages };
+  return {
+    probe,
+    events,
+    advance: (ms: number) => (t += ms),
+    runFrame,
+    stages,
+    setVisible: (v: boolean) => (visible = v),
+  };
 }
 
 describe("terminal latency probe", () => {
@@ -97,5 +106,41 @@ describe("terminal latency probe", () => {
       expect(Object.keys(e.labels ?? {}).sort()).toEqual(["listener", "stage"]);
       expect(e.sessionId).toBeUndefined();
     }
+  });
+
+  it("drops paint samples when rAF was paused past the timeout (hidden tab)", () => {
+    const { probe, advance, runFrame, stages } = setup();
+    probe.noteInput();
+    advance(10);
+    probe.noteOutput();
+    advance(ECHO_TIMEOUT_MS + 1); // tab hidden: frames did not run
+    runFrame();
+    runFrame();
+    expect(stages().some((s) => s.startsWith("echo_paint"))).toBe(false);
+    expect(stages().some((s) => s.startsWith("ttfp_first_paint"))).toBe(false);
+    expect(stages()).toContain("echo_arrive:10");
+  });
+
+  it("drops samples while the document is hidden", () => {
+    const { probe, advance, runFrame, stages, setVisible } = setup();
+    setVisible(false);
+    advance(50);
+    probe.noteConnected();
+    probe.noteInput();
+    advance(10);
+    probe.noteOutput();
+    runFrame();
+    runFrame();
+    expect(stages()).toEqual([]);
+  });
+
+  it("still reports first paint from mount when data arrives late but paints fast", () => {
+    const { probe, advance, runFrame, stages } = setup();
+    advance(5000);
+    probe.noteOutput();
+    advance(16);
+    runFrame();
+    runFrame();
+    expect(stages()).toContain("ttfp_first_paint:5016");
   });
 });

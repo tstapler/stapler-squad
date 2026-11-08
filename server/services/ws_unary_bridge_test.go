@@ -519,7 +519,12 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 
 	sendListFiles(t, c, 1, "counted")
 	require.Equal(t, unaryFrameResponse, readFrame(t, c).Type)
-	assert.EqualValues(t, 1, m.Calls(listFilesMethod, "ok"), "ws_unary_calls_total{method,code=ok}")
+	// The "ok" tally is recorded after the frame is queued, so the client can read the reply first.
+	requireCallsOK := func(want int64) {
+		t.Helper()
+		require.Eventually(t, func() bool { return m.Calls(listFilesMethod, "ok") == want }, readWait, time.Millisecond, "ws_unary_calls_total{method,code=ok}")
+	}
+	requireCallsOK(1)
 
 	sendRequest(t, c, 3, writeFileMethod, unaryRequestMeta{}, nil)
 	require.Equal(t, unaryFrameError, readFrame(t, c).Type)
@@ -531,7 +536,7 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 	h.stub.release("gate:inflight")
 	require.Equal(t, unaryFrameResponse, readFrame(t, c).Type)
 	require.Eventually(t, func() bool { return m.Inflight() == 0 }, readWait, time.Millisecond)
-	assert.EqualValues(t, 2, m.Calls(listFilesMethod, "ok"))
+	requireCallsOK(2)
 
 	u := "ws" + strings.TrimPrefix(h.srv.URL, "http") + UnaryWsPath
 	_, _, err := websocket.DefaultDialer.Dial(u, http.Header{"Origin": {"https://evil.example"}})

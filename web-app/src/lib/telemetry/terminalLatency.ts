@@ -4,6 +4,8 @@ import type { AnalyticsProvider } from "@/lib/analytics/types";
 export const ECHO_MIN_GAP_MS = 250;
 /** A reply later than this is unrelated output (a silent prompt, a long command), not an echo. */
 export const ECHO_TIMEOUT_MS = 3000;
+/** Largest sample the server accepts (see maxTermLatencyMs); anything slower is a throttled tab. */
+export const MAX_SAMPLE_MS = 10_000;
 /** Most terminal-latency events one tab may send per minute. */
 export const MAX_TERM_EVENTS_PER_MINUTE = 60;
 
@@ -30,12 +32,18 @@ export interface TerminalLatencyProbeOptions {
   raf?: (cb: () => void) => void;
   /** "local" for loopback pages, else "remote"; the server folds anything else to "unknown". */
   listener?: () => string;
+  /** Whether the tab is visible; rAF is paused in hidden tabs, so paint samples would be unbounded. */
+  isVisible?: () => boolean;
 }
 
 function defaultListener(): string {
   if (typeof window === "undefined") return "unknown";
   const h = window.location.hostname;
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1" ? "local" : "remote";
+}
+
+function defaultIsVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
 /**
@@ -50,6 +58,7 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
   const raf =
     opts.raf ?? ((cb) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(() => cb()) : cb()));
   const listener = opts.listener ?? defaultListener;
+  const isVisible = opts.isVisible ?? defaultIsVisible;
   const mountedAt = now();
   let pendingInputAt: number | null = null;
   let lastSampledAt = -Infinity;
@@ -59,6 +68,7 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
   let firstData = false;
 
   const emit = (stage: TermLatencyStage, durationMs: number) => {
+    if (!isVisible() || durationMs > MAX_SAMPLE_MS) return;
     const t = now();
     if (t - windowStart >= 60_000) {
       windowStart = t;
@@ -77,6 +87,14 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
   // Two frames: the first runs before the paint that follows the write, the second after it.
   const afterPaint = (cb: () => void) => raf(() => raf(cb));
 
+  // rAF is paused in a hidden tab, so a paint callback that fires long after the frame was
+  // requested measures the pause, not the paint: drop it rather than report an unbounded value.
+  const emitPaint = (stage: TermLatencyStage, startedAt: number, requestedAt: number) => {
+    const t = now();
+    if (t - requestedAt > ECHO_TIMEOUT_MS) return;
+    emit(stage, t - startedAt);
+  };
+
   return {
     noteInput() {
       const t = now();
@@ -90,14 +108,14 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       if (!firstData) {
         firstData = true;
         emit("ttfp_first_data", arrivedAt - mountedAt);
-        afterPaint(() => emit("ttfp_first_paint", now() - mountedAt));
+        afterPaint(() => emitPaint("ttfp_first_paint", mountedAt, arrivedAt));
       }
       if (pendingInputAt === null) return;
       const sentAt = pendingInputAt;
       pendingInputAt = null;
       if (arrivedAt - sentAt > ECHO_TIMEOUT_MS) return;
       emit("echo_arrive", arrivedAt - sentAt);
-      afterPaint(() => emit("echo_paint", now() - sentAt));
+      afterPaint(() => emitPaint("echo_paint", sentAt, arrivedAt));
     },
     noteConnected() {
       if (connected) return;
