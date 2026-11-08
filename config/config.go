@@ -487,8 +487,8 @@ type Config struct {
 	// By default (false), OSC payloads (clipboard, window title, CWD) are redacted for security.
 	// Set to true only if you explicitly need to capture raw OSC payload content.
 	EscapeAnalyticsDisableOSCRedaction bool `json:"escapeAnalyticsDisableOSCRedaction,omitempty"`
-	// EscapeAnalyticsRetentionDays is the number of days to retain escape event rows.
-	// Default: 7.
+	// EscapeAnalyticsRetentionDays is the number of days raw escape event rows are kept; hourly/daily
+	// rollups keep the counts beyond that. Default: 2.
 	EscapeAnalyticsRetentionDays int `json:"escapeAnalyticsRetentionDays,omitempty"`
 	// AnthropicAPIKey is the API key for the Anthropic AI API.
 	// Used by the AI rule generation feature (GenerateSuggestedRule RPC).
@@ -956,7 +956,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	defaultEscapeSamplingRate := 1.0
 	cfg.EscapeAnalyticsSamplingRate = &defaultEscapeSamplingRate
 	cfg.EscapeAnalyticsMaxRowsPerSession = 10000
-	cfg.EscapeAnalyticsRetentionDays = 7
+	cfg.EscapeAnalyticsRetentionDays = 2
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
@@ -1838,7 +1838,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		cfg.EscapeAnalyticsMaxRowsPerSession = 10000
 	}
 	if cfg.EscapeAnalyticsRetentionDays == 0 {
-		cfg.EscapeAnalyticsRetentionDays = 7
+		cfg.EscapeAnalyticsRetentionDays = 2
 	}
 
 	// Validate escape analytics fields.
