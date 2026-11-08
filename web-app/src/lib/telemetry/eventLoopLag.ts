@@ -32,11 +32,21 @@ export function observeEventLoopLag(opts: EventLoopLagOptions): () => void {
 
   let last = now();
   let worst = 0;
+  let sawHidden = false;
   const tickHandle = setIv(() => {
     const t = now();
     const drift = t - last - LAG_TICK_MS;
     last = t;
-    if (!isHidden() && drift > worst) worst = drift;
+    if (isHidden()) {
+      sawHidden = true;
+      return;
+    }
+    // The first tick after a hidden spell measures the browser's throttling, not our thread.
+    if (sawHidden) {
+      sawHidden = false;
+      return;
+    }
+    if (drift > worst) worst = drift;
   }, LAG_TICK_MS);
   const flushHandle = setIv(() => {
     const w = worst;

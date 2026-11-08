@@ -33,7 +33,7 @@ since process start, and an `alerting` list.
 | `ttfp_connect`, `ttfp_first_data`, `ttfp_first_paint` | browser | terminal mounted -> stream open / first output / first paint |
 
 Browser stages arrive as `cm.term_latency` analytics events (`lib/telemetry/terminalLatency.ts`),
-at most one echo sample per 250 ms and 150 events per minute per tab, carrying only a stage name,
+at most one echo sample per 250 ms and 300 events per minute per mounted terminal (the event-loop sampler reports at most one event per 5 s and is outside that cap), carrying only a stage name,
 a duration and `listener`. The browser does not know the session backend, so its rows are under
 `backend="unknown"`; use `echo_server` for a tymux-vs-tmux echo comparison. Long main-thread
 tasks while typing are the existing `client_long_task_duration_*` metric.
@@ -59,9 +59,9 @@ These split one slow call or frame into the places it can wait. All are in the s
 | `stream_send` | tymux | one Attach stream `Send`; gRPC flow-control stalls land here |
 | `pm_lock_wait` | server | a contended wait for `Instance.pmMu`. An uncontended call records nothing, so the sample count is how often a call met the lock |
 | `input_queue` | browser | keystroke entered the send queue -> handed to the socket |
-| `ws_buffered_kib` | browser | KiB the socket still had buffered when the keystroke was sent (a count, not ms) |
+| `ws_buffered_kib` | browser | KiB the socket still had buffered when the keystroke was sent, rounded up so any backlog is at least 1 (a count, not ms; the histogram tops out at 5000) |
 | `echo_render` | browser | echo frame arrived -> painted |
-| `eventloop_lag` | browser | worst drift of a 100 ms timer in a 5 s window, reported when over 16 ms; hidden tabs are skipped |
+| `eventloop_lag` | browser | worst drift of a 100 ms timer in a 5 s window, reported when over 16 ms; ticks while the tab is hidden, and the first one after it returns, are skipped |
 
 Not observable: the time a frame spends inside the gRPC client's flow-control window before
 `Receive` returns, because the daemon stamps no send time on a frame. `tymux_frame_handle` starts

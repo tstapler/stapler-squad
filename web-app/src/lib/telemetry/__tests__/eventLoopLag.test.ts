@@ -1,7 +1,8 @@
 import type { AnalyticsEvent } from "@/lib/analytics/types";
 import { observeEventLoopLag, LAG_WINDOW_MS, LAG_TICK_MS } from "../eventLoopLag";
 
-function setup(hidden = false) {
+function setup(initiallyHidden = false) {
+  let hidden = initiallyHidden;
   let t = 0;
   const events: AnalyticsEvent[] = [];
   let tick: (() => void) | null = null;
@@ -26,6 +27,9 @@ function setup(hidden = false) {
       tick?.();
     },
     flush: () => flush?.(),
+    setHidden: (h: boolean) => {
+      hidden = h;
+    },
   };
 }
 
@@ -54,6 +58,18 @@ describe("event loop lag sampler", () => {
     fire(900);
     flush();
     expect(events).toHaveLength(0);
+  });
+
+  it("ignores the first tick after the tab becomes visible again", () => {
+    const { fire, flush, events, setHidden } = setup(true);
+    fire(900); // throttled while hidden
+    setHidden(false);
+    fire(900); // the wake-up tick: its interval was mostly hidden
+    flush();
+    expect(events).toHaveLength(0);
+    fire(120); // a real stall once visible
+    flush();
+    expect(events[0]?.durationMs).toBe(120);
   });
 
   it("flushes on the window cadence", () => {

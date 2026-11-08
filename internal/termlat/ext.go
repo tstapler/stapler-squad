@@ -149,6 +149,9 @@ func (h *HotSessions) Label(id string) string {
 			weakest, weakestN = m, n
 		}
 	}
+	if _, minted := h.minted[id]; !minted && len(h.minted) >= h.lifetime {
+		return otherSession // evicting a member for a label that cannot be minted would only lose one
+	}
 	if h.counts[id] > weakestN {
 		delete(h.members, weakest)
 		return h.admit(id)

@@ -109,9 +109,11 @@ describe("terminal latency probe", () => {
 
   it("never sends keystroke content or ids and caps events per minute", () => {
     const { probe, advance, events } = setup();
-    for (let i = 0; i < MAX_TERM_EVENTS_PER_MINUTE + 20; i++) {
+    // 3 events per sampled keystroke over under a minute: well past the cap.
+    for (let i = 0; i < 200; i++) {
       advance(ECHO_MIN_GAP_MS);
       probe.noteInput();
+      probe.noteInputSent({ queuedMs: 1, bufferedBytes: 0 });
       advance(5);
       probe.noteOutput();
     }

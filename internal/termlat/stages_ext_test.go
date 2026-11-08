@@ -63,6 +63,18 @@ func TestHotSessions_should_StopMintingLabelsAtTheLifetimeCap(t *testing.T) {
 	assert.Equal(t, "a", h.Label("a"), "an already-minted label is still usable")
 }
 
+func TestHotSessions_should_NotEvictAMemberForALabelItCannotMint(t *testing.T) {
+	t.Parallel()
+	h := NewHotSessions(HotSessionsConfig{Max: 2, Lifetime: 2, Window: time.Minute}, nil)
+	h.Label("a")
+	h.Label("b")
+	for range 5 {
+		assert.Equal(t, "other", h.Label("new"))
+	}
+	assert.Equal(t, "a", h.Label("a"))
+	assert.Equal(t, "b", h.Label("b"))
+}
+
 func TestHotSessions_should_TruncateLongIDs(t *testing.T) {
 	t.Parallel()
 	h := NewHotSessions(HotSessionsConfig{Max: 2, Lifetime: 10, Window: time.Minute}, nil)

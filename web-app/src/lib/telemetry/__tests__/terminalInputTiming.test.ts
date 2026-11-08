@@ -34,6 +34,20 @@ describe("input send timer", () => {
     expect(timer.pending()).toBeLessThanOrEqual(256);
   });
 
+  it("forgets queued messages on reset so later sends do not pair with stale ones", () => {
+    let t = 0;
+    const timer = createInputSendTimer(() => t);
+    const seen: Array<{ queuedMs: number }> = [];
+    timer.subscribe((s) => seen.push(s));
+    timer.markQueued(); // dropped when the queue closes
+    timer.reset();
+    t = 5000;
+    timer.markQueued();
+    t = 5010;
+    timer.markSent(0);
+    expect(seen).toEqual([{ queuedMs: 10, bufferedBytes: 0 }]);
+  });
+
   it("stops notifying after unsubscribe", () => {
     const timer = createInputSendTimer(() => 0);
     const seen: unknown[] = [];

@@ -11,6 +11,8 @@ export interface InputSendTimer {
   markQueued(): void;
   /** The oldest queued input message was passed to the socket. */
   markSent(bufferedBytes: number): void;
+  /** Forget every queued message: the queue they sat in was closed and will never send them. */
+  reset(): void;
   subscribe(listener: (s: InputSendSample) => void): () => void;
   pending(): number;
 }
@@ -36,6 +38,9 @@ export function createInputSendTimer(now: () => number = () => performance.now()
       if (at === undefined) return;
       const sample = { queuedMs: Math.max(0, now() - at), bufferedBytes };
       listeners.forEach((l) => l(sample));
+    },
+    reset() {
+      queued.length = 0;
     },
     subscribe(listener) {
       listeners.add(listener);

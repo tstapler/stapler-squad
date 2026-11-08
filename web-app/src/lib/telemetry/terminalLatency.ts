@@ -6,7 +6,7 @@ export const ECHO_MIN_GAP_MS = 250;
 /** A reply later than this is unrelated output (a silent prompt, a long command), not an echo. */
 export const ECHO_TIMEOUT_MS = 3000;
 /** Most terminal-latency events one tab may send per minute. */
-export const MAX_TERM_EVENTS_PER_MINUTE = 150;
+export const MAX_TERM_EVENTS_PER_MINUTE = 300;
 
 export type TermLatencyStage =
   | "echo_arrive"
@@ -98,7 +98,7 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       if (pendingInputAt === null || sendNoted) return;
       sendNoted = true;
       emit("input_queue", sample.queuedMs);
-      emit("ws_buffered_kib", sample.bufferedBytes / 1024);
+      emit("ws_buffered_kib", Math.ceil(sample.bufferedBytes / 1024)); // ceil: any backlog reads as at least 1 KiB
     },
     noteOutput() {
       const arrivedAt = now();
