@@ -55,12 +55,6 @@ const (
 	// promptly instead of waiting out this ceiling.
 	captureTimeout = 5 * time.Second
 
-	// defaultResizeApplyTimeout bounds the whole SetWindowSize+capture of one resize. Live output
-	// is suppressed for that long (h.resizing), including the echo of what the user is typing, and
-	// a snapshot that misses its budget costs only a stale screen until the next redraw, so it is
-	// far shorter than captureTimeout.
-	defaultResizeApplyTimeout = 2 * time.Second
-
 	// captureRetryTimeout bounds the single post-resize capture retry; the resize
 	// apply lock is held across it, so it is shorter than the first attempt.
 	captureRetryTimeout = 1 * time.Second
@@ -90,10 +84,11 @@ func WithTeardownGrace(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.teardownGrace = d }
 }
 
-// WithResizeApplyTimeout overrides the budget for one resize's SetWindowSize and capture
-// (default 2s); tests shrink it to exercise the timeout path in milliseconds.
+// WithResizeApplyTimeout pins the budget for one resize's SetWindowSize and capture, replacing
+// the adaptive one (resize_budget.go); tests shrink it to exercise the timeout path in
+// milliseconds.
 func WithResizeApplyTimeout(d time.Duration) HubOption {
-	return func(h *StreamHub) { h.resizeApplyTimeout = d }
+	return func(h *StreamHub) { h.resizeBudget.fixed = d }
 }
 
 // WithQuiescenceTimeout overrides the hard deadline a resize's
@@ -149,7 +144,10 @@ type StreamHub struct {
 	activitySink          func(qos.Activity)
 	activity              activityState // see activity.go
 	quiescenceTimeout     time.Duration
-	resizeApplyTimeout    time.Duration
+	resizeBudget          resizeBudget
+	resizeSettleDelay     time.Duration
+	settle                settleState
+	settleCaptures        atomic.Int64
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 	outputObserver        func([]byte)
@@ -288,7 +286,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		teardownGrace:         DefaultHubTeardownGrace,
 		clock:                 realClock{},
 		quiescenceTimeout:     defaultQuiescenceTimeout,
-		resizeApplyTimeout:    defaultResizeApplyTimeout,
+		resizeSettleDelay:     defaultResizeSettleDelay,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
 		batchMaxWindow:        MaxBatchWindow,
 		state:                 HubStarting,
@@ -850,6 +848,7 @@ func (h *StreamHub) OnRawOutput(data []byte) {
 	resizing := h.resizing
 	h.resizeMu.Unlock()
 	if resizing {
+		h.noteSuppressedOutput()
 		h.tap.Record(TapDrop, DropCauseResizeSettling, data)
 		return
 	}
@@ -895,8 +894,15 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// stops this pipeline immediately instead of waiting out a fixed
 	// ceiling neither call could otherwise be told about.
 	callerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, h.resizeApplyTimeout)
+	budget := h.resizeBudget.current()
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+
+	// published is true once a snapshot reached the subscribers; reachedCapture is true once the
+	// pipeline got as far as capturing. Both feed the settle decision in the defer below.
+	var published, reachedCapture bool
+	started := h.clock.Now()
+	h.settle.droppedSinceCapture.Store(false)
 
 	h.resizeMu.Lock()
 	h.resizing = true
@@ -907,6 +913,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		h.resizing = false
 		h.resizeGeneration++
 		h.resizeMu.Unlock()
+		h.finishResize(ctx, callerCtx, budget, h.clock.Now().Sub(started), published, reachedCapture)
 	}()
 
 	// resize.WithForcedRedraw nudges to (cols-1, rows) before the real size —
@@ -943,8 +950,11 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		return
 	}
 
+	reachedCapture = true
+	h.settle.droppedSinceCapture.Store(false) // frames dropped before this point are in the capture
 	if redraw, ok := h.captureRedrawContext(ctx); ok {
 		h.publishSnapshot(redraw)
+		published = true
 		return
 	}
 
@@ -953,7 +963,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		// Our own budget ran out while the caller is still connected. Dropping the
 		// capture would leave subscribers on the pre-resize screen (output was
 		// suppressed during the resize and nothing re-arms a capture), so retry once.
-		retryCtx, retryCancel := context.WithTimeout(callerCtx, min(captureRetryTimeout, h.resizeApplyTimeout))
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, h.resizeBudget.retry())
 		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
 		retryCancel()
 	}
@@ -977,11 +987,22 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	prepared := []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
-	h.snapshotMu.Lock()
-	h.lastSnapshot = prepared
-	h.snapshotMu.Unlock()
-	h.publishSnapshot(prepared)
+	h.publishCaptured(content)
+	published = true
+}
+
+// finishResize runs when a resize stops suppressing output. It feeds the measured apply time to
+// the adaptive budget (a resize that hit the budget reports the budget, a lower bound) and arms
+// the repaint capture when subscribers may be stale: output was dropped after the snapshot was
+// taken, or the snapshot never arrived.
+func (h *StreamHub) finishResize(ctx, callerCtx context.Context, budget, took time.Duration, published, reachedCapture bool) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && callerCtx.Err() == nil {
+		took = budget
+	}
+	h.resizeBudget.observe(took)
+	if h.settle.droppedSinceCapture.Load() || (reachedCapture && !published) {
+		h.armSettle()
+	}
 }
 
 // publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not

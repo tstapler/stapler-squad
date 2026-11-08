@@ -52,6 +52,7 @@ var (
 
 	subscribersPerHubHist      metric.Int64Histogram
 	resizeNegotiationsCounter  metric.Int64Counter
+	resyncCaptureCounter       metric.Int64Counter
 	batchFlushFramesHist       metric.Int64Histogram
 	slowSubscriberDropsCounter metric.Int64Counter
 	overlapInvariantCounter    metric.Int64Counter
@@ -111,6 +112,11 @@ func registerMetricsOnce() error {
 
 	if resizeNegotiationsCounter, err = meter.Int64Counter("streamhub_resize_negotiations_total",
 		metric.WithDescription("Count of resize negotiations, tagged changed=true/false")); err != nil {
+		return err
+	}
+
+	if resyncCaptureCounter, err = meter.Int64Counter("streamhub_resync_capture_total",
+		metric.WithDescription("Full-state repaint captures the hub took on its own, tagged reason (resize_settle) and outcome (published|failed|skipped_busy|skipped_idle)")); err != nil {
 		return err
 	}
 
@@ -176,6 +182,13 @@ func recordResizeNegotiation(changed bool) {
 // the negotiated size) — the same total streamhub_resize_negotiations_total
 // accumulates.
 func ResizeNegotiationsTotal() int64 { return resizeNegotiationsTotal.Load() }
+
+func recordResyncCapture(reason, outcome string) {
+	if resyncCaptureCounter != nil {
+		resyncCaptureCounter.Add(context.Background(), 1,
+			metric.WithAttributes(attribute.String("reason", reason), attribute.String("outcome", outcome)))
+	}
+}
 
 func recordBatchFlushFramesCoalesced(frames int) {
 	batchFlushFramesCoalescedLast.Store(int64(frames))
