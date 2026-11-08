@@ -581,6 +581,7 @@ func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testi
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
 	require.NotNil(t, deps.GitHubUserService)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
 		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},

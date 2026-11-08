@@ -305,16 +305,21 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 	assert.Equal(t, resolvedPath, snap.Path)
 	assert.Equal(t, "feature-x", snap.Branch)
 
-	loaded, err := fix.storage.LoadInstances()
-	require.NoError(t, err)
-	found := false
-	for _, l := range loaded {
-		if l.GetStableID() == inst.GetStableID() {
-			found = true
-			assert.Equal(t, session.Active, l.Status, "persisted row must reflect the terminal Active write")
+	// In-memory Active can precede the pipeline's durable terminal write (Start() flips it
+	// first), so wait on the persisted row itself.
+	stableID := inst.GetStableID()
+	wait.RequireEventually(t, func() bool {
+		loaded, err := fix.storage.LoadInstances()
+		if err != nil {
+			return false
 		}
-	}
-	assert.True(t, found)
+		for _, l := range loaded {
+			if l.GetStableID() == stableID {
+				return l.Status == session.Active
+			}
+		}
+		return false
+	}, pipelineEventuallyTimeout, 20*time.Millisecond, "persisted row must reflect the terminal Active write")
 }
 
 // TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlreadyBumped

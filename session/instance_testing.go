@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -70,4 +71,30 @@ func SetHiddenForTest(tb testing.TB, inst *Instance, hidden bool) {
 	defer inst.mu.Unlock()
 	inst.Hidden = hidden
 	inst.snapshot.Store(buildSnapshot(inst))
+}
+
+// hotRestorablePM is a live backing process whose attach succeeds; the embedded nil
+// ProcessManager means only the methods Start(false)'s attach path uses are safe.
+type hotRestorablePM struct{ ProcessManager }
+
+func (hotRestorablePM) WireLaunch(LaunchSpec)                       {}
+func (hotRestorablePM) AppendLaunchEnv(...string)                   {}
+func (hotRestorablePM) ResetExitOnce()                              {}
+func (hotRestorablePM) SetOnExitCallback(func(string))              {}
+func (hotRestorablePM) IsAlive() bool                               { return true }
+func (hotRestorablePM) HasSession() bool                            { return true }
+func (hotRestorablePM) HasLiveSessionNoCache() bool                 { return true }
+func (hotRestorablePM) RestoreWithWorkDir(string) error             { return nil }
+func (hotRestorablePM) GetPTY() (*os.File, error)                   { return nil, nil } //nolint:nilnil
+func (hotRestorablePM) GetSessionIdentifier() string                { return "hot-restorable" }
+func (hotRestorablePM) GetCurrentWorkingDirectory() (string, error) { return "/tmp", nil }
+
+// NewHotRestorableInstanceForTest returns an Instance in a terminal status whose
+// backing process is alive and attaches cleanly, so HotRestoreIfLive can reach
+// HotRestoreCleared from outside this package.
+func NewHotRestorableInstanceForTest(tb testing.TB, title string, status Status) *Instance {
+	tb.Helper()
+	inst := &Instance{Title: title, Status: status, Path: tb.TempDir()}
+	inst.processManager = hotRestorablePM{}
+	return inst
 }
