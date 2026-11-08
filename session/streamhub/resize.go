@@ -73,6 +73,12 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	defer h.resizeApplyMu.Unlock()
 
 	sub.recordResizeVote(size)
+	h.renegotiateLocked(ctx)
+}
+
+// renegotiateLocked recomputes the negotiated size from current votes and applies it if it
+// changed. The caller must hold resizeApplyMu.
+func (h *StreamHub) renegotiateLocked(ctx context.Context) {
 	votes := h.preferInteractive(h.collectResizeVotes())
 	negotiated := negotiateSize(votes)
 

@@ -1,6 +1,7 @@
 package streamhub
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -16,16 +17,33 @@ type interactivity struct {
 }
 
 // NoteInteractive records that subscriber id just sent input, making it the interactive viewer
-// for the next interactiveWindow. Call it from the input path; it is cheap and safe for
-// concurrent use. Unknown or detached ids are harmless: their entries expire on the next read.
+// for the next interactiveWindow. Call it from the input path. When id was not interactive
+// (absent or expired), it also renegotiates the size so a viewer that lost ownership regains it
+// without waiting for a new resize; repeat keystrokes inside the window only update a timestamp.
+// Unknown or detached ids are harmless: their entries expire on the next read.
 func (h *StreamHub) NoteInteractive(id SubscriberID) {
 	now := h.clock.Now()
 	h.interactive.mu.Lock()
-	defer h.interactive.mu.Unlock()
 	if h.interactive.lastAt == nil {
 		h.interactive.lastAt = make(map[SubscriberID]time.Time)
 	}
+	prev, was := h.interactive.lastAt[id]
 	h.interactive.lastAt[id] = now
+	h.interactive.mu.Unlock()
+	if was && now.Sub(prev) <= interactiveWindow {
+		return
+	}
+
+	h.mu.Lock()
+	_, attached := h.subscribers[id]
+	h.mu.Unlock()
+	if !attached {
+		return
+	}
+	// interactive.mu is released above: preferInteractive takes it under resizeApplyMu.
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+	h.renegotiateLocked(context.Background())
 }
 
 // preferInteractive narrows votes to the subscribers that recently sent input, so a hidden or
