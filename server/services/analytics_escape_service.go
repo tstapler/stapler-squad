@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -140,22 +141,16 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
-	query := s.escapeEventsClient.EscapeEvent.Query().
-		Where(escapeevent.SessionID(req.Msg.SessionId))
-
+	q := escapedb.AggregateQuery{SessionID: req.Msg.SessionId}
 	if req.Msg.StartTime != nil {
-		query = query.Where(escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
+		start := req.Msg.StartTime.AsTime()
+		q.Start = &start
 	}
 	if req.Msg.EndTime != nil {
-		query = query.Where(escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
+		end := req.Msg.EndTime.AsTime()
+		q.End = &end
 	}
-
-	events, err := query.Select(
-		escapeevent.FieldSequenceType,
-		escapeevent.FieldStage,
-		escapeevent.FieldMangled,
-		escapeevent.FieldMangleType,
-	).All(ctx)
+	events, err := s.escapeAggregateReader().Aggregate(ctx, q)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -169,17 +164,17 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 			counts[e.SequenceType] = c
 		}
 		if isEscapeSourceStage(e.Stage) {
-			c.Count++
-			totalSeq++
+			c.Count += e.Count
+			totalSeq += e.Count
 		}
 		if isEscapeOutcomeStage(e.Stage) {
-			outcomes++
+			outcomes += e.Count
 			if e.Mangled {
-				c.MangledCount++
-				totalMangled++
+				c.MangledCount += e.Count
+				totalMangled += e.Count
 			}
 			if e.MangleType == "stripped" {
-				stripped++
+				stripped += e.Count
 			}
 		}
 	}
@@ -228,19 +223,6 @@ func escapeCorrelationCoverage(source, matched int64) float64 {
 	return coverage
 }
 
-// escapeAggregateRow is the destination shape for the global summary's SQL
-// GROUP BY. Grouping on every dimension used by the Go aggregation preserves
-// the correlation semantics without loading every raw event into memory.
-type escapeAggregateRow struct {
-	SessionID    string `json:"session_id"`
-	ProjectPath  string `json:"project_path"`
-	SequenceType string `json:"sequence_type"`
-	Stage        string `json:"stage"`
-	Mangled      bool   `json:"mangled"`
-	MangleType   string `json:"mangle_type"`
-	Count        int64  `json:"count"`
-}
-
 // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
 // across all sessions, plus a per-session breakdown to spot outliers.
 // +api: analytics:get-escape-global-summary
@@ -252,30 +234,18 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
-	var timeFilters []predicate.EscapeEvent
+	var q escapedb.AggregateQuery
 	if req.Msg.StartTime != nil {
-		timeFilters = append(timeFilters, escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
+		start := req.Msg.StartTime.AsTime()
+		q.Start = &start
 	}
 	if req.Msg.EndTime != nil {
-		timeFilters = append(timeFilters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
+		end := req.Msg.EndTime.AsTime()
+		q.End = &end
 	}
-
-	// Aggregate in SQL by every dimension needed below. The number of rows
-	// returned is bounded by the distinct dimension combinations rather than
-	// the total event volume, avoiding an unbounded raw-event allocation on
-	// this global endpoint.
-	var events []escapeAggregateRow
-	err := s.escapeEventsClient.EscapeEvent.Query().Where(timeFilters...).
-		GroupBy(
-			escapeevent.FieldSessionID,
-			escapeevent.FieldProjectPath,
-			escapeevent.FieldSequenceType,
-			escapeevent.FieldStage,
-			escapeevent.FieldMangled,
-			escapeevent.FieldMangleType,
-		).
-		Aggregate(ent.As(ent.Count(), "count")).
-		Scan(ctx, &events)
+	// Rollups answer old ranges and raw rows the partial hours at the ends, so the number
+	// of rows is bounded by distinct dimension combinations, not event volume.
+	events, err := s.escapeAggregateReader().Aggregate(ctx, q)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

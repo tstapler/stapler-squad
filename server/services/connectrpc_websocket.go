@@ -1347,6 +1347,12 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
+		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
+		if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
+			log.Warn("[streamViaControlMode] restored session but PTY attach failed, not marking started", "session", sessionID, "err", ptyErr)
+		} else {
+			instance.MarkStartedIfTmuxAlive() // a lazily-restored instance is not started; input is refused until it is
+		}
 	}
 	if err := streamer.StartControlMode(); err != nil {
 		return fmt.Errorf("failed to start control mode: %w", err)
@@ -2158,10 +2164,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Ins
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
-	if _, ptyErr := instance.GetPTYReader(); ptyErr != nil {
+	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
 	}
+	instance.MarkStartedIfTmuxAlive()
 	return true, nil
 }
 
@@ -2508,6 +2515,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				log.Warn("[streamViaHub] send permission denied", "session", sessionID)
 				return
 			}
+			hub.NoteInteractive(subscriberID)
 			keystrokeDelivery{
 				instance:    instance,
 				latency:     &stream.latency,

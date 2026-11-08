@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,6 +16,24 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// lockedBuffer lets the server's background goroutines log while the test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // buildNarrowRuntimeDeps runs the real Core -> Service -> Runtime phases (never
 // BuildDependencies(), which makes outbound network calls) on isolated state and
 // returns the log output produced while doing so.
@@ -22,7 +41,7 @@ func buildNarrowRuntimeDeps(t *testing.T) (*RuntimeDeps, string) {
 	t.Helper()
 	envtest.NewIsolatedStateDir(t)
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
@@ -35,6 +54,9 @@ func buildNarrowRuntimeDeps(t *testing.T) (*RuntimeDeps, string) {
 	if gate := svc.SessionService.DeliveryGate(); gate != nil {
 		t.Cleanup(gate.Stop)
 	}
+	// Registered after the state dir's TempDir, so it runs first: Shutdown joins the background
+	// tasks BuildRuntimeDeps started, which would otherwise still be writing into the dir.
+	newShutdownOnCleanupServer(t, "localhost:0", rt.ToServerDeps())
 	return rt, buf.String()
 }
 
@@ -113,7 +135,7 @@ func TestBuildServerDependencies_LogsEngineModeStartupLine(t *testing.T) {
 func TestBuildServerDependencies_LogsInvalidatorUnwired_WhenStageConfigEngineConstructionFails(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
