@@ -2,12 +2,9 @@ package session
 
 import (
 	"fmt"
-	"sync"
-)
 
-// hotRestoreLocks serializes HotRestoreIfLive per instance so concurrent RPCs
-// and boot reconcile cannot both pass the recoverable check and double-attach.
-var hotRestoreLocks sync.Map // *Instance -> *sync.Mutex
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // HotRestoreOutcome is the per-session result of HotRestoreIfLive.
 type HotRestoreOutcome string
@@ -17,6 +14,7 @@ const (
 	HotRestoreNotLive     HotRestoreOutcome = "not_live"
 	HotRestoreArchived    HotRestoreOutcome = "archived"
 	HotRestoreNotTerminal HotRestoreOutcome = "not_terminal"
+	HotRestoreBusy        HotRestoreOutcome = "busy"
 	HotRestoreError       HotRestoreOutcome = "error"
 )
 
@@ -25,18 +23,21 @@ const (
 // session), without restarting that process. It is the single implementation
 // shared by boot reconcile (server/dependencies.go Step 6b) and the
 // ClearTerminalStatusIfLive RPC. isLive is the liveness probe seam; it is only
-// called once archival and status checks pass. A non-live or archived session
-// is left untouched.
+// called once archival and status checks pass. A non-live, archived or busy
+// (restart in flight) session is left untouched. A failed attach releases, and
+// never kills, the pre-existing process (see cleanupAfterFailedStart).
 func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, error) {
 	if inst == nil {
 		return HotRestoreError, nil
 	}
-	// Archived sessions are deliberately retired: adopting one would flip it
-	// back off its terminal status (ADR-001); checked under the lock below.
-	mu, _ := hotRestoreLocks.LoadOrStore(inst, &sync.Mutex{})
-	lock := mu.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
+	inst.hotRestoreMu.Lock()
+	defer inst.hotRestoreMu.Unlock()
+	// Shares the restart choke point's guard so a retry restart cannot interleave.
+	if !inst.retryInFlight.CompareAndSwap(false, true) {
+		return HotRestoreBusy, nil
+	}
+	defer inst.retryInFlight.Store(false)
+
 	if inst.IsArchived() {
 		return HotRestoreArchived, nil
 	}
@@ -48,13 +49,27 @@ func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, er
 	}
 	prev := inst.GetLifecycleStatus()
 	inst.RecoverFromStopped()
-	if err := inst.Start(false); err != nil {
+	// Archival can land between the check above and the status flip; never
+	// revive a session archived meanwhile (ADR-001).
+	if inst.IsArchived() {
+		inst.ForceStatus(prev)
+		return HotRestoreArchived, nil
+	}
+	// Mirror restartForRetry: drop a stale controller, start a fresh one after attach.
+	inst.StopController()
+	inst.hotAttaching.Store(true)
+	err := inst.Start(false)
+	inst.hotAttaching.Store(false)
+	if err != nil {
 		// Leave the prior terminal status so a failed attach stays retryable
 		// instead of stranding the session in Creating for the stale sweeper.
 		if inst.GetLifecycleStatus() == Creating {
 			inst.ForceStatus(prev)
 		}
 		return HotRestoreError, fmt.Errorf("hot attach: %w", err)
+	}
+	if ctrlErr := inst.StartController(); ctrlErr != nil {
+		log.Warn("HotRestoreIfLive: failed to start controller after attach", "session", inst.Title, "err", ctrlErr)
 	}
 	return HotRestoreCleared, nil
 }
