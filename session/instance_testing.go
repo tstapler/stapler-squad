@@ -21,6 +21,16 @@ func NewStartedInstanceForTest(tb testing.TB, title string, pm ProcessManager) *
 	return inst
 }
 
+// NewUnstartedActiveInstanceForTest is NewStartedInstanceForTest for an Active Instance whose
+// Start() has not run (a boot-loaded record awaiting its first lazy restore).
+func NewUnstartedActiveInstanceForTest(tb testing.TB, title string, pm ProcessManager) *Instance {
+	tb.Helper()
+	inst := &Instance{Title: title}
+	inst.processManager = pm
+	SetStatusForTest(tb, inst, Active, nil)
+	return inst
+}
+
 // HoldHibernationTeardownForTest blocks resume startup until the returned release runs.
 func HoldHibernationTeardownForTest(tb testing.TB, inst *Instance) func() {
 	tb.Helper()

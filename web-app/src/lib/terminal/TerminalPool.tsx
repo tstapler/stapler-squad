@@ -95,6 +95,17 @@ export const DEFAULT_TERMINAL_POOL_MAX_SIZE = 8;
 // otherwise request (Task 3.3). Never overridden per-entry.
 const POOLED_SCROLLBACK = 5000;
 
+// An entry nobody has pinned yet is a consumer mid-render (its pin effect has not run); the LRU sweep
+// must not evict it, or that consumer keeps an orphan with no portal and a handle that never readies.
+const UNPINNED_NEW_ENTRY_GRACE_MS = 10_000;
+
+// After the fast rAF poll gives up, retry on a slow timer: 1s, 2s, 4s, ... capped at 10s.
+const FIT_RETRY_BASE_MS = 1000;
+const FIT_RETRY_MAX_MS = 10_000;
+
+// ghostty-web WASM init budget before the pool falls back to xterm.js.
+const GHOSTTY_LOAD_TIMEOUT_MS = 15_000;
+
 // Fit-on-show retry cap (Bug 2, see usePooledTerminal's docking effect) --
 // bounds the poll to ~5s at 60fps before giving up and logging a warning,
 // rather than polling forever if a pane genuinely never lays out.
@@ -122,6 +133,10 @@ interface PoolEntry {
   /** True while hostEl is appended to a live consumer's dock anchor rather than parked in the graveyard. Gates backend resize forwarding (Task 3.5 / Bug 7). */
   docked: boolean;
   lastAccessed: number;
+  /** Creation time; with `everPinned`, protects a not-yet-mounted entry from eviction (see evictLRU). */
+  createdAt: number;
+  /** True once any consumer's mount effect pinned this entry. */
+  everPinned: boolean;
   // Ref-mirrors for the currently-attached consumer's callbacks, updated by
   // usePooledTerminal on every render (same ref-mirror idiom TerminalOutput.tsx
   // already uses throughout). Stable wrapper functions below close over these
@@ -150,8 +165,11 @@ interface PoolEntry {
 interface TerminalPoolContextValue {
   maxSize: number;
   getOrCreateEntry: (sessionId: string) => PoolEntry;
-  /** Call from an effect (never during render) after getOrCreateEntry -- see useEntryLifecycle's doc comment. */
-  registerEntry: () => void;
+  /**
+   * Call from an effect (never during render) after getOrCreateEntry -- see useEntryLifecycle's doc comment.
+   * Pass the consumer's entry to re-adopt it if it was evicted from the pool between render and effect.
+   */
+  registerEntry: (entry?: PoolEntry) => void;
   pin: (sessionId: string) => void;
   unpin: (sessionId: string) => void;
   dock: (sessionId: string, anchor: HTMLElement) => void;
@@ -206,6 +224,8 @@ function createEntry(sessionId: string): PoolEntry {
     pinCount: 0,
     docked: false,
     lastAccessed: Date.now(),
+    createdAt: Date.now(),
+    everPinned: false,
     onDataRef,
     onResizeRef,
     isAltScreenActiveRef,
@@ -260,6 +280,7 @@ function useEntryLifecycle(maxSize: number) {
     let victim: PoolEntry | null = null;
     for (const entry of entriesRef.current.values()) {
       if (entry.pinCount > 0 || entry.docked) continue; // never evict a live consumer (Bug: "evicted while still displayed")
+      if (!entry.everPinned && Date.now() - entry.createdAt < UNPINNED_NEW_ENTRY_GRACE_MS) continue; // consumer still mid-render
       if (!victim || entry.lastAccessed < victim.lastAccessed) victim = entry;
     }
     if (!victim) return false; // pool is "full" of pinned/docked entries -- allowed to exceed maxSize rather than evict something on-screen
@@ -283,7 +304,11 @@ function useEntryLifecycle(maxSize: number) {
   }, [maxSize, evictLRU]);
 
   // See this function's doc comment -- call only from an effect.
-  const registerEntry = useCallback(() => {
+  const registerEntry = useCallback((entry?: PoolEntry) => {
+    // Re-adopt an entry evicted between its consumer's render and effect, so its portal (and handle) exists.
+    if (entry && !entriesRef.current.has(entry.sessionId)) {
+      entriesRef.current.set(entry.sessionId, entry);
+    }
     setEntryVersion((v) => v + 1);
   }, []);
 
@@ -296,7 +321,10 @@ function useDockingActions(entriesRef: React.RefObject<Map<string, PoolEntry>>, 
 
   const pin = useCallback((sessionId: string) => {
     const entry = entriesRef.current.get(sessionId);
-    if (entry) entry.pinCount += 1;
+    if (entry) {
+      entry.pinCount += 1;
+      entry.everPinned = true;
+    }
   }, [entriesRef]);
 
   const unpin = useCallback((sessionId: string) => {
@@ -353,18 +381,34 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
   const graveyardRef = useRef<HTMLDivElement | null>(null);
   const { entriesRef, entryVersion, contextValue, dockedIds } = usePoolManager(maxSize, graveyardRef);
 
-  // Renderer is fixed for the page's lifetime (flag flips apply on the next load, not mid-session,
-  // since swapping would discard every pooled terminal's scrollback).
-  const [Renderer] = useState<TerminalRenderer>(() =>
+  // Renderer is chosen once per page load from the flag (flipping it mid-session would discard every
+  // pooled terminal's scrollback). The one exception is the automatic ghostty -> xterm fallback below.
+  const [Renderer, setRenderer] = useState<TerminalRenderer>(() =>
     preloadFlagValue(GHOSTTY_RENDERER_FLAG) ? GhosttyTerminal : XtermTerminal,
   );
 
   // Preload the chosen renderer eagerly (mirrors TerminalOutput.tsx's prior per-mount
   // preload, now hoisted to the pool since it's the sole mount point).
   useEffect(() => {
-    void (Renderer === GhosttyTerminal
-      ? import("@/components/sessions/GhosttyTerminal")
-      : import("@/components/sessions/XtermTerminal"));
+    if (Renderer !== GhosttyTerminal) {
+      void import("@/components/sessions/XtermTerminal");
+      return;
+    }
+    // A ghostty chunk/WASM that fails or hangs would leave every pooled terminal blank, so fall back to xterm.
+    let done = false;
+    const fallback = (why: string, err?: unknown) => {
+      if (done) return;
+      done = true;
+      console.error(`[TerminalPool] ghostty renderer unavailable (${why}); falling back to xterm.js`, err);
+      setRenderer(() => XtermTerminal);
+    };
+    const timer = setTimeout(() => fallback(`no response after ${GHOSTTY_LOAD_TIMEOUT_MS}ms`), GHOSTTY_LOAD_TIMEOUT_MS);
+    import("@/components/sessions/GhosttyTerminal")
+      .then((m) => m.loadGhostty?.())
+      .then(() => { done = true; })
+      .catch((err) => fallback("load failed", err))
+      .finally(() => clearTimeout(timer));
+    return () => { done = true; clearTimeout(timer); };
   }, [Renderer]);
 
   const portals = useMemo(() => {
@@ -390,7 +434,7 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
     );
     // entryVersion (not entriesRef, a ref) is the real dependency -- see its declaration.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryVersion]);
+  }, [entryVersion, Renderer]);
 
   return (
     <TerminalPoolContext.Provider value={contextValue}>
@@ -434,11 +478,13 @@ export interface UsePooledTerminalResult {
  * when the observer next reports a real size. FIT_ON_SHOW_MAX_ATTEMPTS still
  * caps the visible-but-not-ready polling.
  */
-function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): () => void {
+function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string, pool: TerminalPoolContextValue): () => void {
   let settled = false;
   let rafId: number | null = null;
   let attempts = 0;
   let hidden = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelay = FIT_RETRY_BASE_MS;
 
   const tryFit = () => {
     rafId = null;
@@ -458,7 +504,17 @@ function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): ()
     }
     attempts += 1;
     if (attempts >= FIT_ON_SHOW_MAX_ATTEMPTS) {
-      console.warn(`[TerminalPool] Gave up waiting to fit ${sessionId} after ${attempts} frames (handle ready: ${!!handle}, size: ${width}x${height})`);
+      console.warn(`[TerminalPool] Gave up waiting to fit ${sessionId} after ${attempts} frames (handle ready: ${!!handle}, size: ${width}x${height}); retrying in ${retryDelay}ms`);
+      // A missing handle means the entry's portal is not mounted (e.g. evicted); re-adopt it, then keep retrying slowly.
+      if (!handle) pool.registerEntry(entry);
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (settled || hidden) return;
+        attempts = 0;
+        rafId = requestAnimationFrame(tryFit);
+      }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, FIT_RETRY_MAX_MS);
       return;
     }
     rafId = requestAnimationFrame(tryFit);
@@ -485,6 +541,7 @@ function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): ()
   return () => {
     settled = true;
     if (rafId !== null) cancelAnimationFrame(rafId);
+    if (retryTimer !== null) clearTimeout(retryTimer);
     observer.disconnect();
   };
 }
@@ -522,8 +579,8 @@ export function usePooledTerminal(
   // getOrCreateEntry's synchronous render-time call; see useEntryLifecycle's
   // doc comment for why.
   useEffect(() => {
-    pool.registerEntry();
-  }, [pool, sessionId]);
+    pool.registerEntry(entry);
+  }, [pool, sessionId, entry]);
 
   // Pin for this consumer's mount lifetime (keeps the entry out of LRU
   // eviction while something is actually displaying it, even backgrounded --
@@ -556,7 +613,7 @@ export function usePooledTerminal(
     const anchor = dockRef.current;
     if (!anchor) return;
     pool.dock(sessionId, anchor);
-    const cancelFit = fitOnShow(entry, anchor, sessionId);
+    const cancelFit = fitOnShow(entry, anchor, sessionId, pool);
     return () => {
       cancelFit();
       // Also fires on unmount (not just isVisible->false) -- without this an
