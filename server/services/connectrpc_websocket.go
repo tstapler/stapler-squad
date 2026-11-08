@@ -1665,7 +1665,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	})
 
 	// Goroutine 2: Read from WebSocket and handle input/commands
+	bookkeeper := newInputBookkeeper(instance, &stream.latency)
+	slowLane := newSlowRequestLane(errChan, nil)
+	defer slowLane.close()
 	go runInputReadLoop(inputReadLoopParams{
+		slowLane:  slowLane,
 		writer:    writer,
 		stream:    stream,
 		doneChan:  doneChan,
@@ -1684,6 +1688,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			keystrokeDelivery{
 				instance:    instance,
 				latency:     &stream.latency,
+				bookkeeper:  bookkeeper,
 				logPrefix:   "[streamViaControlMode]",
 				tmuxSession: tmuxSessionName,
 				tmuxSocket:  instance.Snapshot().TmuxServerSocket,
@@ -2467,7 +2472,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	stream.creation.End(true)
 
 	doneChan := make(chan struct{})
-	errChan := make(chan error, 1)
+	errChan := make(chan error, 2) // the read loop's exit and, at most, one slow-lane failure
 	var resizeSettling atomic.Bool
 
 	// Epic 4.2, Story 4.2.1: push hub.SubscriberCount() to this connection
@@ -2491,7 +2496,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// goroutine to race here (unlike streamViaControlMode) because the hub's
 	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
 	// already owns delivering output to this connection via transport.Send.
+	bookkeeper := newInputBookkeeper(instance, &stream.latency)
+	// A failed slow request must end the stream as it did inline: flag a server-side close and
+	// interrupt the blocked read so the loop below returns.
+	slowLane := newSlowRequestLane(errChan, func() {
+		stream.serverClosing.Store(true)
+		_ = stream.conn.SetReadDeadline(time.Now())
+	})
+	defer slowLane.close()
 	runInputReadLoop(inputReadLoopParams{
+		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
 		onDroppedResize: upWriter.NoteDroppedResize,
 		stream:          stream,
@@ -2510,6 +2524,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			keystrokeDelivery{
 				instance:    instance,
 				latency:     &stream.latency,
+				bookkeeper:  bookkeeper,
 				logPrefix:   "[streamViaHub]",
 				tmuxSession: tmuxSessionName,
 				tmuxSocket:  snap.TmuxServerSocket,
@@ -3060,6 +3075,19 @@ type inputReadLoopParams struct {
 	// loop starts) — see handleCurrentPaneRequestFrame.
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error)
 	resizeSettling       *atomic.Bool
+	// slowLane, when set, runs scrollback and resync requests off this loop so keystrokes keep
+	// being read while a capture-pane is in flight; nil runs them inline (tests).
+	slowLane *slowRequestLane
+}
+
+// runSlow runs fn on the slow lane, or inline when there is none. A lane run reports its error
+// on the stream's error channel rather than returning it.
+func (p inputReadLoopParams) runSlow(fn func() error) error {
+	if p.slowLane == nil {
+		return fn()
+	}
+	p.slowLane.submit(fn)
+	return nil
 }
 
 func (p inputReadLoopParams) activeWriter() TerminalWriter {
@@ -3152,7 +3180,10 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 		}
 	}
 	if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
-		handleScrollbackRequest(p.stream, p.sessionID, scrollbackReq, p.onScrollbackRequest)
+		_ = p.runSlow(func() error {
+			handleScrollbackRequest(p.stream, p.sessionID, scrollbackReq, p.onScrollbackRequest)
+			return nil
+		})
 	}
 	// CurrentPaneRequest arrives mid-stream (as opposed to the initial
 	// handshake, which streamViaControlMode parses and answers separately
@@ -3160,7 +3191,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// (carrying a resync_id to correlate the reply) is answered without a full
 	// reconnect.
 	if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
-		if err := handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling); err != nil {
+		if err := p.runSlow(func() error {
+			return handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling)
+		}); err != nil {
 			return err
 		}
 	}
@@ -3171,7 +3204,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// handleBatchedCurrentPaneRequestFrame's doc comment for why each reply is
 	// still written as its own individually-resync_id-tagged frame).
 	if batchReq := incomingData.GetBatchedCurrentPaneRequest(); batchReq != nil {
-		return handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
+		return p.runSlow(func() error {
+			return handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
+		})
 	}
 	return nil
 }

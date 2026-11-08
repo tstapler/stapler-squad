@@ -78,20 +78,20 @@ func (t *WebSocketTransport) LatencyLabels() termlat.Labels {
 type keystrokeDelivery struct {
 	instance    *session.Instance
 	latency     *streamLatency
+	bookkeeper  *inputBookkeeper
 	logPrefix   string
 	tmuxSession string
 	tmuxSocket  string
 }
 
-// deliver runs the per-keystroke bookkeeping, then the backend send, recording
+// deliver queues the (deferred) keystroke bookkeeping, then sends to the backend, recording
 // input_bookkeep, input_send and input_total.
 func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	labels := k.latency.labels()
 	start := time.Now()
 	k.latency.noteInput(start)
 
-	k.instance.UpdateTerminalTimestamps(string(data), true)
-	k.instance.MarkUserResponded()
+	k.bookkeeper.note(data)
 	sendStart := time.Now()
 
 	// Try the control-mode path first (low latency, no subprocess); it falls back to a
