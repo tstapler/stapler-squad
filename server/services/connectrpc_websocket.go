@@ -2151,7 +2151,13 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
 func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
-	if handled, err := instance.PrepareRetainedTerminalView(context.Background()); handled {
+	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID)
+}
+
+// ensureHubBackendAliveCtx is ensureHubBackendAlive bounded by the connection: a client that
+// disconnects mid-attach stops waiting on the daemon and frees its attach slot.
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string) (processAlive bool, err error) {
+	if handled, err := instance.PrepareRetainedTerminalView(ctx); handled {
 		return false, err // Render readiness does not imply process/input readiness.
 	}
 	if instance.IsBackendProcessAlive() {
@@ -2429,7 +2435,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	processAlive, err := gatedAttach(connCtx, attachLimiter, stream.latency.labels(), tmuxSessionName, func() (bool, error) {
-		return h.ensureHubBackendAlive(instance, sessionID)
+		return h.ensureHubBackendAliveCtx(connCtx, instance, sessionID)
 	})
 	if err != nil {
 		return err

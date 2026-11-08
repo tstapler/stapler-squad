@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const qos6s = 6 * time.Second
+
 type fakeNow struct{ t time.Time }
 
 func (f *fakeNow) now() time.Time          { return f.t }
@@ -90,6 +92,19 @@ func TestTracker_should_RememberLastInteraction_PastTheWindow(t *testing.T) {
 	f.advance(time.Hour)
 	assert.False(t, tr.Interactive("a"))
 	assert.Equal(t, noted, tr.LastInteraction("a"))
+}
+
+func TestTracker_should_NotifyWatchers_When_AReadPrunesAnExpiredSession(t *testing.T) {
+	t.Parallel()
+	tr, f := newFake()
+	tr.Note("a")
+	var calls int
+	tr.Watch(func() { calls++ })
+	f.advance(qos6s)
+	assert.False(t, tr.AnyInteractive()) // prunes "a" before its owner's timer ran
+	assert.Equal(t, 1, calls, "the interactive spell ended and watchers must hear about it")
+	assert.Equal(t, time.Duration(0), tr.Expire("a"))
+	assert.Equal(t, 1, calls, "and the owner's later Expire does not double-notify")
 }
 
 func TestTracker_should_DropSession_When_Forgotten(t *testing.T) {

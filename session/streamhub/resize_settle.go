@@ -57,29 +57,36 @@ func (h *StreamHub) clearSettleTimer() {
 	h.settle.mu.Unlock()
 }
 
-// runSettle repaints every subscriber with a fresh full-state capture. It yields to a resize in
-// flight (that resize arms its own settle when it ends) and gives up after maxSettleAttempts
-// consecutive failures.
+// runSettle repaints every subscriber with a fresh full-state capture. It holds no lock across
+// the capture, so a resize or FirstPaint is never stalled behind it; instead it samples the
+// resize generation around the capture and, if a resize ran or started meanwhile, discards the
+// result and tries again later (that resize captured its own snapshot, but a retry is cheap and
+// keeps the "someone always repaints" guarantee simple). It gives up after maxSettleAttempts.
 func (h *StreamHub) runSettle() {
 	h.clearSettleTimer()
 	if h.State() == HubTornDown || h.controller == nil {
 		return
 	}
-	if !h.resizeApplyMu.TryLock() {
-		recordResyncCapture(ResyncReasonResizeSettle, "skipped_busy")
-		return
-	}
-	defer h.resizeApplyMu.Unlock()
 	if h.SubscriberCount() == 0 || h.allAwaitingFirstPaint() {
 		recordResyncCapture(ResyncReasonResizeSettle, "skipped_idle")
+		return
+	}
+	genBefore, resizing := h.ResizeActivity()
+	if resizing {
+		h.retrySettle("skipped_busy")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), h.resizeBudget.current())
 	defer cancel()
 	h.settle.droppedSinceCapture.Store(false)
-	err := h.captureAndPublish(ctx)
+	snapshot, err := h.captureFullState(ctx)
 	if err == nil {
+		if genAfter, nowResizing := h.ResizeActivity(); nowResizing || genAfter != genBefore {
+			h.retrySettle("skipped_raced")
+			return
+		}
+		h.publishFullState(snapshot)
 		h.settle.mu.Lock()
 		h.settle.attempts = 0
 		h.settle.mu.Unlock()
@@ -91,6 +98,14 @@ func (h *StreamHub) runSettle() {
 	log.Warn("streamhub: resize settle capture failed", "session", h.sessionName, "error", err)
 	if errors.Is(err, ErrSessionNotStarted) {
 		return
+	}
+	h.retrySettle("")
+}
+
+// retrySettle re-arms the settle (counting an outcome when given) until maxSettleAttempts.
+func (h *StreamHub) retrySettle(outcome string) {
+	if outcome != "" {
+		recordResyncCapture(ResyncReasonResizeSettle, outcome)
 	}
 	h.settle.mu.Lock()
 	h.settle.attempts++
@@ -109,27 +124,41 @@ func (h *StreamHub) ResyncCaptures(reason string) int {
 	return int(h.settleCaptures.Load())
 }
 
-// captureAndPublish takes a full-state capture and publishes it ahead of queued output: the
-// daemon's redraw when the controller has one, else the prepared text capture.
-func (h *StreamHub) captureAndPublish(ctx context.Context) error {
+// fullState is a captured paint: the daemon's redraw (cache is false) or the prepared text
+// capture (cache is true, so it also becomes the latest text snapshot).
+type fullState struct {
+	data  []byte
+	cache bool
+}
+
+// captureFullState takes a full-state capture without publishing it.
+func (h *StreamHub) captureFullState(ctx context.Context) (fullState, error) {
 	if redraw, ok := h.captureRedrawContext(ctx); ok {
-		h.publishSnapshot(redraw)
-		return nil
+		return fullState{data: redraw}, nil
 	}
 	content, err := h.controller.CapturePaneContentRawContext(ctx)
 	if err != nil {
-		return err
+		return fullState{}, err
 	}
-	h.publishCaptured(content)
-	return nil
+	return fullState{data: h.prepareCaptured(content), cache: true}, nil
 }
 
-// publishCaptured runs a raw capture through the snapshot pipeline (erase+home, CRLF, cursor
-// sync), caches it as the latest text snapshot and publishes it.
+// publishFullState sends a captured paint ahead of queued output.
+func (h *StreamHub) publishFullState(s fullState) {
+	if s.cache {
+		h.snapshotMu.Lock()
+		h.lastSnapshot = s.data
+		h.snapshotMu.Unlock()
+	}
+	h.publishSnapshot(s.data)
+}
+
+// prepareCaptured runs a raw capture through the snapshot pipeline (erase+home, CRLF, cursor sync).
+func (h *StreamHub) prepareCaptured(content RawPaneContent) []byte {
+	return []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
+}
+
+// publishCaptured prepares, caches and publishes a raw capture.
 func (h *StreamHub) publishCaptured(content RawPaneContent) {
-	prepared := []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
-	h.snapshotMu.Lock()
-	h.lastSnapshot = prepared
-	h.snapshotMu.Unlock()
-	h.publishSnapshot(prepared)
+	h.publishFullState(fullState{data: h.prepareCaptured(content), cache: true})
 }

@@ -177,16 +177,22 @@ func (t *Tracker) OtherInteractive(key string) bool {
 func (t *Tracker) anyLive(match func(key string) bool) bool {
 	now := t.now()
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	found := false
+	found, pruned := false, false
 	for k, at := range t.lastNote {
 		if now.Sub(at) > t.window {
 			delete(t.lastNote, k)
+			pruned = true
 			continue
 		}
 		if match(k) {
 			found = true
 		}
+	}
+	t.mu.Unlock()
+	// Pruning ends an interactive spell like Expire does; without telling the watchers, a hub
+	// whose own expiry timer then finds nothing to retire would stay boosted or demoted.
+	if pruned {
+		t.notify()
 	}
 	return found
 }

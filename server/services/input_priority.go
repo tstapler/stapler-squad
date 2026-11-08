@@ -187,10 +187,12 @@ type inputOrderGate struct {
 	deliver func([]byte)
 	after   func(d time.Duration, f func())
 
-	mu      sync.Mutex
-	pending int // resizes begun and not yet released
-	epoch   int // bumped on every begin; a safety timer only acts on its own epoch
-	queue   [][]byte
+	mu       sync.Mutex
+	pending  int // resizes begun and not yet released
+	forgiven int // holds the safety valve already dropped; their late releases are ignored
+	epoch    int // bumped each time a hold spell starts; a safety timer only acts on its own spell
+	draining bool
+	queue    [][]byte
 }
 
 // inputOrderGateMaxHold bounds how long a lost resize can hold typing back.
@@ -203,17 +205,23 @@ func newInputOrderGate(deliver func([]byte)) *inputOrderGate {
 	}
 }
 
-// begin starts a hold for one pending resize.
+// begin starts a hold for one pending resize. The safety timer is armed once per hold spell (the
+// first begin after the gate was open), so a stream of resizes cannot keep extending it.
 func (g *inputOrderGate) begin() {
 	if g == nil {
 		return
 	}
 	g.mu.Lock()
 	g.pending++
-	g.epoch++
+	arm := g.pending == 1
+	if arm {
+		g.epoch++
+	}
 	epoch := g.epoch
 	g.mu.Unlock()
-	g.after(inputOrderGateMaxHold, func() { g.expire(epoch) })
+	if arm {
+		g.after(inputOrderGateMaxHold, func() { g.expire(epoch) })
+	}
 }
 
 // release lifts one hold; the last one flushes the queue in arrival order.
@@ -223,11 +231,15 @@ func (g *inputOrderGate) release() {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.forgiven > 0 {
+		g.forgiven--
+		return
+	}
 	if g.pending > 0 {
 		g.pending--
 	}
 	if g.pending == 0 {
-		g.flushLocked()
+		g.startDrainLocked()
 	}
 }
 
@@ -238,8 +250,9 @@ func (g *inputOrderGate) expire(epoch int) {
 	if g.epoch != epoch || g.pending == 0 {
 		return
 	}
+	g.forgiven += g.pending
 	g.pending = 0
-	g.flushLocked()
+	g.startDrainLocked()
 }
 
 // input delivers data now, or queues it behind a pending resize. The read loop is its only
@@ -251,17 +264,35 @@ func (g *inputOrderGate) input(data []byte) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.pending > 0 {
+	if g.pending > 0 || g.draining {
 		g.queue = append(g.queue, append([]byte(nil), data...))
 		return
 	}
 	g.deliver(data)
 }
 
-func (g *inputOrderGate) flushLocked() {
-	queued := g.queue
-	g.queue = nil
-	for _, data := range queued {
+// startDrainLocked flushes the queue on its own goroutine: release runs on the hub's resizing
+// goroutine, which must not wait on pane writes. While the drain runs, input keeps queueing
+// behind it, so arrival order holds.
+func (g *inputOrderGate) startDrainLocked() {
+	if g.draining || len(g.queue) == 0 {
+		return
+	}
+	g.draining = true
+	go g.drain()
+}
+
+func (g *inputOrderGate) drain() {
+	for {
+		g.mu.Lock()
+		if len(g.queue) == 0 || g.pending > 0 {
+			g.draining = false
+			g.mu.Unlock()
+			return
+		}
+		data := g.queue[0]
+		g.queue = g.queue[1:]
+		g.mu.Unlock()
 		g.deliver(data)
 	}
 }
