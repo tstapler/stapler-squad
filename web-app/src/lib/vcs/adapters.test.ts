@@ -10,6 +10,7 @@ import {
 import { BacklogItemShipStatusSchema, ShippedFileStatSchema } from "@/gen/session/v1/backlog_pb";
 import { fromSessionVcs, fromShipStatus, fromUnfinishedWorktree, toPrState, toCheckConclusion } from "./adapters";
 import { deriveMergeabilityState } from "./mergeability";
+import { makePr } from "@/lib/pr/__testUtils__/pullRequests";
 
 describe("toPrState", () => {
   it("toPrState_should_PassThroughRecognizedValues_When_RawIsOpenClosedOrMerged", () => {
@@ -354,5 +355,29 @@ describe("fromUnfinishedWorktree", () => {
 
     const noPr = create(UnfinishedWorktreeSchema, { githubPrUrl: "", githubPrState: "" });
     expect(fromUnfinishedWorktree(noPr).github).toBeNull();
+  });
+});
+
+describe("fromSessionVcs pull request list", () => {
+  const prs = [
+    makePr({ number: 12, isActive: true, state: "open" }),
+    makePr({ number: 14, state: "open", isDraft: true, checkConclusion: "failure" }),
+    makePr({ number: 11, state: "merged" }),
+    makePr({ number: 9, state: "unknown", outcomeUnverified: true }),
+  ];
+  const session = () => create(SessionSchema, { githubOwner: "acme", githubRepo: "app", githubPrNumber: 12, githubChecks: [], pullRequests: prs });
+
+  it("fromSessionVcs_should_ListEveryPrWithOpenAndActiveFlags_When_SessionHasSeveralPrs", () => {
+    const result = fromSessionVcs(create(VCSStatusSchema, {}), session());
+    expect(result.githubPrs?.map((e) => [e.summary.prNumber, e.isOpen, e.isActive])).toEqual([
+      [12, true, true], [14, true, false], [11, false, false], [9, false, false],
+    ]);
+    expect(result.githubPrs?.[0].summary).toBe(result.github);
+    expect(result.githubPrs?.[1].summary).toMatchObject({ isDraft: true, checkConclusion: "failure" });
+  });
+
+  it("fromSessionVcs_should_OmitTheList_When_SessionHasOnePr", () => {
+    const one = create(SessionSchema, { githubOwner: "acme", githubRepo: "app", pullRequests: [prs[0]] });
+    expect(fromSessionVcs(create(VCSStatusSchema, {}), one).githubPrs).toBeUndefined();
   });
 });

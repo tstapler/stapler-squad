@@ -255,6 +255,22 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// "session:save-bundle" markers in session_bundle_service.go verbatim.
 	"ExportSessionBundle": "session:export-bundle",
 	"SaveSessionBundle":   "session:save-bundle",
+	// Session PR set RPCs: match the "// +api: session:*-pr" markers in
+	// session_service_pr_refs.go verbatim.
+	"PinSessionPullRequest":      "session:pin-pr",
+	"DetachSessionPullRequest":   "session:detach-pr",
+	"AttachSessionPullRequest":   "session:attach-pr",
+	"AskSessionToFixPullRequest": "session:ask-to-fix-pr",
+	"DetachItemPullRequest":      "session:detach-item-pr",
+	"RefreshSessionPullRequests": "session:refresh-prs",
+	// Registry files predate these entries and carry the method name as their
+	// feature ID; mapping to the same string keeps those IDs stable.
+	"ListSessionArtifacts":      "ListSessionArtifacts",
+	"RescanSessionArtifacts":    "RescanSessionArtifacts",
+	"SearchSessionArtifacts":    "SearchSessionArtifacts",
+	"FindSessionsByPullRequest": "FindSessionsByPullRequest",
+	"GetTCCEnrichmentStatus":    "GetTCCEnrichmentStatus",
+	"ContinueTCCEnrichment":     "ContinueTCCEnrichment",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",

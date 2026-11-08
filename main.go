@@ -382,10 +382,13 @@ var (
 				backlogSvc *services.BacklogService
 			)
 
-			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
+			// The signal-bound ctx, not the phase's: PR maintenance retries must stop on
+			// SIGTERM, and its retry ticker outlives this phase.
+			signalCtx := ctx
+			app.Phase("core-deps", func(_ context.Context, a *warren.App) error {
 				log.Info("Building core dependencies (phase 1/3)...")
 				var err error
-				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{})
+				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{RunPRMaintenance: true, Context: signalCtx})
 				return err
 			})
 

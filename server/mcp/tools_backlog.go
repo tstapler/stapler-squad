@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,6 +313,9 @@ type backlogHandlers struct {
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
 	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
 
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
+
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
 	// overridable in tests to avoid making real GitHub API calls.
@@ -326,6 +330,9 @@ type backlogHandlers struct {
 	// session.Storage has no public seam for constructing worktree data
 	// without spawning and starting a real Instance (real git/tmux calls).
 	resolveSessionBranch func(ctx context.Context, sessionUUID string) (string, error)
+	// resolveSessionRepo resolves the GitHub repo a session works in, the anchor
+	// for a first reported PR. Defaults to the worktree's origin remote; tests override.
+	resolveSessionRepo func(ctx context.Context, sessionUUID string) (githubpkg.RepoRef, error)
 	// listItemSessionsFn backs request_review's FR2 active-reviewer guard.
 	// Defaults to h.storage.ListItemSessions when nil; overridable in tests to
 	// force a storage error — session.Storage.ListItemSessions type-asserts
@@ -554,7 +561,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
 		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
-		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
+		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary for each PR you open, as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -1167,7 +1174,14 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		acStatus = "in_progress"
 	}
 
-	if err := h.storage.UpdateAcCriterionStatus(ctx, itemID, criteriaIndex, acStatus, note); err != nil {
+	_, verified := verifiedCallerSessionUUID(ctx)
+	auditCtx := session.WithAcActor(ctx, session.AcActor{
+		Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
+	})
+	if err := h.storage.UpdateAcCriterionStatus(auditCtx, itemID, criteriaIndex, acStatus, note); err != nil {
+		if errors.Is(err, session.ErrAcCriterionWaived) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d was waived and needs no further work", criteriaIndex), ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
@@ -1786,7 +1800,7 @@ func unmetAcCriteriaError(item *session.BacklogItemData) error {
 	}
 	var unmet []string
 	for _, c := range criteria {
-		if c.Status != session.AcStatusDone {
+		if !c.Status.IsSatisfied() {
 			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
 		}
 	}
@@ -2080,11 +2094,13 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	}
 
 	verdictData := session.ReviewVerdictData{
-		ItemSessionID:  itemSession.ID,
-		OverallOutcome: overallOutcome,
-		PerCriterion:   string(perCriterionJSON),
-		Summary:        summary,
-		DiffHash:       h.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ItemSessionID:     itemSession.ID,
+		OverallOutcome:    overallOutcome,
+		PerCriterion:      string(perCriterionJSON),
+		Summary:           summary,
+		DiffHash:          h.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ReviewedCommitSha: h.storage.ComputeReviewedCommitSha(ctx, itemID),
+		DiffTruncated:     itemSession.DiffTruncated,
 	}
 
 	if saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID, verdictData); saveErr != nil {
@@ -2882,6 +2898,13 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if status == "" {
 					status = "pending"
 				}
+				// Waivers are recorded only through the audited WaiveAcCriterion path.
+				if session.AcStatus(status) == session.AcStatusWaived {
+					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: status %q cannot be set from an agent tool", i, status), ""), nil
+				}
+				if slices.ContainsFunc(existing, func(c session.AcCriterion) bool { return c.Index == idx && c.Status == session.AcStatusWaived }) {
+					continue // keep the recorded waiver; an agent edit cannot overwrite it
+				}
 				incomingCriteria = append(incomingCriteria, session.AcCriterion{Index: idx, Text: ac.Text, Status: session.AcStatus(status)})
 			}
 
@@ -2894,7 +2917,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil || itemUpdate.Priority != nil || itemUpdate.Category != nil {
-		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, itemUpdate, nil); updateErr != nil {
+		_, triageVerified := verifiedCallerSessionUUID(ctx)
+		triageCtx := session.WithAcActor(ctx, session.AcActor{Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: triageVerified, Source: "mcp"})
+		if _, updateErr := h.storage.UpdateBacklogItem(triageCtx, itemID, itemUpdate, nil); updateErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("update backlog item: %v", updateErr), ""), nil
 		}
 	}
@@ -3145,11 +3170,15 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Description("What changed and why (max 1000 chars) — shown to the reviewer/operator alongside the PR link so they see why the PR exists, not just a bare link"),
 				mcpgo.Required(),
 			),
+			mcpgo.WithNumber("replaces_pr_number",
+				mcpgo.Description("Only for a correction: the number of the item's currently tracked PR that this PR replaces (e.g. you closed a bad PR and opened a clean one). Must equal the tracked PR number. Omit it when reporting an additional PR."),
+				mcpgo.Min(1),
+			),
 			mcpgo.WithString("override_reason",
 				mcpgo.Description("Only required when the PR's actual head branch (per GitHub) differs from this item's tracked branch — e.g. the tracked branch was polluted by another session sharing this worktree, so you opened the PR from a clean branch instead. Explain why in one sentence; it is recorded in the server log as an audit trail. Omit when the PR's head branch matches the tracked branch. The PR must also have been authored by this same GitHub identity — the override path cannot attach a PR someone/something else opened, even with a reason."),
 			),
 		),
-		h.reportPRCreated,
+		h.reportPRCreatedTool(),
 	)
 
 	s.AddTool(

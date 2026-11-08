@@ -117,6 +117,15 @@ type DescriptorSources struct {
 	Guidance  GuidanceLookup
 	// Canary degrades hook-mirrored answers to read_only when the layout drifts (optional).
 	Canary *DialogMatchCanary
+	// Routes tells where an answer would go, so a stored answer (stopped or
+	// archived session, Tier A, no keystroke) stays available remotely (optional;
+	// nil keeps every answer desktop-only on the remote listener).
+	Routes answerRouteLookup
+}
+
+// answerRouteLookup is the slice of AnswerRouter the descriptor builder reads.
+type answerRouteLookup interface {
+	RouteFor(sessionID string) (route answerRoute, known bool)
 }
 
 // ApprovalLookup returns the ids of approvals still waiting for a decision.
@@ -349,10 +358,30 @@ func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescripto
 	if b.sources.Canary.Tripped() && !b.hookReplyOn() {
 		d.Available, d.UnavailableReason = false, unavailableReadOnly
 	}
-	if lc == ListenerClassRemote && !actionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
+	if lc == ListenerClassRemote && !b.remoteAnswerAllowed(d) {
 		d.Available, d.UnavailableReason = false, unavailableDesktopOnly
 	}
 	return []*sessionv1.NotificationActionDescriptor{d}
+}
+
+// remoteAnswerAllowed reports whether d may be answered on the remote listener:
+// the policy row allows it, the session's answer is a durable record (no
+// keystroke, Tier A), or it is a live keystroke and Tier B is enabled remotely.
+func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionDescriptor) bool {
+	if actionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
+		return true
+	}
+	if b.sources.Routes == nil {
+		return false
+	}
+	route, known := b.sources.Routes.RouteFor(d.GetSessionId())
+	if !known {
+		return false
+	}
+	d.Tier = answerTier(route)
+	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
+	// the same check the dispatcher's tierGate makes.
+	return route == routeDurableRecord || b.flag(scopeChannelTierB)
 }
 
 // tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the

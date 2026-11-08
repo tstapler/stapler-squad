@@ -3,6 +3,7 @@ package adapters
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -10,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -568,4 +570,76 @@ func TestInstanceToProto_LeavesContextHealthUnspecifiedWhenNeverComputed(t *test
 	require.NotNil(t, proto)
 	require.Equal(t, sessionv1.ContextHealth_CONTEXT_HEALTH_UNSPECIFIED, proto.ContextHealth)
 	require.Equal(t, "", proto.ContextHealthReason)
+}
+
+func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t *testing.T) {
+	linkedInst := func(program string) *session.Instance {
+		inst := &session.Instance{Title: "t", Program: program}
+		inst.SetHistoryInfo("uuid-1", "/projects/p/uuid-1.jsonl")
+		return inst
+	}
+	tests := []struct {
+		name          string
+		inst          *session.Instance
+		blob          *artifacts.SessionArtifactsBlob
+		wantState     string
+		wantSupported bool
+	}{
+		{"non-claude program has no transcript", &session.Instance{Title: "t", Program: "aider"}, nil, "not_linked", false},
+		{"claude not yet linked", &session.Instance{Title: "t", Program: "claude"}, nil, "not_linked", true},
+		{"linked awaiting first scan", linkedInst("claude"), nil, "scanning", true},
+		{"scanned with nothing", linkedInst("claude"), &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateNoneFound}, "none_found", true},
+		{"scanned with data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateHasData}, "has_data", true},
+		{"failed keeps data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateFailed}, "failed", true},
+		{"legacy blob without state derives it", linkedInst("claude"), &artifacts.SessionArtifactsBlob{}, "none_found", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// SetArtifacts needs a running actor loop, so blob rows exercise the mapping directly.
+			got := InstanceToProto(tt.inst, nil).GetArtifacts()
+			if tt.blob != nil {
+				got = artifactsToProto(tt.blob, true, tt.inst.SupportsTranscript)
+			}
+			require.NotNil(t, got)
+			require.Equal(t, tt.wantState, got.GetScanState())
+			require.Equal(t, tt.wantSupported, got.GetTranscriptSupported())
+		})
+	}
+}
+
+func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) {
+	seen := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	blob := &artifacts.SessionArtifactsBlob{
+		PRURLs: []string{"https://github.com/acme/app/pull/12"},
+		Records: artifacts.RecordList{
+			artifacts.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: artifacts.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
+			artifacts.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
+			artifacts.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
+			artifacts.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
+			artifacts.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
+			artifacts.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
+			artifacts.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
+		},
+	}
+	got := artifactsToProto(blob, true, func() bool { return true })
+
+	require.Equal(t, blob.PRURLs, got.GetPrUrls(), "pr_urls stays populated for older clients")
+	recs := got.GetRecords()
+	require.Len(t, recs, 7)
+	for i, wantKind := range []string{"pr", "branch", "commit", "issue", "plan_doc", "ci_link", "command"} {
+		require.Equal(t, wantKind, recs[i].GetKind())
+		require.True(t, recs[i].GetFirstSeenAt().AsTime().Equal(seen))
+	}
+	pr := recs[0].GetPr()
+	require.Equal(t, int32(12), pr.GetNumber())
+	require.Equal(t, "created", pr.GetSource())
+	require.Equal(t, "feat-a", pr.GetBase())
+	require.Equal(t, "1a2b3c4", recs[2].GetCommit().GetSha())
+	require.Equal(t, "ok", recs[6].GetCommand().GetResult())
+}
+
+func TestArtifactsToProto_ShouldLeaveRecordsEmpty_WhenBlobIsV1(t *testing.T) {
+	got := artifactsToProto(&artifacts.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
+	require.Empty(t, got.GetRecords())
+	require.Equal(t, []string{"u"}, got.GetPrUrls())
 }

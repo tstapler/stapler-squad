@@ -5,6 +5,7 @@ import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { VcsWidgetData } from "@/lib/vcs/types";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { VcsWidget } from "@/components/shared/VcsWidget";
+import { useItemPullRequests } from "@/lib/hooks/useItemPullRequests";
 import * as styles from "../BacklogItemDetail.css";
 
 export interface VersionControlSectionProps {
@@ -44,7 +45,9 @@ export function VersionControlSection({
   onViewDiff,
   onBrowseFiles,
 }: VersionControlSectionProps) {
-  const showPrLink = item.status !== "pr_pending";
+  // PullRequestSection owns the PR links whenever it renders: while pr_pending, or with the multi-PR list.
+  const listsPullRequests = useItemPullRequests(item) !== null;
+  const showPrLink = item.status !== "pr_pending" && !listsPullRequests;
   const showItemPrLink = showPrLink && !!item.prUrl && !widgetData?.github;
 
   if (!widgetData && !showItemPrLink) return null;
