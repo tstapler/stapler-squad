@@ -386,9 +386,21 @@ func TestBatchWindow_should_DeliverInByteOrder_When_FlushesRace(t *testing.T) {
 	b.Add([]byte("B"))
 	bDone := make(chan struct{})
 	go func() { b.TryFlush(); close(bDone) }()
+	// B's flush holds b.mu from the moment it starts until it can deliver, so b.mu being held
+	// shows B is in flight alongside A; no fixed wait.
+	if !waitForBatch(t, 5*time.Second, func() bool {
+		if b.mu.TryLock() {
+			b.mu.Unlock()
+			return false
+		}
+		return true
+	}) {
+		t.Fatal("flush B never started while flush A was in flight")
+	}
 	select {
-	case <-bDone: // B was delivered while A was still in flight
-	case <-time.After(50 * time.Millisecond):
+	case <-bDone:
+		t.Fatal("flush B was delivered while flush A was still in flight")
+	default:
 	}
 	close(release)
 	<-bDone

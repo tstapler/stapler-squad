@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
@@ -31,6 +32,16 @@ func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 	return nil
 }
 
+const (
+	// dropRepaintMinInterval spaces repaint captures, so a dead pane or a subscriber that keeps
+	// overflowing cannot turn the daemon into a capture loop.
+	dropRepaintMinInterval = 250 * time.Millisecond
+	// dropRepaintMaxBackoff caps the wait after a failed capture.
+	dropRepaintMaxBackoff = 4 * time.Second
+	// dropRepaintMaxAttempts bounds one scheduled repaint run; the next dropped frame starts a new one.
+	dropRepaintMaxAttempts = 5
+)
+
 // scheduleDropRepaint is the fanout's drop callback: a subscriber channel overflowed, so its
 // byte stream has a hole the browser's terminal cannot detect. It repaints, in the background and
 // coalesced, only the subscribers that lost output.
@@ -39,24 +50,60 @@ func (s *tymuxGRPCSession) scheduleDropRepaint() {
 		return
 	}
 	go func() {
-		defer s.dropRepaintPending.Store(false)
-		ctx, cancel := s.interruptibleContext()
-		defer cancel()
-		snap, err := s.capturePaneNoRevive(ctx, 0)
-		if err != nil {
-			log.Warn("tymux: repaint after dropped output failed", "session_id", s.GetSessionIdentifier(), "error", err)
-			return
-		}
-		redraw, err := RenderSnapshotRedraw(snap)
-		if err != nil {
-			log.Warn("tymux: repaint after dropped output failed", "session_id", s.GetSessionIdentifier(), "error", err)
-			return
-		}
-		if n := s.fanout.RepaintDropped([]byte(redraw)); n > 0 {
+		sid := s.GetSessionIdentifier()
+		exhausted := repaintDroppedLoop(s.fanout, func() ([]byte, error) {
+			ctx, cancel := s.interruptibleContext()
+			defer cancel()
+			snap, err := s.capturePaneNoRevive(ctx, 0)
+			if err != nil {
+				return nil, err
+			}
+			redraw, err := RenderSnapshotRedraw(snap)
+			return []byte(redraw), err
+		}, dropRepaintMinInterval, time.Sleep, func(n int) {
 			recordAttachEvent(attachEventSnapshotRedraw)
-			log.Warn("tymux: repainted subscribers after dropped output", "session_id", s.GetSessionIdentifier(), "subscribers", n)
+			log.Warn("tymux: repainted subscribers after dropped output", "session_id", sid, "subscribers", n)
+		}, func(err error) {
+			log.Warn("tymux: repaint after dropped output failed", "session_id", sid, "error", err)
+		})
+		s.dropRepaintPending.Store(false)
+		// A drop that landed after the loop's last look but before the flag cleared found it set.
+		if !exhausted && s.fanout.HasDropped() {
+			s.scheduleDropRepaint()
 		}
 	}()
+}
+
+// repaintDroppedLoop repaints dropped subscribers until none is left or
+// dropRepaintMaxAttempts passes ran, waiting minInterval between captures and backing off
+// exponentially after a failed one. It reports whether it gave up with subscribers still flagged.
+// onFail runs for the first failure only, so a dead pane logs once per run, not once per pass.
+func repaintDroppedLoop(f *ClientFanout, capture func() ([]byte, error), minInterval time.Duration,
+	sleep func(time.Duration), onRepainted func(n int), onFail func(error)) (exhausted bool) {
+	backoff := minInterval
+	failed := false
+	for attempt := 0; attempt < dropRepaintMaxAttempts; attempt++ {
+		marks := f.BeginRepaint()
+		if len(marks) == 0 {
+			return false
+		}
+		redraw, err := capture()
+		if err != nil {
+			f.Redrop(marks)
+			if !failed {
+				onFail(err)
+				failed = true
+			}
+			sleep(backoff)
+			backoff = min(backoff*2, dropRepaintMaxBackoff)
+			continue
+		}
+		if n := f.RepaintDropped(redraw, marks); n > 0 {
+			onRepainted(n)
+		}
+		sleep(minInterval)
+	}
+	return f.HasDropped()
 }
 
 // resyncViaCapturePane is the resync entry point for the OutputGap event

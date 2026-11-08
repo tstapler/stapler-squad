@@ -53,6 +53,9 @@ func count(frames []string, want string) int {
 	return n
 }
 
+// resyncStep is longer than the hub's debounce and minimum repaint interval.
+const resyncStep = 300 * time.Millisecond
+
 func newRepaintHub(clock *streamhub.FakeClock) *streamhub.StreamHub {
 	c := &redrawController{fakeSessionController: newFakeSessionController(),
 		snap: streamhub.FullStateSnapshot{Data: "REDRAW"}, ok: true}
@@ -76,11 +79,11 @@ func TestHub_should_RepaintSubscriber_When_FrameDroppedAndSubscriberRecovers(t *
 	for _, f := range []string{"f1", "f2", "f3", "f4", "f5", "f6"} {
 		hub.Broadcast([]byte(f))
 	}
-	clock.Advance(time.Second) // runs the debounced repaint, whose capture happens now
 	close(tr.gate)
-
+	// A repaint waits for the writer to drain something; the retry then runs on the clock.
 	// REDRAW is also the attach catch-up, so a repaint makes it appear twice.
 	require.Eventually(t, func() bool {
+		clock.Advance(resyncStep)
 		fr := tr.frames()
 		return count(fr, "REDRAW") == 2 && fr[len(fr)-1] == "REDRAW"
 	}, 5*time.Second, time.Millisecond)
@@ -107,9 +110,9 @@ func TestHub_should_NotRepaintHealthySubscriber_When_NeighbourDropsFrames(t *tes
 		hub.Broadcast([]byte(f))
 		require.Eventually(t, func() bool { fr := fast.frames(); return fr[len(fr)-1] == f }, 5*time.Second, time.Millisecond)
 	}
-	clock.Advance(time.Second)
 	close(slow.gate)
 	require.Eventually(t, func() bool {
+		clock.Advance(resyncStep)
 		fr := slow.frames()
 		return count(fr, "REDRAW") == 2 && fr[len(fr)-1] == "REDRAW"
 	}, 5*time.Second, time.Millisecond)

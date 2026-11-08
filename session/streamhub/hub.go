@@ -207,6 +207,10 @@ type StreamHub struct {
 
 	// resyncPending is true while a repaint for dropped frames is scheduled or running.
 	resyncPending atomic.Bool
+	// lastResyncNanos / lastResyncWarnNanos are clock times (UnixNano) of the last repaint pass and
+	// its last failure log line; they rate-limit both.
+	lastResyncNanos     atomic.Int64
+	lastResyncWarnNanos atomic.Int64
 
 	// snapshotMu guards lastSnapshot — kept separate from mu (the
 	// subscriber-registry lock) for the same reason resizeMu is separate:
@@ -674,11 +678,11 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 		return
 	}
 
-	progress := sub.replaySent.Load()
+	progress := sub.sentFrames.Load()
 	h.clock.AfterFunc(grace, func() {
 		// A replaying writer that sent anything since the stall was seen is slow, not stalled;
 		// the next stalled frame re-arms the check.
-		if sub.isStillFull() && sub.replaySent.Load() == progress {
+		if sub.isStillFull() && sub.sentFrames.Load() == progress {
 			h.slowSubscriberDropsTotal.Add(1)
 			recordSlowSubscriberDrop()
 			h.removeSubscriber(sub.id, errSlowSubscriberEvicted)
@@ -688,23 +692,38 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 	})
 }
 
-// resyncDebounce lets one repaint cover a burst of drops, and gives the stalled writer a moment
-// to start draining before the repaint queues behind it.
-const resyncDebounce = 50 * time.Millisecond
+const (
+	// resyncDebounce lets one repaint cover a burst of drops, and gives the stalled writer a moment
+	// to start draining before the repaint queues behind it.
+	resyncDebounce = 50 * time.Millisecond
+	// resyncMinInterval bounds how often repaint captures run, so a pane that cannot be captured,
+	// or a subscriber that keeps losing frames, cannot turn the daemon into a capture loop.
+	resyncMinInterval = 250 * time.Millisecond
+	// resyncWarnInterval rate-limits the capture-failure log line.
+	resyncWarnInterval = 5 * time.Second
+)
 
 // requestResync schedules one repaint of every subscriber that has lost a frame.
 func (h *StreamHub) requestResync() {
 	if !h.resyncPending.CompareAndSwap(false, true) {
 		return
 	}
-	h.clock.AfterFunc(resyncDebounce, h.runResync)
+	delay := resyncDebounce
+	if last := h.lastResyncNanos.Load(); last != 0 {
+		if wait := resyncMinInterval - h.clock.Now().Sub(time.Unix(0, last)); wait > delay {
+			delay = wait
+		}
+	}
+	h.clock.AfterFunc(delay, h.runResync)
 }
 
-// runResync repaints each subscriber that lost a frame with a fresh full-screen capture,
-// replacing whatever stale frames it still has queued. Subscribers that lost nothing are not
-// touched. Frames dropped while the capture runs re-flag their subscriber and schedule another
-// pass.
+// runResync repaints each subscriber that lost a frame with a fresh full-screen capture. A
+// repaint replaces only the frames queued before the capture began; later frames follow it.
+// Subscribers that lost nothing, or whose writer has not drained since the drop, are not touched.
+// A capture that fails or a repaint that cannot be ordered re-flags its subscribers, and frames
+// dropped meanwhile re-flag theirs; either way another rate-limited pass follows.
 func (h *StreamHub) runResync() {
+	h.lastResyncNanos.Store(h.clock.Now().UnixNano())
 	defer func() {
 		h.resyncPending.Store(false)
 		h.mu.Lock()
@@ -718,11 +737,15 @@ func (h *StreamHub) runResync() {
 		}
 	}()
 
+	type claim struct {
+		sub  *subscriber
+		mark uint64
+	}
 	h.mu.Lock()
-	var stale []*subscriber
+	var stale []claim
 	for _, sub := range h.subscribers {
-		if sub.takeDropped() {
-			stale = append(stale, sub)
+		if mark, ok := sub.beginResync(); ok {
+			stale = append(stale, claim{sub, mark})
 		}
 	}
 	h.mu.Unlock()
@@ -736,11 +759,26 @@ func (h *StreamHub) runResync() {
 	defer cancel()
 	repaint, ok := h.captureRepaint(ctx)
 	if !ok {
+		for _, c := range stale {
+			c.sub.redrop()
+		}
 		return
 	}
 	log.Warn("streamhub: repainting subscribers after dropped frames", "session", h.sessionName, "subscribers", len(stale))
-	for _, sub := range stale {
-		sub.supersede(repaint)
+	for _, c := range stale {
+		c.sub.supersede(repaint, c.mark)
+	}
+}
+
+// warnRepaintFailed logs a failed repaint capture at most once per resyncWarnInterval.
+func (h *StreamHub) warnRepaintFailed(err error) {
+	now := h.clock.Now().UnixNano()
+	last := h.lastResyncWarnNanos.Load()
+	if last != 0 && now-last < int64(resyncWarnInterval) {
+		return
+	}
+	if h.lastResyncWarnNanos.CompareAndSwap(last, now) {
+		log.Warn("streamhub: repaint after dropped frames failed", "session", h.sessionName, "error", err)
 	}
 }
 
@@ -752,7 +790,7 @@ func (h *StreamHub) captureRepaint(ctx context.Context) ([]byte, bool) {
 	}
 	content, err := h.controller.CapturePaneContentRawContext(ctx)
 	if err != nil || content == "" {
-		log.Warn("streamhub: repaint after dropped frames failed", "session", h.sessionName, "error", err)
+		h.warnRepaintFailed(err)
 		return nil, false
 	}
 	return []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller)), true

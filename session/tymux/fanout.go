@@ -15,6 +15,7 @@ const subscriberBufferSize = 64
 type fanoutSubscriber struct {
 	ch      chan []byte
 	dropped bool
+	enq     uint64 // frames successfully queued on ch; guarded by ClientFanout.mu
 }
 
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
@@ -83,6 +84,7 @@ func (f *ClientFanout) Broadcast(data []byte) {
 	for _, sub := range f.subscribers {
 		select {
 		case sub.ch <- data:
+			sub.enq++
 		default:
 			sub.dropped = true
 			dropped = true
@@ -95,29 +97,106 @@ func (f *ClientFanout) Broadcast(data []byte) {
 	}
 }
 
-// RepaintDropped replaces the queued, stale output of every subscriber that has lost a frame
-// with repaint (a full-screen redraw that already contains it), clears their dropped flag, and
-// returns how many it repainted. Subscribers that lost nothing are untouched.
-func (f *ClientFanout) RepaintDropped(repaint []byte) int {
+// BeginRepaint claims every subscriber that has lost a frame and returns, per subscriber id, how
+// many frames it had been sent when claimed. Call it before capturing the screen: a frame counted
+// in the mark is contained in that capture, any later one is not.
+func (f *ClientFanout) BeginRepaint() map[string]uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n := 0
-	for _, sub := range f.subscribers {
+	var marks map[string]uint64
+	for id, sub := range f.subscribers {
 		if !sub.dropped {
 			continue
 		}
 		sub.dropped = false
-		for drained := false; !drained; {
-			select {
-			case <-sub.ch:
-			default:
-				drained = true
-			}
+		if marks == nil {
+			marks = make(map[string]uint64)
 		}
-		sub.ch <- repaint // the channel was just emptied under f.mu, so this cannot block
-		n++
+		marks[id] = sub.enq
+	}
+	return marks
+}
+
+// Redrop re-flags the subscribers of an abandoned BeginRepaint claim.
+func (f *ClientFanout) Redrop(marks map[string]uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range marks {
+		if sub, ok := f.subscribers[id]; ok {
+			sub.dropped = true
+		}
+	}
+}
+
+// HasDropped reports whether any subscriber is waiting for a repaint.
+func (f *ClientFanout) HasDropped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.subscribers {
+		if sub.dropped {
+			return true
+		}
+	}
+	return false
+}
+
+// RepaintDropped replaces, for each claimed subscriber, the queued output that pre-dates the
+// capture (everything within its mark) with repaint, a full-screen redraw that already contains
+// it. Output queued after the capture stays behind the repaint, so no byte after it is lost. It
+// returns how many subscribers it repainted.
+//
+// A subscriber whose consumer has already taken output newer than the capture, or whose queue
+// cannot hold the repaint beside the newer output, is re-flagged instead: repainting it would
+// roll its screen back, so a later pass retries with a fresher capture.
+func (f *ClientFanout) RepaintDropped(repaint []byte, marks map[string]uint64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for id, mark := range marks {
+		sub, ok := f.subscribers[id]
+		if !ok {
+			continue
+		}
+		if f.repaintLocked(sub, repaint, mark) {
+			n++
+		} else {
+			sub.dropped = true
+		}
 	}
 	return n
+}
+
+// repaintLocked is RepaintDropped for one subscriber; the caller holds f.mu, so nothing else
+// sends on sub.ch while the consumer may still be receiving from it.
+func (f *ClientFanout) repaintLocked(sub *fanoutSubscriber, repaint []byte, mark uint64) bool {
+	post := int(sub.enq - mark)
+	qlen := len(sub.ch)
+	if post >= cap(sub.ch) || qlen < post {
+		return false
+	}
+	for i := 0; i < qlen-post; i++ {
+		select {
+		case <-sub.ch:
+		default:
+		}
+	}
+	rest := make([][]byte, 0, post)
+	for drained := false; !drained; {
+		select {
+		case d := <-sub.ch:
+			rest = append(rest, d)
+		default:
+			drained = true
+		}
+	}
+	complete := len(rest) == post
+	if complete {
+		rest = append([][]byte{repaint}, rest...)
+	}
+	for _, d := range rest {
+		sub.ch <- d // sub.ch was emptied under f.mu and rest fits in it, so this cannot block
+	}
+	return complete
 }
 
 // count reports the current subscriber count — test-only introspection.
