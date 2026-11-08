@@ -116,7 +116,7 @@ func TestRetention_BackfillThenAgeEviction_KeepsHistoryInRollups(t *testing.T) {
 	now := testBase.Add(5 * 24 * time.Hour)
 	events := genEvents(testBase, 120, time.Hour) // five days of hourly events
 	seedRaw(ctx, t, client, events)
-	_, err := ensureRollupState(ctx, drv, now) // every seeded row predates live counting
+	err := setLiveSince(ctx, drv, now) // every seeded row predates live counting
 	require.NoError(t, err)
 
 	r := NewRetention(client, drv, RetentionConfig{RawRetentionDays: 2, BackfillChunkRows: 7, Now: func() time.Time { return now }})
@@ -142,7 +142,7 @@ func TestRetention_DoesNotDeleteRawRows_UntilBackfillCompletes(t *testing.T) {
 	client, drv := openStoreForTest(ctx, t, t.TempDir())
 	now := testBase.Add(5 * 24 * time.Hour)
 	seedRaw(ctx, t, client, genEvents(testBase, 40, time.Hour))
-	_, err := ensureRollupState(ctx, drv, now)
+	err := setLiveSince(ctx, drv, now)
 	require.NoError(t, err)
 	r := NewRetention(client, drv, RetentionConfig{RawRetentionDays: 1, BackfillChunkRows: 5, Now: func() time.Time { return now }})
 	r.pauseHook = func(context.Context) error { cancel(); return context.Canceled } // interrupt after the first chunk
@@ -171,7 +171,7 @@ func TestBackfill_SkipsRowsCountedAtWriteTime_AndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	client, drv := openStoreForTest(ctx, t, t.TempDir())
 	liveSince := testBase.Add(10 * time.Hour)
-	_, err := ensureRollupState(ctx, drv, liveSince)
+	err := setLiveSince(ctx, drv, liveSince)
 	require.NoError(t, err)
 	events := genEvents(testBase, 20, time.Hour) // hours 0-9 predate liveSince, 10-19 do not
 	seedRaw(ctx, t, client, events)

@@ -102,7 +102,7 @@ func (r *Retention) Start(ctx context.Context, wg *sync.WaitGroup) {
 // in a rollup, so no history is lost to a deletion that outruns the backfill.
 func (r *Retention) Run(ctx context.Context) {
 	if r.drv != nil {
-		if err := r.maintainRollups(ctx); err != nil {
+		if err := r.maintainRollups(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("analytics/retention escape rollup maintenance failed", "err", err)
 		}
 		st, err := readRollupState(ctx, r.drv)

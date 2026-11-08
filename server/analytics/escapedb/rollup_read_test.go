@@ -28,7 +28,7 @@ func newReaderFixture(t *testing.T, nowOffset time.Duration) *readerFixture {
 	ctx := context.Background()
 	client, drv := openStoreForTest(ctx, t, t.TempDir())
 	f := &readerFixture{client: client, drv: drv, now: testBase.Add(nowOffset), events: genEvents(testBase, 240, time.Hour)}
-	_, err := ensureRollupState(ctx, drv, testBase.Add(-time.Hour)) // live counting began before the first event
+	err := setLiveSince(ctx, drv, testBase.Add(-time.Hour)) // live counting began before the first event
 	require.NoError(t, err)
 	NewEscapeEventBatchWriter(drv).flushBatch(ctx, f.events)
 	NewRetention(client, drv, RetentionConfig{Now: func() time.Time { return f.now }}).Run(ctx)
@@ -103,7 +103,7 @@ func TestReader_FallsBackToRawRows_UntilBackfillIsDone(t *testing.T) {
 	client, drv := openStoreForTest(ctx, t, t.TempDir())
 	events := genEvents(testBase, 24, time.Hour)
 	seedRaw(ctx, t, client, events)
-	_, err := ensureRollupState(ctx, drv, testBase.Add(48*time.Hour)) // rollups empty, backfill pending
+	err := setLiveSince(ctx, drv, testBase.Add(48*time.Hour)) // rollups empty, backfill pending
 
 	require.NoError(t, err)
 	got, err := NewReader(client, drv, RollupTiers{}, func() time.Time { return testBase.Add(48 * time.Hour) }).Aggregate(ctx, AggregateQuery{})

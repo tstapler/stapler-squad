@@ -39,6 +39,7 @@ type EscapeEventBatchWriter struct {
 	ch  chan pkganalytics.EscapeEventRecord
 	drv dialect.Driver
 
+	createdAt  time.Time
 	flushRows  int
 	flushEvery time.Duration
 	newTicker  func(time.Duration) (<-chan time.Time, func())
@@ -77,6 +78,7 @@ func NewEscapeEventBatchWriter(drv dialect.Driver, opts ...WriterOption) *Escape
 	w := &EscapeEventBatchWriter{
 		ch:         make(chan pkganalytics.EscapeEventRecord, DefaultQueueSize),
 		drv:        drv,
+		createdAt:  time.Now(),
 		flushRows:  DefaultFlushRows,
 		flushEvery: DefaultFlushInterval,
 		newTicker: func(d time.Duration) (<-chan time.Time, func()) {
@@ -108,8 +110,9 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 	defer stop()
 	registerWriterMetrics(w)
 	defer unregisterWriterMetrics(w)
-	// Stamp live_since before the first flush: rows older than it are backfilled, newer ones counted here.
-	if _, err := ensureRollupState(ctx, w.drv, time.Now()); err != nil {
+	// Normally a no-op (Open stamps live_since). Stamping at construction time keeps events queued
+	// before Start on the live side of the cut.
+	if _, err := ensureRollupState(ctx, w.drv, w.createdAt); err != nil {
 		log.Warn("escape analytics: rollup state init failed", "err", err)
 	}
 

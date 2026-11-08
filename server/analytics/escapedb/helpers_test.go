@@ -73,3 +73,9 @@ func aggregateMap(rows []AggregateRow) map[AggregateRow]int64 {
 	}
 	return out
 }
+
+// setLiveSince moves the live-counting cut that Open stamped at "now", so tests control which
+// rows count as pre-existing history.
+func setLiveSince(ctx context.Context, drv dialect.Driver, at time.Time) error {
+	return drv.Exec(ctx, "UPDATE "+rollupStateTable+" SET live_since_ms = ? WHERE id = 1", []any{at.UnixMilli()}, nil)
+}

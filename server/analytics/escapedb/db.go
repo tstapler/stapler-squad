@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"entgo.io/ent/dialect/sql/schema"
 
@@ -38,6 +39,10 @@ func Open(ctx context.Context, configDir string) (*ent.Client, *dbpool.Database,
 	session.EntSchemaCreateMu.Unlock()
 	if err == nil {
 		err = EnsureRollupSchema(ctx, h.Driver())
+	}
+	if err == nil {
+		// Stamped at open, before any writer exists, so no live-counted event predates it.
+		_, err = ensureRollupState(ctx, h.Driver(), time.Now())
 	}
 	if err != nil {
 		_ = client.Close()
