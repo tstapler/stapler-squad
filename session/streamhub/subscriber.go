@@ -6,14 +6,6 @@ import (
 	"time"
 )
 
-// queuedFrame is one entry of a subscriber's outbound queue. seq is the subscriber's enqueue
-// counter at the time it was queued (0 for a repaint), so a repaint can tell the frames that
-// pre-date its capture from those that post-date it.
-type queuedFrame struct {
-	data []byte
-	seq  uint64
-}
-
 // noProgressCheck is a droppedAtSent sentinel: the writer has already shown progress, so the
 // next repaint need not wait for more.
 const noProgressCheck = ^uint64(0)
@@ -30,7 +22,7 @@ type subscriber struct {
 	// upgraded, when set, supersedes capability (see StreamHub.UpgradeSubscriber).
 	upgraded atomic.Pointer[SubscriberCapability]
 
-	outbound  chan queuedFrame
+	outbound  chan []byte
 	done      chan struct{}
 	closeOnce sync.Once
 
@@ -75,8 +67,12 @@ type subscriber struct {
 	dropped bool
 	// droppedAtSent is sentFrames when dropped was first set (or noProgressCheck).
 	droppedAtSent uint64
-	// seq counts frames enqueued to outbound; guarded by mu.
-	seq uint64
+	// resyncing is true from beginResync until finishResync: a repaint capture is in flight, so
+	// frames are held (bounded by cap(outbound)-1) instead of queued, and queue only what the
+	// capture does not contain once the repaint is placed ahead of them.
+	resyncing bool
+	held      [][]byte
+	heldLost  bool // a frame arrived while held was full
 
 	// resizeMu guards hasVoted/lastVote — this subscriber's last ResizeVote
 	// (Story 1.3.1). Kept separate from mu (the send-path lock) so a
@@ -95,7 +91,7 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 		id:         id,
 		transport:  transport,
 		capability: capability,
-		outbound:   make(chan queuedFrame, bufferSize),
+		outbound:   make(chan []byte, bufferSize),
 		done:       make(chan struct{}),
 	}
 	s.awaitingFirstPaint.Store(capability.ManualFirstPaint)
@@ -117,8 +113,8 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 			if !s.drainPending(onSendError) {
 				return
 			}
-			for f := range s.outbound {
-				if err := s.transport.Send(f.data); err != nil {
+			for data := range s.outbound {
+				if err := s.transport.Send(data); err != nil {
 					onSendError(s.id, err)
 					return
 				}
@@ -157,9 +153,16 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 		}
 		return true, stalled
 	}
+	if s.resyncing {
+		if len(s.held) < cap(s.outbound)-1 {
+			s.held = append(s.held, data)
+		} else {
+			s.heldLost = true
+		}
+		return true, false
+	}
 	select {
-	case s.outbound <- queuedFrame{data: data, seq: s.seq + 1}:
-		s.seq++
+	case s.outbound <- data:
 		s.slowSince = time.Time{}
 		return true, false
 	default:
@@ -171,35 +174,28 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	}
 }
 
-// beginResync claims this subscriber's pending repaint. mark is the enqueue counter before the
-// caller captures the screen: every frame at or below it is contained in that capture.
+// beginResync claims this subscriber's pending repaint and starts holding new frames until
+// finishResync, so every frame left in the queue pre-dates the capture the caller is about to take.
 //
 // ok is false when nothing was dropped, or when the writer has not delivered a single frame since
 // the drop (a repaint would only queue behind a stalled transport and hide the stall from the
 // slow-subscriber eviction). The flag is then left set for a later pass.
-func (s *subscriber) beginResync() (mark uint64, ok bool) {
+func (s *subscriber) beginResync() (ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || !s.dropped || s.sentFrames.Load() == s.droppedAtSent {
-		return 0, false
+		return false
 	}
 	s.dropped = false
-	return s.seq, true
+	s.resyncing = true
+	s.held, s.heldLost = nil, false
+	return true
 }
 
 // redropLocked re-flags the subscriber for another repaint pass.
 func (s *subscriber) redropLocked() {
 	s.dropped = true
 	s.droppedAtSent = noProgressCheck
-}
-
-// redrop re-flags the subscriber after a repaint attempt that could not be completed.
-func (s *subscriber) redrop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed {
-		s.redropLocked()
-	}
 }
 
 // hasDropped reports whether a dropped frame is waiting to be repainted.
@@ -209,48 +205,50 @@ func (s *subscriber) hasDropped() bool {
 	return s.dropped
 }
 
-// supersede replaces the queued frames that pre-date a repaint capture with data, a full-screen
-// repaint of that capture; frames queued after mark follow it, so no byte after the capture is
-// lost. A subscriber still waiting for its first paint or replaying one keeps its own ordering
-// rules and is left alone (its paint is captured later than any drop).
+// finishResync ends a claim from beginResync. With a repaint (the capture succeeded) it replaces
+// the queued frames, all of which pre-date the capture, and queues the repaint followed by the
+// frames held meanwhile. With none (the capture failed) the queue is kept and only the held
+// frames are appended. Either way, if held frames could not all be kept, or there was no repaint,
+// the subscriber is re-flagged for another pass.
 //
-// It reports false, with the subscriber re-flagged for another pass, when the repaint cannot be
-// ordered correctly: the writer already sent a post-capture frame (the repaint would roll the
-// screen back past it), or the queue has no room for the repaint beside the post-capture frames.
-func (s *subscriber) supersede(data []byte, mark uint64) bool {
+// A subscriber still waiting for its first paint or replaying one keeps its own ordering rules.
+func (s *subscriber) finishResync(repaint []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	held := s.held
+	s.resyncing, s.held = false, nil
 	if s.closed {
-		return true
+		return
 	}
-	if s.painting || s.awaitingFirstPaint.Load() {
-		return true
+	if s.painting {
+		s.pending = append(s.pending, held...)
+		return
 	}
-	var kept []queuedFrame
-drain:
-	for {
-		select {
-		case f := <-s.outbound:
-			if f.seq > mark {
-				kept = append(kept, f)
+	if s.awaitingFirstPaint.Load() {
+		return
+	}
+	complete := repaint != nil && !s.heldLost
+	if repaint != nil {
+	drain:
+		for {
+			select {
+			case <-s.outbound:
+			default:
+				break drain
 			}
+		}
+		held = append([][]byte{repaint}, held...)
+	}
+	for _, data := range held {
+		select {
+		case s.outbound <- data:
 		default:
-			break drain
+			complete = false
 		}
 	}
-	taken := uint64(len(kept)) < s.seq-mark
-	if taken || len(kept) >= cap(s.outbound) {
-		for _, f := range kept {
-			s.outbound <- f // drained under mu, so it fits
-		}
+	if !complete {
 		s.redropLocked()
-		return false
 	}
-	s.outbound <- queuedFrame{data: data}
-	for _, f := range kept {
-		s.outbound <- f
-	}
-	return true
 }
 
 // markSlow records the first moment this subscriber's outbound queue was

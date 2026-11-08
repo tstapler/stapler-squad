@@ -38,6 +38,9 @@ const (
 	dropRepaintMinInterval = 250 * time.Millisecond
 	// dropRepaintMaxBackoff caps the wait after a failed capture.
 	dropRepaintMaxBackoff = 4 * time.Second
+	// dropRepaintGiveUpRetry is how long after a run gave up (the pane could not be captured)
+	// before the still-flagged subscribers are tried again.
+	dropRepaintGiveUpRetry = 30 * time.Second
 	// dropRepaintMaxAttempts bounds one scheduled repaint run; the next dropped frame starts a new one.
 	dropRepaintMaxAttempts = 5
 )
@@ -60,48 +63,73 @@ func (s *tymuxGRPCSession) scheduleDropRepaint() {
 			}
 			redraw, err := RenderSnapshotRedraw(snap)
 			return []byte(redraw), err
-		}, dropRepaintMinInterval, time.Sleep, func(n int) {
+		}, dropRepaintMinInterval, s.sleepUnlessAborted, func(n int) {
 			recordAttachEvent(attachEventSnapshotRedraw)
 			log.Warn("tymux: repainted subscribers after dropped output", "session_id", sid, "subscribers", n)
 		}, func(err error) {
 			log.Warn("tymux: repaint after dropped output failed", "session_id", sid, "error", err)
 		})
 		s.dropRepaintPending.Store(false)
-		// A drop that landed after the loop's last look but before the flag cleared found it set.
-		if !exhausted && s.fanout.HasDropped() {
-			s.scheduleDropRepaint()
+		if s.fanout.HasDropped() {
+			// A drop that landed after the loop's last look found the flag set; and a run that gave up
+			// (dead pane) must not leave subscribers flagged with nothing to retry them.
+			if exhausted {
+				time.AfterFunc(dropRepaintGiveUpRetry, s.scheduleDropRepaint)
+			} else {
+				s.scheduleDropRepaint()
+			}
 		}
 	}()
 }
 
-// repaintDroppedLoop repaints dropped subscribers until none is left or
-// dropRepaintMaxAttempts passes ran, waiting minInterval between captures and backing off
-// exponentially after a failed one. It reports whether it gave up with subscribers still flagged.
-// onFail runs for the first failure only, so a dead pane logs once per run, not once per pass.
+// sleepUnlessAborted waits d and reports false if the session was torn down meanwhile.
+func (s *tymuxGRPCSession) sleepUnlessAborted(d time.Duration) bool {
+	s.mu.RLock()
+	abort := s.abortReconnect
+	s.mu.RUnlock()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-abort:
+		return false
+	}
+}
+
+// repaintDroppedLoop repaints dropped subscribers until none is left or dropRepaintMaxAttempts
+// passes ran, waiting minInterval between captures and backing off exponentially after a failed
+// one. A sleep that returns false (session torn down) also ends it. It reports whether it stopped
+// with subscribers still flagged; the caller must not retry immediately in that case. onFail runs for the first failure only, so a dead
+// pane logs once per run, not once per pass.
 func repaintDroppedLoop(f *ClientFanout, capture func() ([]byte, error), minInterval time.Duration,
-	sleep func(time.Duration), onRepainted func(n int), onFail func(error)) (exhausted bool) {
+	sleep func(time.Duration) bool, onRepainted func(n int), onFail func(error)) (exhausted bool) {
 	backoff := minInterval
 	failed := false
 	for attempt := 0; attempt < dropRepaintMaxAttempts; attempt++ {
-		marks := f.BeginRepaint()
-		if len(marks) == 0 {
+		ids := f.BeginRepaint()
+		if len(ids) == 0 {
 			return false
 		}
 		redraw, err := capture()
 		if err != nil {
-			f.Redrop(marks)
+			f.FinishRepaint(ids, nil)
 			if !failed {
 				onFail(err)
 				failed = true
 			}
-			sleep(backoff)
+			if !sleep(backoff) {
+				return f.HasDropped()
+			}
 			backoff = min(backoff*2, dropRepaintMaxBackoff)
 			continue
 		}
-		if n := f.RepaintDropped(redraw, marks); n > 0 {
+		if n := f.FinishRepaint(ids, redraw); n > 0 {
 			onRepainted(n)
 		}
-		sleep(minInterval)
+		if !sleep(minInterval) {
+			return f.HasDropped()
+		}
 	}
 	return f.HasDropped()
 }

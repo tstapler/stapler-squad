@@ -15,7 +15,12 @@ const subscriberBufferSize = 64
 type fanoutSubscriber struct {
 	ch      chan []byte
 	dropped bool
-	enq     uint64 // frames successfully queued on ch; guarded by ClientFanout.mu
+	// resyncing is true between BeginRepaint and FinishRepaint: a repaint capture is in flight, so
+	// Broadcast holds frames here (at most cap(ch)-1) instead of queueing them. heldLost records
+	// that one did not fit. Guarded by ClientFanout.mu.
+	resyncing bool
+	held      [][]byte
+	heldLost  bool
 }
 
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
@@ -82,9 +87,16 @@ func (f *ClientFanout) Broadcast(data []byte) {
 	f.mu.Lock()
 	dropped := false
 	for _, sub := range f.subscribers {
+		if sub.resyncing {
+			if len(sub.held) < cap(sub.ch)-1 {
+				sub.held = append(sub.held, data)
+			} else {
+				sub.heldLost = true
+			}
+			continue
+		}
 		select {
 		case sub.ch <- data:
-			sub.enq++
 		default:
 			sub.dropped = true
 			dropped = true
@@ -97,35 +109,23 @@ func (f *ClientFanout) Broadcast(data []byte) {
 	}
 }
 
-// BeginRepaint claims every subscriber that has lost a frame and returns, per subscriber id, how
-// many frames it had been sent when claimed. Call it before capturing the screen: a frame counted
-// in the mark is contained in that capture, any later one is not.
-func (f *ClientFanout) BeginRepaint() map[string]uint64 {
+// BeginRepaint claims every subscriber that has lost a frame and returns their ids. Until
+// FinishRepaint their new output is held, so everything still queued pre-dates the capture the
+// caller takes next.
+func (f *ClientFanout) BeginRepaint() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var marks map[string]uint64
+	var ids []string
 	for id, sub := range f.subscribers {
 		if !sub.dropped {
 			continue
 		}
 		sub.dropped = false
-		if marks == nil {
-			marks = make(map[string]uint64)
-		}
-		marks[id] = sub.enq
+		sub.resyncing = true
+		sub.held, sub.heldLost = nil, false
+		ids = append(ids, id)
 	}
-	return marks
-}
-
-// Redrop re-flags the subscribers of an abandoned BeginRepaint claim.
-func (f *ClientFanout) Redrop(marks map[string]uint64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id := range marks {
-		if sub, ok := f.subscribers[id]; ok {
-			sub.dropped = true
-		}
-	}
+	return ids
 }
 
 // HasDropped reports whether any subscriber is waiting for a repaint.
@@ -140,63 +140,47 @@ func (f *ClientFanout) HasDropped() bool {
 	return false
 }
 
-// RepaintDropped replaces, for each claimed subscriber, the queued output that pre-dates the
-// capture (everything within its mark) with repaint, a full-screen redraw that already contains
-// it. Output queued after the capture stays behind the repaint, so no byte after it is lost. It
-// returns how many subscribers it repainted.
-//
-// A subscriber whose consumer has already taken output newer than the capture, or whose queue
-// cannot hold the repaint beside the newer output, is re-flagged instead: repainting it would
-// roll its screen back, so a later pass retries with a fresher capture.
-func (f *ClientFanout) RepaintDropped(repaint []byte, marks map[string]uint64) int {
+// FinishRepaint ends a BeginRepaint claim. With a repaint (the capture succeeded) each claimed
+// subscriber's queued output, all of which pre-dates the capture, is replaced by it, and the
+// output held during the capture follows. With none (the capture failed) the queue is kept and
+// only the held output is appended. A subscriber that could not keep all held output, or had no
+// repaint, is re-flagged for another pass. It returns how many subscribers were repainted.
+func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
-	for id, mark := range marks {
+	for _, id := range ids {
 		sub, ok := f.subscribers[id]
 		if !ok {
 			continue
 		}
-		if f.repaintLocked(sub, repaint, mark) {
+		held := sub.held
+		complete := repaint != nil && !sub.heldLost
+		sub.resyncing, sub.held, sub.heldLost = false, nil, false
+		if repaint != nil {
+			// Under f.mu nothing else sends on sub.ch, and a consumer only makes room.
+			for drained := false; !drained; {
+				select {
+				case <-sub.ch:
+				default:
+					drained = true
+				}
+			}
+			held = append([][]byte{repaint}, held...)
 			n++
-		} else {
+		}
+		for _, d := range held {
+			select {
+			case sub.ch <- d:
+			default:
+				complete = false
+			}
+		}
+		if !complete {
 			sub.dropped = true
 		}
 	}
 	return n
-}
-
-// repaintLocked is RepaintDropped for one subscriber; the caller holds f.mu, so nothing else
-// sends on sub.ch while the consumer may still be receiving from it.
-func (f *ClientFanout) repaintLocked(sub *fanoutSubscriber, repaint []byte, mark uint64) bool {
-	post := int(sub.enq - mark)
-	qlen := len(sub.ch)
-	if post >= cap(sub.ch) || qlen < post {
-		return false
-	}
-	for i := 0; i < qlen-post; i++ {
-		select {
-		case <-sub.ch:
-		default:
-		}
-	}
-	rest := make([][]byte, 0, post)
-	for drained := false; !drained; {
-		select {
-		case d := <-sub.ch:
-			rest = append(rest, d)
-		default:
-			drained = true
-		}
-	}
-	complete := len(rest) == post
-	if complete {
-		rest = append([][]byte{repaint}, rest...)
-	}
-	for _, d := range rest {
-		sub.ch <- d // sub.ch was emptied under f.mu and rest fits in it, so this cannot block
-	}
-	return complete
 }
 
 // count reports the current subscriber count — test-only introspection.

@@ -52,8 +52,9 @@ func (c *captureHookController) CapturePaneRedraw(ctx context.Context) (streamhu
 }
 
 // Output that arrives while the repaint capture runs is not in the capture, so it must be
-// delivered after the repaint, not discarded with the stale queue.
-func TestHub_should_KeepFramesQueuedDuringCapture_When_Repainting(t *testing.T) {
+// delivered after the repaint, even when the writer keeps draining during the capture (a busy
+// pane); a repaint must not be refused or lose it.
+func TestHub_should_RepaintAndKeepFrames_When_WriterDrainsDuringCapture(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	clock := streamhub.NewFakeClock(time.Unix(0, 0))
 	c := &captureHookController{redrawController: &redrawController{fakeSessionController: newFakeSessionController(),
@@ -73,15 +74,20 @@ func TestHub_should_KeepFramesQueuedDuringCapture_When_Repainting(t *testing.T) 
 	tr.permits <- struct{}{} // f1 goes out; the writer then holds f2 in a blocked Send
 	<-tr.parked
 
-	late := func() { hub.Broadcast([]byte("late")) }
-	c.onCapture.Store(&late)
-	clock.Advance(resyncStep) // the repaint captures now, with the writer parked
-
-	for i := 0; i < 3; i++ {
+	// While the capture runs, new output arrives and the writer drains f2 and f3.
+	hook := func() {
+		hub.Broadcast([]byte("late"))
 		tr.permits <- struct{}{}
+		tr.permits <- struct{}{}
+		require.Eventually(t, func() bool { return count(tr.frames(), "f3") == 1 }, 5*time.Second, time.Millisecond)
 	}
-	require.Eventually(t, func() bool { return len(tr.frames()) == 5 }, 5*time.Second, time.Millisecond)
-	require.Equal(t, []string{"REDRAW", "f1", "f2", "REDRAW", "late"}, tr.frames())
+	c.onCapture.Store(&hook)
+	clock.Advance(resyncStep)
+
+	tr.permits <- struct{}{}
+	tr.permits <- struct{}{}
+	require.Eventually(t, func() bool { return len(tr.frames()) == 6 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, []string{"REDRAW", "f1", "f2", "f3", "REDRAW", "late"}, tr.frames())
 }
 
 // A writer blocked on a dead transport must be evicted at the default grace, not kept alive by
@@ -122,7 +128,7 @@ func (c *failingCaptureController) CapturePaneContentRawContext(context.Context)
 
 // A failed capture must keep the subscriber flagged, retry no faster than the minimum interval,
 // and repaint once the capture works again.
-func TestHub_should_RetryRepaintAtMinInterval_When_CaptureFails(t *testing.T) {
+func TestHub_should_BackOffRepaintRetries_When_CaptureFails(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	clock := streamhub.NewFakeClock(time.Unix(0, 0))
 	c := &failingCaptureController{fakeSessionController: newFakeSessionController()}
@@ -141,8 +147,12 @@ func TestHub_should_RetryRepaintAtMinInterval_When_CaptureFails(t *testing.T) {
 
 	clock.Advance(50 * time.Millisecond) // debounce: first attempt fails
 	require.Equal(t, attachCalls+1, c.calls.Load())
-	clock.Advance(240 * time.Millisecond)
-	require.Equal(t, attachCalls+1, c.calls.Load(), "no second capture inside the minimum interval")
+	clock.Advance(490 * time.Millisecond)
+	require.Equal(t, attachCalls+1, c.calls.Load(), "no second capture before the backed-off interval")
 	clock.Advance(10 * time.Millisecond)
 	require.Equal(t, attachCalls+2, c.calls.Load(), "the subscriber stayed flagged and is retried")
+	clock.Advance(time.Second - time.Millisecond)
+	require.Equal(t, attachCalls+2, c.calls.Load(), "the backoff doubled again")
+	clock.Advance(time.Millisecond)
+	require.Equal(t, attachCalls+3, c.calls.Load())
 }
