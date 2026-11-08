@@ -31,11 +31,15 @@ Compare against the CLI on a fixture and assert equal, as
   above the limit, one side within the limit with the product above, exact renames above the limit).
 - Known divergence, not mirrored by the fork: git's basename-guess pre-pass
   (`diffcore-rename.c`, `find_basename_matches`). Use fixtures whose basenames differ.
-- Known gap (measured 2026-11-08, git rule at the default limit of 1000): go-git's similarity matrix is
-  far slower than git's for the same input. 120 moved-and-edited files took about 1.3 s and 400 about
-  10 s through `DiffStatBetween`; 1000 x 1000 exceeded its 30 s timeout. Cause: `buildSimilarityMatrix`
-  rebuilds every destination's similarity index once per source (O(n^2) index builds). Fix it in the fork
-  (cache destination indexes), not with a cap here.
+- Fork `v5.19.3-ssq.4` (in `go.mod`) applies git's rename-limit product rule, treats regular and executable
+  files alike and pairs symlinks only exactly, and builds each similarity index once (a bounded cache). Measured
+  with it, `DiffStatBetween` over moved-and-edited files: 120 files 30 ms, 400 files 108 ms, 1000 files 408 ms
+  (it was 1.3 s, 10 s and over the 30 s timeout before the cache).
+- Known remaining divergences from git, fixed by the fork's two-phase pairing change once it is tagged
+  (tstapler/go-git PR #8): equal-score ties among identical files (git takes the first sorted path, go-git
+  the last), same-basename preference, git's basename pre-pass running before the rename limit, and the
+  stricter basename score threshold. Content similarity stays jgit's estimate, so pairs within a few percent
+  of the threshold can differ. Until then `ops_rename_limit_test.go` uses fixtures that avoid these cases.
 
 ## Shipping a fork change
 
