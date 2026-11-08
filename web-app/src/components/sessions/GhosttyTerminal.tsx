@@ -9,6 +9,7 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
+import { loadOwnGhostty } from "@/lib/terminal/ghosttyWasm";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
@@ -24,10 +25,13 @@ const DEFAULT_FONT_SIZE = 14;
  * (ghostty-web's FitAddon observes the container itself).
  */
 let ghosttyReady: Promise<typeof GhosttyModule> | null = null;
+// Our own build's wasm (scripts/build-ghostty-wasm.sh); null keeps ghostty-web's embedded stock wasm.
+let ownGhostty: GhosttyModule.Ghostty | null = null;
 function loadGhostty(): Promise<typeof GhosttyModule> {
   ghosttyReady ??= import("ghostty-web")
     .then(async (mod) => {
       await mod.init();
+      ownGhostty = await loadOwnGhostty(mod.Ghostty);
       return mod;
     })
     .catch((err) => {
@@ -92,6 +96,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         cursorStyle,
         cursorBlink,
         theme: themeName === "light" ? lightTerminalTheme : darkTerminalTheme,
+        ...(ownGhostty ? { ghostty: ownGhostty } : {}),
       });
       const fit = new FitAddon();
       term.loadAddon(fit);

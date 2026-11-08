@@ -106,6 +106,12 @@ build/
 # scripts/fetch-tymuxd.sh and ADR-001).
 .tymuxd-fetch.stamp
 
+# Own ghostty-vt.wasm build (scripts/build-ghostty-wasm.sh): toolchain cache and outputs
+/.cache/
+/build/ghostty-wasm/
+/web-app/public/ghostty-vt.json
+/web-app/public/ghostty-vt.*.wasm
+
 # Scanner build artifacts
 tools/scanner/cmd
 tools/scanner/backend/cmd/scanner
@@ -143,3 +149,5 @@ tests/e2e/website-demo-output/
 
 # demo clips recorded during the deploy; never committed
 website/public/clips/
+/bazel-*
+/.bazelrc.user

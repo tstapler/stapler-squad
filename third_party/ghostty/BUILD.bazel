@@ -1,0 +1,64 @@
+load(":ghostty_wasm.bzl", "ghostty_zig")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "macos_arm64",
+    constraint_values = ["@platforms//os:macos", "@platforms//cpu:arm64"],
+)
+
+config_setting(
+    name = "macos_x86_64",
+    constraint_values = ["@platforms//os:macos", "@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "linux_arm64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+)
+
+alias(
+    name = "zig",
+    actual = select({
+        ":macos_arm64": "@zig_aarch64_macos//:zig",
+        ":macos_x86_64": "@zig_x86_64_macos//:zig",
+        ":linux_x86_64": "@zig_x86_64_linux//:zig",
+        ":linux_arm64": "@zig_aarch64_linux//:zig",
+    }),
+)
+
+alias(
+    name = "zig_lib",
+    actual = select({
+        ":macos_arm64": "@zig_aarch64_macos//:lib",
+        ":macos_x86_64": "@zig_x86_64_macos//:lib",
+        ":linux_x86_64": "@zig_x86_64_linux//:lib",
+        ":linux_arm64": "@zig_aarch64_linux//:lib",
+    }),
+)
+
+# bazel build //third_party/ghostty:ghostty_vt_wasm  ->  bazel-bin/third_party/ghostty/ghostty_vt_wasm.wasm
+ghostty_zig(
+    name = "ghostty_vt_wasm",
+    build_zig = "@ghostty_src//:build.zig",
+    mode = "wasm",
+    srcs = "@ghostty_src//:srcs",
+    zig = ":zig",
+    zig_lib = ":zig_lib",
+)
+
+# Zig unit test for DECSTR (patch 0002). Build it to run it: a failing test fails the build.
+ghostty_zig(
+    name = "softreset_test",
+    build_zig = "@ghostty_src//:build.zig",
+    mode = "test",
+    srcs = "@ghostty_src//:srcs",
+    test_filter = "softReset",
+    zig = ":zig",
+    zig_lib = ":zig_lib",
+)

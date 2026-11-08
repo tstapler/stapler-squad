@@ -1,0 +1,6 @@
+# Recorded sha256 of build/ghostty-wasm/ghostty-vt.wasm, one line per
+# "<rev12>-<patchset12>-zig<version> <sha256>". scripts/build-ghostty-wasm.sh prints the
+# exact line to add for a new pin or patch set; `--verify` (CI) fails on a mismatch.
+# For reference, the stock ghostty-web 0.4.0 dist/ghostty-vt.wasm is
+# d6f0326f1874ad2ce9f289e3a4a0c5f3507d4cb38d8747e4b287def470a0c60a (423045 bytes).
+# No entry yet: the first build must be run, reviewed and recorded by the owner.

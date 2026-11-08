@@ -1,0 +1,86 @@
+"""Bazel is used only for the own-built ghostty-vt.wasm (third_party/ghostty). The Go and web
+builds are untouched. Design: docs/explanation/own-ghostty-wasm-build.md, ADR-039.
+
+The pin values below are read by scripts/build-ghostty-wasm.sh (grep on `^NAME = "`), so keep
+each on one line.
+"""
+
+module(name = "stapler_squad")
+
+bazel_dep(name = "platforms", version = "1.0.0")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# ── Ghostty source: a commit archive pinned by sha256 ────────────────────────
+# Today: upstream at the newest commit coder/ghostty-web's wasm API patch applies to, plus
+# the series in third_party/ghostty-patches. After the tstapler/ghostty fork's ssq/main is
+# pushed: set GHOSTTY_ORG = "tstapler", GHOSTTY_REV = <ssq/main sha>, GHOSTTY_SHA256 = new
+# archive hash, and empty GHOSTTY_PATCHES (docs/how-to/ghostty-fork-workflow.md).
+GHOSTTY_ORG = "ghostty-org"
+GHOSTTY_REV = "5714ed07a1012573261b7b7e3ed2add9c1504496"
+GHOSTTY_SHA256 = "55cee28558945de6e984bc183cd51f28eefdbf805544da2e70d4635476178790"
+GHOSTTY_PATCHES = [
+    "//third_party/ghostty-patches:0001-wasm-api.patch",
+    "//third_party/ghostty-patches:0002-decstr-soft-reset.patch",
+    "//third_party/ghostty-patches:0003-scrub-freed-pages-on-wasm.patch",
+]
+
+http_archive(
+    name = "ghostty_src",
+    urls = ["https://github.com/%s/ghostty/archive/%s.tar.gz" % (GHOSTTY_ORG, GHOSTTY_REV)],
+    sha256 = GHOSTTY_SHA256,
+    strip_prefix = "ghostty-%s" % GHOSTTY_REV,
+    patches = GHOSTTY_PATCHES,
+    # Bazel's built-in Java patcher mis-parses 0002 (CONTENT_DOES_NOT_MATCH_TARGET on a clean
+    # tree); the system `patch` applies the same series cleanly.
+    patch_tool = "patch",
+    patch_args = ["-p1"],
+    build_file = "//third_party/ghostty:ghostty_src.BUILD",
+)
+
+# ── Zig toolchain: official tarballs pinned by sha256 ────────────────────────
+# Must match the pinned Ghostty's build.zig.zon minimum_zig_version. sha256 values are from
+# https://ziglang.org/download/index.json (checked 2026-11-08).
+ZIG_VERSION = "0.15.2"
+ZIG_SHA256_AARCH64_MACOS = "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b"
+ZIG_SHA256_X86_64_MACOS = "375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f"
+ZIG_SHA256_X86_64_LINUX = "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+ZIG_SHA256_AARCH64_LINUX = "958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f"
+
+ZIG_BUILD_FILE = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["zig"])
+filegroup(name = "lib", srcs = glob(["lib/**"]))
+"""
+
+http_archive(
+    name = "zig_aarch64_macos",
+    urls = ["https://ziglang.org/download/%s/zig-aarch64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    sha256 = ZIG_SHA256_AARCH64_MACOS,
+    strip_prefix = "zig-aarch64-macos-%s" % ZIG_VERSION,
+    build_file_content = ZIG_BUILD_FILE,
+)
+
+http_archive(
+    name = "zig_x86_64_macos",
+    urls = ["https://ziglang.org/download/%s/zig-x86_64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    sha256 = ZIG_SHA256_X86_64_MACOS,
+    strip_prefix = "zig-x86_64-macos-%s" % ZIG_VERSION,
+    build_file_content = ZIG_BUILD_FILE,
+)
+
+http_archive(
+    name = "zig_x86_64_linux",
+    urls = ["https://ziglang.org/download/%s/zig-x86_64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    sha256 = ZIG_SHA256_X86_64_LINUX,
+    strip_prefix = "zig-x86_64-linux-%s" % ZIG_VERSION,
+    build_file_content = ZIG_BUILD_FILE,
+)
+
+http_archive(
+    name = "zig_aarch64_linux",
+    urls = ["https://ziglang.org/download/%s/zig-aarch64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    sha256 = ZIG_SHA256_AARCH64_LINUX,
+    strip_prefix = "zig-aarch64-linux-%s" % ZIG_VERSION,
+    build_file_content = ZIG_BUILD_FILE,
+)
