@@ -101,14 +101,19 @@ export class ResyncGate {
     }
   }
 
-  /** Runs `fn` no sooner than DISCONNECT_SPACING_MS after the previous forced disconnect. */
-  scheduleDisconnect(fn: () => void): void {
+  /**
+   * Runs `fn` no sooner than DISCONNECT_SPACING_MS after the previous forced disconnect. The
+   * returned cancel stops a still-delayed `fn` (a no-op once it has run).
+   */
+  scheduleDisconnect(fn: () => void): { cancel: () => void } {
     const t = this.now();
     const at = Math.max(t, this.nextDisconnectAt);
     this.nextDisconnectAt = at + DISCONNECT_SPACING_MS;
     const wait = at - t;
+    let cancelled = false;
     if (wait <= 0) fn();
-    else this.setTimer(fn, wait);
+    else this.setTimer(() => { if (!cancelled) fn(); }, wait);
+    return { cancel: () => { cancelled = true; } };
   }
 }
 

@@ -8,9 +8,11 @@ import { resyncGate } from '@/lib/terminal/resyncGate';
 
 const RESYNC_DEBOUNCE_MS = 300;
 // Under load a full-pane capture takes seconds, so the watchdog's budget follows what resyncs
-// actually cost here: the larger of this floor and 3x the recent p95 round trip.
+// actually cost here: the larger of this floor and 3x the recent median round trip, capped at the ceiling.
 const RESYNC_STALL_FLOOR_MS = 10_000;
 const RESYNC_RTT_SAMPLES = 10;
+// One outlier must not set the budget, so the ceiling holds even when the median is huge.
+const RESYNC_STALL_CEILING_MS = 30_000;
 // Output this recent on a connected stream means the terminal is in sync; a gap shows as a
 // reconnect or sequence reset, not as elapsed time.
 const OUTPUT_FLOWING_MS = 5000;
@@ -159,6 +161,11 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
   // Adaptive stall budget and the once-only retry (see armStallTimer).
   const rttSamplesRef = useRef<number[]>([]);
   const retriedRef = useRef(false);
+  // Earlier ids of the current resync (replaced by a retry); a late reply to one is still valid.
+  const supersededIdsRef = useRef<Set<string>>(new Set());
+  // The tab was hidden while a resync was pending, so its round trip is throttled, not server cost.
+  const hiddenDuringResyncRef = useRef(false);
+  const disconnectCancelRef = useRef<{ cancel: () => void } | null>(null);
   // A focus/visibility event reached this pane while hidden; it resyncs when shown.
   const staleRef = useRef(false);
   const slotHeldRef = useRef(false);
@@ -240,8 +247,9 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
   const stallTimeoutMs = useCallback(() => {
     const rtts = rttSamplesRef.current;
     if (rtts.length === 0) return stallFloorMs;
-    const p95 = [...rtts].sort((a, b) => a - b)[Math.min(rtts.length - 1, Math.ceil(rtts.length * 0.95) - 1)];
-    return Math.max(stallFloorMs, 3 * p95);
+    const sorted = [...rtts].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    return Math.min(Math.max(stallFloorMs, 3 * median), Math.max(stallFloorMs, RESYNC_STALL_CEILING_MS));
   }, [stallFloorMs]);
 
   // Shared terminal-recovery path (Epic 3.1, Tasks 3.1.2.2/3.1.2.4b) for both
@@ -296,10 +304,16 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       },
     });
     retriedRef.current = false;
+    supersededIdsRef.current.clear();
     releaseSlot();
     countResync('watchdog_disconnect');
-    // Spaced apart: a stall that hits every terminal must not drop every stream at once.
-    resyncGate.scheduleDisconnect(() => {
+    // Spaced apart: a stall that hits every terminal must not drop every stream at once. The
+    // delayed callback is dropped if the session changed, so it never disconnects a newer stream.
+    const recoveringSessionId = sessionIdRef.current;
+    disconnectCancelRef.current?.cancel();
+    disconnectCancelRef.current = resyncGate.scheduleDisconnect(() => {
+      disconnectCancelRef.current = null;
+      if (sessionIdRef.current !== recoveringSessionId) return;
       void disconnectRef.current().then(() => connectRef.current());
     });
   }, [clearStallTimer, clearBannerTimer, stallTimeoutMs, releaseSlot, countResync]);
@@ -313,10 +327,14 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       resyncStallTimerRef.current = null;
       // First expiry: the server may just be slow, so ask again once (new id) and keep the
       // stream. Only a second expiry drops it.
+      // A queued resync that never got a slot has nothing outstanding to retry or recover.
+      if (!slotHeldRef.current) return;
       if (!retriedRef.current && pendingResyncCompletionRef.current) {
         retriedRef.current = true;
         countResync('watchdog_retry');
         try {
+          const previousId = pendingResyncIdRef.current;
+          if (previousId) supersededIdsRef.current.add(previousId);
           pendingResyncIdRef.current = requestFullResyncRef.current(true, true);
         } catch (err) {
           console.warn(`[resync] sessionId=${sessionIdRef.current} watchdog retry threw`, err);
@@ -365,6 +383,8 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
 
       pendingResyncCompletionRef.current = true;
       retriedRef.current = false;
+      supersededIdsRef.current.clear();
+      hiddenDuringResyncRef.current = false;
       // Epic 6.1 (terminal:resync-stagger) — `fire` is exactly today's
       // pre-Epic-6.1 synchronous resync logic, unchanged. When no scheduler
       // is wired (flag off, or no SessionDetailView-level stagger queue),
@@ -401,13 +421,20 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       const start = () => {
         slotHeldRef.current = true;
         queuedRef.current = null;
+        // The stream may have dropped, or the session changed, while this waited for a slot.
+        if (!isConnectedRef.current || sessionId !== sessionIdRef.current) {
+          pendingResyncCompletionRef.current = false;
+          releaseSlot();
+          return;
+        }
         if (scheduleResyncRef.current) {
           scheduleResyncRef.current(fire, { preempt });
         } else {
           fire();
         }
       };
-      queuedRef.current = resyncGate.acquire(isVisibleRef.current ? 'foreground' : 'background', start);
+      // A pane that was just shown (or preempts) has the staler picture, so it goes first.
+      queuedRef.current = resyncGate.acquire(preempt || fromStale ? 'foreground' : 'background', start);
       if (resyncGate.depth() > 0) {
         trackRef.current({
           name: 'cm.term_latency',
@@ -423,7 +450,7 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       connectRef.current();
       setShowReconnectButtonRef.current(true);
     }
-  }, [sessionId, clearBannerTimer, armStallTimer, countResync]);
+  }, [sessionId, clearBannerTimer, armStallTimer, countResync, releaseSlot]);
 
   // Zero-arg wrapper: `debouncedResync` is registered directly as a DOM event
   // listener below, so useDebouncedCallback forwards whatever argument the
@@ -471,6 +498,14 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible]);
 
+  useEffect(() => {
+    const onChange = () => {
+      if (document.hidden && pendingResyncCompletionRef.current) hiddenDuringResyncRef.current = true;
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+
   // sessionId-keyed cleanup: a watchdog/resync armed for the previous session
   // must never fire against the next one's connect()/disconnect() (adversarial
   // review Blocker 1 / research features.md race #4).
@@ -483,7 +518,10 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       bannerShownRef.current = false;
       resyncStartTimeRef.current = null;
       retriedRef.current = false;
+      supersededIdsRef.current.clear();
       staleRef.current = false;
+      disconnectCancelRef.current?.cancel();
+      disconnectCancelRef.current = null;
       releaseSlot();
       setShowReconnectBannerRef.current?.(false);
       markResyncCompleteRef.current();
@@ -500,7 +538,10 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
     // clearing this one's pending state when IDs are present and mismatch
     // (Epic 3.1, Task 3.1.1.4c / validation.md
     // notifyResyncOutputReceived_should_NotClearPendingResync_When_ResyncIdMismatch).
-    if (resyncId && pendingResyncIdRef.current && resyncId !== pendingResyncIdRef.current) {
+    if (
+      resyncId && pendingResyncIdRef.current && resyncId !== pendingResyncIdRef.current &&
+      !supersededIdsRef.current.has(resyncId)
+    ) {
       // Task 7.1.1.3 (Epic 7.1 observability) — client-side correlation-ID
       // mismatch, mirrored by the server-side log in handleCurrentPaneRequest
       // (connectrpc_websocket.go) for the case where the mismatch instead
@@ -509,11 +550,14 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       return;
     }
     const resyncDurationMs = resyncStartTimeRef.current !== null ? Date.now() - resyncStartTimeRef.current : undefined;
+    // A retried or backgrounded resync measures patience and throttling, not server cost.
+    const sampleIsClean = !retriedRef.current && !hiddenDuringResyncRef.current && !document.hidden;
     resyncStartTimeRef.current = null;
     pendingResyncCompletionRef.current = false;
     pendingResyncIdRef.current = undefined;
     retriedRef.current = false;
-    if (resyncDurationMs !== undefined) {
+    supersededIdsRef.current.clear();
+    if (resyncDurationMs !== undefined && sampleIsClean) {
       rttSamplesRef.current = [...rttSamplesRef.current, resyncDurationMs].slice(-RESYNC_RTT_SAMPLES);
     }
     releaseSlot();
@@ -555,7 +599,8 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
   // callers/tests) — resetStallWatchdog always just re-arms when it's absent
   // or the ID's start time isn't recorded, preserving prior behavior.
   const resetStallWatchdog = useCallback(() => {
-    if (!pendingResyncCompletionRef.current) return;
+    // A queued resync that has not started yet must not arm the watchdog and bypass the gate.
+    if (!pendingResyncCompletionRef.current || !slotHeldRef.current) return;
     const ownResyncId = pendingResyncIdRef.current;
     const startedAt = ownResyncId ? outstandingResyncIdsRef?.current.get(ownResyncId) : undefined;
     if (startedAt !== undefined && Date.now() - startedAt >= stallTimeoutMs() * 2) {

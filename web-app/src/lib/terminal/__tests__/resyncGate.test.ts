@@ -69,4 +69,14 @@ describe("ResyncGate", () => {
     flush();
     expect(dropped).toHaveLength(10);
   });
+
+  it("a cancelled delayed disconnect never runs", () => {
+    const { gate, flush } = makeGate();
+    const dropped: number[] = [];
+    gate.scheduleDisconnect(() => dropped.push(0));
+    const second = gate.scheduleDisconnect(() => dropped.push(1));
+    second.cancel();
+    flush();
+    expect(dropped).toEqual([0]);
+  });
 });

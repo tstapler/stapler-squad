@@ -879,4 +879,119 @@ describe('useVisibilityResync', () => {
     expect(params.requestFullResync).not.toHaveBeenCalled();
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'skipped_output' } }));
   });
+
+  // ── Review follow-ups ────────────────────────────────────────────────────
+
+  async function runCleanResync(result: { current: { notifyResyncOutputReceived: (id?: string) => void } }, ms: number) {
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(ms); });
+    act(() => { result.current.notifyResyncOutputReceived(); });
+  }
+
+  it('caps the stall budget at 30s even when recent round trips were slow', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    await runCleanResync(result, 3900); // budget becomes 3 x 3.9s
+    await runCleanResync(result, 11_000); // median 11s would give 33s unclamped
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(29_000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 1); // no retry yet
+    await act(async () => { jest.advanceTimersByTime(1_000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // retry at the 30s cap
+  });
+
+  it('does not learn from a resync that needed a retry', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry
+    await act(async () => { jest.advanceTimersByTime(3000); });
+    act(() => { result.current.notifyResyncOutputReceived(); }); // completes after 7s
+
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // still the 4s floor
+  });
+
+  it('does not learn from a resync that spanned a hidden tab', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    act(() => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    });
+    await act(async () => { jest.advanceTimersByTime(3900); });
+    act(() => { result.current.notifyResyncOutputReceived(); });
+
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // floor, not 3 x 3.9s
+  });
+
+  async function stallUntilDelayedDisconnect(rerender: (p: ReturnType<typeof makeParams>) => void, params: ReturnType<typeof makeParams>) {
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry
+    await act(async () => { jest.advanceTimersByTime(3700); });
+    resyncGate.scheduleDisconnect(() => {}); // a sibling just dropped, so ours must wait 500ms
+    await act(async () => { jest.advanceTimersByTime(300); }); // recovery runs, disconnect is delayed
+    expect(params.disconnect).not.toHaveBeenCalled();
+    return rerender;
+  }
+
+  it('drops the delayed disconnect when the session switched meanwhile', async () => {
+    const params = makeParams();
+    const { rerender } = renderHook((p) => useVisibilityResync(p), { initialProps: params });
+    await stallUntilDelayedDisconnect((p) => rerender(p), params);
+    rerender({ ...params, sessionId: 's2' });
+    await act(async () => { jest.advanceTimersByTime(600); });
+    expect(params.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops the delayed disconnect when the hook unmounts meanwhile', async () => {
+    const params = makeParams();
+    const { rerender, unmount } = renderHook((p) => useVisibilityResync(p), { initialProps: params });
+    await stallUntilDelayedDisconnect((p) => rerender(p), params);
+    unmount();
+    await act(async () => { jest.advanceTimersByTime(600); });
+    expect(params.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('a queued resync that has no slot ignores resetStallWatchdog', async () => {
+    const all = Array.from({ length: 3 }, () => makeParams());
+    const hooks = all.map((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    await act(async () => { jest.advanceTimersByTime(3000); });
+    act(() => { hooks[2].result.current.resetStallWatchdog(); });
+    await act(async () => { jest.advanceTimersByTime(4000); }); // past the timer it would have armed
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    expect(all[2].disconnect).not.toHaveBeenCalled();
+  });
+
+  it('a queued resync does not start once its stream has dropped', async () => {
+    const all = Array.from({ length: 3 }, () => makeParams());
+    const hooks = all.map((p) => renderHook((props) => useVisibilityResync(props), { initialProps: p }));
+    focusEvent();
+    hooks[2].rerender({ ...all[2], isConnected: false });
+    act(() => { hooks[0].result.current.notifyResyncOutputReceived(); }); // frees a slot
+    await act(async () => { jest.advanceTimersByTime(300); });
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    expect(resyncGate.active()).toBe(1);
+  });
+
+  it('accepts a late reply to the id a retry replaced', async () => {
+    const params = makeParams({ requestFullResync: jest.fn().mockReturnValueOnce('a').mockReturnValueOnce('b') });
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry sends 'b'
+    (params.markResyncComplete as jest.Mock).mockClear();
+    act(() => { result.current.notifyResyncOutputReceived('a'); });
+    expect(params.markResyncComplete).toHaveBeenCalledTimes(1);
+  });
 });
