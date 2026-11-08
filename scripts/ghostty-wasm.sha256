@@ -3,4 +3,4 @@
 # exact line to add for a new pin or patch set; `--verify` (CI) fails on a mismatch.
 # For reference, the stock ghostty-web 0.4.0 dist/ghostty-vt.wasm is
 # d6f0326f1874ad2ce9f289e3a4a0c5f3507d4cb38d8747e4b287def470a0c60a (423045 bytes).
-# No entry yet: the first build must be run, reviewed and recorded by the owner.
+5714ed07a101-3292194fa4e7-zig0.15.2 18bd51b696cd8a993f467ba32fa7add51586ccbb065d8d8db0c5ab95720efafb

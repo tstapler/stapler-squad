@@ -5,7 +5,7 @@ Decision: we carry Ghostty patches in a fork (`github.com/tstapler/ghostty`, fro
 ## Status (2026-11-08)
 
 - The fork exists (`gh repo view tstapler/ghostty` reports `isFork: true`).
-- `ssq/main` is prepared in a local clone at `~/code/github.com/tstapler/ghostty-ssq-staging`: upstream `5714ed07a1012573261b7b7e3ed2add9c1504496` plus four commits (the three patches in `third_party/ghostty-patches/`, then `README-SSQ.md`), tagged `ssq.1`, tip `490dbd0afcfe090839e63d94d9e7a0511c94fb6e`. It is **not pushed**: the push was denied by the sandbox's permission classifier, so the owner must run the push below. Until then the fork's `ssq/main` does not exist and `MODULE.bazel` still points at upstream.
+- `ssq/main` is prepared in a local clone at `~/code/github.com/tstapler/ghostty-ssq-staging`: upstream `5714ed07a1012573261b7b7e3ed2add9c1504496` plus four commits (the three patches in `third_party/ghostty-patches/`, then `README-SSQ.md`), tagged `ssq.1`, tip `38c7055f6ae361919d6f86c8521a0b9546783c25` (0002 was compile-fixed after the first draft). It is **not pushed**: the push was denied twice by the sandbox's permission classifier, so the owner must run the push below. Until then the fork's `ssq/main` does not exist and `MODULE.bazel` still points at upstream.
 
 ## Push the prepared branch (owner)
 

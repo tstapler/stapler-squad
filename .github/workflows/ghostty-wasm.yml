@@ -61,14 +61,19 @@ jobs:
 
       - name: Build (and verify against the recorded sha256 once one is recorded)
         run: |
+          set -o pipefail  # without it `| tee` hid a failed build behind tee's exit status
           export BAZEL_FLAGS="--disk_cache=$HOME/.cache/bazel-disk --repository_cache=$HOME/.cache/bazel-repo"
           flags=(--test)
           if grep -qv '^#' scripts/ghostty-wasm.sha256; then flags+=(--verify); fi
-          ./scripts/build-ghostty-wasm.sh "${flags[@]}" | tee "$RUNNER_TEMP/build.log"
+          ./scripts/build-ghostty-wasm.sh "${flags[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Job summary (wasm size + sha256, Zig test count)
+        if: ${{ !cancelled() }}
+        run: |
           {
             echo '### ghostty-vt.wasm'
             echo '```'
-            grep -E 'sha256=|recorded|Matches' "$RUNNER_TEMP/build.log" || true
+            grep -E "sha256=|recorded|Matches|tests, all passed|ran no tests|error:" "$RUNNER_TEMP/build.log" || echo "no wasm/test lines: the build did not get that far"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -77,4 +82,5 @@ jobs:
         with:
           name: ghostty-vt-wasm
           path: web-app/public/ghostty-vt.*.wasm
+          if-no-files-found: error
           retention-days: 14

@@ -44,11 +44,9 @@ The wasm is not committed. CI builds it on PRs that touch the pin, patches or sc
 | 0002 | `0002-decstr-soft-reset.patch` | DECSTR: `soft_reset` stream action, `CSI ! p` dispatch, `Terminal.softReset` + Zig test | Upstream main has `Terminal.softReset`; this is a backport |
 | 0003 | `0003-scrub-freed-pages-on-wasm.patch` | Zero page memory on free (wasm only) so recycled memory cannot ghost into a new terminal | Candidate to upstream; not yet proposed |
 
-## What is not verified
+## Verification
 
-- No Zig has been executed in this work (the permission classifier denied running the downloaded binary), so 0002's Zig test and 0003 are uncompiled. 0002 was written from reading source (the #1490 runbook says the same); expect to fix field-type errors first.
-- 0003 zeroes in `PageList.deinit` and `Page.deinit`. Whether those two sites cover every path that recycles page memory on wasm is INFERRED from reading `PageList.zig` and `page.zig` at the pin; `ghosttyFreedMemory.test.ts` from #1489 is the check once a wasm exists.
-- The reproducibility claim (same inputs give the same sha256) is untested until a second build is compared against the first.
+Results and their evidence are in ADR-039 (Verification status). In short: the Zig `softReset` test passes and the wasm builds reproducibly in a Linux container, and the differential harness passes against it with native DECSTR and no stale-cell leak. Zig 0.15.2 cannot build on macOS 26, so use CI or a Linux container locally. Still unconfirmed: the Bazel rule on x86_64 CI producing the same sha256 as the aarch64 container, and whether 0003's two zeroing sites cover every page-recycling path (the leak test passes, which is evidence, not proof).
 
 ## Stage B (own wrapper) and the newer-Ghostty path
 

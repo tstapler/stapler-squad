@@ -10,6 +10,8 @@ make test-ghostty-wasm       # same, but first builds //third_party/ghostty:soft
 make verify-ghostty-wasm     # CI mode: fails unless the wasm sha256 equals scripts/ghostty-wasm.sha256
 ```
 
+**macOS 26 caveat:** Zig 0.15.2 fails to link its build runner there; build on Linux (CI) or in a `linux/arm64` container (mount the sha256-pinned Zig linux tarball and run the `zig build` commands from `third_party/ghostty/ghostty_wasm.bzl`).
+
 Needs `bazel` (bazelisk; `.bazelversion` pins 9.3.2), system `patch`, and network (Bazel downloads the sha256-pinned Zig and Ghostty archives; `zig build` fetches Ghostty's own Zig dependencies on first build). Bazel fetches and verifies Zig itself, so there is no manual download. Outputs are `web-app/public/ghostty-vt.<sha12>.wasm` and `web-app/public/ghostty-vt.json` (gitignored). A remote or disk cache is opt-in: `BAZEL_FLAGS="--remote_cache=grpcs://<host>" make build-ghostty-wasm`, or put it in the gitignored `.bazelrc.user`.
 
 Analysis-only check (downloads and verifies the inputs, runs no Zig): `bazel build --nobuild //third_party/ghostty:ghostty_vt_wasm //third_party/ghostty:softreset_test`.
@@ -24,7 +26,7 @@ Nothing to configure: `GhosttyTerminal.tsx` fetches `/ghostty-vt.json` and, if p
 
 ## Check it (differential harness)
 
-With PR #1489's harness (`web-app/src/lib/terminal/__tests__/differential/`), load the built file with `Ghostty.load("build/ghostty-wasm/ghostty-vt.wasm")`, disable the adapter's DECSTR rewriter, and confirm the DECSTR streams match xterm.js and the log has no `unimplemented CSI p`; `ghosttyFreedMemory.test.ts` covers patch 0003. The `it.failing` cases turn red when the behavior is fixed, which is the signal to flip them.
+With PR #1489's harness (`web-app/src/lib/terminal/__tests__/differential/`), make `loadGhostty()` read `GHOSTTY_WASM_PATH` (instantiate the file with `WebAssembly.instantiate` and `new Ghostty(instance)`, because `Ghostty.load(path)` falls back to `fetch` under jest) and turn the adapter's DECSTR rewriter off when it is set, then run `GHOSTTY_WASM_PATH=<built.wasm> bunx jest --testPathPatterns=differential` and confirm the DECSTR streams match xterm.js and the log has no `unimplemented CSI p`; `ghosttyFreedMemory.test.ts` covers patch 0003. The `it.failing` cases turn red when the behavior is fixed, which is the signal to flip them.
 
 ## Roll back
 

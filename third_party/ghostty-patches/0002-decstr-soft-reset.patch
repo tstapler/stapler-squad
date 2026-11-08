@@ -53,7 +53,7 @@
              .prompt_start => {
 --- a/src/terminal/Terminal.zig
 +++ b/src/terminal/Terminal.zig
-@@ -2817,6 +2817,49 @@
+@@ -2817,6 +2817,48 @@
  
      // Always mark dirty so we redraw everything
      self.flags.dirty.clear = true;
@@ -76,8 +76,7 @@
 +        .keypad_keys,
 +        .enable_left_and_right_margin,
 +    };
-+    var defaults: modespkg.ModeState = .{ .default = self.default_modes };
-+    defaults.reset();
++    const defaults: modespkg.ModeState = .{ .values = self.modes.default };
 +    for (reset_modes) |mode| self.modes.set(mode, defaults.get(mode));
 +
 +    self.scrolling_region = .{
@@ -103,7 +102,7 @@
  }
  
  /// Returns true if the point is dirty, used for testing.
-@@ -10904,6 +10947,37 @@
+@@ -10904,6 +10946,37 @@
      }
  
      try testing.expectEqual(@as(style.Id, 0), t.screens.active.cursor.style_id);

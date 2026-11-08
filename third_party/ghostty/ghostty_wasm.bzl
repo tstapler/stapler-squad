@@ -24,8 +24,14 @@ case "$mode" in
     cp "$tmp/prefix/bin/ghostty-vt.wasm" "$out"
     ;;
   test)
-    "$zig" build test-lib-vt "-Dtest-filter=$5" $common
-    echo "zig test-lib-vt -Dtest-filter=$5 passed" > "$out"
+    # A filter that matches nothing still "passes", so require the filter to add tests over a
+    # baseline run that matches nothing (the second run reuses the compile cache).
+    count() { "$zig" build test-lib-vt "-Dtest-filter=$1" $common --summary all 2>&1 | sed -n 's/.*steps succeeded; [0-9]*\\/\\([0-9]*\\) tests passed.*/\\1/p' | head -n1; }
+    base="$(count NO_SUCH_TEST_NAME_EVER)"
+    with="$(count "$5")"
+    echo "baseline=$base with_filter=$with" >&2
+    [ -n "$base" ] && [ -n "$with" ] && [ "$with" -gt "$base" ] || { echo "filter '$5' ran no tests" >&2; exit 1; }
+    echo "zig test-lib-vt -Dtest-filter=$5 ran $((with - base)) tests, all passed" > "$out"
     ;;
   *) echo "unknown mode $mode" >&2; exit 1 ;;
 esac

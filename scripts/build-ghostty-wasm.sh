@@ -68,6 +68,9 @@ cd "$ROOT"
 if [[ "$RUN_TESTS" == 1 ]]; then
   log "bazel build $TEST_TARGET (zig build test-lib-vt -Dtest-filter=softReset)"
   bazel build "${FLAGS[@]}" "$TEST_TARGET"
+  TEST_LOG="$(bazel cquery "${FLAGS[@]}" --output=files "$TEST_TARGET" 2>/dev/null | head -n1)"
+  [[ -f "$ROOT/$TEST_LOG" ]] || err "Bazel did not produce the test log"
+  log "$(cat "$ROOT/$TEST_LOG")"
 fi
 
 log "bazel build $TARGET"
