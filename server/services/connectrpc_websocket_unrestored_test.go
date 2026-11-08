@@ -116,3 +116,30 @@ func TestStreamPaths_should_RestoreUnrestoredTymuxInstance_When_StoredSessionIsL
 		require.Equal(t, int32(1), streamer.startControlModeCalls.Load())
 	})
 }
+
+// A boot-loaded Active tymux Instance is not started until something starts it. The lazy restore
+// on attach must leave it started, or input, resize and scroll-forward are all refused with
+// "cannot send input to instance that has not been started" while the pane still renders.
+func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreSucceeds(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("ensureHubBackendAlive", func(t *testing.T) {
+		pm := &unrestoredTymuxPM{}
+		inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-hub", pm)
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.True(t, alive, "a restore that attached a pane is alive; the started gate must not veto it")
+		require.True(t, inst.Started(), "attach must leave the restored instance started so input is accepted")
+	})
+
+	t.Run("ensureControlModeStarted", func(t *testing.T) {
+		pm := &unrestoredTymuxPM{}
+		inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-control", pm)
+
+		require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
+
+		require.True(t, inst.Started(), "attach must leave the restored instance started so input is accepted")
+	})
+}
