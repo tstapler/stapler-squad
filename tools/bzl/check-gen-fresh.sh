@@ -8,6 +8,7 @@ command -v bazel >/dev/null || bazel() { BAZEL_REAL=${BAZEL_REAL:-$(command -v b
 bazel build //proto/session/v1:gen_go //tools/bzl/ent:ent_gen >/dev/null 2>"${TMPDIR:-/tmp}/check-gen-fresh.$$.log" \
   || { tail -5 "${TMPDIR:-/tmp}/check-gen-fresh.$$.log" >&2; rm -f "${TMPDIR:-/tmp}/check-gen-fresh.$$.log"; echo "check-gen-fresh: bazel build failed" >&2; exit 2; }
 rm -f "${TMPDIR:-/tmp}/check-gen-fresh.$$.log"
+# shellcheck disable=SC2015  # the || arm reports an unresolvable bazel-bin, which is the intended failure for either test
 bin=$(bazel info bazel-bin 2>/dev/null) && [ -d "$bin" ] || { echo "check-gen-fresh: cannot resolve bazel-bin" >&2; exit 2; }
 
 tree_hash() { # <dir> <find args...>: sha256 over sorted "path sha256" lines

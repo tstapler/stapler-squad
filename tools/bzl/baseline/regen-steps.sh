@@ -34,6 +34,7 @@ done
 
 # shellcheck disable=SC2206
 files=( $GLOB )
+# shellcheck disable=SC2015  # the || arm only handles "no transcripts"; the exit 0 inside it cannot run when A is true
 ((${#files[@]} > 0)) && [[ -e "${files[0]}" ]] || { echo '{"regen_steps_per_session_median":"UNMEASURED: no transcripts found"}'; exit 0; }
 mapfile -t sorted < <(ls -t "${files[@]}")
 

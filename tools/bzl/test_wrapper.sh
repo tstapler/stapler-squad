@@ -52,6 +52,7 @@ export PATH="$bin:$PATH"
 # shellcheck disable=SC2329
 cleanup() {
   # TMUX_TMPDIR is private (set above), so this reaches only this process's tmux servers.
+  # shellcheck disable=SC2317  # runs from the EXIT trap
   case "$tmux_dir" in /tmp/ssq-tmux.*) tmux kill-server >/dev/null 2>&1 || true; rm -rf "$tmux_dir" ;; esac
 }
 child=""

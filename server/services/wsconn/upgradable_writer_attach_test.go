@@ -104,14 +104,3 @@ func TestAttachUpgradableSubscriber_should_UpgradeOnNextFrame_When_NoServiceBus(
 	got := hub.NegotiatedSize()
 	require.Equal(t, [2]int{100, 30}, [2]int{got.Cols(), got.Rows()})
 }
-
-func drain(ch <-chan *events.Event) (n int) {
-	for {
-		select {
-		case <-ch:
-			n++
-		default:
-			return n
-		}
-	}
-}

@@ -28,6 +28,7 @@ disk_kb=$(du_kb "$disk_cache"); disk_kb=${disk_kb:-0}
 
 pct=""
 for p in "$cache_dir" "$remote_dir"; do
+  # shellcheck disable=SC2015  # `continue` is the else branch; the && chain has no side effects
   [ -n "$p" ] && [ -e "$p" ] || continue
   v=$(df_pct "$p"); v=${v:-0}
   [ -z "$pct" ] && pct=$v

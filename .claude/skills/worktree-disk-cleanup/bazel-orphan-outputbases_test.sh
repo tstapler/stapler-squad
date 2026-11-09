@@ -6,6 +6,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 script="$here/bazel-orphan-outputbases.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/orphan-test.XXXXXX")
 pids=""
+# shellcheck disable=SC2317  # cleanup runs from the EXIT trap
 cleanup() { for p in $pids; do kill "$p" 2>/dev/null; done; chmod -R u+w "$T" 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
 failures=0

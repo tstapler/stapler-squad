@@ -95,6 +95,9 @@ run_case "unreachable remote fails with CI=true" \
 
 # --- Task 3.3d: MODULE.bazel / PIN / checksums / gitlink cross-checks (offline: remote unreachable). ---
 repo_root="$(cd "$here/../.." && pwd)"
+# Derived from the repo so a TYMUX_VERSION bump does not stale the mutations below.
+daemon_tag="$(sed -nE 's/^TYMUX_VERSION \?= (v[^[:space:]]+).*/\1/p' "$repo_root/Makefile" | head -1)"
+first_sha_prefix="$(awk '/name = "tymuxd_/ { f = 1 } f && /sha256 = "/ { split($0, a, "\""); print substr(a[2], 1, 8); exit }' "$repo_root/MODULE.bazel")"
 
 # make_pin_tree <name>: a git repo with the real MODULE.bazel, PIN, checksums, Makefile pin line and go.mod
 # client pin, plus a third_party/tmux gitlink equal to the PIN commit. Callers then mutate one file.
@@ -122,7 +125,7 @@ run_case "pins consistent across MODULE.bazel, PIN, checksums and gitlink" \
   "$(make_pin_tree pins_ok)" 0 "skipped, cannot reach" "$unreachable"
 
 t="$(make_pin_tree mod_tymuxd_sha)"
-sed -i '0,/sha256 = "2f8250dd/s//sha256 = "00000000/' "$t/MODULE.bazel"; amend "$t"
+sed -i "0,/sha256 = \"$first_sha_prefix/s//sha256 = \"00000000/" "$t/MODULE.bazel"; amend "$t"
 run_case "mutated tymuxd sha256 in MODULE.bazel fails" "$t" 1 "differs from" "$unreachable"
 
 t="$(make_pin_tree mod_tmux_sha)"
@@ -138,11 +141,11 @@ sed -i 's/^commit=7f2a35ad/commit=00000000/' "$t/tools/bzl/tmux/PIN"; amend "$t"
 run_case "PIN commit differing from the gitlink fails" "$t" 1 "gitlink" "$unreachable"
 
 t="$(make_pin_tree checksums_line)"
-sed -i '/^v1.12.0 x86_64-unknown-linux-musl/d' "$t/scripts/tymuxd-checksums.txt"; amend "$t"
+sed -i "/^$daemon_tag x86_64-unknown-linux-musl/d" "$t/scripts/tymuxd-checksums.txt"; amend "$t"
 run_case "missing checksums line for a MODULE.bazel tymuxd repo fails" "$t" 1 "has no" "$unreachable"
 
 t="$(make_pin_tree url_tag)"
-sed -i 's#download/v1.12.0/tymux-aarch64-apple#download/v1.11.0/tymux-aarch64-apple#' "$t/MODULE.bazel"; amend "$t"
+sed -i "s#download/$daemon_tag/tymux-aarch64-apple#download/v0.0.1/tymux-aarch64-apple#" "$t/MODULE.bazel"; amend "$t"
 run_case "MODULE.bazel url for a different release fails" "$t" 1 "is not release" "$unreachable"
 
 echo "$((cases - failures))/$cases passed"
