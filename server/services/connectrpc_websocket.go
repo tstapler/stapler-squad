@@ -2158,7 +2158,13 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
 func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
-	if handled, err := instance.PrepareRetainedTerminalView(context.Background()); handled {
+	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID)
+}
+
+// ensureHubBackendAliveCtx is ensureHubBackendAlive bounded by the connection: a client that
+// disconnects mid-attach stops waiting on the daemon and frees its attach slot.
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string) (processAlive bool, err error) {
+	if handled, err := instance.PrepareRetainedTerminalView(ctx); handled {
 		return false, err // Render readiness does not imply process/input readiness.
 	}
 	if instance.IsBackendProcessAlive() {
@@ -2436,7 +2442,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return err
 	}
 
-	processAlive, err := h.ensureHubBackendAlive(instance, sessionID)
+	processAlive, err := gatedAttach(connCtx, attachLimiter, stream.latency.labels(), tmuxSessionName, func() (bool, error) {
+		return h.ensureHubBackendAliveCtx(connCtx, instance, sessionID)
+	})
 	if err != nil {
 		return err
 	}
@@ -2513,6 +2521,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	})
 	defer slowLane.close()
 	var resizes latestResize
+	// Resizes run on the slow lane, so a keystroke typed after one must be ordered behind the
+	// pane resize (not behind its repaint capture) by the gate.
+	inputGate := newInputOrderGate(func(data []byte) {
+		writer := upWriter.Writer()
+		if writer == nil {
+			return
+		}
+		keystrokeDelivery{
+			instance:    instance,
+			latency:     &stream.latency,
+			bookkeeper:  bookkeeper,
+			logPrefix:   "[streamViaHub]",
+			tmuxSession: tmuxSessionName,
+			tmuxSocket:  snap.TmuxServerSocket,
+		}.deliver(writer, data)
+	})
 	runInputReadLoop(inputReadLoopParams{
 		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
@@ -2522,8 +2546,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		errChan:         errChan,
 		sessionID:       sessionID,
 		onInput: func(data []byte) {
-			writer := upWriter.Writer()
-			if writer == nil {
+			if upWriter.Writer() == nil {
 				return
 			}
 			if !instance.Permissions.CanSendCommand {
@@ -2531,14 +2554,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				return
 			}
 			hub.NoteInteractive(subscriberID)
-			keystrokeDelivery{
-				instance:    instance,
-				latency:     &stream.latency,
-				bookkeeper:  bookkeeper,
-				logPrefix:   "[streamViaHub]",
-				tmuxSession: tmuxSessionName,
-				tmuxSocket:  snap.TmuxServerSocket,
-			}.deliver(writer, data)
+			inputGate.input(data)
 		},
 		onResize: func(cols, rows int) {
 			writer := upWriter.Writer()
@@ -2549,14 +2565,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
 				return
 			}
-			resizes.push(slowLane, cols, rows, func(cols, rows int) {
+			resizes.pushOrdered(slowLane, inputGate, cols, rows, func(cols, rows int, paneResized func()) {
 				// Re-check: the slow lane runs after the up-writer may have been closed.
 				if writer := upWriter.Writer(); writer == nil {
 					return
 				}
-				if size, err := streamhub.NewTerminalSize(cols, rows); err == nil {
-					hub.RequestResize(connCtx, subscriberID, size)
+				size, err := streamhub.NewTerminalSize(cols, rows)
+				if err != nil {
+					return
 				}
+				hub.RequestResizeNotify(connCtx, subscriberID, size, paneResized)
 			})
 		},
 		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {

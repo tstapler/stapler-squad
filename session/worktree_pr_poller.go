@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -306,6 +307,9 @@ func (p *WorktreePRPoller) pollLoop() {
 		case <-p.source.ScanDone():
 			p.pollWorktrees(p.source.GetWorktrees(), pollTriggerScan)
 		case <-ticker.C:
+			if qos.Default.Defer("worktree_pr_poller", qos.BackgroundMaxDeferral) {
+				continue
+			}
 			p.pollWorktrees(p.source.GetWorktrees(), pollTriggerTick)
 		}
 	}

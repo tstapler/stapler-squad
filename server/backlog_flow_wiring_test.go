@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,7 +28,9 @@ func TestFlowMCPOptions_should_ShareRpcServiceInstance_When_FlowServiceWired(t *
 
 // Serial: BuildDependencies sets the isolated state dir and wires real subsystems.
 func TestBuildDependencies_should_ServeGetFlowSummaryOverApi_When_FlowServiceWired(t *testing.T) {
-	envtest.NewIsolatedStateDir(t)
+	dir := envtest.NewIsolatedStateDir(t)
+	// The flow service refuses calls while the backlog feature flag (default off) is disabled.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"feature_flags": {"backlog": true}}`), 0o644))
 
 	deps, err := BuildDependencies()
 	require.NoError(t, err)

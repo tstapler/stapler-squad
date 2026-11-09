@@ -41,6 +41,8 @@ const (
 	StageTTFPConnect    = "ttfp_connect"       // browser: terminal mounted -> stream open
 	StageTTFPFirstData  = "ttfp_first_data"    // browser: terminal mounted -> first output frame
 	StageTTFPFirstPaint = "ttfp_first_paint"   // browser: terminal mounted -> first frame painted
+	StageAttachQueue    = "attach_queue"       // server: waiting for an attach slot (reload thundering herd)
+	StageAttachOpen     = "attach_open"        // server: backend alive/adopt/restore for one terminal attach
 )
 
 // Decomposition stages: where one slow capture_pane / send / frame spent its time. Backend is
@@ -70,7 +72,7 @@ func NormalizeStage(s string) string {
 	switch s {
 	case StageInputTotal, StageInputSend, StageInputBookkeep, StageBookkeepFlush, StageOutputSend,
 		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint, StageResyncQueue,
-		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint,
+		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint, StageAttachQueue, StageAttachOpen,
 		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
 		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
 		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag:

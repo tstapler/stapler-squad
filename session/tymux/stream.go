@@ -54,7 +54,7 @@ func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, pan
 	ctx, cancel := context.WithCancel(context.Background())
 	stopCancel := context.AfterFunc(parent, cancel)
 	defer stopCancel()
-	timer := time.AfterFunc(lifecycleRPCTimeout, cancel)
+	timer := time.AfterFunc(s.viewRPCTimeout(), cancel)
 	defer timer.Stop()
 	stream := s.transport.Attach(ctx)
 	if stream == nil {

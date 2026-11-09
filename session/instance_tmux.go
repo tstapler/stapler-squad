@@ -15,6 +15,7 @@ import (
 	ptyPkg "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
@@ -1572,6 +1573,16 @@ func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSn
 		i.SetAltScreenActiveBootstrap(altScreen)
 	}
 	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
+}
+
+// SetPaneActivity forwards the hub's per-session priority class to the backend daemon when it
+// takes hints; otherwise it is a no-op. Satisfies streamhub.ActivityHinter.
+func (i *Instance) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
+	h, ok := capabilityOf[PaneActivityHinter](i.pm())
+	if !ok {
+		return nil
+	}
+	return h.SetPaneActivity(ctx, activity)
 }
 
 // SupportsInStreamResync reports whether ResyncInStream can splice by sequence number right now.
