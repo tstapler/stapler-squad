@@ -379,7 +379,7 @@ func closeCodeLabel(s string) string {
 // clientTermStages are the terminal stages a browser may report; anything else is rejected so a
 // client cannot write server-side stages (input_total etc.) into the shared rolling windows.
 var clientTermStages = map[string]bool{
-	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true,
+	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true, termlat.StageResyncQueue: true,
 	termlat.StageTTFPConnect: true, termlat.StageTTFPFirstData: true, termlat.StageTTFPFirstPaint: true,
 	termlat.StageInputQueue: true, termlat.StageEchoRender: true, termlat.StageWSBufferedKiB: true, termlat.StageEventLoopLag: true,
 }

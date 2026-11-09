@@ -110,7 +110,16 @@ count resyncs (each costs the server a full-pane capture):
 | `visibility` | the browser sent a resync on tab/window focus or visibility |
 | `skipped_fresh` | focus/visibility, but the size is unchanged and the last sync is under 60 s old (`lib/terminal/resyncPolicy.ts`) |
 | `skipped_unavailable` | focus/visibility, but the terminal could not be measured |
+| `deferred_hidden` | focus/visibility reached a pane that was hidden: it is marked stale and resyncs when shown |
+| `stale_shown` | a stale pane was shown and resynced (subject to the same skip rules) |
+| `skipped_output` | focus/visibility, but output arrived within 5 s on a connected stream |
+| `watchdog_retry` | a resync got no reply within the stall budget and was re-sent once |
+| `watchdog_disconnect` | the retry also stalled and the stream was dropped and re-attached (spaced 500 ms apart tab-wide) |
 | `server_request` | the server received a mid-stream CurrentPaneRequest (resize, visibility, or manual) |
 | `server_stale_dims` | the same, flagged by the client as a same-size visibility resync: the avoidable kind |
 
 Browser reasons arrive as `cm.term_resync` events with `backend="unknown"`; server reasons carry the real backend.
+
+At most two resyncs run in flight across the tab (`lib/terminal/resyncGate.ts`); the rest wait, foreground first, with
+up to 200 ms of jitter. `resync_queue_depth` (a count) is the queue length each time a resync had to wait. The stall
+budget is the larger of 10 s and 3x the recent p95 resync round trip for that terminal.
