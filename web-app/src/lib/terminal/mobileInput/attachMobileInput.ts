@@ -231,7 +231,7 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
     },
     bindTapTarget(surface) {
       if (disposed || surface === el || el.contains(surface)) return () => undefined;
-      const unbind = bindTapTarget(surface, () => controller.focus(), clock);
+      const unbind = bindTapTarget(surface, () => controller.focus(), clock, () => doc.activeElement === el);
       tapUnbinds.add(unbind);
       return () => {
         unbind();

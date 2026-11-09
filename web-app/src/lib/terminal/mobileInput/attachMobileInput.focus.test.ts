@@ -155,6 +155,20 @@ describe("bindTapTarget", () => {
     expect(focusSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("bindTapTarget_should_RefocusLayer_When_RendererTakesFocusAfterTouchendWithinDedupeWindow", () => {
+    const { c, surface } = setup();
+    const rendererTextarea = document.createElement("textarea");
+    surface.appendChild(rendererTextarea);
+    c.bindTapTarget(surface);
+    surface.dispatchEvent(pointer("pointerup", { pointerType: "touch" }));
+    expect(document.activeElement).toBe(c.element);
+    // The compat mousedown after touchend makes the renderer focus its own helper textarea.
+    rendererTextarea.focus();
+    expect(document.activeElement).toBe(rendererTextarea);
+    surface.click();
+    expect(document.activeElement).toBe(c.element);
+  });
+
   it("bindTapTarget_should_FocusLayerOnGhosttyCanvasContainer_When_TouchPointerupLands", () => {
     const { c, surface } = setup();
     const canvas = document.createElement("canvas");

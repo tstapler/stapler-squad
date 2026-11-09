@@ -19,7 +19,13 @@ function touchPoint(e: Event): Point {
   return t ? { x: t.clientX, y: t.clientY } : { x: 0, y: 0 };
 }
 
-export function bindTapTarget(surface: HTMLElement, focus: () => void, clock: MobileInputClock): () => void {
+export function bindTapTarget(
+  surface: HTMLElement,
+  focus: () => void,
+  clock: MobileInputClock,
+  /** When given, a trigger inside the dedupe window still refocuses if the layer lost focus (the renderer's own mousedown takes it after touchend). */
+  hasFocus?: () => boolean,
+): () => void {
   let start: Point | null = null;
   let lastFocusAt: number | null = null;
 
@@ -27,7 +33,7 @@ export function bindTapTarget(surface: HTMLElement, focus: () => void, clock: Mo
 
   const tap = () => {
     const now = clock.now();
-    if (lastFocusAt !== null && now - lastFocusAt < TAP_DEDUPE_MS) return;
+    if (lastFocusAt !== null && now - lastFocusAt < TAP_DEDUPE_MS && hasFocus?.() !== false) return;
     lastFocusAt = now;
     focus();
   };
