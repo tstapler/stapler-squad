@@ -42,6 +42,10 @@ jobs:
       # The make path must not silently depend on Bazel.
       - name: Assert no Bazel on PATH
         run: |
+          # The ubuntu-latest image ships bazelisk; remove it so the job proves make works without it.
+          for b in bazel bazelisk; do
+            while p=$(command -v "$b" 2>/dev/null); do sudo rm -f "$p" || break; hash -r; done
+          done
           if command -v bazel >/dev/null 2>&1 || command -v bazelisk >/dev/null 2>&1; then
             echo "::error::bazel or bazelisk is installed on this runner; the make-only job must run without it"
             exit 1
