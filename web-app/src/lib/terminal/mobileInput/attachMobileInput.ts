@@ -9,7 +9,6 @@ import { createInputElement } from "./inputElement";
 import { TextareaSource } from "./inputSource";
 import type { Modifiers } from "./keymap";
 import { supportsBeforeInput } from "./normalize";
-import { physicalKeyBytes } from "./physicalKeys";
 import { DEFAULT_POLICY, DEFERRED_INDICATOR_MS, resetValue, WATCHDOG_TICK_MS, type MobileInputPolicy } from "./policy";
 import { shouldAttachMobileInput } from "./platform";
 import { bindTapTarget } from "./tapTarget";
@@ -185,10 +184,7 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
 
   function mapPhysicalKey(e: KeyboardEvent): boolean {
     if (e.keyCode === 229 || e.isComposing || engine.state.kind === "composing") return false;
-    const bytes = physicalKeyBytes(e);
-    if (bytes === null) return false;
-    engine.emitRaw(bytes);
-    return true;
+    return engine.emitPhysical(e);
   }
 
   const handle = (event: MobileInputEvent, raw: Event | null): boolean => {

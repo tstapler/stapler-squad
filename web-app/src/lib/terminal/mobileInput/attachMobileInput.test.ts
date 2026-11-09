@@ -262,6 +262,40 @@ describe("attachMobileInput event execution", () => {
     expect(r.modifiers.consumed).toBe(1);
   });
 
+  it("attach_should_SendCtrlCAndConsume_When_ArmedCtrlAndGboardStartsWordWithCompositionC", () => {
+    const r = make();
+    r.modifiers.value = { ctrl: true, alt: false, shift: false };
+    composition(r.ta, "compositionstart");
+    beforeinput(r.ta, "insertCompositionText", "c", `${resetValue(DEFAULT_POLICY)}c`);
+    composition(r.ta, "compositionupdate", "c");
+    inputEvent(r.ta, `${resetValue(DEFAULT_POLICY)}c`);
+    composition(r.ta, "compositionend", "c");
+    expect(r.sink.handed).toEqual(["\x03"]);
+    expect(r.modifiers.consumed).toBe(1);
+    expect(r.ta.value).toBe(resetValue(DEFAULT_POLICY));
+    expect(r.anomalies).toEqual([]);
+    beforeinput(r.ta, "insertText", " ");
+    expect(r.sink.handed).toEqual(["\x03", " "]);
+    expect(r.modifiers.consumed).toBe(1);
+  });
+
+  it("attach_should_ConsumeArmedCtrlAndNotLeakOntoLaterKey_When_HardwareTabPressed", () => {
+    const r = make();
+    r.modifiers.value = { ctrl: true, alt: false, shift: false };
+    const e = key(r.ta, "keydown", { key: "Tab", keyCode: 9 });
+    expect(e.defaultPrevented).toBe(true);
+    expect(r.modifiers.consumed).toBe(1);
+    beforeinput(r.ta, "insertText", "c");
+    expect(r.sink.handed[r.sink.handed.length - 1]).toBe("c");
+  });
+
+  it("attach_should_NotConsumeArmedModifier_When_PhysicalKeyIsUnmapped", () => {
+    const r = make();
+    r.modifiers.value = { ctrl: true, alt: false, shift: false };
+    key(r.ta, "keydown", { key: "x", keyCode: 88 });
+    expect(r.modifiers.consumed).toBe(0);
+  });
+
   it("attach_should_FlattenMultilinePaste_When_BracketedPasteOff", () => {
     const r = make();
     beforeinput(r.ta, "insertFromPaste", "a\nb");

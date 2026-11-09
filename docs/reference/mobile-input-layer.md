@@ -115,6 +115,10 @@ Replay fixtures (`mobileInput/__fixtures__/`, schema in `fixtureSchema.ts`) have
 
 The layer cannot detect an echo-off prompt, so characters typed at a password prompt travel through the same path as any other text. The soft keyboard's suggestion strip, autocorrect and clipboard history can retain what is typed, and TalkBack reads typed characters aloud through the polite live region (the same limitation as ADR-008). Do not type secrets on the phone through this layer; use a hardware keyboard or paste from a password manager.
 
+## Known limitations
+
+Hardware arrows, Home and End always send CSI sequences (`ESC [ A`), never the SS3 form (`ESC O A`) that application-cursor mode (DECCKM) expects: the layer does not read that renderer mode. Armed sticky modifiers are applied to, and consumed by, mapped physical keys (Tab, Esc, arrows, navigation) so they cannot leak onto a later key.
+
 ## Related
 
 - Debug procedure: `docs/how-to/debug-phone-typing.md`

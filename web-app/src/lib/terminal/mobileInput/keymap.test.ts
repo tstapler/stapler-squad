@@ -119,6 +119,61 @@ describe("keymap modifiers", () => {
   });
 });
 
+describe("keymap armed modifier on a fresh composition (Gboard suggestions on)", () => {
+  const fresh = (kind: "idle" | "composingEmpty") => (kind === "idle" ? idle() : composing("", ""));
+
+  it.each(["idle", "composingEmpty"] as const)(
+    "keymap_should_EmitCtrlCAndConsume_When_ArmedCtrlAndFirstEventIsCompositionC_from_%s",
+    (kind) => {
+      const h = harness(false, { ctrl: true });
+      const r = step(h, fresh(kind), ev.beforeinput("insertCompositionText", "c"));
+      expect(r.bytes).toEqual(["\x03"]);
+      expect(h.consumed()).toBe(1);
+      expect(r.state.kind).toBe("idle");
+      expect(r.commands.some((c) => c.kind === "ResetTextarea")).toBe(true);
+    },
+  );
+
+  it("keymap_should_NotTurnFollowingSpaceIntoCtrlSpace_When_CtrlConsumedByComposedLetter", () => {
+    const h = harness(false, { ctrl: true });
+    const first = step(h, composing("", ""), ev.beforeinput("insertCompositionText", "c"));
+    const end = step(h, first.state, ev.compositionend("c"));
+    expect(end.bytes).toEqual([]);
+    const space = step(h, end.state, ev.beforeinput("insertText", " "));
+    expect(space.bytes).toEqual([" "]);
+    expect(h.consumed()).toBe(1);
+  });
+
+  it("keymap_should_PrefixEscAndConsume_When_ArmedAltAndComposedLetter", () => {
+    const h = harness(false, { alt: true });
+    const r = step(h, composing("", ""), ev.beforeinput("insertCompositionText", "b"));
+    expect(r.bytes).toEqual(["\x1bb"]);
+    expect(h.consumed()).toBe(1);
+  });
+
+  it("keymap_should_UppercaseAndConsume_When_ArmedShiftAndComposedLetter", () => {
+    const h = harness(false, { shift: true });
+    const r = step(h, composing("", ""), ev.beforeinput("insertCompositionText", "a"));
+    expect(r.bytes).toEqual(["A"]);
+    expect(h.consumed()).toBe(1);
+  });
+
+  it("keymap_should_ConsumeWithoutMapping_When_ArmedCtrlAndMultiGraphemeFreshComposition", () => {
+    const h = harness(false, { ctrl: true });
+    const r = step(h, composing("", ""), ev.beforeinput("insertCompositionText", "hi"));
+    expect(r.bytes).toEqual(["hi"]);
+    expect(h.consumed()).toBe(1);
+    expect(r.state.kind).toBe("idle");
+  });
+
+  it("keymap_should_KeepLiveComposition_When_NoModifierArmedAndFreshComposition", () => {
+    const h = harness();
+    const r = step(h, composing("", ""), ev.beforeinput("insertCompositionText", "c"));
+    expect(r.state.kind).toBe("composing");
+    expect(h.consumed()).toBe(0);
+  });
+});
+
 describe("keymap word delete policy", () => {
   it("keymap_should_EmitCtrlW_When_WordDeleteStrategyIsCtrlW", () => {
     const h = harness();

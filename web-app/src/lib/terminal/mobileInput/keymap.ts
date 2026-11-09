@@ -1,6 +1,6 @@
 import { ALT_KEY_MAP, CTRL_KEY_MAP, SHIFT_KEY_MAP } from "../modifierKeys";
 import { reduce, utf8Length } from "./composition";
-import type { MobileInputPolicy } from "./policy";
+import { resetValue, type MobileInputPolicy } from "./policy";
 import { graphemes } from "./rewrite";
 import { asTerminalBytes, type InputCommand, type MobileInputEvent, type MobileInputState, type ReduceResult } from "./types";
 
@@ -80,6 +80,35 @@ function reduceAndFlush(state: Composing, event: Beforeinput, policy: MobileInpu
 const isCompositionInput = (e: MobileInputEvent): e is Beforeinput =>
   e.kind === "beforeinput" && (e.inputType === "insertCompositionText" || e.inputType === "insertReplacementText");
 
+/** No composition text sent yet: the state before the first composed character, whether or not compositionstart already arrived. */
+const isFreshComposition = (s: MobileInputState): boolean =>
+  s.kind === "idle" || (s.kind === "composing" && s.mode === "live" && s.region === "" && s.sent === "");
+
+/**
+ * Gboard with suggestions starts every word as `insertCompositionText`; under an armed modifier that
+ * first character is a committed key press. Emits it (mapped when single-grapheme), consumes the
+ * modifier and ends the composition, swallowing the browser's trailing compositionend.
+ */
+function commitFreshComposition(
+  event: Beforeinput,
+  mods: Modifiers,
+  policy: MobileInputPolicy,
+  deps: KeymapDeps,
+): ReduceResult {
+  const data = event.data ?? event.value;
+  const idleAfter: MobileInputState = {
+    kind: "idle",
+    shadow: resetValue(policy),
+    swallow: [{ kind: "compositionend" }],
+    inputExpected: true,
+  };
+  if (!data) return { state: idleAfter, commands: [{ kind: "ResetTextarea" }], preventDefault: false };
+  const bytes = graphemes(data).length === 1 ? mapTypedChar(data, mods) : data;
+  deps.consumeModifiers();
+  const emit: EmitCommand = { kind: "Emit", bytes: asTerminalBytes(bytes), atomic: utf8Length(bytes) < policy.atomicEditMaxBytes };
+  return { state: idleAfter, commands: [emit, { kind: "ResetTextarea" }], preventDefault: false };
+}
+
 /** Applies armed modifiers to the one Emit a non-composing `insertText` produced; null when nothing was typed. */
 function applyTypedModifiers(
   commands: readonly InputCommand[],
@@ -108,6 +137,10 @@ export function reduceWithKeymap(
 ): KeymapResult {
   const mods = deps.getModifiers();
   const armed = anyArmed(mods);
+  if (armed && isFreshComposition(state) && isCompositionInput(event) && event.inputType === "insertCompositionText") {
+    const r = commitFreshComposition(event, mods, policy, deps);
+    return { ...r, flattened: false };
+  }
   const base =
     armed && state.kind === "composing" && isCompositionInput(event)
       ? reduceAndFlush(state, event, policy)

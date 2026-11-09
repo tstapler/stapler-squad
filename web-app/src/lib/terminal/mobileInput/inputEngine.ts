@@ -6,6 +6,7 @@
 import { abandonRegion, demoteToDeferred } from "./composition";
 import { DeliveryLedger } from "./deliveryLedger";
 import { reduceWithKeymap, type KeymapDeps } from "./keymap";
+import { physicalKeyBytes, type PhysicalKey } from "./physicalKeys";
 import { resetValue, type MobileInputPolicy } from "./policy";
 import { graphemes } from "./rewrite";
 import {
@@ -81,6 +82,25 @@ export class InputEngine {
   /** A mapped physical key (Tab, Esc, arrows, Ctrl-x): its own unit outside any composition. */
   emitRaw(bytes: string): void {
     this.send({ kind: "Emit", bytes: asTerminalBytes(bytes), atomic: true }, this.state);
+  }
+
+  /** A physical key through the same modifier choke point as typed text: armed modifiers apply and are consumed only when the key maps. */
+  emitPhysical(k: PhysicalKey): boolean {
+    // Plain letters stay with beforeinput, which applies armed modifiers itself.
+    if (physicalKeyBytes(k) === null) return false;
+    const mods = this.opts.deps.getModifiers();
+    const merged: PhysicalKey = {
+      key: k.key,
+      metaKey: k.metaKey,
+      ctrlKey: k.ctrlKey || mods.ctrl,
+      altKey: k.altKey || mods.alt,
+      shiftKey: k.shiftKey || mods.shift,
+    };
+    const bytes = physicalKeyBytes(merged);
+    if (bytes === null) return false;
+    if (mods.ctrl || mods.alt || mods.shift) this.opts.deps.consumeModifiers();
+    this.emitRaw(bytes);
+    return true;
   }
 
   invalidate(reason: InvalidateReason): void {
