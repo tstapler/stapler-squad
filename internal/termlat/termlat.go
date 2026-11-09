@@ -365,3 +365,17 @@ func (r *Recorder) Alerting() []Stats {
 	}
 	return out
 }
+
+type keystrokeKey struct{}
+
+// WithKeystroke marks ctx as carrying a browser keystroke, so a backend can start its echo
+// clock for user typing only (not agent prompts or scroll forwarding).
+func WithKeystroke(ctx context.Context) context.Context {
+	return context.WithValue(ctx, keystrokeKey{}, true)
+}
+
+// IsKeystroke reports whether ctx was marked by WithKeystroke.
+func IsKeystroke(ctx context.Context) bool {
+	v, _ := ctx.Value(keystrokeKey{}).(bool)
+	return v
+}

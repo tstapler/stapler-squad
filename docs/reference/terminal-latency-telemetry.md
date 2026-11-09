@@ -59,7 +59,7 @@ These split one slow call or frame into the places it can wait. All are in the s
 | `stream_send` | tymux | one Attach stream `Send`; gRPC flow-control stalls land here |
 | `pm_lock_wait` | server | a contended wait for `Instance.pmMu`. An uncontended call records nothing, so the sample count is how often a call met the lock |
 | `echo_daemon` | server (tymux) | browser keystroke handed to the tymux session -> the daemon stamped the first output frame after it. Includes `stream_lock_wait`, `stream_send`, squad -> daemon transit, pty write, app/shell echo and the daemon's send queue. Needs capability `output.sent_at` (daemon v1.17.0+); no samples otherwise |
-| `output_transit` | server (tymux) | daemon stamped the echo frame (the one `echo_daemon` ended on) -> squad handled it: gRPC/HTTP2 transit and the client receive queue. An upper bound (the daemon may pull a frame before flow control releases it) |
+| `output_transit` | server (tymux) | daemon stamped the first frame after a browser keystroke -> squad handled it (recorded even when the gap exceeds the 2 s `echo_daemon` bound): gRPC/HTTP2 transit and the client receive queue. An upper bound (the daemon may pull a frame before flow control releases it) |
 | `input_queue` | browser | keystroke entered the send queue -> handed to the socket |
 | `ws_buffered_kib` | browser | KiB the socket still had buffered when the keystroke was sent, rounded up so any backlog is at least 1 (a count, not ms; the histogram tops out at 5000) |
 | `echo_render` | browser | echo frame arrived -> painted |
@@ -80,7 +80,10 @@ On tymux, `echo_server` splits into `input_bookkeep` (squad pre-write), `echo_da
 daemon, app echo; it contains `stream_lock_wait` and `stream_send`), `output_transit`, `tymux_fanout_wait`, `output_queue_wait` (hub
 batch) and `ws_write_wait` + `ws_write`; the dashboard stacks them. The pieces are an
 approximation: `echo_daemon` and `output_transit` attribute the first stamped frame after a
-keystroke, which under bulk output need not be its echo.
+keystroke, which under bulk output need not be its echo, and a second keystroke typed before the
+first echo arrives replaces the first (as in `echo_server`). Only browser keystrokes start the
+clock; agent prompts and scroll forwarding do not, and a send that fails is forgotten. The daemon
+and squad must share a host: a daemon clock that runs behind inflates both stages by the offset.
 
 ## Dropped frames
 

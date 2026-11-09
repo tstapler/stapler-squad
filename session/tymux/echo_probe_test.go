@@ -91,16 +91,47 @@ func TestEchoProbe_should_LeaveTheKeystrokePendingWhenAStaleFrameArrives(t *test
 	assert.InDelta(t, 20.0, daemon.Max, 0.01)
 }
 
-func TestSendInputViaControlMode_should_StartTheEchoClockButSendKeysShouldNot(t *testing.T) {
+func TestSendInputViaControlMode_should_StartTheEchoClockOnlyForBrowserKeystrokes(t *testing.T) {
 	// sessionWith uses t.Setenv, so this test cannot be parallel.
 	sess, _ := sessionWith(t)
 
 	_, err := sess.SendKeys("agent prompt")
 	require.NoError(t, err)
-	assert.Zero(t, sess.echo.lastInputNs.Load(), "programmatic input is not a user keystroke")
+	require.NoError(t, sess.SendInputViaControlMode(context.Background(), []byte("scroll-forward")))
+	assert.Zero(t, sess.echo.lastInputNs.Load(), "programmatic input and scroll forwarding are not user keystrokes")
 
-	require.NoError(t, sess.SendInputViaControlMode(context.Background(), []byte("k")))
+	require.NoError(t, sess.SendInputViaControlMode(termlat.WithKeystroke(context.Background()), []byte("k")))
 	assert.NotZero(t, sess.echo.lastInputNs.Load())
+}
+
+func TestSendInputViaControlMode_should_ForgetTheKeystrokeWhenTheSendFails(t *testing.T) {
+	sess, _ := sessionWith(t)
+	sess.mu.Lock()
+	sess.stream = nil // errSessionNotStarted
+	sess.mu.Unlock()
+
+	err := sess.SendInputViaControlMode(termlat.WithKeystroke(context.Background()), []byte("k"))
+
+	require.Error(t, err)
+	assert.Zero(t, sess.echo.lastInputNs.Load(), "an undelivered keystroke has no echo to attribute")
+}
+
+func TestEchoProbe_should_KeepANewerKeystrokeThatArrivesMidSample(t *testing.T) {
+	t.Parallel()
+	rec := termlat.New(nil)
+	base := time.Unix(1_700_000_000, 0)
+	newer := base.Add(50 * time.Millisecond)
+	p := &echoProbe{rec: rec}
+	// noteOutput reads the clock after loading the pending keystroke and before its CAS, so a
+	// keystroke typed in that window arrives exactly here.
+	p.now = func() time.Time { p.noteInput(newer); return base.Add(30 * time.Millisecond) }
+	p.noteInput(base)
+
+	p.noteOutput(uint64(base.Add(20 * time.Millisecond).UnixMicro()))
+
+	assert.Equal(t, newer.UnixNano(), p.lastInputNs.Load(), "the newer keystroke must stay pending")
+	_, recorded := statFor(rec, termlat.StageEchoDaemon)
+	assert.False(t, recorded, "the sample for the replaced keystroke is dropped, not misattributed")
 }
 
 func TestHandleAttachEvent_should_FeedTheEchoProbeFromLegacyOutput(t *testing.T) {

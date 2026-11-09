@@ -38,7 +38,15 @@ func (p *echoProbe) recorder() *termlat.Recorder {
 
 // noteInput marks the start of a keystroke send, before any wait for the stream's locks, so the
 // echo_daemon window includes stream_lock_wait and stream_send.
-func (p *echoProbe) noteInput(at time.Time) { p.lastInputNs.Store(at.UnixNano()) }
+func (p *echoProbe) noteInput(at time.Time) int64 {
+	ns := at.UnixNano()
+	p.lastInputNs.Store(ns)
+	return ns
+}
+
+// forget clears the pending keystroke ns if it is still the pending one: a send that failed has
+// no echo, and a newer keystroke must not be cleared.
+func (p *echoProbe) forget(ns int64) { p.lastInputNs.CompareAndSwap(ns, 0) }
 
 // noteOutput handles one output frame carrying the daemon's stamp. Only the first frame stamped
 // after the pending keystroke is attributed, and it records both echo_daemon and output_transit,

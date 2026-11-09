@@ -1315,11 +1315,18 @@ func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []b
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Only this path carries the browser's keystrokes; SendKeys is agent automation.
-	s.echo.noteInput(time.Now())
+	// Only a ctx marked by the browser keystroke path starts the echo clock: SendKeys is agent
+	// automation and scroll forwarding also lands here.
+	var inputNs int64
+	if termlat.IsKeystroke(ctx) {
+		inputNs = s.echo.noteInput(time.Now())
+	}
 	_, err := s.sendOnStreamCtx(ctx, &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
+	if err != nil && inputNs != 0 {
+		s.echo.forget(inputNs)
+	}
 	return err
 }
 
