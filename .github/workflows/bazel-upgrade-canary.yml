@@ -67,7 +67,7 @@ jobs:
       - name: Resolve MODULE.bazel
         id: resolve
         continue-on-error: true
-        run: bazel mod tidy --config=ci --lockfile_mode=update
+        run: bazel mod tidy --lockfile_mode=update
 
       - name: Build and test the generated-independent subset
         id: subset

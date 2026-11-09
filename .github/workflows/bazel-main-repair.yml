@@ -42,7 +42,7 @@ jobs:
       - name: Regenerate
         run: |
           bazel run --config=ci //:gazelle
-          bazel mod tidy --config=ci --lockfile_mode=update
+          bazel mod tidy --lockfile_mode=update
           make sync
 
       - name: Open or update the repair PR

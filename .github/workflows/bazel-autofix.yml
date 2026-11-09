@@ -42,7 +42,8 @@ jobs:
       - name: Regenerate
         run: |
           bazel run --config=ci //:gazelle
-          bazel mod tidy --config=ci --lockfile_mode=update
+          # `bazel mod` reads only common: rc lines, so --config=ci (a build: config) is rejected.
+          bazel mod tidy --lockfile_mode=update
 
       - name: Push the regenerate commit
         env:
