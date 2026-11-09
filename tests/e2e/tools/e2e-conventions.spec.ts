@@ -15,7 +15,6 @@ const ONE_SHOT_TITLE = /\bpage\.title\(\)|\bdocument\.title\b/;
 
 /** Files that record a settled title into a fixture (a measurement, not an assertion). */
 const RECORDING_FILES = new Set([
-  path.join('tools', 'capture-next-fixtures.spec.ts'),
   path.join('pages', 'BaselineProbes.ts'),
   path.join('tools', 'e2e-conventions.spec.ts'),
 ]);

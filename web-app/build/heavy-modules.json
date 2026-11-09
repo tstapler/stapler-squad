@@ -1,0 +1,12 @@
+[
+  { "package": "ghostty-web", "reason": "terminal renderer plus embedded WASM, loaded only when the ghostty_renderer flag mounts a terminal" },
+  { "package": "@xterm/", "reason": "xterm renderer and addons, loaded when a terminal mounts" },
+  { "package": "@codemirror/", "reason": "code editor, loaded when a file view opens" },
+  { "package": "@monaco-editor/", "reason": "diff/code editor, loaded when opened" },
+  { "package": "recharts", "reason": "charts, loaded by the pages that draw them" },
+  { "package": "@opentelemetry/sdk-trace-web", "reason": "OTel SDK, loaded by the otel-init chunk after first paint" },
+  { "package": "@opentelemetry/exporter-trace-otlp-http", "reason": "OTel exporter, loaded by the otel-init chunk" },
+  { "package": "react-markdown", "reason": "markdown rendering, loaded where messages render" },
+  { "package": "react-arborist", "reason": "file tree, loaded by the file browser" },
+  { "package": "@dnd-kit/", "reason": "drag and drop, loaded by the session board" }
+]

@@ -15,7 +15,7 @@ import (
 // two can't silently drift apart the way backlogExcludePatterns and .gitignore
 // did before this test existed. Patterns are compared with leading/trailing "/"
 // stripped, since the two files use slightly different (but equivalent) glob
-// forms for the same path (e.g. "web-app/.next/" here vs "/web-app/.next" in
+// forms for the same path (e.g. "web-app/.build/" here vs "/web-app/.build" in
 // .gitignore).
 //
 // This only checks the Go-slice -> .gitignore direction. The reverse (every

@@ -60,7 +60,8 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
 
   test('activeTab_should_ExposeAriaSelectedAndNoAriaCurrent_When_WindowSelected', async ({ page }) => {
     await seedThreeWindows(page);
-    await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveCount(1);
+    // Scoped to the window switcher: the notification tray has its own tablist with its own selected tab.
+    await expect(page.getByRole('tablist', { name: 'Window switcher' }).locator('[role="tab"][aria-selected="true"]')).toHaveCount(1);
     await expect(page.locator('[role="tablist"] [aria-current]')).toHaveCount(0);
   });
 
@@ -76,9 +77,7 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
 
   test('windowSwitch_should_AnnounceOnceInSingleLiveRegion_When_NoPathnameChange', async ({ page }) => {
     const strip = await seedThreeWindows(page);
-    // RouteAnnouncer only exists in the react-router build (WEB_BUILD=bun); the Next build has no polite route announcer.
     const region = page.getByTestId('route-announcer');
-    test.skip((await region.count()) === 0, 'RouteAnnouncer is not mounted in the Next build');
     await strip.switchToTab('api');
     await expect(region).toHaveText('Window 2 of 3: api');
     await expect(page.getByTestId('route-announcer')).toHaveCount(1);
@@ -102,7 +101,8 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
     expect(await activeElementIsTab(page, 'api')).toBe(true);
     await page.keyboard.press('Space');
     expect(await activeElementIsTab(page, 'api')).toBe(true);
-    await page.keyboard.press('Tab');
+    // Roving tabindex: Tab leaves the tablist (first to the strip's New window button, then on into the panel).
+    for (let i = 0; i < 4 && !(await activeElementInsidePanel(page)); i++) await page.keyboard.press('Tab');
     expect(await activeElementInsidePanel(page)).toBe(true);
   });
 
@@ -126,11 +126,24 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
     expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).toBe('tab');
 
     // Step 2: leader switch to window 3; the selected state and (where mounted) the announcement follow.
+    // The announcer clears its message ~1.1s after speaking it, so record what it says instead of racing that window.
+    if (hasAnnouncer) {
+      await page.evaluate(() => {
+        const w = window as unknown as { __spoken: string[] };
+        w.__spoken = [];
+        const el = document.querySelector('[data-testid="route-announcer"]')!;
+        new MutationObserver(() => {
+          if (el.textContent) w.__spoken.push(el.textContent);
+        }).observe(el, { childList: true, characterData: true, subtree: true });
+      });
+    }
     await page.keyboard.press('Alt+w');
     await page.keyboard.press('3');
     await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 3');
     await expect(strip.getTab('Window 3')).toHaveAttribute('aria-selected', 'true');
-    if (hasAnnouncer) await expect(region).toHaveText('Window 3 of 3: Window 3');
+    if (hasAnnouncer) {
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __spoken: string[] }).__spoken)).toContain('Window 3 of 3: Window 3');
+    }
 
     // Step 3: focus lands inside the tabpanel, so typing reaches that window's content, not the tab strip.
     await expect.poll(() => activeElementInsidePanel(page)).toBe(true);
@@ -160,13 +173,15 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
       const strip = await seedThreeWindows(page);
       await strip.switchToTab('api');
       const result = await page.evaluate(() => {
-        const durations = [...document.querySelectorAll('[role="tab"], [role="tabpanel"]')].map(
-          (el) => getComputedStyle(el).transitionDuration,
-        );
-        return { animations: document.getAnimations().length, durations };
+        // The switch's own elements only (page-wide spinners and badges animate regardless). Under `reduce`
+        // globals.css clamps durations to 0.01ms rather than 0, so count only animations longer than 1ms.
+        const els = [...document.querySelectorAll('[role="tablist"][aria-label="Window switcher"] [role="tab"], [role="tabpanel"]')];
+        const durations = els.map((el) => getComputedStyle(el).transitionDuration);
+        const animations = els.flatMap((el) => el.getAnimations()).filter((a) => Number(a.effect?.getComputedTiming().duration ?? 0) > 1).length;
+        return { animations, durations };
       });
       expect(result.animations).toBe(0);
-      for (const d of result.durations) expect(d.split(',').every((part) => parseFloat(part) === 0)).toBe(true);
+      for (const d of result.durations) expect(d.split(',').every((part) => parseFloat(part) <= 0.001)).toBe(true);
     });
   }
 });

@@ -20,6 +20,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
 jest.mock("@connectrpc/connect");
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 jest.mock("@connectrpc/connect-web");
 jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost", createAuthInterceptor: () => (x: unknown) => x }));
 

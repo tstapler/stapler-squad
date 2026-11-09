@@ -17,10 +17,15 @@ import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { parseGitHubRef } from "@/lib/github/urlParser";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
+import { useAnalytics } from "@/lib/analytics";
+import type { AnalyticsEvent } from "@/lib/analytics/types";
+import { reviewItemHasOpenPr, reviewItemPr } from "@/lib/pr/reviewItemPr";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { CreatePullRequestModal } from "./CreatePullRequestModal";
-import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
+import type { ReviewItem, Session} from "@/gen/session/v1/types_pb";
+import { Priority, AttentionReason, WorkingState, SuggestionSource, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import { riskLevelRank } from "@/lib/sessions/riskLevel";
@@ -187,6 +192,10 @@ const KNOWN_RISK_LEVELS = new Set<string>(SEVERITY_FILTER_VALUES.filter((v) => v
 // value) into UNRECORDED_SEVERITY, so every item is always reachable through one of the
 // SEVERITY_FILTER_VALUES chips — a future/unrecognized risk_level can't become its own
 // unfilterable key (PR #411 review finding).
+function reviewQueueEvent(name: string, labels?: Record<string, string>): AnalyticsEvent {
+  return { name, category: "user_action", component: "ReviewQueuePanel", labels };
+}
+
 function severityFilterKey(riskLevel: string | undefined): string {
   return riskLevel && KNOWN_RISK_LEVELS.has(riskLevel) ? riskLevel : UNRECORDED_SEVERITY;
 }
@@ -353,7 +362,8 @@ export function ReviewQueuePanel({
   // so both entry points open the identical shared CreatePullRequestModal (ux.md Surface 1 & 2).
   const [isCreatePrOpen, setIsCreatePrOpen] = useState<string | null>(null);
   const createPrTriggerRef = useRef<HTMLElement | null>(null);
-  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
+  const { draftPullRequest, createPullRequest, sessions: liveSessions } = useSessionServiceContext();
+  const multiPrUi = useSessionMultiPR();
   // ReviewItem carries only a PR URL, not the originating host, so recognize
   // any configured GHE host when parsing it (same source as GitHubEnterpriseURLDetector).
   const { hosts: enterpriseHosts } = useGitHubEnterpriseHosts();
@@ -397,6 +407,7 @@ export function ReviewQueuePanel({
       ? (urlFilters.group as GroupingStrategy)
       : GroupingStrategy.None
   );
+  const { track } = useAnalytics();
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   // Track whether queue ever had items so we can show "all done" vs generic empty state
   const [hadItems, setHadItems] = useState(false);
@@ -451,6 +462,10 @@ export function ReviewQueuePanel({
     setReviewingIdsSnapshot(new Set(allItems.map((item) => item.sessionId)));
     refresh();
   }, [allItems, refresh]);
+  const refreshFrom = (source: "button" | "new_items_banner") => {
+    track(reviewQueueEvent("review_queue_refreshed", { source }));
+    refreshSnapshot();
+  };
   // ─────────────────────────────────────────────────────────────────────────
 
   // ─── Focus management on item removal (design/ux.md AC34) ─────────────────
@@ -495,6 +510,16 @@ export function ReviewQueuePanel({
   // so the queue only shows sessions that need user attention.
   // Exception: INPUT_REQUIRED and APPROVAL_PENDING items always show — they need immediate action
   // even though deriveWorkingState maps their subStatus to WorkingState.PROCESSING.
+  // The queue's ReviewItem carries no PR list; look the live session up (by id or title) for it.
+  const liveSessionByItemId = useMemo(() => {
+    const map = new Map<string, Session>();
+    for (const s of liveSessions ?? []) {
+      map.set(s.id, s);
+      if (s.title && !map.has(s.title)) map.set(s.title, s);
+    }
+    return map;
+  }, [liveSessions]);
+
   const allFilteredItems = useMemo(() => {
     let filtered = allItems.filter((item) => {
       const ws = deriveWorkingState(item);
@@ -542,10 +567,9 @@ export function ReviewQueuePanel({
     if (tagExcludeFilter.size > 0) {
       filtered = filtered.filter((item) => !item.tags.some((t) => tagExcludeFilter.has(t)));
     }
-    if (prFilter === "has-pr") {
-      filtered = filtered.filter((item) => !!item.githubPrUrl);
-    } else if (prFilter === "no-pr") {
-      filtered = filtered.filter((item) => !item.githubPrUrl);
+    if (prFilter !== "all") {
+      const wantPr = prFilter === "has-pr";
+      filtered = filtered.filter((item) => reviewItemHasOpenPr(item, liveSessionByItemId.get(item.sessionId), multiPrUi) === wantPr);
     }
     if (divergedOnly) {
       filtered = filtered.filter((item) => item.branchDivergedFromBase);
@@ -603,6 +627,8 @@ export function ReviewQueuePanel({
     tagFilter,
     tagExcludeFilter,
     prFilter,
+    liveSessionByItemId,
+    multiPrUi,
     divergedOnly,
     searchText,
     sortField,
@@ -1032,6 +1058,7 @@ export function ReviewQueuePanel({
     // autoResolvedRules for the timing/removal side of this.
     const autoResolvedRuleName = autoResolvedRules[queueItem.sessionId];
     const isAutoResolved = !!autoResolvedRuleName;
+    const approvalId = queueItem.metadata?.["pending_approval_id"];
 
     return (
     <div
@@ -1047,7 +1074,7 @@ export function ReviewQueuePanel({
     >
       <div
         className={`${itemClickable} ${index === currentIndex ? currentItem : ""}`}
-        onClick={() => onSessionClick?.(queueItem.sessionId)}
+        onClick={() => { track(reviewQueueEvent("review_queue_item_opened")); onSessionClick?.(queueItem.sessionId); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -1169,7 +1196,7 @@ export function ReviewQueuePanel({
         </div>
       </div>
       <div className={itemActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        {queueItem.metadata?.["pending_approval_id"] && (
+        {approvalId && (
           <>
             <Button
               intent="primary"
@@ -1177,7 +1204,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                approveRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                approveRequest(approvalId).finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
@@ -1194,7 +1221,7 @@ export function ReviewQueuePanel({
               disabled={isAutoResolved}
               onClick={(e) => {
                 e.stopPropagation();
-                denyRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                denyRequest(approvalId).finally(() => {
                   acknowledgeSession(queueItem.sessionId);
                   onAcknowledged?.(queueItem.sessionId);
                 });
@@ -1217,7 +1244,7 @@ export function ReviewQueuePanel({
                   setActiveRuleItemId(queueItem.sessionId);
                   void generateRule({
                     source: SuggestionSource.COMMAND_SAMPLE,
-                    commandSample: queueItem.metadata!["tool_input_command"],
+                    commandSample: queueItem.metadata["tool_input_command"] ?? "",
                     toolNameFilter: queueItem.metadata?.["tool_name"] ?? "",
                   });
                 }}
@@ -1252,9 +1279,8 @@ export function ReviewQueuePanel({
             (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
         {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
           const hasCommitsAhead = queueItem.hasCommitsAhead;
-          const prNumber = queueItem.githubPrUrl
-            ? parseGitHubRef(queueItem.githubPrUrl, enterpriseHosts)?.prNumber
-            : undefined;
+          const itemPr = reviewItemPr(queueItem, liveSessionByItemId.get(queueItem.sessionId), multiPrUi);
+          const prNumber = itemPr ? (itemPr.number ?? parseGitHubRef(itemPr.url, enterpriseHosts)?.prNumber) : undefined;
           return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {queueItem.branchDivergedFromBase && (
@@ -1262,12 +1288,12 @@ export function ReviewQueuePanel({
                   ⚠ Diverged from main
                 </span>
               )}
-              {queueItem.githubPrUrl ? (
+              {itemPr ? (
                 <a
-                  href={queueItem.githubPrUrl}
+                  href={itemPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); track(reviewQueueEvent("review_queue_pr_link_opened")); }}
                   aria-label={prNumber ? `PR #${prNumber}: ${queueItem.sessionName}` : `View PR: ${queueItem.sessionName}`}
                   data-testid="github-pr-link"
                 >
@@ -1385,7 +1411,7 @@ export function ReviewQueuePanel({
             </label>
           )}
           <button
-            onClick={refreshSnapshot}
+            onClick={() => refreshFrom("button")}
             className={refreshButton}
             disabled={loading}
             aria-label="Refresh review queue"
@@ -1417,7 +1443,7 @@ export function ReviewQueuePanel({
         {showStalenessIndicator && (
           <div className={stalenessIndicator} role="status" data-testid="review-queue-staleness">
             Last updated {stalenessLabel} ago ·{" "}
-            <button type="button" className={stalenessRetry} onClick={refresh}>
+            <button type="button" className={stalenessRetry} onClick={() => { track(reviewQueueEvent("review_queue_refresh_retried")); refresh(); }}>
               Retry
             </button>
           </div>
@@ -1434,7 +1460,7 @@ export function ReviewQueuePanel({
         {newItemsCount > 0 && (
           <button
             className={newItemsBanner}
-            onClick={refreshSnapshot}
+            onClick={() => refreshFrom("new_items_banner")}
             aria-label={`${newItemsCount} new item${newItemsCount !== 1 ? "s" : ""} added. Click to refresh the list.`}
           >
             {newItemsCount} new item{newItemsCount !== 1 ? "s" : ""} added — click to refresh
@@ -1446,7 +1472,7 @@ export function ReviewQueuePanel({
         <div className={filterToggleRow}>
           <button
             className={`${filterToggle} ${hasActiveFilter ? filterToggleActive : ""}`}
-            onClick={() => setIsFiltersOpen((o) => !o)}
+            onClick={() => { track(reviewQueueEvent("review_queue_filters_toggled", { open: String(!isFiltersOpen) })); setIsFiltersOpen((o) => !o); }}
             aria-expanded={isFiltersOpen}
             aria-controls="review-queue-filters"
           >
@@ -1455,7 +1481,7 @@ export function ReviewQueuePanel({
           {hasActiveFilter && (
             <button
               className={filterClear}
-              onClick={clearAllFilters}
+              onClick={() => { track(reviewQueueEvent("review_queue_filters_cleared")); clearAllFilters(); }}
               aria-label="Clear active filter"
             >
               ✕ Clear
@@ -1503,7 +1529,7 @@ export function ReviewQueuePanel({
                     <button
                       key={priority}
                       className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByPriority(priority)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "priority" })); handleFilterByPriority(priority); }}
                       disabled={priorityCount === 0}
                       aria-pressed={priorityFilter.has(priority)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
@@ -1539,7 +1565,7 @@ export function ReviewQueuePanel({
                   <button
                     key={reason}
                     className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                    onClick={() => handleFilterByReason(reason)}
+                    onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "reason" })); handleFilterByReason(reason); }}
                     disabled={reasonCount === 0}
                     aria-pressed={reasonFilter.has(reason)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
@@ -1563,7 +1589,7 @@ export function ReviewQueuePanel({
                   <button
                     key={severity}
                     className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                    onClick={() => handleFilterBySeverity(severity)}
+                    onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "severity" })); handleFilterBySeverity(severity); }}
                     disabled={severityCount === 0}
                     aria-pressed={severityFilter.has(severity)}
                     title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
@@ -1586,7 +1612,7 @@ export function ReviewQueuePanel({
                     <button
                       key={program}
                       className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByProgram(program)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "program" })); handleFilterByProgram(program); }}
                       aria-pressed={programFilter.has(program)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
@@ -1609,7 +1635,7 @@ export function ReviewQueuePanel({
                     <button
                       key={category}
                       className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByCategory(category)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "category" })); handleFilterByCategory(category); }}
                       aria-pressed={categoryFilter.has(category)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
@@ -1632,7 +1658,7 @@ export function ReviewQueuePanel({
                     <button
                       key={t}
                       className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
-                      onClick={() => handleFilterByTag(t)}
+                      onClick={() => { track(reviewQueueEvent("review_queue_filter_changed", { dimension: "tag" })); handleFilterByTag(t); }}
                       aria-pressed={tagFilter.has(t)}
                       title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
@@ -1652,7 +1678,7 @@ export function ReviewQueuePanel({
                 <button
                   key={v}
                   className={`${filterButton} ${prFilter === v ? filterButtonActive : ""}`}
-                  onClick={() => handlePrFilterChange(v)}
+                  onClick={() => { track(reviewQueueEvent("review_queue_pr_filter_changed", { value: v })); handlePrFilterChange(v); }}
                   aria-pressed={prFilter === v}
                 >
                   {v === "all" ? "All" : v === "has-pr" ? "Has PR" : "No PR"}
@@ -1660,7 +1686,7 @@ export function ReviewQueuePanel({
               ))}
               <button
                 className={`${filterButton} ${divergedOnly ? filterButtonActive : ""}`}
-                onClick={() => handleDivergedOnlyChange(!divergedOnly)}
+                onClick={() => { track(reviewQueueEvent("review_queue_diverged_filter_toggled", { enabled: String(!divergedOnly) })); handleDivergedOnlyChange(!divergedOnly); }}
                 aria-pressed={divergedOnly}
               >
                 Diverged from base
@@ -1687,7 +1713,11 @@ export function ReviewQueuePanel({
               {sortField !== "default" && (
                 <button
                   className={filterButton}
-                  onClick={() => handleSortDirectionChange(sortDirection === "asc" ? "desc" : "asc")}
+                  onClick={() => {
+                    const next = sortDirection === "asc" ? "desc" : "asc";
+                    track(reviewQueueEvent("review_queue_sort_direction_changed", { direction: next }));
+                    handleSortDirectionChange(next);
+                  }}
                   aria-label={`Sort direction: ${sortDirection === "asc" ? "ascending" : "descending"}`}
                 >
                   {sortDirection === "asc" ? "↑ Asc" : "↓ Desc"}
@@ -1857,6 +1887,7 @@ export function ReviewQueuePanel({
                   lineHeight: 1,
                 }}
                 onClick={() => {
+                  track(reviewQueueEvent("review_queue_create_rule_modal_closed"));
                   setActiveRuleItemId(null);
                   clearRule();
                 }}

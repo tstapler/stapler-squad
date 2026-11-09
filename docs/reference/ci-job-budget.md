@@ -40,6 +40,8 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 
 The e2e shard count is a separate knob (`E2E_SHARD_TOTAL` in `build.yml` once #1317 lands) and is the largest remaining contributor.
 
+Within a shard, spec files are assigned by recorded duration (`tests/e2e/shard-timings.json`, `tests/e2e/scripts/shard-assign.ts`) rather than Playwright's count-based `--shard`, which once left one shard at 36 min next to others at 16. Refresh the file from the `e2e-shard-timings` artifact the `e2e (Bun build)` job uploads, taken from a full uncut run (a cut-off shard has no durations for the specs it never reached). Each shard also stops itself with `--global-timeout` inside `E2E_SHARD_BUDGET_S` (default 38 min), so an overrunning shard still writes its reports instead of being killed with none. It still fails loudly (`assert-e2e-report.mjs` names the global-timeout cut-off), and the confirmation rerun does not run for a failed shard. A missing or unusable shard plan also fails the shard; there is no count-based fallback, because mixing schemes across shards would lose and duplicate tests.
+
 ## Runner utilization
 
 Heavy jobs (`prepare`, `web-checks`, `e2e-binary-bun`, `e2e-bun-shard`, `test-affected`, `go-guards`, `lint`, `mcp-integration`, `ux-analysis`, and the `main-ci.yml` test jobs) run a background sampler (`.github/actions/runner-utilization`, `tools/ci/runner-utilization.py`) and a final `if: always()` report step. Each job's summary shows cores busy, iowait, steal, peak memory, and PSI stall share, and uploads a tiny `util-<label>` artifact (7 days). Both steps swallow their own errors and cannot fail a job.

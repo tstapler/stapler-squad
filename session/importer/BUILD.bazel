@@ -21,9 +21,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//config",
+        "//internal/dirwatch",
         "//log",
         "//session",
         "//session/mux",
+        "//session/scanqueue",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_gofrs_flock//:flock",
         "@com_github_linkdata_deadlock//:deadlock",
@@ -64,45 +66,58 @@ go_test(
         "//envtest",
         "//executor/safeexec",
         "//session",
+        "//session/artifacts",
         "//session/git",
         "//session/internal/sessiontest",
         "//session/mux",
         "//session/tmux",
         "//testutil/wait",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ] + select({
         "@rules_go//go/platform:aix": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:android": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:darwin": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:dragonfly": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:freebsd": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:illumos": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:ios": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:linux": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:netbsd": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:openbsd": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "@rules_go//go/platform:solaris": [
+            "//internal/dirwatch",
             "@org_golang_x_sys//unix",
         ],
         "//conditions:default": [],

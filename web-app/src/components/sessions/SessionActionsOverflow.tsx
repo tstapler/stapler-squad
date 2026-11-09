@@ -1,6 +1,8 @@
 "use client";
 // +feature: session-change-program session-pin-toggle
 
+import { displayedPullRequest } from "@/lib/pr/legacyPullRequest";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
 import { useState, useRef, useContext, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal, Pin, PinOff } from "lucide-react";
@@ -40,6 +42,7 @@ export interface SessionActionsOverflowHandle {
   openAt(x: number, y: number): void;
 }
 
+/* eslint-disable no-restricted-syntax -- SessionActionsOverflowProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 export interface SessionActionsOverflowProps {
   session: Session;
   /** Show Resume/Pause as a shortcut button before the ··· */
@@ -57,6 +60,10 @@ export interface SessionActionsOverflowProps {
   /** Immediately restart a session's retry policy, bypassing any pending backoff
    *  delay — including from PERMANENTLY_FAILED (session-retry-backoff, AC6). */
   onRetryNow?: (sessionId: string) => Promise<boolean | void>;
+  /** Soft-archive: sets archived_at and moves status to Stopped. Shown for non-archived sessions. */
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  /** Clear archived_at so the session returns to the default list (status stays Stopped). Shown for archived sessions. */
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onClone?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
@@ -68,13 +75,10 @@ export interface SessionActionsOverflowProps {
   onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
-  /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
-  onRenameRequest?: () => void;
-  /** Trigger workspace switch in parent (SessionDetail-specific) */
-  onWorkspaceSwitchRequest?: () => void;
   /** Save a new program for the session. Empty string = system default. */
   onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
+/* eslint-enable no-restricted-syntax */
 
 const VIEWPORT_MARGIN = 8;
 
@@ -98,7 +102,7 @@ function MenuSection({ id, label, openId, onToggle, children }: {
         aria-controls={`overflow-section-${id}`}
         onClick={(e) => { e.stopPropagation(); onToggle(id); }}
         style={{ justifyContent: "space-between" }}
-      >
+      >{/* analytics-exempt */}
         <span>{label}</span>
         <span aria-hidden="true">{open ? "▾" : "▸"}</span>
       </button>
@@ -132,6 +136,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onDelete,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onClone,
   onOpenInNewPane,
   onNewWorkspace,
@@ -143,8 +149,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onSteerAutonomousSession,
   onClearConversationState,
   onUpdateTags,
-  onRenameRequest,
-  onWorkspaceSwitchRequest,
   onChangeProgram,
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
@@ -181,6 +185,9 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryError, setRetryError] = useState("");
+  const [isArchiveConfirmOpen, setIsArchiveConfirmOpen] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -210,6 +217,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [pendingProgramValue, setPendingProgramValue] = useState("");
   const availablePrograms = useAvailablePrograms();
   const { draftPullRequest, createPullRequest } = useSessionServiceContext();
+  const shownPr = displayedPullRequest(session, useSessionMultiPR());
 
   // Keep the picker's selected value in sync with the session while the dialog is
   // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
@@ -224,6 +232,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const restartDialogRef = useRef<HTMLDivElement>(null);
   const retryDialogRef = useRef<HTMLDivElement>(null);
+  const archiveDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
@@ -247,6 +256,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   useFocusTrap(overflowMenuRef, showOverflow, overflowButtonRef);
   useFocusTrap(restartDialogRef, isRestartConfirmOpen, overflowButtonRef);
   useFocusTrap(retryDialogRef, isRetryConfirmOpen, overflowButtonRef);
+  useFocusTrap(archiveDialogRef, isArchiveConfirmOpen, overflowButtonRef);
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen, overflowButtonRef);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, overflowButtonRef);
   useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen, overflowButtonRef);
@@ -383,6 +393,24 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
+  const handleArchiveConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsArchiving(true);
+    setArchiveError("");
+    try {
+      // archiveSession resolves false (not throws) on failure; keep the dialog open then.
+      if ((await onArchive?.(session.id)) === false) {
+        setArchiveError("Failed to archive session.");
+      } else {
+        setIsArchiveConfirmOpen(false);
+      }
+    } catch (err) {
+      setArchiveError(err instanceof Error ? err.message : "Failed to archive session.");
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   const commitProgramChange = async (program: string) => {
     setIsSavingProgram(true);
     setProgramError("");
@@ -420,9 +448,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   // Create/View PR item is now always rendered (no longer gated on a
   // caller-supplied callback prop — see Task 2.3.1a).
   const hasGroup2 = true;
-  const hasOrganize = !!(onRenameRequest || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasOrganize = !!(onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove || (onSteerAutonomousSession && session.autonomousMode));
-  const hasMore = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
+  const isArchived = !!session.archivedAt;
+  const hasMore = !!(onClearConversationState || (isArchived ? onUnarchive : onArchive) || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)));
 
   return (
     <>
@@ -487,6 +516,37 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 {isRetrying ? "Retrying..." : "Retry now"}
               </button>
               <button onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); setRetryError(""); }} disabled={isRetrying} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {isArchiveConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsArchiveConfirmOpen(false); }}>
+          <div
+            ref={archiveDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="archiveDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsArchiveConfirmOpen(false); }}
+          >
+            <h3 id="archiveDialogTitle">Archive Session</h3>
+            <p>Archive &quot;{session.title}&quot;?</p>
+            <p className={warningText}>
+              It is marked Stopped, unpinned, and hidden from the session list (use &quot;Show archived&quot; to find it).
+              Its worktree and history are kept. Unarchive restores it to the list but leaves it Stopped.
+            </p>
+            {archiveError && <p className={errorMessage}>{archiveError}</p>}
+            <div className={dialogActions}>
+              <button onClick={handleArchiveConfirm} disabled={isArchiving} className={submitButton}>
+                {isArchiving ? "Archiving..." : "Archive"}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsArchiveConfirmOpen(false); setArchiveError(""); }} disabled={isArchiving} className={cancelButton}>
                 Cancel
               </button>
             </div>
@@ -921,18 +981,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               {(hasGroup2 || hasOrganize || hasGroup4 || hasMore) && menuSeparator}
               {hasGroup2 && (
                 <MenuSection id="workflow" label="Workflow" openId={openSection} onToggle={toggleSection}>
-              {session.githubPrUrl ? (
+              {shownPr ? (
                 <a
-                  href={session.githubPrUrl}
+                  href={shownPr.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   role="menuitem"
                   className={overflowMenuItem}
-                  aria-label={`PR #${session.githubPrNumber}: ${session.title}`}
+                  aria-label={`PR #${shownPr.number}: ${session.title}`}
                   data-testid="github-pr-link"
                   onClick={(e) => { e.stopPropagation(); close(); }}
                 >
-                  <span aria-hidden="true">✅</span> View PR #{session.githubPrNumber}
+                  <span aria-hidden="true">✅</span> View PR #{shownPr.number}
                 </a>
               ) : (
                 <button
@@ -972,14 +1032,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               )}
               {hasOrganize && (
                 <MenuSection id="organize" label="Organize" openId={openSection} onToggle={toggleSection}>
-              {onRenameRequest && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
-                  aria-label={`Rename session ${session.title}`}
-                >
-                  <span aria-hidden="true">✏️</span> Rename
-                </button>
-              )}
               {onClone && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onClone(); }}
@@ -1010,14 +1062,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   aria-label={`New workspace from ${session.title}`}
                 >
                   <span aria-hidden="true">➕</span> New Workspace
-                </button>
-              )}
-              {onWorkspaceSwitchRequest && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onWorkspaceSwitchRequest(); }}
-                  aria-label={`Switch workspace for ${session.title}`}
-                >
-                  <span aria-hidden="true">⎇</span> Switch Workspace
                 </button>
               )}
                 </MenuSection>
@@ -1126,8 +1170,31 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); setIsRetryConfirmOpen(true); }}
                   aria-label={`Retry session ${session.title} now`}
+                  data-testid="session-retry-now-menuitem"
                 >
                   <span aria-hidden="true">🔁</span> Retry now
+                </button>
+              )}
+              {onArchive && !isArchived && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsArchiveConfirmOpen(true); }}
+                  aria-label={`Archive session ${session.title}`}
+                  data-testid="session-archive-menuitem"
+                >
+                  <span aria-hidden="true">📦</span> Archive
+                </button>
+              )}
+              {onUnarchive && isArchived && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); void onUnarchive(session.id); }}
+                  aria-label={`Unarchive session ${session.title}`}
+                  data-testid="session-unarchive-menuitem"
+                >
+                  <span aria-hidden="true">📤</span> Unarchive
                 </button>
               )}
                 </MenuSection>

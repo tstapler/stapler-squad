@@ -253,19 +253,18 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 	idleTimeout := time.Duration(s.cfg.Hibernation.IdleTimeoutMinutes) * time.Minute
 	if idleTimeout > 0 {
 		for _, inst := range instances {
-			if !inst.IsActive() {
+			if !inst.IsActive() || inst.HasTerminalViewers() {
 				continue
 			}
 			if inst.NeedsReview() {
 				continue
 			}
-			idle := inst.TimeSinceLastMeaningfulOutput(inst.CreatedAt)
+			idle := inst.hibernationIdleDuration()
 			if idle >= idleTimeout {
 				log.Info("auto-hibernating idle session",
 					"session", inst.Title,
 					"idle_duration", idle.Round(time.Minute))
-				inst.SetHibernateReason("idle")
-				if err := inst.Hibernate(ctx); err != nil {
+				if err := inst.hibernateAutomatically(ctx, "idle"); err != nil {
 					log.Warn("auto-hibernate failed", "session", inst.Title, "err", err)
 					continue
 				}
@@ -366,13 +365,13 @@ func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instance
 	}
 	var candidates []candidate
 	for _, inst := range instances {
-		if !inst.IsActive() {
+		if !inst.IsActive() || inst.HasTerminalViewers() {
 			continue
 		}
 		if inst.NeedsReview() {
 			continue
 		}
-		idle := inst.TimeSinceLastMeaningfulOutput(inst.CreatedAt)
+		idle := inst.hibernationIdleDuration()
 		if idle < pressureGracePeriod {
 			continue
 		}
@@ -394,8 +393,7 @@ func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instance
 		"idle_duration", candidates[0].idleFor.Round(time.Minute),
 		"system_memory_pct", sysPct)
 
-	target.SetHibernateReason("resource_pressure")
-	if err := target.Hibernate(ctx); err != nil {
+	if err := target.hibernateAutomatically(ctx, "resource_pressure"); err != nil {
 		log.Warn("resource-pressure hibernate failed", "session", target.Title, "err", err)
 		return
 	}

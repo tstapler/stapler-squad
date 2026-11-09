@@ -1,22 +1,16 @@
 // @feature ui:header-nav, accessibility
 /**
- * Story 7.2a (Next baseline): what a keyboard or screen-reader user gets on navigation.
- * Premises of the plan that do not hold on Next, recorded in fixtures/next-baseline.json:
- *  - The skip link is not the first Tab stop (the nav precedes it), so the spec Tabs to it.
- *  - Activating it sets the `#main-content` hash but does not focus <main> (it has no tabindex),
- *    and the computed outline-style of main#main-content is `none`.
- * The Bun half (7.2b) asserts the decided policy through the web-build helper in PR 7b.
+ * What a keyboard or screen-reader user gets on navigation: the polite route announcer, focus
+ * landing on the layout main, and aria-current on the active nav item.
  */
 import { test, expect } from '@playwright/test';
-import { isBunBuild } from './helpers/web-build';
 import { AppShellPage } from './pages/AppShellPage';
-import baseline from './fixtures/next-baseline.json';
 
 const HISTORY_TITLE = 'History - Stapler Squad';
 const SETTINGS_TITLE = 'Settings - Stapler Squad';
 const LOGS_TITLE = 'Logs - Stapler Squad';
 
-test.describe('route focus and announcements (Next baseline)', () => {
+test.describe('route announcements and nav state', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 900 });
     await new AppShellPage(page).skipOnboarding();
@@ -30,40 +24,18 @@ test.describe('route focus and announcements (Next baseline)', () => {
     await shell.navLink(/history/i).click({ force: true });
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
-    if (isBunBuild()) {
-      // The Bun RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
-      // test id rather than by the text it carries.
-      const announcer = page.getByTestId('route-announcer');
-      await expect(announcer).toHaveText(HISTORY_TITLE);
-      await expect(announcer).toHaveAttribute('role', 'status');
-      return;
-    }
-    // Next's own announcer is the only live region that carries the title.
-    await expect(shell.liveRegions.filter({ hasText: HISTORY_TITLE })).toHaveCount(1);
-    const announcer = shell.liveRegions.filter({ hasText: HISTORY_TITLE }).first();
-    await expect(announcer).toHaveAttribute('role', 'alert');
-  });
-
-  test('skip link: Tab reaches it, Enter keeps the path and sets the hash', async ({ page }) => {
-    const shell = new AppShellPage(page);
-    await shell.goto('/history');
-    await expect(shell.drawerNav).toBeVisible();
-
-    const tabPresses = await shell.tabToSkipLink();
-    expect(tabPresses, 'skip link tab position on Next').toBe(baseline.skipLink.tabPresses);
-
-    const outcome = await shell.activateSkipLink();
-    expect(outcome.path).toBe('/history');
-    expect(outcome.hash).toBe(baseline.skipLink.hash);
-    expect(outcome.mainFocused, 'Next does not move focus into <main>').toBe(baseline.skipLink.mainFocused);
-    expect(outcome.outlineStyle).toBe(baseline.skipLink.outlineStyle);
+    // The RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
+    // test id rather than by the text it carries.
+    const announcer = page.getByTestId('route-announcer');
+    await expect(announcer).toHaveText(HISTORY_TITLE);
+    await expect(announcer).toHaveAttribute('role', 'status');
   });
 
   test('the History nav item exposes aria-current="page" on /history', async ({ page }) => {
     const shell = new AppShellPage(page);
     await shell.goto('/history');
     await expect(shell.drawerNav).toBeVisible();
-    await expect(shell.navLink(/history/i)).toHaveAttribute('aria-current', baseline.historyNavAriaCurrent as string);
+    await expect(shell.navLink(/history/i)).toHaveAttribute('aria-current', 'page');
   });
 });
 
@@ -84,9 +56,7 @@ async function announcerLog(page: import('@playwright/test').Page): Promise<stri
   return page.evaluate(() => (window as unknown as { __ann: string[] }).__ann);
 }
 
-test.describe('route focus and announcements (Bun only)', () => {
-  test.skip(!isBunBuild(), "Next's own announcer (role=alert) is asserted by the Next-baseline block above");
-
+test.describe('route focus and announcements', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 900 });
     await new AppShellPage(page).skipOnboarding();

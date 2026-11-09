@@ -82,16 +82,72 @@ adaptive batches of about 40 ms writer hold; the ledger is the table `escape_eve
 the new file (`phase`, `cursor`, `scanned`, `inserted`). It resumes after a restart and ends
 `done` only when the source row count equals the rows scanned.
 
-The legacy table is **not dropped**: a follow-up change drops it after a soak. Deleting its rows
-is as expensive as the old retention deletes, so reclaim the space offline instead, with the
-service stopped and free disk about the size of `analytics.db`:
+The legacy table is **not dropped by default**. Dropping it is destructive, so it is opt-in through
+`STAPLER_SQUAD_ESCAPE_LEGACY_DROP` (read at boot; unset, `off` or any unrecognised value does nothing):
+
+| Value | Effect |
+|---|---|
+| unset / `off` | Nothing runs (default). |
+| `dry-run` | Evaluates the guards and logs both row counts and what it would do; changes nothing. |
+| `on` | Runs the drop below, once the copy above has finished in the same boot (or an earlier one). |
+
+Guards, all required, evaluated on read-only connections before any delete (neither writer is held):
+
+1. `escape_events_migration.phase` in `escape_events.db` is `done` (a missing ledger, `copying` or `failed` refuses).
+2. Every legacy row **id** exists in `escape_events.db`, or the row's `wall_time` is older than the
+   age-retention cutoff (`EscapeAnalyticsRetentionDays`, the same cutoff `runEscapeEventRetention`
+   uses), so the new database may have evicted it. This checks ids, **not** row content: a copied row
+   whose content differs is not detected. A missing row newer than the cutoff refuses with
+   `refused_uncopied`, logging the counts and a sample of ids. That is what a legacy write after the
+   ledger turned `done` (for example an older binary) looks like. With age retention off, no row may
+   be missing. Rows the per-session cap evicted from the new database while still young also refuse;
+   that is conservative.
+
+The check repeats per chunk, and each chunk deletes only the ids it just verified, so a row written to
+the legacy table mid-run survives; the final `DROP TABLE` runs in a transaction that re-counts the table
+and keeps it if any row is left.
+
+When the guards pass, the drop deletes the verified legacy rows in short chunks on the analytics
+writer (adaptive to about 40 ms per chunk, with a pause between), then drops the empty table, then
+returns freed pages with up to 64 bounded `PRAGMA incremental_vacuum(1024)` steps if `analytics.db` is
+`auto_vacuum=INCREMENTAL` (the periodic maintenance loop reclaims any remainder; see above for
+converting a legacy file). A crash or shutdown mid-way leaves a smaller table; the next boot checks
+again and continues. A table that is empty on the next boot (ent recreates it) is dropped quietly,
+without a log line or metric.
+
+The ledger is read once at the start of a run, so do not run a second process or reset the ledger
+while a drop is in progress.
+
+To copy rows a `refused_uncopied` run found (catch-up), reset the ledger and restart; the copy
+resumes from the start, skips ids already present (`ON CONFLICT DO NOTHING`) and marks `done` again
+when the source count equals the rows scanned:
+
+```bash
+sqlite3 <escape_events.db> "UPDATE escape_events_migration SET phase='copying', cursor='', scanned=0, inserted=0, pass=0 WHERE id=1"
+```
+
+Verify:
+
+```bash
+grep -E 'escape legacy' ~/.stapler-squad/logs/staplersquad.log   # guards passed / refused (both counts), dropped
+sqlite3 -readonly <analytics.db> "SELECT name FROM sqlite_master WHERE name='escape_events'"   # empty once dropped
+```
+
+Metrics: `escape_events.legacy_drop.runs{outcome=...}` (`dropped`, `dry_run`, `migration_incomplete`,
+`refused_uncopied`, `error`) and `escape_events.legacy_drop.rows_deleted`.
+
+To reclaim the space without the in-app drop, use the offline path, with the service stopped and
+free disk about the size of `analytics.db`:
 
 ```bash
 sqlite3 <analytics.db> 'PRAGMA auto_vacuum=INCREMENTAL; DROP TABLE escape_events; VACUUM;'
 ```
 
-Run it only after `SELECT phase FROM escape_events_migration` reads `done` in `escape_events.db`.
-An older binary recreates the empty table on its next start; that is harmless.
+Run it only after `SELECT phase FROM escape_events_migration` reads `done` in `escape_events.db`. The
+offline `VACUUM` is also the only way to shrink a file that is not at `auto_vacuum=INCREMENTAL`.
+`OpenAnalyticsDB` recreates an empty `escape_events` table on every start (`client.Schema.Create`
+creates every ent table; a subset create like `escapedb.Open` uses would avoid it, not done here), and
+an older binary does too; that is harmless, and the next `on` run drops the empty table again.
 
 ## Fallback external job
 

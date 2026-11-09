@@ -49,7 +49,9 @@ func (a appender) Append(r *notifications.NotificationRecord) error {
 	if r.SessionID == hiddenTitle {
 		a.m.history[sessionv1.NotificationType(r.NotificationType).String()]++
 	}
-	if r.SessionID == visibleTitle {
+	// Only the INFO sentinel: a visible FAILURE crash record also carries visibleTitle
+	// and can flush (map order) before the hidden record.
+	if r.SessionID == visibleTitle && r.NotificationType == int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO) {
 		a.m.once[0].Do(func() { close(a.m.sentinel[0]) })
 	}
 	return nil
@@ -101,7 +103,7 @@ func newMatrixEnvWith(t *testing.T, settings deliverygate.FlagSettings, hidden .
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	notifications.StartSubscriberWithInterval(ctx, bus, appender{s}, 5*time.Millisecond)
+	historyDone := notifications.StartSubscriberWithInterval(ctx, bus, appender{s}, 5*time.Millisecond)
 	pushDone := push.StartDeliverySubscriber(ctx, bus, []push.Notifier{pushRecorder{s}}, push.WithSessionDeliveryGate(gate))
 
 	watchCh, _ := bus.Subscribe(ctx)
@@ -123,6 +125,7 @@ func newMatrixEnvWith(t *testing.T, settings deliverygate.FlagSettings, hidden .
 
 	return &matrixEnv{bus: bus, gate: gate, sinks: s, done: func() {
 		cancel()
+		<-historyDone // its final flush writes any records still coalesced
 		<-pushDone
 		<-watchDone
 	}}

@@ -316,17 +316,29 @@ func TestLocalWriteGuard_ShouldRefuseAHostnameOnlyInDetectedSet_WhenVerifiedSetL
 // ClearNotificationHistory.
 func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredProcedures_AndNeverGuardClearNotificationHistory(t *testing.T) {
 	want := map[string]middleware.GuardProfile{
-		probeProcedurePath: middleware.ProfileProbe,
-		nudgeProcedurePath: middleware.ProfileProbe,
-		pruneProcedurePath: middleware.ProfileRebinding,
+		probeProcedurePath:  middleware.ProfileProbe,
+		nudgeProcedurePath:  middleware.ProfileProbe,
+		askFixProcedurePath: middleware.ProfileProbe,
+		pruneProcedurePath:  middleware.ProfileRebinding,
 
 		updateFlagProcedurePath:  middleware.ProfileRebinding,
 		replyProcedurePath:       middleware.ProfileRebinding,
 		updateQuotaProcedurePath: middleware.ProfileRebinding,
 		writeFileProcedurePath:   middleware.ProfileRebinding,
+
+		"/api" + sessionv1connect.SessionServiceContinueTCCEnrichmentProcedure: middleware.ProfileRebinding,
 	}
 	for _, p := range engineWriteProcedures { // pinned in quota_listener_test.go
 		want[p] = middleware.ProfileRebinding
+	}
+	for _, p := range []string{
+		sessionv1connect.SessionServiceAttachSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceDetachSessionPullRequestProcedure,
+		sessionv1connect.SessionServicePinSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceRefreshSessionPullRequestsProcedure,
+		sessionv1connect.SessionServiceDetachItemPullRequestProcedure,
+	} {
+		want["/api"+p] = middleware.ProfileRebinding
 	}
 	assert.Equal(t, want, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]

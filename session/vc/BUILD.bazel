@@ -34,6 +34,7 @@ go_test(
         "git_provider_test.go",
         "gitwiring_test.go",
         "jj_provider_test.go",
+        "main_test.go",
         "types_test.go",
     ],
     embed = [":vc"],

@@ -21,6 +21,14 @@ function mount(ui: ReactElement, url: string) {
 
 const settle = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
 
+// jsdom finishes a traversal over two chained setTimeout(0) hops, so a fixed sleep can fire between them when the event loop stalls; wait for popstate instead.
+const traverse = (go: () => void) =>
+  act(async () => {
+    const popped = new Promise<void>((resolve) => window.addEventListener("popstate", () => resolve(), { once: true }));
+    go();
+    await popped;
+  });
+
 afterEach(() => {
   routers.forEach((router) => router.dispose());
   routers = [];
@@ -71,8 +79,7 @@ describe("impl.router specifics", () => {
     act(() => screen.getByTestId("go").click());
     await settle();
     expect(window.location.pathname).toBe("/next");
-    act(() => window.history.back());
-    await act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
+    await traverse(() => window.history.back());
     expect(window.history.state).toEqual(expect.objectContaining({ ssqTray: true }));
   });
 
@@ -87,14 +94,12 @@ describe("impl.router specifics", () => {
     routerImpl.pushTrayEntry();
     const rendersAfterPush = renders;
     expect(window.history.length).toBe(lengthBefore + 1);
-    act(() => window.history.back());
-    await act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
+    await traverse(() => window.history.back());
     expect(screen.getByTestId("path").textContent).toBe("/start");
     expect(window.history.state).not.toEqual(expect.objectContaining({ ssqTray: true }));
     expect(window.history.length).toBe(lengthBefore + 1);
     expect(renders - rendersAfterPush).toBeLessThanOrEqual(1);
-    act(() => window.history.forward());
-    await act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
+    await traverse(() => window.history.forward());
     expect(window.history.state).toEqual(expect.objectContaining({ ssqTray: true }));
   });
 

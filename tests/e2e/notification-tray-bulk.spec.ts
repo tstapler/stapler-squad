@@ -11,6 +11,8 @@ import {
   ToastDeck,
   openTerminalSession,
   sendNotification,
+  sendOnceStreamLive,
+  watchStreamLive,
 } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
@@ -28,17 +30,17 @@ test.describe('notification bulk actions across tabs', () => {
     const tabB = await context.newPage();
     const deckA = new ToastDeck(tabA);
     const deckB = new ToastDeck(tabB);
+    watchStreamLive(tabA);
+    watchStreamLive(tabB);
     await Promise.all([
       tabA.goto(BASE_URL, { waitUntil: 'domcontentloaded' }),
       tabB.goto(BASE_URL, { waitUntil: 'domcontentloaded' }),
     ]);
 
-    // Retry the first send until both tabs' streams are attached and show it.
-    await expect(async () => {
+    // Send once both tabs' streams are live, then wait for the toast in both.
+    await sendOnceStreamLive([tabA, tabB], async () => {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-0`, type: 'ERROR', title: 'Failure 0' });
-      await expect(deckA.toasts.first()).toBeVisible({ timeout: 1_500 });
-      await expect(deckB.toasts.first()).toBeVisible({ timeout: 1_500 });
-    }).toPass({ timeout: 20_000 });
+    }, [deckA.toasts.first(), deckB.toasts.first()]);
     await sendNotification(request, BASE_URL, { sessionId: `${prefix}-1`, type: 'ERROR', title: 'Failure 1' });
     await expect(deckA.moveAll).toBeVisible();
     await expect(deckB.moveAll).toBeVisible();

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1393,4 +1394,84 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 	_, err = storage.GetWorktreeDataBySessionUUIDs(context.Background(), uuids)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), queries.Load(), "one session query plus its worktree eager-load, not one per uuid")
+}
+
+// prLoadFixture creates a persisted Paused session row with an optional legacy PR.
+func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo string, legacyNumber int) {
+	t.Helper()
+	data := InstanceData{
+		Title: title, UUID: uuid, Path: "/tmp/test", Status: Paused, Program: "claude",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: owner, GitHubRepo: repo,
+	}
+	if legacyNumber > 0 {
+		data.GitHubPRNumber = legacyNumber
+		data.GitHubPRURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, legacyNumber)
+	}
+	require.NoError(t, storage.Repo.Create(context.Background(), data))
+}
+
+func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	const n = 200
+	for i := 0; i < n; i++ {
+		uuid := fmt.Sprintf("uuid-%03d", i)
+		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
+		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
+			mustPRRef(t, "", "acme", "app", 1000+i), PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}})
+		require.NoError(t, err)
+	}
+
+	var loaded []*Instance
+	stmts := countStatementsMatching(t, storage.Repo, func(q string) bool {
+		return strings.Contains(q, "session_prs") || strings.Contains(q, "pull_request_states")
+	}, func() {
+		var err error
+		loaded, err = storage.LoadInstances()
+		require.NoError(t, err)
+	})
+
+	require.Len(t, loaded, n)
+	assert.LessOrEqual(t, stmts, int64(2), "link+state queries must be 2*ceil(n/500)")
+	for _, inst := range loaded {
+		require.Len(t, inst.Snapshot().GitHub.PRs, 1, "hydrated before the first snapshot publish: %s", inst.Title)
+		assert.True(t, inst.Snapshot().GitHub.HasPRLinks)
+	}
+}
+
+func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	// No owner/repo resolved: the legacy number can never become a link (skipped class).
+	prLoadFixture(t, storage, "skipped", "uuid-skipped", "", "", 41)
+	// A represented legacy number for contrast.
+	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
+	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
+		mustPRRef(t, "", "acme", "app", 42), PRLink{Source: AttachSourceBackfill})
+	require.NoError(t, err)
+
+	byTitle := func(insts []*Instance) map[string]*Instance {
+		m := map[string]*Instance{}
+		for _, i := range insts {
+			m[i.Title] = i
+		}
+		return m
+	}
+	want := sessionMirror(t, storage, "skipped")
+	require.Equal(t, 41, want.GitHubPRNumber)
+	for round := 0; round < 2; round++ {
+		loaded, err := storage.LoadInstances()
+		require.NoError(t, err)
+		m := byTitle(loaded)
+		require.True(t, m["skipped"].Snapshot().GitHub.LegacyPRUnrepresented, "round %d: flag lost", round)
+		require.False(t, m["represented"].Snapshot().GitHub.LegacyPRUnrepresented)
+		for _, inst := range loaded {
+			require.NoError(t, storage.UpdateInstance(inst)) // full save
+		}
+		row := sessionMirror(t, storage, "skipped")
+		assert.Equal(t, want.GitHubPRNumber, row.GitHubPRNumber, "round %d", round)
+		assert.Equal(t, want.GitHubPRURL, row.GitHubPRURL, "round %d", round)
+	}
 }

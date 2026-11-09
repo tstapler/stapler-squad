@@ -1,9 +1,11 @@
 package backlog
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -12,6 +14,74 @@ import (
 // appending " [truncated]" if truncation occurred.
 func SanitizeForAgentContext(s string, maxLen int) string {
 	return session.SanitizeField(s, maxLen)
+}
+
+// canonicalIssueURL returns the canonical https URL for a GitHub issue URL, or
+// "" when rawURL is not one. Rebuilding it from the parsed parts keeps free-form
+// ExternalURL text out of the agent's instructions.
+func canonicalIssueURL(rawURL string) string {
+	ref, err := github.ParseGitHubRefWithHosts(rawURL, nil)
+	if err != nil || ref.Type != github.RefTypeIssue {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/%s/%s/issues/%d", ref.Host, ref.Owner, ref.Repo, ref.IssueNumber)
+}
+
+// closingKeywordWithRepo returns "Closes #<N>" when issueURL is a GitHub issue
+// in the same repository as prRemoteURL, else "". Cross-repo issues get no
+// keyword: GitHub's bare "#N" only resolves in-repo, and a full-URL keyword
+// would close an issue in a repo this PR doesn't belong to.
+func closingKeywordWithRepo(issueURL, prRemoteURL string) string {
+	issue, err := github.ParseGitHubRefWithHosts(issueURL, nil)
+	if err != nil || issue.Type != github.RefTypeIssue {
+		return ""
+	}
+	remote, err := github.ParseGitHubRefWithHosts(prRemoteURL, nil)
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(issue.Host, remote.Host) || !strings.EqualFold(issue.Owner, remote.Owner) || !strings.EqualFold(issue.Repo, remote.Repo) {
+		return ""
+	}
+	return fmt.Sprintf("Closes #%d", issue.IssueNumber)
+}
+
+// buildAcChecklist renders a numbered checklist from AC criteria.
+// pending → "[ ]", done → "[✓]", in_progress → "[✗]"
+func buildAcChecklist(criteria []session.AcCriterion) string {
+	if len(criteria) == 0 {
+		return "(no acceptance criteria)"
+	}
+	var sb strings.Builder
+	for _, c := range criteria {
+		var marker string
+		switch c.Status {
+		case "done":
+			marker = "[✓]"
+		case "in_progress":
+			marker = "[✗]"
+		default:
+			marker = "[ ]"
+		}
+		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, session.SanitizeField(c.Text, 500))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// parsePerCriterionVerdicts unmarshals the JSON array stored in
+// ReviewVerdictSummary.PerCriterion (produced via json.Marshal([]CriterionVerdict) in
+// review_gate.go) into a typed slice. Malformed or empty input yields a nil slice and no
+// error is fatal to prompt construction — callers should treat a parse failure as "no
+// per-criterion evidence available" rather than aborting.
+func parsePerCriterionVerdicts(raw string) ([]session.CriterionVerdict, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var verdicts []session.CriterionVerdict
+	if err := json.Unmarshal([]byte(raw), &verdicts); err != nil {
+		return nil, err
+	}
+	return verdicts, nil
 }
 
 // maxPriorAttemptsWithFullEvidence caps how many of the most recent ended prior sessions
@@ -184,7 +254,15 @@ func buildSessionInitialPrompt(item *session.BacklogItemData, priorSessions []se
 		}
 	}
 
+	issueURL := canonicalIssueURL(item.ExternalURL)
+	if issueURL != "" {
+		fmt.Fprintf(&sb, "\nLinked GitHub Issue: %s\n", issueURL)
+	}
 	sb.WriteString("--- END BACKLOG ITEM DATA ---\n\n")
+	if issueURL != "" {
+		// Outside the inert-data fence: this is an instruction, not item data.
+		fmt.Fprintf(&sb, "When opening a pull request, include this exact line in the PR body: Fixes %s\n\n", issueURL)
+	}
 
 	// Deliberately priorSessions here, not the EndedAt-filtered "ended" local
 	// above: escalationNotice must match AutoReopenAfterFailedReview's own

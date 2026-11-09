@@ -1,0 +1,16 @@
+{
+  "id": "session:attach-pr",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "AttachSessionPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_pr_refs.go",
+  "tested": true,
+  "testIds": [
+    "TestAttachSessionPullRequest_ShouldVerifyViaConditionalRequestAndClearTombstone_WhenURLGiven",
+    "TestAttachPRManual_ShouldClearTombstoneBeforeAttaching",
+    "TestAttachSessionPullRequest_ShouldReportAlreadyTrackedWithoutLookup_WhenPRAlreadyAttached"
+  ],
+  "lastModified": "2026-11-05T09:55:00-08:00"
+}

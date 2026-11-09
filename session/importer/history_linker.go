@@ -113,7 +113,12 @@ func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
 	if hl.rescanNeeded(filePath) {
 		hl.ScanAll()
 	}
-	// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
+	hl.notifyFileCallbacks(filePath)
+}
+
+// notifyFileCallbacks runs the extra callbacks (e.g. TokenStore for token usage
+// tracking, ArtifactExtractor) for filePath. Callers must hold no linker locks.
+func (hl *HistoryLinker) notifyFileCallbacks(filePath string) {
 	hl.mu.RLock()
 	cbs := hl.extraCallbacks
 	hl.mu.RUnlock()
@@ -134,6 +139,9 @@ func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 	uuid := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
 	if uuid == "" {
 		return true
+	}
+	if strings.HasPrefix(uuid, "agent-") {
+		return false // a subagent transcript names no conversation, so it cannot change a link
 	}
 	claimedByLive, awaitingLink := false, false
 	for _, inst := range hl.Instances() {
@@ -406,6 +414,17 @@ func (hl *HistoryLinker) detectLink(inst *session.Instance, alreadyLinked bool) 
 // A path-derived guess for a never-linked session that was linked meanwhile is
 // dropped, so a stale guess cannot overwrite the newer link.
 func (hl *HistoryLinker) commitLink(inst *session.Instance, info *session.HistoryFileInfo, viaPath, alreadyLinked bool) *session.HistoryFileInfo {
+	prevPath := inst.Snapshot().HistoryFilePath
+	committed := hl.commitLinkLocked(inst, info, viaPath, alreadyLinked)
+	// A file written before the link existed produces no later event, so hand
+	// it to the callbacks (artifact scan) now that it has an owner.
+	if committed != nil && committed.HistoryFilePath != prevPath {
+		hl.notifyFileCallbacks(committed.HistoryFilePath)
+	}
+	return committed
+}
+
+func (hl *HistoryLinker) commitLinkLocked(inst *session.Instance, info *session.HistoryFileInfo, viaPath, alreadyLinked bool) *session.HistoryFileInfo {
 	hl.claimMu.Lock()
 	defer hl.claimMu.Unlock()
 	if viaPath && !alreadyLinked && inst.HasClaudeSession() {

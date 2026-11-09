@@ -4,6 +4,7 @@
 
 import { useState, useCallback, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
+import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
 import { BacklogBoard } from "@/components/backlog/BacklogBoard";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
@@ -134,6 +135,7 @@ function BacklogBoardPageInner() {
 
   return (
     <div className={styles.pageWrapper}>
+      <BacklogViewTabs active="board" />
       <BacklogFilterBar
         search={search}
         onSearchChange={setSearch}

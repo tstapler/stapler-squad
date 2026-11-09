@@ -339,4 +339,18 @@ describe("terminal socket pool", () => {
       ),
     ).toBe(1);
   });
+
+  it("drains a mux socket after a 1008 CLOSE so the next stream dials a fresh one", () => {
+    const h = setup({ size: 1 });
+    const first = h.pool.openStream(URL);
+    const onClose = jest.fn();
+    first.addEventListener("close", onClose);
+    h.muxes[0].open();
+    h.muxes[0].feed(encodeConfig("HELLO", HELLO));
+    h.muxes[0].feed(encodeClose(1, 1008, "unauthorized"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.calls[0][0]).toMatchObject({ code: 1008, reason: "unauthorized" });
+    h.pool.openStream(URL);
+    expect(h.muxes).toHaveLength(2);
+  });
 });

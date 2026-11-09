@@ -163,6 +163,10 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubCheckConclusion:  snap.GitHub.GitHubCheckConclusion,
 		GitHubPRStatusTerminal: snap.GitHub.GitHubPRStatusTerminal,
 		LastPRStatusCheck:      snap.GitHub.LastPRStatusCheck,
+		PRs:                    snap.GitHub.PRs,
+		LegacyPRUnrepresented:  snap.GitHub.LegacyPRUnrepresented,
+		HasPRLinks:             snap.GitHub.HasPRLinks,
+		TerminalClearPending:   i.terminalClearPending.Load(),
 		// Crew autonomy mode
 		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
@@ -358,6 +362,9 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubCheckConclusion:  data.GitHubCheckConclusion,
 		GitHubPRStatusTerminal: data.GitHubPRStatusTerminal,
 		LastPRStatusCheck:      data.LastPRStatusCheck,
+		PRs:                    append([]PRView(nil), data.PRs...),
+		LegacyPRUnrepresented:  data.LegacyPRUnrepresented,
+		HasPRLinks:             data.HasPRLinks,
 		// Worktree detection fields
 		MainRepoPath: data.MainRepoPath,
 		IsWorktree:   data.IsWorktree,
@@ -431,9 +438,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
 		}
 	}
-	// Persisted sessions predate backend pinning and were tmux; a later global tymux flip must
-	// not re-route them (and their stream) to tymux.
-	if instance.Backend == "" && getSelectedBackend() == BackendTymux {
+	if instance.Backend == "" && data.TymuxSessionID != "" {
+		// A daemon id proves the record ran on tymux; don't let a changed
+		// process-wide default drop it onto another backend.
+		instance.Backend = BackendTymux
+	}
+	// Other persisted sessions predate backend pinning and were tmux; no later global selection
+	// (tymux or native) may re-route them, or their stream, to another backend.
+	if sel := getSelectedBackend(); instance.Backend == "" && sel != "" && sel != BackendTmux {
 		instance.Backend = BackendTmux
 	}
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
@@ -464,13 +476,11 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	// Auto-detect worktree info for migration (existing sessions without this info)
 	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
+	// The open()-based probe can block on an unreadable (e.g. TCC-protected) path, so
+	// with a WorktreeEnricher registered this only reads its in-memory cache and
+	// queues a background probe; see ADR-038.
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
-		if err := instance.DetectAndPopulateWorktreeInfo(); err != nil {
-			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
-			// Non-fatal - session can still work without this info
-		} else if instance.GitHubOwner != "" {
-			log.Info("auto-detected github info", "session", instance.Title, "owner", instance.GitHubOwner, "repo", instance.GitHubRepo, "worktree", instance.IsWorktree)
-		}
+		instance.populateWorktreeInfoOnLoad()
 	}
 
 	// Initialize session-specific logging

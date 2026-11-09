@@ -14,6 +14,8 @@ import {
   NotificationTray,
   SEEDED_HIDDEN_SESSION,
   sendNotification,
+  sendOnceStreamLive,
+  watchStreamLive,
   setFeatureFlag,
 } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
@@ -52,19 +54,17 @@ test.describe('hidden session stays quiet', () => {
     const controlTitle = `Visible finished ${stamp}`;
     const controlSession = `e2e-visible-complete-${stamp}`;
 
+    watchStreamLive(page);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-    // A visible failure is retried until the live stream is attached and shows its toast.
-    await expect(async () => {
+    // A visible failure, sent once the live stream is attached, must show its toast.
+    await sendOnceStreamLive(page, async () => {
       await sendNotification(request, BASE_URL, {
         sessionId: `${controlSession}-probe`,
         type: 'ERROR',
         title: `Stream probe ${stamp}`,
       });
-      await expect(page.getByTestId('toast').filter({ hasText: `Stream probe ${stamp}` }).first()).toBeVisible({
-        timeout: 1_500,
-      });
-    }).toPass({ timeout: 20_000 });
+    }, [page.getByTestId('toast').filter({ hasText: `Stream probe ${stamp}` }).first()]);
 
     await sendNotification(request, BASE_URL, { sessionId: controlSession, type: 'TASK_COMPLETE', title: controlTitle });
     // The versioned stamp is what a current ssq-notify sends; without it the gate treats the

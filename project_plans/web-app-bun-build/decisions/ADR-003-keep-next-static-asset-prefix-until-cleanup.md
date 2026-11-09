@@ -1,6 +1,6 @@
 # ADR-003: Emit assets under `/_next/static/` through the dual-build period; rename later in one atomic PR
 
-Status: Proposed — default pending owner confirmation (flagged choice F3). Date: 2026-10-19
+Status: Accepted (flagged choice F3; Story 9.4 still pending, optional). Date: 2026-10-19
 Evidence: `server/middleware/auth.go:95-101` (`exemptPrefixes`), `server/middleware/static.go:76-78` (immutable cache), `research/pitfalls.md` R1, `research/architecture.md` §2 and F4.
 
 ## Context

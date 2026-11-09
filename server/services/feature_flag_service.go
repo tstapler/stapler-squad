@@ -324,6 +324,11 @@ var knownFeatureFlags = []struct {
 		description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
 	},
 	{
+		name:         config.TCCEnrichmentConsentFlag,
+		description:  "Explain protected-root metadata access and require app consent before background worktree enrichment on macOS. Does not gate other filesystem access or represent OS grants. Default: on on Darwin, no-op elsewhere. Restart required.",
+		defaultValue: config.DefaultTCCEnrichmentConsent,
+	},
+	{
 		name:        worktreeChangeDetectionFlagName,
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
@@ -424,6 +429,15 @@ var knownFeatureFlags = []struct {
 		name:        agentWakeTriggersFlagName,
 		description: "Agent wake triggers: the dispatcher and the schedule_wake, list_wakes, cancel_wake and request_help tools. Off stops the dispatcher and the tools return flag_off; rows are kept. Scopes: trigger:<type>, tool:<name>; a scoped true runs the dispatcher for that type only. Applies at once. Default: off.",
 		scopes:      agentWakeTriggerScopes(),
+	},
+	{
+		name:        config.SessionMultiPRFlag,
+		description: "Session multi-PR tracking: per-PR state, the active PR and the item PR set. Scopes reader:poller, reader:backlog, reader:actions, reader:ui switch the readers on; enable them in that order (a later reader stays off until the earlier ones are on, applied at read time). The scope refresher_off is the kill switch of the always-on state refresher (default: refresher runs). Applies at once. Default: off.",
+		scopes:      config.SessionMultiPRScopes(),
+	},
+	{
+		name:        config.ArtifactScanV2Flag,
+		description: "Artifact scan v2: the rescan that rebuilds every session's artifact blob with typed records. Off until the owner flips it after a dry run on a database copy; turning it off stops further rescans. Applies at once; global only. Default: off.",
 	},
 	{
 		name:         hiddenSessionReadonlyGuardsFlagName,

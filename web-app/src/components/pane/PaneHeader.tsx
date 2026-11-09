@@ -6,6 +6,7 @@ import type { LeafPane, PaneViewKind } from "@/lib/pane/paneTypes";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOverflow";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { usePaneContext } from "./PaneContext";
 import {
   paneHeader,
@@ -41,11 +42,12 @@ export function PaneHeader({
   onSplitHorizontal,
 }: PaneHeaderProps) {
   const cockpit = useCockpitActions();
-  const { backlogIndex } = usePaneContext();
+  const { backlogIndex, triggerPickerForceNew } = usePaneContext();
   const isListPane = pane.viewKind === "session-list";
   const session = !isListPane && pane.sessionId
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
+  const sessionActions = useSessionActions(session?.id ?? "");
   const titleText = isListPane ? "Sessions" : (session ? session.title : "Empty");
 
   return (
@@ -68,9 +70,15 @@ export function PaneHeader({
               buttonClassName={paneHeaderButton}
               onPause={() => cockpit.onPauseSession(session.id)}
               onResume={() => cockpit.onResumeSession(session)}
+              onHibernate={() => cockpit.onHibernateSession(session.id)}
+              onResumeFromHibernation={() => cockpit.onResumeFromHibernation(session.id)}
               onDelete={() => cockpit.onDeleteSession(session.id)}
               onRestart={(id) => cockpit.onRestartSession(id)}
+              onRetryNow={(id) => cockpit.onRetryNowSession(id)}
+              onArchive={(id) => cockpit.onArchiveSession(id)}
+              onUnarchive={(id) => cockpit.onUnarchiveSession(id)}
               onClone={() => cockpit.onCloneSession(session.id)}
+              onOpenInNewPane={() => triggerPickerForceNew(session)}
               onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
@@ -80,6 +88,10 @@ export function PaneHeader({
               onSteerAutonomousSession={(id, msg) => cockpit.onSteerAutonomousSession(id, msg)}
               onClearConversationState={(id) => cockpit.onClearConversationState(id)}
               onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}
+              onChangeProgram={async (_id, program) => {
+                const result = await sessionActions.update({ program });
+                if (!result) throw new Error("Failed to change program.");
+              }}
             />
           </div>
         )}
@@ -95,7 +107,7 @@ export function PaneHeader({
             }}
             title={isListPane ? "Switch to session detail" : "Switch to session list"}
             aria-label={isListPane ? "Switch to session detail" : "Switch to session list"}
-          >
+          >{/* analytics-exempt */}
             {isListPane ? <LayoutDashboard size={14} /> : <LayoutList size={14} />}
           </button>
         )}
@@ -112,7 +124,7 @@ export function PaneHeader({
               }}
               title="Split pane side by side (vertical)"
               aria-label="Split pane side by side"
-            >
+            >{/* analytics-exempt */}
               <Columns2 size={14} />
             </button>
             <button
@@ -124,7 +136,7 @@ export function PaneHeader({
               }}
               title="Split pane top and bottom (horizontal)"
               aria-label="Split pane top and bottom"
-            >
+            >{/* analytics-exempt */}
               <Rows2 size={14} />
             </button>
           </>
@@ -140,7 +152,7 @@ export function PaneHeader({
             }}
             title="Fullscreen pane"
             aria-label="Fullscreen pane"
-          >
+          >{/* analytics-exempt */}
             <Maximize2 size={14} />
           </button>
         )}
@@ -154,7 +166,7 @@ export function PaneHeader({
           }}
           title="Close pane"
           aria-label="Close pane"
-        >
+        >{/* analytics-exempt */}
           <X size={14} />
         </button>
       </div>

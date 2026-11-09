@@ -6,22 +6,14 @@ const packageJson = JSON.parse(
 );
 
 describe("package.json scripts", () => {
-  it("dev_should_containPortEnvVarFallback_When_readFromPackageJson", () => {
-    expect(packageJson.scripts["dev:next"]).toContain("${PORT:-3001}");
+  it("dev_and_build_should_runTheBunPipeline_When_readFromPackageJson", () => {
+    expect(packageJson.scripts["dev"]).toBe("bun build/dev.ts");
+    expect(packageJson.scripts["build"]).toBe("bun build/build.ts");
   });
 
-  it("start_should_containPortEnvVarFallback_When_readFromPackageJson", () => {
-    expect(packageJson.scripts["start:next"]).toContain("${PORT:-3001}");
-  });
-
-  it("dev_should_containHostnameLocalhost_When_readFromPackageJson", () => {
-    expect(packageJson.scripts["dev:next"]).toContain("--hostname localhost");
-  });
-
-  it("dev_and_start_and_build_should_dispatchOnWebBuild_When_readFromPackageJson", () => {
-    for (const name of ["dev", "start", "build"]) {
-      expect(packageJson.scripts[name]).toContain('"$WEB_BUILD" = bun');
-      expect(packageJson.scripts[name]).toContain(`${name}:next`);
+  it("scripts_should_notReferenceNext_When_readFromPackageJson", () => {
+    for (const [name, command] of Object.entries<string>(packageJson.scripts)) {
+      expect({ name, command }).not.toEqual({ name, command: expect.stringMatching(/\bnext\b|WEB_BUILD/) });
     }
   });
 });

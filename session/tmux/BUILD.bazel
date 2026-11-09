@@ -144,6 +144,7 @@ go_test(
         "control_mode_interleaved_start_stop_test.go",
         "control_mode_refcount_test.go",
         "control_mode_remote_test.go",
+        "control_mode_server_command_test.go",
         "control_mode_test.go",
         "directory_restoration_test.go",
         "exec_gate_test.go",

@@ -792,21 +792,7 @@ func (i *Instance) GetWorkingDirectory() string {
 // - gitWorktree.GetWorktreePath() is the actual worktree (e.g., ~/.stapler-squad/worktrees/...)
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
-	// Determine the path to use for detection
-	// For worktree sessions, use the worktree path; otherwise use i.Path.
-	// Deliberately raw, not GetPath(): a session-creation/retry caller sets
-	// i.Path raw without republishing the snapshot before this runs, so
-	// GetPath() observed stale data and regressed
-	// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
-	// TestTriggerTriage_* when tried.
-	detectPath := i.Path
-	if i.GitManager.HasWorktree() {
-		worktreePath := i.GitManager.GetWorktreePath()
-		if worktreePath != "" {
-			detectPath = worktreePath
-		}
-	}
-
+	detectPath := i.worktreeDetectPath()
 	if detectPath == "" {
 		return nil
 	}
@@ -815,9 +801,68 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	if err != nil {
 		return err
 	}
+	return i.applyWorktreeInfo(info)
+}
 
+// worktreeDetectPath is the path worktree detection probes: the worktree for a
+// worktree session, otherwise i.Path.
+// Deliberately raw, not GetPath(): a session-creation/retry caller sets
+// i.Path raw without republishing the snapshot before this runs, so
+// GetPath() observed stale data and regressed
+// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
+// TestTriggerTriage_* when tried.
+func (i *Instance) worktreeDetectPath() string {
+	if i.GitManager.HasWorktree() {
+		if worktreePath := i.GitManager.GetWorktreePath(); worktreePath != "" {
+			return worktreePath
+		}
+	}
+	return i.Path
+}
+
+// applyWorktreeInfo publishes a detection result through the instance actor.
+func (i *Instance) applyWorktreeInfo(info *WorktreeInfo) error {
 	return i.sendSyncErr(func(s *instanceState) error {
 		applyWorktreeDetectionLocked(s, info)
 		return nil
 	})
+}
+
+// populateWorktreeInfoOnLoad fills worktree/GitHub info while the instance is
+// still goroutine-local (inside fromInstanceData). Without a registered
+// WorktreeEnricher it detects synchronously, as before; with one it applies a
+// cached result if ready and otherwise leaves the fields empty for the next load.
+func (i *Instance) populateWorktreeInfoOnLoad() {
+	enricher := activeWorktreeEnricher.Load()
+	if enricher == nil {
+		if err := i.DetectAndPopulateWorktreeInfo(); err != nil {
+			log.Warn("failed to detect worktree info", "session", i.Title, "err", err)
+		} else if i.GitHubOwner != "" {
+			log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
+		}
+		return
+	}
+	path := i.worktreeDetectPath()
+	if path == "" {
+		return
+	}
+	cached, ready := enricher.Result(path)
+	if !ready {
+		enricher.Request(path)
+		return
+	}
+	if cached.Err != nil {
+		log.Debug("worktree detection failed (cached)", "session", i.Title, "err", cached.Err)
+		return
+	}
+	info := cached.Info
+	if info.isEmptyDetection() {
+		// "No .git here" can be stale (a recreated worktree) and would flip a persisted IsWorktree.
+		return
+	}
+	if err := i.applyWorktreeInfo(info); err != nil {
+		log.Warn("failed to apply cached worktree info", "session", i.Title, "err", err)
+	} else if i.GitHubOwner != "" {
+		log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
+	}
 }

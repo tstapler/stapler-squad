@@ -14,6 +14,7 @@ jest.mock("@/components/ui/ErrorBoundary", () => ({ ErrorBoundary: ({ children }
 jest.mock("@/lib/contexts/AuthContext", () => ({ AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</> }));
 jest.mock("@/app/layout.css", () => ({ mainContent: "main-content" }));
 jest.mock("@/components/layout/CockpitShell", () => ({ CockpitShell: ({ children }: { children: ReactNode }) => <div data-testid="cockpit">{children}</div> }));
+jest.mock("@/components/system/TCCEnrichmentBanner", () => ({ TCCEnrichmentBanner: () => null }));
 jest.mock("@/components/system/TmuxVersionMismatchBanner", () => ({ TmuxVersionMismatchBanner: () => null }));
 jest.mock("@/components/system/ForkPressureStatusBanner", () => ({ ForkPressureStatusBanner: () => null }));
 jest.mock("@/components/ui/TrayErrorBoundary", () => ({ TrayErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</> }));

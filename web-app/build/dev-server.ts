@@ -6,7 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import { FONT_PRELOAD_PLACEHOLDER, THEME_BOOT_PLACEHOLDER } from "./config";
 
-/** Same default as `next dev --port ${PORT:-3001}`. */
+/** The dev port when PORT is unset. */
 export const DEFAULT_DEV_PORT = 3001;
 export const DEV_HOSTNAME = "localhost";
 export const RELOAD_PATH = "/_dev/reload";

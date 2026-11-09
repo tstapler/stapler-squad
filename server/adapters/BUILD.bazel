@@ -4,8 +4,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "adapters",
     srcs = [
+        "artifact_records.go",
         "instance_adapter.go",
         "review_queue_adapter.go",
+        "session_pull_requests.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/server/adapters",
     visibility = ["//visibility:public"],
@@ -14,6 +16,7 @@ go_library(
         "//log",
         "//proto/session/v1:sessionv1_go",
         "//session",
+        "//session/artifacts",
         "//session/cdp",
         "//session/detection",
         "//session/detection/ratelimit",
@@ -32,14 +35,18 @@ alias(
 go_test(
     name = "adapters_test",
     srcs = [
+        "artifact_records_utf8_test.go",
         "instance_adapter_test.go",
         "review_queue_adapter_test.go",
+        "session_pull_requests_test.go",
     ],
     embed = [":adapters"],
     deps = [
+        "//envtest",
         "//github",
         "//proto/session/v1:sessionv1_go",
         "//session",
+        "//session/artifacts",
         "//session/detection",
         "//session/detection/ratelimit",
         "//session/git",
@@ -47,6 +54,7 @@ go_test(
         "//session/tokens",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
         "@org_golang_x_crypto//ssh",
     ],
 )

@@ -11,7 +11,7 @@ import fs from 'fs';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import { DIALOG_QUESTION, fakePaneSession, postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
-import { INLINE_ACTIONS_FLAG, QuestionCard, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
+import { INLINE_ACTIONS_FLAG, QuestionCard, markAllNotificationsRead, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
 
@@ -33,6 +33,7 @@ test.afterAll(async ({ request }) => {
   // The shared server outlives this file; other specs expect the legacy buttons.
   await setFeatureFlag(request, BASE_URL, INLINE_ACTIONS_FLAG, false);
   await setFeatureFlag(request, BASE_URL, STRUCTURED_FLAG, false);
+  await markAllNotificationsRead(request, BASE_URL);
 });
 
 const receivedKey = (keyFile: string) => (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : '');

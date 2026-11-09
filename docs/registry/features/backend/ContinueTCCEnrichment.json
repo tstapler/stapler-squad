@@ -1,0 +1,13 @@
+{
+  "id": "ContinueTCCEnrichment",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ContinueTCCEnrichment",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestTCCEnrichmentRPC_ConsentAndUnknownRoot"
+  ],
+  "lastModified": "2026-11-01T23:01:03.928832484-08:00"
+}

@@ -11,7 +11,7 @@
     "BacklogItemDetail — Epic 1.1: triage question answer wiring \u003e calls triggerTriage with the composed Q:/A: feedback when a question is answered",
     "TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved",
     "TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason",
-    "tests/e2e/triage-question-answer.spec.ts",
+    "web-app/src/components/backlog/BacklogItemDetail.triageQuestionAnswer.test.tsx",
     "tests/e2e/plan-review.spec.ts"
   ],
   "lastModified": "2026-11-04T19:49:24.282436485-08:00"

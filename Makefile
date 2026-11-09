@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -249,49 +249,20 @@ web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
-# WEB_BUILD selects the bundler: bun (default, web-app/build/, ADR-006) or next (explicit opt-in until PR 9 deletes it). Both write web-app/out.
-WEB_BUILD ?= bun
-ifneq ($(filter $(WEB_BUILD),next bun),$(WEB_BUILD))
-$(error WEB_BUILD must be "next" or "bun", got "$(WEB_BUILD)")
-endif
 # Bun builds are minified unless this is 0. Unminified until PR 8b turns minification on (plan Story 8.6, which deletes this line).
 WEB_MINIFY ?= 0
 
-# The stamp changes only when WEB_BUILD does, so flipping modes rebuilds web-app/out (and recopies dist) once, never twice.
-WEB_BUILD_STAMP := web-app/.web-build-mode
-.PHONY: FORCE-web-build-mode
-FORCE-web-build-mode: ;
-$(WEB_BUILD_STAMP): FORCE-web-build-mode
-	@[ "$$(cat $@ 2>/dev/null)" = "$(WEB_BUILD)" ] || echo "$(WEB_BUILD)" > $@
+BUN_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
 
-ifeq ($(WEB_BUILD),bun)
-WEB_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
-else
-WEB_BUILD_INPUTS := web-app/next.config.ts
-endif
-
-# end of the WEB_BUILD seam block (scripts/__tests__/makefile-web-build.test.mjs extracts everything above)
-
-# Build the web UI to web-app/out (Bun by default, Next with WEB_BUILD=next)
-web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(WEB_BUILD_INPUTS) $(WEB_BUILD_STAMP)
-ifeq ($(WEB_BUILD),bun)
+# Build the web UI to web-app/out with Bun (web-app/build/, ADR-006)
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/@vanilla-extract/integration || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
 		go run ./tools/shared-node-modules web-app; \
 	}
-	@echo "Building web UI with Bun (WEB_BUILD=bun, WEB_MINIFY=$(WEB_MINIFY))..."
+	@echo "Building web UI with Bun (WEB_MINIFY=$(WEB_MINIFY))..."
 	@cd web-app && WEB_MINIFY=$(WEB_MINIFY) bun build/build.ts
-else
-	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
-	@test -d web-app/node_modules/next || { \
-		echo "⚠️  node_modules incomplete, re-installing..."; \
-		go run ./tools/shared-node-modules web-app; \
-	}
-	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
-	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
-endif
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -304,7 +275,7 @@ server/web/dist: web-app/out
 	@echo "✅ Web UI built and copied successfully"
 
 ifneq ($(BUILD_SYSTEM),bazel)
-web-build: server/web/dist ## Build the web UI, Bun by default, WEB_BUILD=next for Next (Bazel: bazel build //server/web:dist_staged, copied to server/web/dist)
+web-build: server/web/dist ## Build the web UI with Bun (Bazel: bazel build //server/web:dist_staged, copied to server/web/dist)
 	@echo "[build-system=make] make server/web/dist"
 endif
 
@@ -423,7 +394,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.12.0
+TYMUX_VERSION ?= v1.17.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -639,10 +610,10 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	STAPLER_SQUAD_USE_CONTROL_MODE=false \
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
-# Isolated backend + next-dev DevStack (Next mode (removed in PR 9)) for manual testing (Epic 3.2,
+# Isolated backend + Bun dev server DevStack for manual testing (Epic 3.2,
 # scripts/dev-stack/launch.ts). Distinct from `make preview` (which runs the
 # built Go binary alone against the static-exported web UI) — this spins up
-# BOTH a backend and a real `next dev` on separately allocated ports, wired
+# BOTH a backend and the Bun dev server (web-app/build/dev.ts) on separately allocated ports, wired
 # together via STAPLER_SQUAD_EXTRA_ORIGINS/NEXT_PUBLIC_API_URL, and tears
 # both down (plus any orphaned grandchildren) on Ctrl-C.
 #
@@ -651,7 +622,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 DEV_STACK_TS_NODE := web-app/node_modules/.bin/ts-node
 DEV_STACK_TSC_OPTS := {"module":"commonjs","moduleResolution":"node","esModuleInterop":true}
 
-dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack NAME=my-feature-test
+dev-stack: build ## Start an isolated backend+Bun-dev-server DevStack: make dev-stack NAME=my-feature-test
 	@if [ -z "$(NAME)" ]; then \
 		echo "Usage: make dev-stack NAME=<instance-name>"; \
 		exit 1; \
@@ -1004,7 +975,7 @@ $(LINTER_BIN): $(LINTER_SRC)
 # excluded outright since scanning them just re-lints scripts already
 # covered by their own branch). Includes scripts/ssq-hook-handler, which has
 # no .sh extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+SHELL_SCRIPTS := $(shell find . -type d \( -name third_party -o -name node_modules -o -path './.git' -o -path './.claude/worktrees' \) -prune -o -type f \( -name '*.sh' -o -name ssq-hook-handler \) -print)
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
@@ -1135,7 +1106,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard check-no-generated-committed ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -1208,6 +1179,20 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
+
+.PHONY: check-no-generated-committed
+check-no-generated-committed: ## Fail if generated ent or gen/ output is tracked (only session/ent/schema/ and generate.go may be)
+	@bad="$$(git ls-files session/ent gen | grep -v -E '^session/ent/(schema/|generate\.go)')"; \
+	if [ -n "$$bad" ]; then \
+	    echo "❌ check-no-generated-committed: generated output is tracked (untrack it; .gitignore excludes it):"; \
+	    echo "$$bad" | head -20; \
+	    exit 1; \
+	fi
+	@echo "✅ check-no-generated-committed: no generated ent or gen/ output tracked"
+
+.PHONY: plan-check-session-multi-pr
+plan-check-session-multi-pr: ## Validate the session-multi-pr-tracking plan's task dependency table
+	python3 scripts/plan-check/session_multi_pr_table.py
 
 ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty-web vs tests/terminal-conformance/ (docs/how-to/vt-conformance-runbook.md)
 	cd web-app && bunx jest --no-coverage src/lib/terminal/__tests__/conformance src/lib/terminal/__tests__/ghosttyAdapter.test.ts
@@ -1288,6 +1273,30 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
+
+# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
+# Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
+pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance*.go and session/session_pr_*.go
+	@echo "pr-field-guard: scanning for direct PR field writes..."
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance*.go' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
+	    | xargs -r grep -EnH '\b(inst|instance|liveInst)\.(GitHubPRNumber|GitHubPRURL|GitHubPRStatusTerminal|GitHubOwner|GitHubRepo) = [^=]' \
+	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	    echo "❌ pr-field-guard: direct PR field write found — route through AttachPR / the actor setters (session-multi-pr-tracking)"; \
+	    exit 1; \
+	fi
+	@echo "✅ pr-field-guard: no direct PR field writes"
+
+# Invariant I1: only the repository file writes PullRequestState (session_pr_gc.go deletes only).
+# Grep-based like pr-field-guard; a typed analyzer is the follow-up T2.2.6.
+pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside ent_repository_session_pr.go and session_pr_gc.go
+	@echo "pr-state-write-guard: scanning for direct PullRequestState writes..."
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/ent_repository_session_pr.go' ':!:session/session_pr_gc.go' \
+	    | xargs -r grep -EnH 'PullRequestState\.(Create|CreateBulk|Update|UpdateOne|UpdateOneID|Delete|DeleteOne|DeleteOneID)\b|PullRequestState(Create|CreateBulk|Update|UpdateOne|Delete|DeleteOne|Client)\b' \
+	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through EntRepository.UpdatePullRequestState"; \
+	    exit 1; \
+	fi
+	@echo "✅ pr-state-write-guard: no direct PullRequestState writes"
 
 ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
 	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."

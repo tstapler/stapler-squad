@@ -29,34 +29,55 @@ func buildPRAnnotations(poller *prpoller.PRStatusPoller, scanner *unfinished.Sca
 	return annotationSessions(poller, enterpriseHosts), annotationWorktrees(scanner, enterpriseHosts)
 }
 
+// annotationsForSnapshot emits one annotation per attached PR so every PR a
+// session holds links back to it; a session with no links keeps the single
+// legacy entry. Reads the snapshot, never raw fields: actor writes do not hold mu.
+func annotationsForSnapshot(title string, snap *session.InstanceSnapshot, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
+	if len(snap.GitHub.PRs) > 0 {
+		return annotationsForPRs(title, snap)
+	}
+	repoRef, prNumber, hostUnrecorded := resolveSessionRepo(snap, enterpriseHosts)
+	if !repoRef.IsValid() {
+		return nil
+	}
+	// Last resort: extract PR number from session title (e.g. "pr-1255-...").
+	if prNumber == 0 {
+		if m := prNumFromTitle.FindStringSubmatch(title); m != nil {
+			prNumber, _ = strconv.Atoi(m[1])
+		}
+	}
+	return []githubpkg.PRAnnotationSession{{
+		ID: title, Branch: snap.Branch, Repo: repoRef, PRNumber: prNumber,
+		Status: linkedStatusFor(snap.Status), LastActiveAt: snap.UpdatedAt, HostUnrecorded: hostUnrecorded,
+	}}
+}
+
+func annotationsForPRs(title string, snap *session.InstanceSnapshot) []githubpkg.PRAnnotationSession {
+	out := make([]githubpkg.PRAnnotationSession, 0, len(snap.GitHub.PRs))
+	for _, v := range snap.GitHub.PRs {
+		host := v.Ref.Host()
+		if githubpkg.IsGitHubCom(host) {
+			host = ""
+		}
+		repoRef, err := githubpkg.NewRepoRefWithHost(v.Ref.Owner(), v.Ref.Repo(), host)
+		if err != nil {
+			continue
+		}
+		out = append(out, githubpkg.PRAnnotationSession{
+			ID: title, Branch: snap.Branch, Repo: repoRef, PRNumber: v.Ref.Number(),
+			Status: linkedStatusFor(snap.Status), LastActiveAt: snap.UpdatedAt,
+		})
+	}
+	return out
+}
+
 func annotationSessions(poller *prpoller.PRStatusPoller, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
 	if poller == nil {
 		return nil
 	}
 	var out []githubpkg.PRAnnotationSession
 	for _, inst := range poller.GetInstances() {
-		// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold
-		// mu, so direct field reads would race with concurrent poller updates.
-		snap := inst.Snapshot()
-		repoRef, prNumber, hostUnrecorded := resolveSessionRepo(snap, enterpriseHosts)
-		if !repoRef.IsValid() {
-			continue
-		}
-		// Last resort: extract PR number from session title (e.g. "pr-1255-...").
-		if prNumber == 0 {
-			if m := prNumFromTitle.FindStringSubmatch(inst.Title); m != nil {
-				prNumber, _ = strconv.Atoi(m[1])
-			}
-		}
-		out = append(out, githubpkg.PRAnnotationSession{
-			ID:             inst.Title,
-			Branch:         snap.Branch,
-			Repo:           repoRef,
-			PRNumber:       prNumber,
-			Status:         linkedStatusFor(snap.Status),
-			LastActiveAt:   snap.UpdatedAt,
-			HostUnrecorded: hostUnrecorded,
-		})
+		out = append(out, annotationsForSnapshot(inst.Title, inst.Snapshot(), enterpriseHosts)...)
 	}
 	return out
 }

@@ -108,6 +108,16 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 	return string(merged), nil
 }
 
+// checkNoNewWaivers is the early, user-facing error for a rewrite that introduces a waiver; the
+// repository re-checks authoritatively inside its transaction and carries existing waivers
+// forward by criterion text, so nothing here rewrites the list.
+func checkNoNewWaivers(incoming, existing session.AcCriteriaJSON) error {
+	if incoming == "" {
+		return nil
+	}
+	return session.CheckNoNewAcWaivers(existing, incoming)
+}
+
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
 func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON, error) {
 	if len(protoAC) == 0 {
@@ -119,6 +129,10 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON,
 			Index:  int(c.Index),
 			Text:   c.Text,
 			Status: session.AcStatus(c.Status),
+
+			WaiverReason: c.WaiverReason,
+			WaivedBy:     c.WaivedBy,
+			WaivedAt:     c.WaivedAt,
 		}
 	}
 	b, err := json.Marshal(criteria)
@@ -178,6 +192,9 @@ func (s *BacklogService) CreateBacklogItem(
 	}
 
 	acJSON, err := acCriteriaToJSON(req.Msg.AcceptanceCriteria)
+	if err == nil {
+		err = checkNoNewWaivers(acJSON, "")
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
@@ -275,6 +292,11 @@ func (s *BacklogService) UpdateBacklogItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
+	}
+
+	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	if err = checkNoNewWaivers(acJSON, existing.AcceptanceCriteria); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
 
 	update := session.BacklogItemUpdate{}
@@ -432,6 +454,10 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, precondition)
+	var clearedWaivers []session.AcCriterion
+	if updated != nil {
+		clearedWaivers = updated.ClearedAcWaivers
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -442,7 +468,13 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
 	}
 
+	if update.RepoPath != nil && *update.RepoPath != existing.RepoPath {
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // the likely cause was just fixed
+	}
+
+	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
 	if associatePR {
+		prAssociation = prAssociationOutcome(updated, prNumber)
 		// Routed through the shared primary-write path — not a hand-rolled
 		// field write — so the status transition (review -> pr_pending) and
 		// the PR fields land as one atomic UPDATE, same as report_pr_created.
@@ -473,7 +505,7 @@ func (s *BacklogService) UpdateBacklogItem(
 			Caller:      session.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
-		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note})
+		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: session.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
@@ -502,8 +534,21 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
-		Item: backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		Item:           backlogItemToProto(updated, s.engine, s.buildCostLookup()),
+		PrAssociation:  prAssociation,
+		ClearedWaivers: acCriteriaToProto(clearedWaivers),
 	}), nil
+}
+
+// prAssociationOutcome says what the PR association write will do, read from the
+// item as it stood before the write: pr_pending on the same PR number is the
+// idempotent no-op (setPRAndTransition), anything else that succeeds is a first
+// link from review. Failures never reach a response, so they need no value.
+func prAssociationOutcome(before *session.BacklogItemData, prNumber int) sessionv1.PrAssociationResult {
+	if before.Status == string(session.BacklogStatusPRPending) && before.PrNumber == prNumber {
+		return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_ALREADY_TRACKED
+	}
+	return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_LINKED_AND_MOVED
 }
 
 // --- ArchiveBacklogItem ---
@@ -537,7 +582,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	// Best-effort: clean up git worktrees for work sessions on archive.
 	if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-		s.cleanupItemWorktrees(ctx, sessions)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathArchiveRPC), sessions)
 	}
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
@@ -569,6 +614,71 @@ func (s *BacklogService) UnarchiveBacklogItem(
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
 		Item: backlogItemToProto(unarchived, s.engine, s.buildCostLookup()),
+	}), nil
+}
+
+const maxWaiverReason = 2000
+
+// --- WaiveAcceptanceCriterion ---
+
+// WaiveAcceptanceCriterion records an audited waiver of one acceptance criterion. No MCP tool
+// exposes it, and a request that carries an agent-session identity is denied. The Connect surface
+// has no per-caller identity of its own, so a plain loopback caller is recorded as "unverified",
+// not trusted and not blocked: every attempt, applied or refused, is written to the AC audit trail.
+// This is an audit control, not owner-only enforcement.
+// +api: WaiveAcceptanceCriterion
+func (s *BacklogService) WaiveAcceptanceCriterion(
+	ctx context.Context,
+	req *connect.Request[sessionv1.WaiveAcceptanceCriterionRequest],
+) (*connect.Response[sessionv1.WaiveAcceptanceCriterionResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	m := req.Msg
+	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	idx := int(m.CriterionIndex)
+
+	current, err := s.storage.GetBacklogItem(ctx, m.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) || ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item: %w", err))
+	}
+	deny := func(code connect.Code, outcome string, cause error) (*connect.Response[sessionv1.WaiveAcceptanceCriterionResponse], error) {
+		s.recordDeniedAcAttempt(ctx, current.ID, idx, m.Reason, outcome)
+		return nil, connect.NewError(code, cause)
+	}
+	switch {
+	case session.AcActorFrom(ctx).Class == session.AcActorAgentSession:
+		return deny(connect.CodePermissionDenied, "denied:agent_session",
+			errors.New("acceptance criteria cannot be waived from a request carrying an agent-session identity"))
+	case current.ArchivedAt != nil || current.Status == string(session.BacklogStatusDone) || current.Status == string(session.BacklogStatusArchived):
+		return deny(connect.CodeFailedPrecondition, "denied:item_terminal",
+			fmt.Errorf("backlog item %q is %s; its criteria can no longer be waived", m.ItemId, current.Status))
+	case strings.TrimSpace(m.Reason) == "":
+		return deny(connect.CodeInvalidArgument, "rejected:reason_required", session.ErrWaiverReasonRequired)
+	case len(m.Reason) > maxWaiverReason:
+		return deny(connect.CodeInvalidArgument, "rejected:reason_too_long", fmt.Errorf("waiver reason is limited to %d bytes", maxWaiverReason))
+	}
+
+	err = s.storage.WaiveAcCriterion(ctx, m.ItemId, idx, m.Reason)
+	switch {
+	case errors.Is(err, session.ErrNotFound):
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
+	case errors.Is(err, session.ErrAcCriterionAlreadyDone), errors.Is(err, session.ErrAcCriterionAlreadyWaived):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, session.ErrWaiverReasonRequired), errors.Is(err, session.ErrAcCriterionOutOfRange):
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	case err != nil:
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to waive criterion: %w", err))
+	}
+	item, err := s.storage.GetBacklogItem(ctx, m.ItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload item: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.WaiveAcceptanceCriterionResponse{
+		Item: backlogItemToProto(item, s.engine, s.buildCostLookup()),
 	}), nil
 }
 
@@ -961,6 +1071,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
+	if services.TransitionActorFromContext(ctx) == session.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
+	}
 
 	// override_reason set means this was a manual operator override (bypassing
 	// TransitionGuard, per session.TransitionGuard's override handling above),
@@ -979,7 +1092,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
 	if session.IsTerminalStatus(to) {
-		s.CleanupTerminalItem(ctx, req.Msg.ItemId)
+		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 
 	// Backward to idea/refining: reset planning approval so triage must re-run.
@@ -1293,12 +1406,13 @@ func (s *BacklogService) OverrideVerdict(
 	// 4. Save/upsert the ReviewVerdict with override fields.
 	now := time.Now()
 	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
-		OverallOutcome: outcome,
-		Summary:        fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
-		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, itemID),
-		OverrideBy:     "user",
-		OverrideReason: req.Msg.OverrideReason,
-		OverrideAt:     &now,
+		OverallOutcome:    outcome,
+		Summary:           fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
+		DiffHash:          s.storage.ComputeCurrentDiffHash(ctx, itemID),
+		ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(ctx, itemID),
+		OverrideBy:        "user",
+		OverrideReason:    req.Msg.OverrideReason,
+		OverrideAt:        &now,
 	}); verdictErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save review verdict: %w", verdictErr))
 	}
@@ -1420,13 +1534,14 @@ func (s *BacklogService) SubmitManualReview(
 		SessionRole: session.SessionRoleReview,
 		AcSnapshot:  item.AcceptanceCriteria,
 	}, session.ReviewVerdictData{
-		OverallOutcome: overall,
-		PerCriterion:   string(perCriterionJSON),
-		Summary:        req.Msg.Summary,
-		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
-		OverrideBy:     "user",
-		OverrideReason: "manual review",
-		OverrideAt:     &now,
+		OverallOutcome:    overall,
+		PerCriterion:      string(perCriterionJSON),
+		Summary:           req.Msg.Summary,
+		DiffHash:          s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
+		ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(ctx, req.Msg.ItemId),
+		OverrideBy:        "user",
+		OverrideReason:    "manual review",
+		OverrideAt:        &now,
 	})
 	if createErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))

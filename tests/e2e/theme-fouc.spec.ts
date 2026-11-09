@@ -1,12 +1,11 @@
 // @feature ui:theme, accessibility
 /**
- * Story 7.5a (Next baseline): the inline theme script applies the stored theme class to <html>
+ * The inline theme script applies the stored theme class to <html>
  * before first paint, degrades to `clean` on unknown values, applies `custom:` themes, and never
- * removes the font variable classes. Theme class names are hashed, so each is identified by being
+ * removes the font variable properties. Theme class names are hashed, so each is identified by being
  * distinct from `clean` (the default with no storage) rather than by name.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { isBunBuild } from './helpers/web-build';
 import { AppShellPage } from './pages/AppShellPage';
 import { baseUrl } from './helpers/base-url';
 
@@ -54,7 +53,7 @@ async function loadWithStorage(page: Page, storage: Record<string, string>): Pro
   return page.evaluate(() => (window as unknown as { __paint: FirstPaintFacts }).__paint);
 }
 
-test.describe('theme FOUC prevention (Next baseline)', () => {
+test.describe('theme FOUC prevention', () => {
   test('each stored theme is applied at DOMContentLoaded and dark themes resolve their own tokens on the first frame', async ({ browser }) => {
     const byTheme = new Map<string, FirstPaintFacts>();
     for (const theme of THEMES) {
@@ -72,27 +71,11 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
     for (const theme of THEMES.filter((t) => t !== 'clean')) {
       expect(themeClassOf(byTheme.get(theme)!).length, `${theme} adds its own class`).toBeGreaterThan(0);
     }
-    // <body>'s own background is theme-independent on Next (globals.css --background), so the
+    // <body>'s own background is theme-independent (globals.css --background), so the
     // first-frame check reads the theme tokens instead: a late theme would still show clean's.
     for (const theme of DARK_THEMES) {
       expect(byTheme.get(theme)!.tokens, `${theme} first-frame theme tokens`).not.toBe(clean.tokens);
     }
-  });
-
-  test('font variable classes survive every theme', async ({ browser }) => {
-    test.skip(isBunBuild(), 'Bun vendors fonts as global --font-* properties, not <html> classes; the Bun-only block below covers it');
-    const fonts = new Map<string, string[]>();
-    for (const theme of THEMES) {
-      const context = await browser.newContext();
-      const facts = await loadWithStorage(await context.newPage(), { 'stapler-theme': theme });
-      await context.close();
-      fonts.set(theme, facts.classes);
-    }
-    // Exactly one class differs between themes; the rest (next/font variables) are shared.
-    const sizes = new Set(Array.from(fonts.values()).map((c) => c.length));
-    expect(sizes.size, 'class count is identical across themes').toBe(1);
-    const shared = fonts.get('clean')!.filter((c) => Array.from(fonts.values()).every((list) => list.includes(c)));
-    expect(shared.length, 'font variable classes present under every theme').toBeGreaterThanOrEqual(4);
   });
 
   test('a custom: theme applies its class and CSS variables before first paint', async ({ page }) => {
@@ -105,7 +88,7 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
     expect(facts.style).toContain('--e2e-probe');
     // Only the DOMContentLoaded snapshot is the first-paint contract: ThemeContext later confirms
     // the theme against /api/themes and, for this unregistered id, clears the override, so a live
-    // read after load races that fetch (the Bun build wins the race, Next hydrates slower).
+    // read after load races that fetch (a slow host can lose the race).
     expect(facts.style).toContain('42px');
   });
 
@@ -123,9 +106,7 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
   });
 });
 
-test.describe('theme FOUC prevention (Bun only, UX G10)', () => {
-  test.skip(!isBunBuild(), 'Next vendors fonts via next/font/local classes; Bun vendors them as global --font-* custom properties (app/fonts.css)');
-
+test.describe('theme FOUC prevention (fonts and stylesheet order, UX G10)', () => {
   test('--font-* variables resolve under every theme (globals, never removed by the boot script)', async ({ browser }) => {
     for (const theme of THEMES) {
       const context = await browser.newContext();

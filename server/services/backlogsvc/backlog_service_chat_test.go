@@ -173,3 +173,50 @@ func TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrR
 	require.Error(t, chatErr)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(chatErr))
 }
+
+// TestCreateBacklogItemFromChat_should_TriggerTriage_When_RepoPathProvided
+// guards AC4: the compose widget's repo path must reach CreateBacklogItem so
+// MaybeTriggerTriage runs (before this field existed it always saw "").
+func TestCreateBacklogItemFromChat_should_TriggerTriage_When_RepoPathProvided(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(&fakeHeadlessPool{response: validTriageJSON()})
+	repoPath := t.TempDir()
+
+	resp, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
+		Message:  "Add dark mode support",
+		RepoPath: "  " + repoPath + "  ",
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.TriageTriggered)
+	assert.Equal(t, repoPath, resp.Msg.Item.RepoPath)
+}
+
+func TestCreateBacklogItemFromChat_should_NotTriggerTriage_When_RepoPathEmpty(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(&fakeHeadlessPool{response: validTriageJSON()})
+
+	resp, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
+		Message: "Add dark mode support",
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.TriageTriggered)
+}
+
+func TestCreateBacklogItemFromChat_should_KeepItemWithoutTriage_When_RepoPathUnresolvable(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(&fakeHeadlessPool{response: validTriageJSON()})
+
+	resp, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
+		Message:  "Add dark mode support",
+		RepoPath: "https://github.com/",
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.TriageTriggered)
+	assert.Empty(t, resp.Msg.Item.RepoPath)
+}

@@ -284,7 +284,19 @@ func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {
 
 // SetGitHubPR atomically sets the GitHub PR URL and PR number discovered after a
 // RunOneShot or PR-discovery poll.  Pass prNumber=0 if not yet known.
+//
+// With a resolved owner/repo and a uuid the PR joins the session's PR set through
+// AttachPR; otherwise only the legacy scalars are written and no link is created.
 func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
+	i.setLegacyPR(prURL, prNumber, AttachSourcePRCreationService)
+}
+
+// setLegacyPR attaches the PR with source, or writes the legacy scalars alone when
+// the session cannot hold a link.
+func (i *Instance) setLegacyPR(prURL string, prNumber int, source AttachSource) {
+	if i.attachLegacyPR(prNumber, source, PRInitial{URL: prURL}) {
+		return
+	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setGitHubPRURLLocked(s, prURL, prNumber)
 		return nil
@@ -304,7 +316,13 @@ func setGitHubPRNumberLocked(s *instanceState, n int) {
 // SetGitHubPRNumber atomically updates the in-memory GitHubPRNumber field.
 // Replaces the stateMutex-based implementation; now actor-routed so it is
 // serialised with buildSnapshot.
+//
+// Like SetGitHubPR it attaches through AttachPR (as a branch discovery) when the
+// session can hold a link, and writes only the scalar when it cannot.
 func (i *Instance) SetGitHubPRNumber(n int) {
+	if i.attachLegacyPR(n, AttachSourceBranchDiscovery, PRInitial{}) {
+		return
+	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setGitHubPRNumberLocked(s, n)
 		return nil
@@ -567,6 +585,7 @@ func setTitleDirectLocked(s *instanceState, title string) {
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
+	s.inst.syncProcessLabel(title)
 }
 
 // SetTitleDirect sets the Title field directly without tmux-session constraints.
@@ -943,10 +962,6 @@ func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
 	s.inst.GitHubRepo = r.Repo
 	s.inst.GitHubSourceRef = r.SourceRef
 	s.inst.ClonedRepoPath = r.ClonedRepoPath
-	if r.PRNumber > 0 {
-		s.inst.GitHubPRNumber = r.PRNumber
-		s.inst.GitHubPRURL = r.PRURL
-	}
 	s.inst.touchUpdatedAt()
 	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := buildSnapshot(s.inst)
@@ -963,6 +978,10 @@ func (i *Instance) SetGitHubResolution(r GitHubResolution) {
 		setGitHubResolutionLocked(s, r)
 		return nil
 	})
+	// After the owner/repo above are published: the PR the URL named joins the set.
+	if r.PRNumber > 0 {
+		i.setLegacyPR(r.PRURL, r.PRNumber, AttachSourceCreatedFromURL)
+	}
 }
 
 // applyWorktreeDetectionLocked writes DetectAndPopulateWorktreeInfo's

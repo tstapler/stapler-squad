@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
@@ -45,6 +46,7 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/inbox-pr-watch", handleActuatorInboxPRWatch)
 	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
 	s.mux.HandleFunc("/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load))
+	s.mux.HandleFunc("/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default))
 }
 
 // handleActuatorTerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).

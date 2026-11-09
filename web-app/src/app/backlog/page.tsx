@@ -8,7 +8,7 @@ import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css"
 import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { AppLink } from "@/components/ui/AppLink";
+import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
 import { BacklogEmptyState, FilterZeroState, FooterNudge } from "@/components/backlog/BacklogEmptyState";
@@ -18,12 +18,21 @@ import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
 import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
-import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { BacklogService, type StuckBacklogItem, type StuckReason } from "@/gen/session/v1/backlog_pb";
+import { AcSummary, ProvenanceBadge, VerdictBadge } from "@/components/backlog/BacklogItemCard";
+import { BlockerChip } from "@/components/backlog/BlockerChip";
+import { ClaimChip } from "@/components/backlog/ClaimChip";
+import { DependencyChip } from "@/components/backlog/DependencyChip";
+import { DuplicatePendingBadge } from "@/components/backlog/DuplicatePendingBadge";
+import { TriageLoadingIndicator } from "@/components/backlog/TriageLoadingIndicator";
+import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { groupStuckItemsByItemId, summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import {
   useBacklogService,
   type BacklogItem,
   type BacklogItemStatus,
   type BacklogItemInput,
+  type ClaimedElsewhere,
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
 import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
@@ -146,6 +155,9 @@ const BacklogTableRow = memo(function BacklogTableRow({
   isSelectMode,
   onRowClick,
   onToggleSelect,
+  stuckItem,
+  otherStuckReasons,
+  claim,
 }: {
   item: BacklogItem;
   isActive: boolean;
@@ -154,8 +166,10 @@ const BacklogTableRow = memo(function BacklogTableRow({
   isSelectMode: boolean;
   onRowClick: (itemId: string) => void;
   onToggleSelect: (itemId: string) => void;
+  stuckItem?: StuckBacklogItem;
+  otherStuckReasons?: StuckReason[];
+  claim?: ClaimedElsewhere;
 }) {
-  const acDone = item.acCriteria.filter((c) => c.status === "done").length;
 
   const prevLiveVersionRef = useRef(item.liveVersion);
   const [justChanged, setJustChanged] = useState(false);
@@ -210,6 +224,21 @@ const BacklogTableRow = memo(function BacklogTableRow({
       </td>
       <td className={`${styles.tableCell} ${styles.titleCell}`}>
         {item.title}
+        <div className={styles.rowWidgets} data-testid="backlog-row-widgets">
+          {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
+          <VerdictBadge item={item} />
+          {item.externalUrl && item.externalId && (
+            <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} pluginId={item.pluginId} />
+          )}
+          {claim && <ClaimChip claim={claim} />}
+          {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
+          {item.blockedBy && item.blockedBy.length > 0 && (
+            <DependencyChip deps={item.blockedBy} onItemClick={onRowClick} />
+          )}
+          {item.triageStatus === "running" && (
+            <TriageLoadingIndicator elapsedSeconds={0} context="list" onCancel={() => {}} compact />
+          )}
+        </div>
       </td>
       <td className={styles.tableCell}>
         <span
@@ -231,9 +260,7 @@ const BacklogTableRow = memo(function BacklogTableRow({
         </span>
       </td>
       <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
-        {item.acCriteria.length > 0
-          ? `${acDone}/${item.acCriteria.length}`
-          : "—"}
+        {item.acCriteria.length > 0 ? <AcSummary item={item} /> : "—"}
       </td>
       <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
         {formatDateShort(item.updatedAt)}
@@ -252,7 +279,24 @@ const BacklogTableRow = memo(function BacklogTableRow({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { createBacklogItem, importGitHubIssue, triggerTriage, spawnSessionFromItem, archiveBacklogItem, deleteBacklogItem } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage, spawnSessionFromItem, archiveBacklogItem, deleteBacklogItem, listForeignClaims } = useBacklogService();
+  // One call each for the whole list (never per row), mirroring the board page.
+  const { items: stuckItems } = useStuckBacklogItems();
+  const stuckItemsById = useMemo(() => groupStuckItemsByItemId(stuckItems), [stuckItems]);
+  const [foreignClaims, setForeignClaims] = useState<ClaimedElsewhere[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listForeignClaims().then((claims) => {
+      if (!cancelled) setForeignClaims(claims);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [listForeignClaims]);
+  const claimsByUrl = useMemo(
+    () => new Map(foreignClaims.map((c) => [c.externalUrl, c])),
+    [foreignClaims]
+  );
   const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -813,6 +857,8 @@ function BacklogPageInner() {
   const renderItemRow = (item: BacklogItem) => {
     const isActive = selectedItemId === item.id;
     const isExiting = exitingItems.has(item.id);
+    const stuckGroup = stuckItemsById.get(item.id);
+    const stuckSummary = stuckGroup ? summarizeStuckItemGroup(stuckGroup) : undefined;
     return (
       <BacklogTableRow
         key={item.id}
@@ -823,6 +869,9 @@ function BacklogPageInner() {
         isSelectMode={selectMode}
         onRowClick={handleRowClick}
         onToggleSelect={handleToggleSelect}
+        stuckItem={stuckSummary?.primary}
+        otherStuckReasons={stuckSummary?.otherReasons}
+        claim={item.externalUrl ? claimsByUrl.get(item.externalUrl) : undefined}
       />
     );
   };
@@ -865,24 +914,7 @@ function BacklogPageInner() {
         </div>
       </div>
 
-      {/* Tab Bar */}
-      <nav className={styles.tabBar} aria-label="Backlog views">
-        <button
-          type="button"
-          className={`${styles.tab} ${styles.tabActive}`}
-          aria-current="page"
-          data-testid="backlog-tab-list"
-        >
-          List
-        </button>
-        <AppLink
-          href="/backlog/board"
-          className={styles.tab}
-          data-testid="backlog-tab-board"
-        >
-          Board
-        </AppLink>
-      </nav>
+      <BacklogViewTabs active="list" />
 
       {/* Filter Bar */}
       <BacklogFilterBar

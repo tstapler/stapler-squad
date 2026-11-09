@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from "react";
+import { lazy, type ComponentType, type ReactNode } from "react";
 import type { AppRoute, PageRoute } from "@/lib/nav/app-types";
 import type { RoutePath } from "@/lib/nav/paths";
 import { FeatureGuard } from "./FeatureGuard";
@@ -13,8 +13,10 @@ export const routeTable = {
   "/": { load: () => import("./page") },
   "/account": { load: () => import("./account/page") },
   "/analytics/escape": { load: () => import("./analytics/escape/page") },
+  "/artifacts": { load: () => import("./artifacts/page") },
   "/backlog": { load: () => import("./backlog/page") },
   "/backlog/board": { load: () => import("./backlog/board/page") },
+  "/backlog/flow": { load: () => import("./backlog/flow/page") },
   "/changelog": { load: () => import("./changelog/page") },
   "/config": { redirect: "/settings?tab=config-files", keepQuery: false },
   "/debug/escape-codes": { load: () => import("./debug/escape-codes/page") },
@@ -28,6 +30,7 @@ export const routeTable = {
   "/login": { load: () => import("./login/page") },
   "/logs": { load: () => import("./logs/page") },
   "/notifications": { load: () => import("./notifications/page") },
+  "/owner-inbox": { load: () => import("./owner-inbox/page") },
   "/resolve": { load: () => import("./resolve/page") },
   "/review-queue": { load: () => import("./review-queue/page") },
   "/rules": { load: () => import("./rules/page") },
@@ -57,14 +60,28 @@ export const routeTable = {
   "/workflows": { load: () => import("./workflows/page") },
 } satisfies Record<RoutePath, RouteDef>;
 
+// Every backlog route shares one watch stream; this table loads pages only, so the provider is added here.
+// Without it each `useBacklogStream()` consumer opens its own stream and a late snapshot overwrites fresher item state (e2e jump-to-session lost its injected sessions on Bun only). Lazy keeps the hook out of the entry chunk.
+const BacklogStreamLayout = lazy(() =>
+  import("@/components/backlog/BacklogStreamContext").then((m) => ({ default: m.BacklogStreamProvider })),
+);
+const LAYOUT_WRAP: Partial<Record<RoutePath, ComponentType<{ children: ReactNode }>>> = {
+  "/backlog": BacklogStreamLayout,
+  "/backlog/board": BacklogStreamLayout,
+};
+
 function guardFor(path: RoutePath): PageRoute["wrap"] {
   const flag = routeMetaFor(path)?.guard;
-  if (!flag) return undefined;
-  const Guarded = ({ children }: { children: ReactNode }) => <FeatureGuard flag={flag}>{children}</FeatureGuard>;
-  return Guarded;
+  const Layout = LAYOUT_WRAP[path];
+  if (!flag && !Layout) return undefined;
+  const Wrapped = ({ children }: { children: ReactNode }) => {
+    const inner = Layout ? <Layout>{children}</Layout> : children;
+    return flag ? <FeatureGuard flag={flag}>{inner}</FeatureGuard> : <>{inner}</>;
+  };
+  return Wrapped;
 }
 
-/** Titles and guards come from `RouteMeta`, so they cannot drift from the Next layouts the drift test checks. */
+/** Titles and guards come from `RouteMeta`. */
 export const appRoutes: AppRoute[] = (Object.entries(routeTable) as [RoutePath, RouteDef][]).map(([path, def]) =>
   "load" in def ? { path, load: def.load, wrap: guardFor(path) } : { path, ...def },
 );

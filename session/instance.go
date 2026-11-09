@@ -388,6 +388,25 @@ type Instance struct {
 	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
+	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
+	// siblings. Written only by the PR setters (instance_pr_set.go) and load
+	// hydration; never serialized from here (links live in their own table).
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
+	// prPersistMu serializes this session's PR persists; prPersister is the
+	// storage seam (nil until injected); prPersistPending marks a PR set change
+	// the next full save must write. See instance_pr_set.go.
+	prPersistMu sync.Mutex
+	prPersister prSetPersister
+	// prActions is the GitHub client the PR actions use; nil means the real one.
+	prActions        prActionClient
+	prPersistPending atomic.Bool
+	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
+	prLegacyPathLogged atomic.Bool
+	// terminalClearPending marks a failed immediate clear of the stored terminal
+	// flag; the next full save writes false (guarded by prPersistMu).
+	terminalClearPending atomic.Bool
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
@@ -690,6 +709,10 @@ type Instance struct {
 	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
 	// by every mutator before it releases mu. Readers can call Snapshot()
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	// -1 reserves automatic hibernation; nonnegative values count attached streams.
+	terminalViewers      atomic.Int64
+	terminalViewClosedAt atomic.Int64
+
 	snapshot atomic.Pointer[InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
@@ -732,11 +755,15 @@ type Instance struct {
 	driverRunning atomic.Bool
 	// retryInFlight guards every restart path (automated backoff-expiry,
 	// restart-grace, manual RetryNow) against running concurrently for the
-	// same instance. Claimed exclusively inside restartForRetry via CAS — no
-	// other function CASes it directly, so every restart path is guarded by
-	// construction rather than by each caller remembering to. See
-	// session/retry_state.go's restartForRetry.
+	// same instance. Claimed inside restartForRetry via CAS; the only other
+	// claimant is HotRestoreIfLive, so it cannot interleave with a restart.
+	// See session/retry_state.go's restartForRetry.
 	retryInFlight atomic.Bool
+	// hotRestoreMu serializes HotRestoreIfLive for this instance.
+	hotRestoreMu deadlock.Mutex
+	// hotAttaching is set for the duration of a HotRestoreIfLive Start: the backing
+	// process pre-exists the attempt, so a failed Start must release it, never kill it.
+	hotAttaching atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -772,7 +799,8 @@ type Instance struct {
 	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
 	// goroutines so tests can join them before t.TempDir() cleanup runs.
 	// See JoinHibernation.
-	hibernateWG sync.WaitGroup
+	hibernateWG         sync.WaitGroup
+	hibernateTeardownWG sync.WaitGroup
 
 	// scrollLease serializes this instance's own concurrent
 	// Instance.ForwardScroll calls (Story 1.3.1) -- see scroll_lease.go's
@@ -1215,8 +1243,6 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},
 		// GitHub integration fields
-		GitHubPRNumber:  opts.GitHubPRNumber,
-		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubHost:      opts.GitHubHost,
@@ -1260,6 +1286,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	instance.pinResolvedBackend()
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()
@@ -1294,6 +1321,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance.initCDPManager(cfg)
 
 	finishInstanceConstruction(instance)
+	if opts.GitHubPRNumber > 0 {
+		// Created from a PR URL: the PR joins the set (its write is deferred to the
+		// first full save, see persistPRAttach).
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+	}
 	return instance, nil
 }
 
@@ -1666,6 +1698,11 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
+			// A hot attach only adopts a live process; never cold-launch a new one.
+			if i.hotAttaching.Load() {
+				setupErr = fmt.Errorf("hot attach: backing process is no longer alive")
+				return setupErr
+			}
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
 			hasClaudeSession := i.HasClaudeSession()
 			if hasClaudeSession {
@@ -2124,7 +2161,16 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	}
 	i.stopVNC()
 	i.stopCDP()
-	return i.KillSession()
+	// A session that ran before this attempt is released, not killed.
+	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	// A hot attach only ever adopts a live process (tmux included, which has no
+	// releaser); leave it running rather than kill-session it.
+	if i.hotAttaching.Load() {
+		return nil
+	}
+	return i.killSessionAttachedByThisAttempt()
 }
 
 // Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a
@@ -2702,6 +2748,14 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	}
 
 	migrating := backendOverride != "" && backendOverride != i.Backend
+	if migrating {
+		if old, ok := capabilityOf[DaemonReadiness](i.pm()); ok && i.tymuxSessionID() != "" {
+			// Confirm the old daemon is reachable before Close tears down its stream or ownership.
+			if err := old.ensureDaemonReady(); err != nil {
+				return fmt.Errorf("cannot migrate until the old tymux daemon can confirm session termination; retry after daemon recovery: %w", err)
+			}
+		}
+	}
 
 	waspaused := i.Status == Paused
 
@@ -2764,6 +2818,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 	if err := i.updateProcessManagerForRestart(migrating, backendOverride, command); err != nil {
 		return err
+	}
+	if migrating {
+		i.applyLaunchEnv()
 	}
 
 	// Start the new session

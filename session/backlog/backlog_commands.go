@@ -260,10 +260,10 @@ func buildDefaultSlashCommandSet(item *session.BacklogItemData) (map[string]stri
 		"   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.\n"+
 		"   If review already returned PASS before you got here, skip this — running it again will fail (the "+
 		"   item is no longer `in_progress`), and there's nothing left for it to check.\n\n"+
-		"3. Report the PR back onto this backlog item — REQUIRED, do not skip:\n"+
+		"3. Report a PR back onto this backlog item — REQUIRED, do not skip:\n"+
 		"   Call the report_pr_created MCP tool with item_id=%s, pr_url=<the PR URL /github:pr-ship or gh pr "+
 		"create printed>, pr_number=<the PR number>, and summary=<2-3 sentences: what changed and why>.\n"+
-		"   You created this PR yourself — nothing else will ever report it back to the item record. Skipping "+
+		"   You created each PR yourself — nothing else will ever report it back to the item record. Skipping "+
 		"this step leaves the item stuck in review with a real PR that is invisible to the reviewer and the "+
 		"operator.\n\n"+
 		"Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which\n"+

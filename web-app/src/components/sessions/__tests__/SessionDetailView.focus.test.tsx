@@ -15,17 +15,19 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SessionDetailView } from "../SessionDetailView";
 import type { useSessionActions } from "@/lib/hooks/useSessionActions";
-import { SessionStatus, InstanceType } from "@/gen/session/v1/types_pb";
+import { SessionStatus, InstanceType, type Session } from "@/gen/session/v1/types_pb";
 
 jest.mock("../SessionDetailView.css", () =>
   new Proxy({}, { get: (_target, key) => (typeof key === "string" ? key : "") })
 );
 
-jest.mock("next/dynamic", () => () => {
-  const DynamicComponent = () => null;
-  DynamicComponent.displayName = "LoadableComponent";
-  return DynamicComponent;
-});
+jest.mock("@/lib/lazy", () => ({
+  lazyComponent: () => {
+    const DynamicComponent = () => null;
+    DynamicComponent.displayName = "LoadableComponent";
+    return DynamicComponent;
+  },
+}));
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => null }));
 jest.mock("../VcsPanel", () => ({ VcsPanel: () => null }));
@@ -80,7 +82,7 @@ function makeSession() {
     branch: "main",
     program: "claude",
     tags: [],
-  } as unknown as import("@/gen/session/v1/types_pb").Session;
+  } as unknown as Session;
 }
 
 describe("SessionDetailView resume-modal focus restoration", () => {

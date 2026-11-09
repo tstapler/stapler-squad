@@ -4,15 +4,19 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Session, SessionSchema, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
+import type { Session, ReviewItem } from "@/gen/session/v1/types_pb";
+import { SessionSchema, SessionStatus } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
-import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
+import type { SessionDetailTab } from "@/components/sessions/SessionDetail";
+import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
+import { useListAllPendingGuidanceRequestsQuery } from "@/lib/api/guidanceApi";
+import { isOwnerActionRequest, ownerActionQuestion } from "@/lib/guidance/ownerAction";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
@@ -72,6 +76,13 @@ function ReviewQueueContent() {
   const planReviewItems = useMemo(
     () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
     [backlogItems]
+  );
+
+  // Agent requests only the owner can unblock (request_owner_action) — second entry point beside Notifications.
+  const { data: pendingGuidance } = useListAllPendingGuidanceRequestsQuery(undefined, { pollingInterval: 10000 });
+  const ownerActionRequests = useMemo(
+    () => (pendingGuidance ?? []).filter((r) => isOwnerActionRequest(r) && r.scope === "backlog-item" && r.itemId),
+    [pendingGuidance]
   );
 
   // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
@@ -295,6 +306,28 @@ function ReviewQueueContent() {
   return (
     <div className={styles.page}>
       <div id="main-content" className={styles.main}>
+        {ownerActionRequests.length > 0 && (
+          <section className={styles.inlineSection} aria-label="Pending questions" data-testid="owner-action-section">
+            <h3 className={styles.inlineSectionTitle}>
+              Pending Questions
+              <span className={styles.inlineSectionCount}>{ownerActionRequests.length}</span>
+            </h3>
+            <div className={styles.inlineSectionList}>
+              {ownerActionRequests.map((r) => (
+                <button
+                  key={r.id}
+                  className={styles.inlineSectionRow}
+                  onClick={() => router.push(`/backlog?item=${r.itemId}`)}
+                  data-testid={`owner-action-item-${r.id}`}
+                >{/* analytics-exempt */}
+                  <span>{ownerActionQuestion(r)}</span>
+                  <span className={styles.inlineSectionRowMeta}>Waiting for your decision</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {planReviewItems.length > 0 && (
           <section className={styles.inlineSection} aria-label="Plan reviews" data-testid="plan-review-section">
             <h3 className={styles.inlineSectionTitle}>
@@ -308,7 +341,7 @@ function ReviewQueueContent() {
                   className={styles.inlineSectionRow}
                   onClick={() => router.push(`/backlog?item=${item.id}`)}
                   data-testid={`plan-review-item-${item.id}`}
-                >
+                >{/* analytics-exempt */}
                   <span>{item.title}</span>
                   <span className={styles.inlineSectionRowMeta}>Plan awaiting approval</span>
                 </button>
@@ -330,7 +363,7 @@ function ReviewQueueContent() {
                   className={styles.inlineSectionRow}
                   onClick={() => handleSessionClick(s.id)}
                   data-testid={`working-session-${s.id}`}
-                >
+                >{/* analytics-exempt */}
                   <span>{s.title}</span>
                   <span className={styles.inlineSectionRowMeta}>
                     {s.status === SessionStatus.CREATING ? "Queued" : "In progress"} — nothing to do yet
@@ -400,7 +433,7 @@ function ReviewQueueContent() {
                 className={styles.helpOverlayCloseButton}
                 onClick={() => setIsHelpOpen(false)}
                 aria-label="Close keyboard shortcuts"
-              >
+              >{/* analytics-exempt */}
                 ✕
               </button>
             </div>
@@ -426,7 +459,7 @@ function ReviewQueueContent() {
         onClick={() => setIsHelpOpen(true)}
         aria-label="Show keyboard shortcuts"
         title="Keyboard shortcuts (?)"
-      >
+      >{/* analytics-exempt */}
         ?
       </button>
     </div>

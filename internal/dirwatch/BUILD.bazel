@@ -1,0 +1,56 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "dirwatch",
+    srcs = [
+        "counted.go",
+        "dirwatch.go",
+        "fsevents_darwin.go",
+        "other.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/dirwatch",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//log",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "//internal/fsevents",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//internal/fsevents",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dirwatch",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "dirwatch_test",
+    srcs = [
+        "counted_test.go",
+        "fsevents_darwin_test.go",
+    ],
+    embed = [":dirwatch"],
+    deps = [
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_stretchr_testify//require",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "//internal/fsevents",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//internal/fsevents",
+        ],
+        "//conditions:default": [],
+    }),
+)

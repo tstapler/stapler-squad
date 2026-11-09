@@ -5,6 +5,7 @@ go_library(
     name = "gogit",
     srcs = [
         "config.go",
+        "enrichment.go",
         "fileid_other.go",
         "fileid_unix.go",
         "gogit.go",
@@ -43,6 +44,7 @@ go_test(
     srcs = [
         "broken_repo_oracle_test.go",
         "config_oracle_test.go",
+        "enrichment_test.go",
         "fifo_unix_test.go",
         "fixtures_oracle_test.go",
         "gogit_test.go",

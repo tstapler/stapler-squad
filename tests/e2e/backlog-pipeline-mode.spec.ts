@@ -32,6 +32,7 @@
 import { test, expect, APIRequestContext, Page } from "@playwright/test";
 import { BacklogPage } from "./pages/BacklogPage";
 import { PipelineModesSettingsPage } from "./pages/PipelineModesSettingsPage";
+import { deleteBacklogItemsByTitlePrefix } from './pages/BacklogMutations';
 import { baseUrl, slotTmp } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
@@ -148,6 +149,10 @@ test.describe("backlog-pipeline-mode", () => {
     });
   });
 
+  test.afterEach(async ({ request }) => {
+    await deleteBacklogItemsByTitlePrefix(request, ["pipeline-mode-"]);
+  });
+
   test.beforeEach(async ({ page }) => {
     // Pre-seed the first-visit tour as dismissed, same as backlog.spec.ts, so it
     // doesn't intercept clicks on the backlog page for the selection scenario.
@@ -190,7 +195,10 @@ test.describe("backlog-pipeline-mode", () => {
 
       const itemTitle = `pipeline-mode-select-${Date.now()}`;
       await backlogPage.openNewItemForm();
-      await backlogPage.fillNewItemForm(itemTitle, { repoPath: slotTmp("e2e-pipeline-mode-test") });
+      await backlogPage.fillNewItemForm(itemTitle, {
+        repoPath: slotTmp("e2e-pipeline-mode-test"),
+        addAcCriterion: "Selected mode persists", // non-vague, so no VaguenessPromptModal blocks the row click
+      });
 
       const option = backlogPage.getPipelineModeOption(slug);
       await expect(option).toBeVisible();

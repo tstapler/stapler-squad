@@ -11,6 +11,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -40,6 +41,9 @@ var (
 // regardless of how much raw context a given row carries.
 const stuckReportTruncateLen = 300
 
+// unknownPRHoldWarnAfter is how long an `unknown` PR may hold an item before the report flags it.
+const unknownPRHoldWarnAfter = time.Hour
+
 // --- get_backlog_stuck_report ---
 
 func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -67,6 +71,8 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 	h.writeStuckTimeline(ctx, &sb, itemID)
 	h.writeItemSessions(ctx, &sb, itemID)
 	h.writeActivityNotes(ctx, &sb, itemID)
+	h.writePullRequestSet(ctx, &sb, item)
+	h.writeBlockedCleanup(&sb, itemID)
 
 	if session.BacklogStatus(item.Status) == session.BacklogStatusPRPending && item.PrNumber > 0 {
 		h.writeCICrossCheck(ctx, &sb, item)
@@ -277,4 +283,107 @@ func registerStuckReportTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 		),
 		h.getBacklogStuckReport,
 	)
+}
+
+// backlogReaderEnabled reports whether the reader:backlog scope is effective.
+func (h *backlogHandlers) backlogReaderEnabled() bool {
+	if h.backlogReaderOverride != nil {
+		return h.backlogReaderOverride()
+	}
+	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
+}
+
+// writePullRequestSet renders the item's derived PR set (reader:backlog): how many
+// are merged, which one the item is waiting on, and, for an `unknown` PR, the owner
+// actions that release it. An item detach alone filters the verdict, but a session
+// link still holds that session's worktree, so both detaches are named when a
+// session also holds the PR.
+func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.Builder, item *session.BacklogItemData) {
+	if !h.backlogReaderEnabled() {
+		return
+	}
+	prs, err := h.storage.ItemPRs(ctx, item.ID)
+	if err != nil {
+		log.WarningLog().Printf("get_backlog_stuck_report: ItemPRs failed for %s: %v", item.ID, err)
+		return
+	}
+	if len(prs) == 0 {
+		return
+	}
+	holders := h.sessionHoldersOf(ctx, item.ID)
+	merged := 0
+	var waiting []session.PRView
+	for _, v := range prs {
+		switch v.State {
+		case session.PRStateMerged:
+			merged++
+		case session.PRStateClosed:
+		default:
+			waiting = append(waiting, v)
+		}
+	}
+	fmt.Fprintf(sb, "## Pull requests (%d of %d merged)\n", merged, len(prs))
+	for _, v := range prs {
+		fmt.Fprintf(sb, "- #%d %s\n", v.Ref.Number(), v.State)
+	}
+	for _, v := range waiting {
+		fmt.Fprintf(sb, "Waiting on #%d (%s).", v.Ref.Number(), v.State)
+		if v.State == session.PRStateUnknown {
+			if !v.AttachedAt.IsZero() && time.Since(v.AttachedAt) > unknownPRHoldWarnAfter {
+				fmt.Fprintf(sb, " Held longer than %s.", unknownPRHoldWarnAfter)
+			}
+			fmt.Fprintf(sb, " Owner actions (operator, in the UI): detach #%d from the item", v.Ref.Number())
+			for _, s := range holders[v.Ref] {
+				fmt.Fprintf(sb, " and detach #%d from session %s", v.Ref.Number(), s)
+			}
+			sb.WriteString(" to release it. (Agents cannot detach.)")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+}
+
+// sessionHoldersOf maps each PR to the item's sessions that link it, so the report
+// can name the session detach alongside the item detach. Best-effort: errors log.
+func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) map[session.PRRef][]string {
+	out := map[session.PRRef][]string{}
+	sessions, err := h.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("get_backlog_stuck_report: ListItemSessions failed for %s: %v", itemID, err)
+		return out
+	}
+	uuids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		if s.SessionUUID != "" {
+			uuids = append(uuids, s.SessionUUID)
+		}
+	}
+	links, err := h.storage.ListSessionPRViewsByUUIDs(ctx, uuids)
+	if err != nil {
+		log.WarningLog().Printf("get_backlog_stuck_report: session PR links failed for %s: %v", itemID, err)
+		return out
+	}
+	for u, views := range links {
+		for _, v := range views {
+			out[v.Ref] = append(out[v.Ref], u)
+		}
+	}
+	return out
+}
+
+// writeBlockedCleanup lists a done/archived item whose worktree cleanup the gate is
+// withholding, with the holding owner and how long it has been blocked (the same set
+// behind ssq_cleanup_gate_blocked_items). Nothing is written when the item is clear.
+func (h *backlogHandlers) writeBlockedCleanup(sb *strings.Builder, itemID string) {
+	if h.backlogSvc == nil {
+		return
+	}
+	for _, b := range h.backlogSvc.BlockedCleanups() {
+		if b.ItemID != itemID {
+			continue
+		}
+		fmt.Fprintf(sb, "\n## Worktree cleanup blocked\nBlocked for %s (path %s): %s\n",
+			time.Since(b.Since).Round(time.Minute), b.Path, backlog.SanitizeForAgentContext(b.Reason, 400))
+		return
+	}
 }

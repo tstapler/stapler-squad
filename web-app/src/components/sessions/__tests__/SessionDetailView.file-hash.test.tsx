@@ -12,7 +12,7 @@ import type { Session } from "@/gen/session/v1/types_pb";
 import type { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";
 
-jest.mock("next/dynamic", () => require("./sessionDetailViewTestFixtures").mockNextDynamic());
+jest.mock("@/lib/lazy", () => ({ lazyComponent: require("./sessionDetailViewTestFixtures").mockLazyComponent() }));
 jest.mock("../DiffViewer", () => require("./sessionDetailViewTestFixtures").mockDiffViewer());
 jest.mock("../VcsPanel", () => require("./sessionDetailViewTestFixtures").mockVcsPanel());
 jest.mock("../SessionLogsTab", () => require("./sessionDetailViewTestFixtures").mockSessionLogsTab());

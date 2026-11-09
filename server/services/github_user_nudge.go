@@ -334,18 +334,35 @@ func (s *GitHubUserService) freshPrompt(ctx context.Context, call *nudgeCall) (p
 }
 
 func (s *GitHubUserService) fetchFailure(fetchCtx context.Context, call *nudgeCall, err error) (*sessionv1.NudgeSessionForPRResponse, error) {
+	kind, cerr := classifyNudgeFetchError(fetchCtx, err, s.rateLimitMessage)
+	if kind == nudgeFetchNotFound {
+		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, nudgePRNotFoundDetail), nil
+	}
+	s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", string(kind), "err", err.Error())
+	return nil, cerr
+}
+
+type nudgeFetchKind string
+
+const (
+	nudgeFetchNotFound    nudgeFetchKind = "not_found"
+	nudgeFetchRateLimited nudgeFetchKind = "rate_limited"
+	nudgeFetchTimeoutKind nudgeFetchKind = "timeout"
+	nudgeFetchOther       nudgeFetchKind = "other"
+)
+
+// classifyNudgeFetchError maps a failed fresh-PR read to its kind and Connect
+// error (nil for not_found, which callers answer with a typed outcome).
+func classifyNudgeFetchError(fetchCtx context.Context, err error, rateLimitMessage func() string) (nudgeFetchKind, error) {
 	switch {
 	case errors.Is(err, githubpkg.ErrRateLimited):
-		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "rate_limited", "err", err.Error())
-		return nil, connect.NewError(connect.CodeResourceExhausted, errors.New(s.rateLimitMessage()))
+		return nudgeFetchRateLimited, connect.NewError(connect.CodeResourceExhausted, errors.New(rateLimitMessage()))
 	case errors.Is(err, githubpkg.ErrGitHubRefNotFound):
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_PR_NOT_FOUND, nil, call.sessionID, nudgePRNotFoundDetail), nil
+		return nudgeFetchNotFound, nil
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(context.Cause(fetchCtx), context.DeadlineExceeded):
-		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "timeout", "err", err.Error())
-		return nil, connect.NewError(connect.CodeDeadlineExceeded, errors.New("GitHub did not answer in time; try again"))
+		return nudgeFetchTimeoutKind, connect.NewError(connect.CodeDeadlineExceeded, errors.New("GitHub did not answer in time; try again"))
 	default:
-		s.nudgeWarnf("nudge_fetch_failed", "pr", call.pr, "session_id", call.sessionID, "kind", "other", "err", err.Error())
-		return nil, connect.NewError(connect.CodeUnavailable, errors.New("could not read the PR from GitHub; try again"))
+		return nudgeFetchOther, connect.NewError(connect.CodeUnavailable, errors.New("could not read the PR from GitHub; try again"))
 	}
 }
 
@@ -363,7 +380,11 @@ func ctxDoneError(ctx context.Context) error {
 }
 
 func (s *GitHubUserService) rateLimitMessage() string {
-	resume := s.nudge.rateLimitResume
+	return nudgeRateLimitMessage(s.nudge.rateLimitResume)
+}
+
+// nudgeRateLimitMessage words the rate-limit error; a nil resume reads the default limiter.
+func nudgeRateLimitMessage(resume func() (bool, time.Time)) string {
 	if resume == nil {
 		resume = githubpkg.DefaultRateLimiter.IsLimited
 	}
@@ -381,35 +402,53 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 		return nil, err
 	}
 	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, NudgeSignature(key, reasons), prompt)
+	if no, detail, ok := nudgeFromSteer(outcome); ok {
+		if outcome == SteerDelivered {
+			if t := s.nudgeTracker(); t != nil {
+				t.RecordNudge(key, nudgeReasonKinds(reasons), s.nudgeClock().Now())
+			}
+		}
+		return nudgeResponse(no, reasons, call.sessionID, detail), nil
+	}
+	if outcome == SteerFailed {
+		s.nudgeWarnf("nudge_steer_failed", "pr", call.pr, "session_id", call.sessionID, "err", fmt.Sprint(err))
+		return nil, steerFailedError(ctx, err)
+	}
+	// SteerUnspecified is never treated as delivered.
+	s.nudgeWarnf("nudge_steer_unexpected", "pr", call.pr, "session_id", call.sessionID, "outcome", outcome.String(), "err", fmt.Sprint(err))
+	return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", outcome))
+}
+
+// nudgeFromSteer maps a not-failed SteerOutcome to its typed nudge outcome and
+// detail; ok is false for SteerFailed and anything unknown.
+func nudgeFromSteer(outcome SteerOutcome) (no sessionv1.NudgeOutcome, detail string, ok bool) {
 	switch outcome {
 	case SteerDelivered:
-		if t := s.nudgeTracker(); t != nil {
-			t.RecordNudge(key, nudgeReasonKinds(reasons), s.nudgeClock().Now())
-		}
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, reasons, call.sessionID, "Request sent to the session."), nil
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_DELIVERED, "Request sent to the session.", true
 	case SteerDuplicate:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, reasons, call.sessionID, "Already requested recently."), nil
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_DUPLICATE, "Already requested recently.", true
 	case SteerCoolingDown:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeCoolingDownDetail), nil
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeCoolingDownDetail, true
 	case SteerGuardBusy, SteerBusy:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeBusyDetail), nil
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeBusyDetail, true
 	case SteerNoStatusSource:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, reasons, call.sessionID, nudgeNoControllerDetail), nil
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, nudgeNoControllerDetail, true
 	case SteerNotTracked:
-		return nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, reasons, call.sessionID, nudgeNotTrackedDetail), nil
-	case SteerFailed:
-		s.nudgeWarnf("nudge_steer_failed", "pr", call.pr, "session_id", call.sessionID, "err", fmt.Sprint(err))
-		if ctxErr := ctxDoneError(ctx); ctxErr != nil {
-			return nil, ctxErr
-		}
-		if errors.Is(err, ErrSteerPaneOwnership) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the session's terminal could not be verified, so nothing was sent"))
-		}
-		return nil, connect.NewError(connect.CodeInternal, errors.New("could not deliver the request to the session"))
-	default: // includes SteerUnspecified: never treated as delivered
-		s.nudgeWarnf("nudge_steer_unexpected", "pr", call.pr, "session_id", call.sessionID, "outcome", outcome.String(), "err", fmt.Sprint(err))
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", outcome))
+		return sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail, true
 	}
+	return 0, "", false
+}
+
+// steerFailedError is the Connect error for a SteerFailed outcome: a lapsed
+// context first, then a pane that could not be verified, else internal.
+func steerFailedError(ctx context.Context, err error) error {
+	if ctxErr := ctxDoneError(ctx); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, ErrSteerPaneOwnership) {
+		return connect.NewError(connect.CodeFailedPrecondition, errors.New("the session's terminal could not be verified, so nothing was sent"))
+	}
+	return connect.NewError(connect.CodeInternal, errors.New("could not deliver the request to the session"))
 }
 
 // findPR matches by the full key (host, owner, repo, number); the cache's

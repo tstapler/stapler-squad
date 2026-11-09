@@ -461,14 +461,14 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 				// fields on its own goroutine under inst.mu (session/instance.go's mu
 				// doc comment mandates Snapshot() for reads outside the actor).
-				ghInfo := inst.Snapshot().GitHub
-				if ghInfo.GitHubPRNumber > 0 {
-					classCtx.CIStatus = ghInfo.GitHubCheckConclusion
+				pr := activePRStatusOf(inst.Snapshot())
+				if pr.Number > 0 {
+					classCtx.CIStatus = pr.Conclusion
 					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
 					// poller's configured interval may no longer reflect the branch's real CI
 					// state. Treat it as unknown rather than risk gating an irreversible
 					// auto-approve (RequireCIPassing) on stale data.
-					if time.Since(ghInfo.LastPRStatusCheck) > 2*h.pollInterval {
+					if time.Since(pr.CheckedAt) > 2*h.pollInterval {
 						classCtx.CIStatus = ""
 					}
 				}

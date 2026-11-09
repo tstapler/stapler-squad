@@ -13,12 +13,6 @@ import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { PipelineModeForm } from "./PipelineModeForm";
 import * as styles from "./page.css";
 
-// Note: `export const metadata` only applies to server components — this page
-// is a client component (it needs useState/useEffect for the list + form
-// toggle, mirroring BacklogItemForm's direct useBacklogService() usage), so
-// metadata is intentionally omitted here rather than silently ignored. The
-// document <title> is set by the nearest server-rendered layout instead.
-
 /**
  * Management page for pipeline modes: lists all modes (enabled AND disabled —
  * this is the operator-facing management view, unlike the item-form selector
@@ -122,6 +116,7 @@ export default function PipelineModesPage() {
             </p>
           </div>
           <button className={styles.newBtn} onClick={handleNewMode} data-testid="pipeline-mode-new">
+            {/* analytics-exempt */}
             New Mode
           </button>
         </div>
@@ -167,12 +162,15 @@ export default function PipelineModesPage() {
                     disabled={togglingId === m.id}
                     aria-label={`${m.enabled ? "Disable" : "Enable"} ${m.name}`}
                     data-testid={`pipeline-mode-toggle-${m.slug}`}
-                  />
+                  >
+                    {/* analytics-exempt */}
+                  </button>
                   <button
                     className={styles.smallBtn}
                     onClick={() => handleEditMode(m)}
                     data-testid={`pipeline-mode-edit-${m.slug}`}
                   >
+                    {/* analytics-exempt */}
                     Edit
                   </button>
                 </div>

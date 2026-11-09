@@ -2,6 +2,7 @@ package wsconn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -289,7 +290,11 @@ func readShellWebSocketMessage(p shellStreamParams) (message []byte, stop bool) 
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		p.errChan <- nil
 	} else {
-		log.Error("[streamShellViaControlMode] WebSocket read error", "session", p.sessionID, "shell", p.shellID, "err", err)
+		if errors.Is(err, errMuxSocketClosed) {
+			log.Debug("[streamShellViaControlMode] WebSocket read ended: mux socket closed", "session", p.sessionID, "shell", p.shellID)
+		} else {
+			log.Error("[streamShellViaControlMode] WebSocket read error", "session", p.sessionID, "shell", p.shellID, "err", err)
+		}
 		p.errChan <- err
 	}
 	return nil, true

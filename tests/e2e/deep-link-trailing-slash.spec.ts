@@ -1,8 +1,8 @@
 // @feature session:deep-link, notification:push-click-handoff, backlog:item-detail
 /**
  * Story 7.4a/7.4b: links that outsiders hold (notifications, Slack, bookmarks) keep working with
- * and without a trailing slash and with query strings. Runs unchanged on Next and Bun.
- * Next baseline recorded here: `?window=` is stamped on `/` only (useWindowUrlSync), so a client
+ * and without a trailing slash and with query strings.
+ * Note: `?window=` is stamped on `/` only (useWindowUrlSync), so a client
  * navigation to /history drops it and returning home stamps a window id again.
  */
 import { test, expect } from '@playwright/test';

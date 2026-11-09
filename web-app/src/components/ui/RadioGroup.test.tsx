@@ -164,3 +164,21 @@ describe("RadioGroup roving tabindex", () => {
     expect(screen.getByRole("radio", { name: "C" })).toHaveAttribute("tabIndex", "-1");
   });
 });
+
+describe("RadioGroup disabled options", () => {
+  const WITH_DISABLED = [OPTIONS[0], { ...OPTIONS[1], disabled: true }, OPTIONS[2]];
+
+  it("RadioGroup_should_SkipDisabledOptionAndIgnoreClicks_When_OptionDisabled", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderGroup({ options: WITH_DISABLED });
+
+    const optionB = screen.getByRole("radio", { name: "B" });
+    expect(optionB).toHaveAttribute("aria-disabled", "true");
+    await user.click(optionB);
+    expect(onChange).not.toHaveBeenCalled();
+
+    screen.getByRole("radio", { name: "A" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(onChange).toHaveBeenCalledWith("c");
+  });
+});

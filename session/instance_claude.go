@@ -329,6 +329,12 @@ func (i *Instance) HasClaudeSession() bool {
 	return i.claudeSession != nil && i.claudeSession.ConversationUUID != ""
 }
 
+// SupportsTranscript reports whether this instance's program ever gets a
+// Claude conversation transcript linked (only the claude binary does).
+func (i *Instance) SupportsTranscript() bool {
+	return IsClaude(i.Snapshot().Program)
+}
+
 // ClearConversationState removes the stored Claude conversation UUID and history
 // file path so that the next Resume starts a fresh conversation rather than
 // attempting --resume with a potentially stale or path-mismatched UUID. Also

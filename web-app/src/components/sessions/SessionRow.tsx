@@ -5,16 +5,19 @@ import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { useCreationLifecycleActions } from "@/lib/hooks/useCreationLifecycleActions";
 import { getFailureMessage } from "@/lib/utils/sessionFailure";
-import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
+import type { Session} from "@/gen/session/v1/types_pb";
+import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
+import type {
+  SessionActionsOverflowHandle} from "./SessionActionsOverflow";
 import {
-  SessionActionsOverflow,
-  SessionActionsOverflowHandle,
+  SessionActionsOverflow
 } from "./SessionActionsOverflow";
 import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
 import { truncateWorkspacePath } from "@/lib/utils/truncateWorkspacePath";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { SessionPullRequestBadge } from "@/components/shared/SessionPullRequestBadge";
+import { openPullRequestsAnchor } from "@/lib/pr/anchor";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
@@ -51,13 +54,15 @@ import {
   failureMessageLine,
 } from "./SessionRow.css";
 import { failureMessageIcon } from "./SessionCard.css";
+import type {
+  ColumnKey} from "./session-columns";
 import {
-  ColumnKey,
   DEFAULT_VISIBLE_COLUMNS,
   buildRowGridTemplate,
 } from "./session-columns";
 import { truncateGoal } from "@/lib/utils/string";
 
+/* eslint-disable no-restricted-syntax -- SessionRowProps is a wide optional-callback bag by design (parent wires per-session actions); splitting is out of scope */
 interface SessionRowProps {
   session: Session;
   onClick?: () => void;
@@ -65,10 +70,14 @@ interface SessionRowProps {
   onResume?: () => void;
   onDelete?: () => Promise<void> | void;
   onClone?: () => void;
+  /** Opens the session on its Info tab, where the "Pull requests" section is (the chip's "+N"). Falls back to `onClick`. */
+  onOpenInfo?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onRetryNow?: (sessionId: string) => Promise<boolean | void>;
+  onArchive?: (sessionId: string) => Promise<boolean | void>;
+  onUnarchive?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
@@ -97,6 +106,7 @@ interface SessionRowProps {
   /** Backlog item this session was dispatched from (work/review/triage automation), if any. */
   backlogEntry?: BacklogIndexEntry;
 }
+/* eslint-enable no-restricted-syntax */
 
 // Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
 const BIGINT_ZERO = BigInt(0);
@@ -211,9 +221,12 @@ function SessionRowInner({
   onDelete,
   onClone,
   onOpenInNewPane,
+  onOpenInfo,
   onNewWorkspace,
   onRestart,
   onRetryNow,
+  onArchive,
+  onUnarchive,
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
@@ -283,6 +296,12 @@ function SessionRowInner({
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     overflowRef.current?.openAt(e.clientX, e.clientY);
+  };
+
+  // "+N" stops its click, so it opens the session itself, then points the URL at the PR section.
+  const openPullRequests = () => {
+    (onOpenInfo ?? onClick)?.();
+    openPullRequestsAnchor();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -355,7 +374,7 @@ function SessionRowInner({
             onToggleSelect?.(e);
           }}
           className={checkboxButton}
-        />
+        >{/* analytics-exempt */}</button>
       </div>
 
       {/* Status dot — always visible */}
@@ -445,21 +464,7 @@ function SessionRowInner({
           {session.remoteName && (
             <RemoteConnectionIndicator remoteName={session.remoteName} />
           )}
-          <GitHubBadge
-            prNumber={session.githubPrNumber}
-            prUrl={session.githubPrUrl}
-            owner={session.githubOwner}
-            repo={session.githubRepo}
-            sourceRef={session.githubSourceRef}
-            host={session.githubHost}
-            prPriority={session.githubPrPriority}
-            prState={session.githubPrState}
-            isDraft={session.githubPrIsDraft}
-            approvedCount={session.githubApprovedCount}
-            changesRequestedCount={session.githubChangesReqCount}
-            checkConclusion={session.githubCheckConclusion}
-            compact={true}
-          />
+          <SessionPullRequestBadge session={session} onOpenPullRequests={openPullRequests} />
           <BacklogOriginBadge entry={backlogEntry} compact={true} />
           {noteTooltip && (
             <Tooltip label={noteTooltip}>
@@ -615,7 +620,7 @@ function SessionRowInner({
                 onResume();
               }}
               aria-label={`Resume session ${session.title}`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">▶️</span> Resume
             </button>
           )}
@@ -627,7 +632,7 @@ function SessionRowInner({
                 onResumeFromHibernation();
               }}
               aria-label={`Wake session ${session.title} from hibernation`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">▶️</span> Resume
             </button>
           )}
@@ -639,7 +644,7 @@ function SessionRowInner({
                 onPause();
               }}
               aria-label={`Pause session ${session.title}`}
-            >
+            >{/* analytics-exempt */}
               <span aria-hidden="true">⏸️</span> Pause
             </button>
           )}
@@ -657,7 +662,7 @@ function SessionRowInner({
               disabled={cancelDisabled}
               aria-label="Cancel session creation"
               data-testid="cancel-creation-button"
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           )}
@@ -673,7 +678,7 @@ function SessionRowInner({
               disabled={retryDisabled}
               aria-label="Retry creating session"
               data-testid="retry-creation-button"
-            >
+            >{/* analytics-exempt */}
               Retry
             </button>
           )}
@@ -693,6 +698,8 @@ function SessionRowInner({
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
           onRetryNow={onRetryNow}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
           onCreateCheckpoint={onCreateCheckpoint}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}

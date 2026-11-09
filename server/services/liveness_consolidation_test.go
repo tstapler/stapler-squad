@@ -17,7 +17,9 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // livenessProbeExecutor answers exactly the two tmux subprocess calls the
@@ -332,7 +334,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
 	sharedPath := t.TempDir()
 
-	t.Run("no reviewQueuePoller: nothing can be proven, so nothing may be reported owned", func(t *testing.T) {
+	t.Run("no ReviewQueuePoller: nothing can be proven, so nothing may be reported owned", func(t *testing.T) {
 		t.Parallel()
 		svc := &SessionService{}
 		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
@@ -521,4 +523,46 @@ func (f *fakePtyFactory) Close() {
 		_ = file.Close()
 	}
 	f.created = nil
+}
+
+// storedSessionTymux is a tymux manager for a pane-less view: it has no pane
+// (HasSession/IsAlive false) but its record's stored daemon session is live.
+type storedSessionTymux struct {
+	tymux.TymuxManager // nil; any unlisted method must not be reached
+}
+
+func (storedSessionTymux) SetStoredSessionID(string)          {}
+func (storedSessionTymux) SetSessionLabel(string)             {}
+func (storedSessionTymux) SetCommand(launchcmd.LaunchCommand) {}
+func (storedSessionTymux) HasSession() bool                   { return false }
+func (storedSessionTymux) IsAlive() bool                      { return false }
+func (storedSessionTymux) StoredSessionLive() bool            { return true }
+func (storedSessionTymux) PersistedSessionID() string         { return "d-1" }
+func (storedSessionTymux) GetSessionIdentifier() string       { return "" }
+
+// A tymux record the poller map lost, whose shadow view has no pane, is still live
+// when its stored daemon session is. Probing with IsBackendProcessAlive alone calls
+// it dead, which lets backlog spawn a duplicate agent into the worktree.
+func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_ReturnsInstance(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	session.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return storedSessionTymux{} })
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	const uuid = "uuid-tymux-stored-live"
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:          "tymux-stored-live",
+		UUID:           uuid,
+		Path:           t.TempDir(),
+		Status:         session.Active,
+		Program:        "claude",
+		Backend:        session.BackendTymux,
+		TymuxSessionID: "d-1",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}))
+	svc := &SessionService{storage: storage, concStorage: storage, ReviewQueuePoller: svctest.NewEmptyPoller()}
+
+	assert.NotNil(t, svc.findConfirmedLiveInstance(uuid), "a stored daemon session that is live means the session is live")
+	assert.True(t, svc.IsSessionLive(uuid))
 }

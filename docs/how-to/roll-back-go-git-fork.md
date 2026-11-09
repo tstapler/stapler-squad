@@ -8,6 +8,20 @@ See ADR-002 in `project_plans/go-git-fork-full-git-replacement/decisions/`.
 
 A fork tag misbehaves (build break, test failure, or a runtime regression traced to a fork patch).
 
+> **Warning:** stock `v5.19.3` rejects `extensions.worktreeConfig` (and `partialClone`/`preciousObjects`) on
+> `core.repositoryformatversion=0` repos, so every `OpenRepo` fails on any repo that has had a linked worktree.
+> The fork fixes this from `v5.19.3-ssq.2`; rolling back below that tag (or to stock) reintroduces
+> `core.repositoryformatversion does not support extension: worktreeconfig`.
+
+> **Note:** from `v5.19.3-ssq.4` (the tag in `go.mod`) the fork applies git's rename-limit product rule
+> (`too_many_rename_candidates`) to `object.DiffTreeOptions.RenameLimit`, pairs executable and regular files, and
+> caches similarity indexes (a 1000-file move-and-edit diff drops from over 30 s to about 0.4 s; rolling back brings
+> the slowness back); stock go-git skips content-rename detection when
+> `max(added, deleted) > limit`. Rolling back below `ssq.4` still builds (squad passes the limit as a plain
+> number and defines no new fork symbol) but stops matching `git diff -M` near the limit, so
+> `TestFileStatsBetween_ShouldMatchGitCLI_AroundRenameLimit` in `session/git` fails for the `1 add x 8 deletes` case.
+> Treat that failure as the expected signal, not a reason to loosen the test.
+
 ## Steps
 
 1. Delete this line from `go.mod`:

@@ -151,6 +151,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Program:      discovered.Metadata.Command,
 		Status:       Active,
 		InstanceType: InstanceTypeExternal,
+		Backend:      BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",
 		Tags:         []string{"external", "mux"},
 		CreatedAt:    now, // Initialize timestamps to avoid stale notifications

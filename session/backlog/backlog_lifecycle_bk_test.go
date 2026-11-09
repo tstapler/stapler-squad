@@ -727,9 +727,12 @@ type fakePRPendingChecker struct {
 	// TransitionBacklogItemStatus call (the precondition race these calls
 	// guard against), deterministically rather than via a real goroutine race.
 	onIsPRMerged func()
+
+	isMergedCalls int
 }
 
 func (f *fakePRPendingChecker) IsPRMerged(ctx context.Context, prNumber int) (bool, error) {
+	f.isMergedCalls++
 	if f.onIsPRMerged != nil {
 		f.onIsPRMerged()
 	}
@@ -1413,7 +1416,7 @@ func conflictOnlyListener(t *testing.T, storage *session.Storage, prNumber int) 
 }
 
 // With ReworkCapOverride == 0 the rework cap never closes, so the hourly retry must bound
-// itself: conflictRetryMaxAttempts sessions, then stand down with one notice.
+// itself: session.ConflictRetryMaxAttempts sessions, then stand down with one notice.
 func TestReconcilePRPending_ConflictOnly_StopsAfterMaxAttempts_WithOneNotice(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -1603,7 +1606,7 @@ func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot
 
 			// Inside the hourly window the conflict path is throttled too.
 			listener.ReconcilePRPending(ctx, storage.Repo)
-			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount, "throttle must hold within conflictRetryInterval")
+			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount, "throttle must hold within session.ConflictRetryInterval")
 		})
 	}
 }
@@ -4796,12 +4799,14 @@ func TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded
 type fakeWorktreeCleaner struct {
 	mu           sync.Mutex
 	cleanedItems []string
+	outcome      session.CleanupOutcome // zero value is CleanupDone
 }
 
-func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) {
+func (f *fakeWorktreeCleaner) CleanupTerminalItem(_ context.Context, itemID string) session.CleanupOutcome {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleanedItems = append(f.cleanedItems, itemID)
+	return f.outcome
 }
 
 func (f *fakeWorktreeCleaner) calls() []string {
@@ -4920,4 +4925,52 @@ func TestNotifyAutoRemediating_should_UseStampedPathWhenImplementedAndFallBackTo
 	if len(plain.Calls) != 1 || plain.Calls[0].Method != "Notify" {
 		t.Fatalf("fallback should call Notify once, got %+v", plain.Calls)
 	}
+}
+
+// Drives remediatePRFixWithBackoffGate directly with a spawner that always fails the way a
+// stale worktree does. Failed starts are refunded only session.ConflictRetryMaxRefunds times, so
+// the budget (session.ConflictRetryMaxAttempts net grants) is spent after
+// session.ConflictRetryMaxRefunds+session.ConflictRetryMaxAttempts spawn attempts; the next call is
+// exhausted, spawns nothing, and notifies exactly once.
+func TestRemediatePRFixWithBackoffGate_AlwaysFailingSpawn_ExhaustsAndNotifiesOnce(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, item := conflictOnlyListener(t, storage, 9318)
+	spawner.err = errors.New("failed to create worktree from branch backlog/x: branch already used by worktree at /gone")
+
+	call := func() (bool, error) {
+		return listener.remediatePRFixWithBackoffGate(ctx, storage.Repo, spawner, item.ID, item.Title, "## Merge conflict\n", true)
+	}
+
+	const attempts = session.ConflictRetryMaxRefunds + session.ConflictRetryMaxAttempts
+	for i := 1; i <= attempts; i++ {
+		attempted, err := call()
+		require.True(t, attempted, "call %d must attempt a spawn", i)
+		require.Error(t, err, "call %d must surface the spawn error", i)
+		require.Equal(t, i, spawner.callCount)
+		clock.Add(session.ConflictRetryInterval)
+	}
+	grants, refunds := listener.conflictRetries.Counters(item.ID)
+	assert.Equal(t, session.ConflictRetryMaxRefunds, refunds, "refund called (and honored) up to its cap")
+	assert.Equal(t, session.ConflictRetryMaxAttempts, grants, "net grants consumed")
+	assert.NotContains(t, n.Titles(), "Auto-rework paused", "no dead-end notice before exhaustion")
+
+	for i := 0; i < 3; i++ {
+		attempted, err := call()
+		assert.False(t, attempted, "exhausted: no spawn attempted")
+		assert.NoError(t, err)
+		clock.Add(session.ConflictRetryInterval)
+	}
+	assert.Equal(t, attempts, spawner.callCount, "no spawn after exhaustion")
+	exhausted := 0
+	for _, c := range n.Calls {
+		// Every spawn failed, so no fix session ran: the notice says the attempts could not be
+		// started, not that the conflict "survived" sessions.
+		if strings.Contains(c.Message, "could not be started") && strings.Contains(c.Message, "needs manual attention") {
+			exhausted++
+		}
+	}
+	assert.Equal(t, 1, exhausted, "ledger-exhaustion needs-manual-attention notice fires exactly once")
 }

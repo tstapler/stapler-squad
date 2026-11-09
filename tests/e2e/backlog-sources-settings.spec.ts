@@ -65,6 +65,11 @@ test.describe("backlog-sources-settings", () => {
     await sourcesPage.goto();
   });
 
+  test.afterEach(async () => {
+    await sourcesPage.goto();
+    await sourcesPage.deleteSourcesWithPrefix("E2E ");
+  });
+
   test("AC-01 Add Source button disabled until required fields are filled", async ({ page }) => {
     await expect(page.getByRole("button", { name: "Add Source" })).toBeDisabled();
   });

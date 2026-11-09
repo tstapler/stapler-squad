@@ -6,6 +6,7 @@ import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from "web-vitals";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { getActiveSessionUUID } from "@/lib/telemetry/active-session";
 import { observeLongTasks, routeLabel } from "@/lib/telemetry/longTasks";
+import { observeEventLoopLag } from "@/lib/telemetry/eventLoopLag";
 
 export function WebVitalsReporter() {
   const analytics = useAnalytics();
@@ -60,7 +61,12 @@ export function WebVitalsReporter() {
     onINP(report);
     onLCP(report);
     onTTFB(report);
-    return observeLongTasks((event) => analyticsRef.current.track(event));
+    const stopLongTasks = observeLongTasks((event) => analyticsRef.current.track(event));
+    const stopLag = observeEventLoopLag({ track: (event) => analyticsRef.current.track(event) });
+    return () => {
+      stopLongTasks();
+      stopLag();
+    };
   }, []);
 
   return null;

@@ -46,8 +46,13 @@
 
 set -euo pipefail
 
+# Hot path: this runs on every Stop/Notification, and under EDR each spawned
+# process is costly. Prefer builtins (read, parameter expansion, $PWD) and
+# batch external calls (one git, one jq) over per-field subprocesses.
+
 # Find ssq-notify script (look in same directory as this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[[ "${BASH_SOURCE[0]}" == */* ]] || SCRIPT_DIR="."
 CS_NOTIFY="${CS_NOTIFY:-$SCRIPT_DIR/ssq-notify}"
 
 # Check if notifications are disabled
@@ -67,8 +72,8 @@ if ! command -v jq &>/dev/null; then
     exit 0  # Don't block Claude on hook errors
 fi
 
-# Read JSON input from stdin
-INPUT=$(cat)
+# Read JSON input from stdin (builtin; $(cat) would spawn)
+IFS= read -r -d '' INPUT || true
 
 # Get hook type from argument
 HOOK_TYPE="${1:-}"
@@ -79,9 +84,33 @@ if [[ -z "$HOOK_TYPE" ]]; then
     exit 0
 fi
 
-# Helper to extract JSON field
-json_get() {
-    echo "$INPUT" | jq -r "$1 // empty" 2>/dev/null || echo ""
+# Extract all fields for a hook type with ONE jq call. $1 is a jq string
+# interpolation body of NAME=\(expr) pairs, e.g. 'A=\(.a // "") B=\(.b // "")';
+# @sh quotes every value, so the eval cannot execute input content.
+json_vars() {
+    local assignments
+    assignments=$(jq -r "@sh \"$1\"" <<<"$INPUT" 2>/dev/null) || return 0
+    eval "$assignments"
+}
+
+# Basename of the current directory without spawning basename ("/" stays "/").
+cwd_name() {
+    CWD_NAME="${PWD##*/}"
+    CWD_NAME="${CWD_NAME:-/}"
+}
+
+# One `tty` call for the whole run. It prints "not a tty" (exit 1) when stdin
+# is not a terminal, so only /dev/* output counts as a real device.
+TTY_RAW=$(tty 2>/dev/null || true)
+
+# tmux session name, fetched at most once.
+TMUX_SESSION_NAME=""
+TMUX_SESSION_LOADED=false
+load_tmux_session() {
+    if [[ "$TMUX_SESSION_LOADED" == "false" ]]; then
+        TMUX_SESSION_LOADED=true
+        TMUX_SESSION_NAME=$(tmux display-message -p '#S' 2>/dev/null || echo "")
+    fi
 }
 
 # Try to determine session ID
@@ -96,53 +125,47 @@ json_get() {
 get_session_id() {
     # Check environment variable first (explicit override from ssq-mux)
     if [[ -n "${CS_SESSION_ID:-}" ]]; then
-        echo "$CS_SESSION_ID"
+        SESSION_ID="$CS_SESSION_ID"
         return
     fi
 
     # Check for mux-injected tmux session name (ssq-mux integration)
     if [[ -n "${CS_MUX_TMUX_SESSION:-}" ]]; then
-        echo "$CS_MUX_TMUX_SESSION"
+        SESSION_ID="$CS_MUX_TMUX_SESSION"
         return
     fi
 
     # Try to detect from tmux session name (stapler-squad managed sessions)
     if [[ -n "${TMUX:-}" ]]; then
-        local tmux_session
-        tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
-        if [[ -n "$tmux_session" ]]; then
-            echo "$tmux_session"
+        load_tmux_session
+        if [[ -n "$TMUX_SESSION_NAME" ]]; then
+            SESSION_ID="$TMUX_SESSION_NAME"
             return
         fi
     fi
 
     # Get TTY for per-terminal disambiguation (used in IDE/fallback cases below)
-    # Note: `tty` prints "not a tty" to stdout (not stderr) when stdin isn't a terminal,
-    # so we must check the exit code before using its output.
     local tty_suffix=""
-    local tty_raw
-    local tty_dev=""
-    if tty_raw=$(tty 2>/dev/null) && [[ "$tty_raw" == /dev/* ]]; then
-        tty_dev="${tty_raw#/dev/}"
-    fi
-    if [[ -n "$tty_dev" ]]; then
-        tty_suffix="-$tty_dev"
+    if [[ "$TTY_RAW" == /dev/* ]]; then
+        tty_suffix="-${TTY_RAW#/dev/}"
     fi
 
     # For IDE sessions, try to get meaningful project name.
     # Append TTY so multiple IDE windows on the same project get distinct IDs.
     # IntelliJ sets IDEA_INITIAL_DIRECTORY
     if [[ -n "${IDEA_INITIAL_DIRECTORY:-}" ]]; then
-        echo "$(basename "$IDEA_INITIAL_DIRECTORY")${tty_suffix}"
+        local idea_dir="${IDEA_INITIAL_DIRECTORY%/}"
+        SESSION_ID="${idea_dir##*/}${tty_suffix}"
         return
     fi
 
     # Fallback: use current directory name + TTY.
     # This ensures multiple external terminals in the same directory don't collapse.
-    echo "$(basename "$(pwd)")${tty_suffix}"
+    cwd_name
+    SESSION_ID="${CWD_NAME}${tty_suffix}"
 }
 
-SESSION_ID=$(get_session_id)
+get_session_id
 
 # Detect source application (IDE/terminal) for deep linking
 # Returns: APP_NAME, APP_PID, APP_BUNDLE (macOS bundle ID)
@@ -157,8 +180,10 @@ detect_source_app() {
         APP_NAME="IntelliJ IDEA"
         APP_BUNDLE="com.jetbrains.intellij"
         # Try to get project name from directory
-        APP_PROJECT="${IDEA_INITIAL_DIRECTORY:-$(pwd)}"
-        APP_PROJECT=$(basename "$APP_PROJECT")
+        APP_PROJECT="${IDEA_INITIAL_DIRECTORY:-$PWD}"
+        APP_PROJECT="${APP_PROJECT%/}"
+        APP_PROJECT="${APP_PROJECT##*/}"
+        APP_PROJECT="${APP_PROJECT:-/}"
         # Find IntelliJ process - look for parent processes
         local ppid=$$
         while [[ $ppid -gt 1 ]]; do
@@ -183,7 +208,8 @@ detect_source_app() {
         APP_NAME="Visual Studio Code"
         APP_BUNDLE="com.microsoft.VSCode"
         APP_PID="${VSCODE_PID:-}"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
@@ -192,7 +218,8 @@ detect_source_app() {
         APP_NAME="Cursor"
         APP_BUNDLE="com.todesktop.230313mzl4w4u92"
         APP_PID="${CURSOR_PID:-}"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
@@ -200,7 +227,8 @@ detect_source_app() {
     if [[ "${TERM_PROGRAM:-}" == "iTerm.app" ]]; then
         APP_NAME="iTerm2"
         APP_BUNDLE="com.googlecode.iterm2"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
@@ -208,7 +236,8 @@ detect_source_app() {
     if [[ "${TERM_PROGRAM:-}" == "Apple_Terminal" ]]; then
         APP_NAME="Terminal"
         APP_BUNDLE="com.apple.Terminal"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
@@ -216,7 +245,8 @@ detect_source_app() {
     if [[ "${TERM_PROGRAM:-}" == "WarpTerminal" ]]; then
         APP_NAME="Warp"
         APP_BUNDLE="dev.warp.Warp-Stable"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
@@ -224,14 +254,21 @@ detect_source_app() {
     if [[ "${TERM_PROGRAM:-}" == "Alacritty" ]]; then
         APP_NAME="Alacritty"
         APP_BUNDLE="io.alacritty"
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
         return
     fi
 
     # Check for tmux-managed session (Stapler Squad)
     if [[ -n "${TMUX:-}" ]]; then
         APP_NAME="tmux"
-        APP_PROJECT=$(tmux display-message -p '#S' 2>/dev/null || basename "$(pwd)")
+        load_tmux_session
+        if [[ -n "$TMUX_SESSION_NAME" ]]; then
+            APP_PROJECT="$TMUX_SESSION_NAME"
+        else
+            cwd_name
+            APP_PROJECT="$CWD_NAME"
+        fi
         return
     fi
 
@@ -262,7 +299,8 @@ detect_source_app() {
 
     # Default project name
     if [[ -z "$APP_PROJECT" ]]; then
-        APP_PROJECT=$(basename "$(pwd)")
+        cwd_name
+        APP_PROJECT="$CWD_NAME"
     fi
 }
 
@@ -278,28 +316,43 @@ detect_git_context() {
     GIT_DIRTY=""
     GIT_SHORT_SHA=""
 
-    # Check if we're in a git repository
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        return
+    # One git call for toplevel, full SHA and branch (fails outside a work tree
+    # and in a repo with no commits yet). `--short` cannot precede --abbrev-ref
+    # in one rev-parse call, so the SHA is truncated here instead (7 chars).
+    local git_root="" git_head="" git_sha=""
+    {
+        IFS= read -r git_root
+        IFS= read -r git_sha
+        IFS= read -r git_head
+    } < <(git rev-parse --show-toplevel HEAD --abbrev-ref HEAD 2>/dev/null) || true
+    GIT_SHORT_SHA="${git_sha:0:7}"
+
+    if [[ -z "$git_root" || -z "$git_head" || -z "$GIT_SHORT_SHA" ]]; then
+        # Either not a work tree, or an unborn branch (no HEAD yet).
+        [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || return 0
+        git_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+        git_head=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+        GIT_SHORT_SHA=""
     fi
 
-    # Get current branch name
-    GIT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "")
+    # --abbrev-ref prints "HEAD" when detached: prefer an exact tag, else the SHA.
+    GIT_BRANCH="$git_head"
+    if [[ "$git_head" == "HEAD" ]]; then
+        GIT_BRANCH=$(git describe --tags --exact-match 2>/dev/null || echo "$GIT_SHORT_SHA")
+    fi
 
     # Get repository name from remote URL or directory
     GIT_REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "")
     if [[ -n "$GIT_REMOTE_URL" ]]; then
         # Extract repo name from URL (handles both HTTPS and SSH)
-        GIT_REPO=$(basename -s .git "$GIT_REMOTE_URL" 2>/dev/null || echo "")
+        GIT_REPO="${GIT_REMOTE_URL%/}"
+        GIT_REPO="${GIT_REPO##*/}"
+        GIT_REPO="${GIT_REPO%.git}"
     fi
 
     # Fallback to directory name if no remote
-    if [[ -z "$GIT_REPO" ]]; then
-        local git_root
-        git_root=$(git rev-parse --show-toplevel 2>/dev/null)
-        if [[ -n "$git_root" ]]; then
-            GIT_REPO=$(basename "$git_root")
-        fi
+    if [[ -z "$GIT_REPO" && -n "$git_root" ]]; then
+        GIT_REPO="${git_root##*/}"
     fi
 
     # Check if working directory is dirty (has uncommitted changes)
@@ -308,9 +361,6 @@ detect_git_context() {
     else
         GIT_DIRTY="false"
     fi
-
-    # Get short commit SHA
-    GIT_SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "")
 }
 
 # Detect terminal context
@@ -320,7 +370,7 @@ detect_terminal_context() {
     TERMINAL_TITLE=""
 
     # Get TTY device name (useful for differentiating terminal tabs)
-    TTY_NAME=$(tty 2>/dev/null | sed 's/\/dev\///' || echo "")
+    TTY_NAME="${TTY_RAW/\/dev\//}"
 
     # Try to get terminal title from environment (some terminals set this)
     # iTerm2 sets ITERM_SESSION_ID, which includes tab info
@@ -341,7 +391,8 @@ detect_env_context() {
 
     # Detect Python virtual environment
     if [[ -n "${VIRTUAL_ENV:-}" ]]; then
-        VENV_NAME=$(basename "$VIRTUAL_ENV")
+        VENV_NAME="${VIRTUAL_ENV%/}"
+        VENV_NAME="${VENV_NAME##*/}"
     elif [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
         VENV_NAME="conda:${CONDA_DEFAULT_ENV}"
     fi
@@ -377,7 +428,7 @@ send_notification() {
         args+=(-d "source_project=$APP_PROJECT")
     fi
     # Add current working directory for context
-    args+=(-d "cwd=$(pwd)")
+    args+=(-d "cwd=$PWD")
 
     # Add git context for session differentiation
     if [[ -n "$GIT_BRANCH" ]]; then
@@ -429,12 +480,10 @@ send_notification() {
 case "$HOOK_TYPE" in
     notification)
         # Notification hook - Claude is sending a notification
-        TITLE=$(json_get '.notification.title // .title // "Claude Notification"')
-        MESSAGE=$(json_get '.notification.message // .message // ""')
-        PRIORITY=$(json_get '.notification.priority // "medium"')
+        TITLE="" MESSAGE="" PRIORITY="" LEVEL=""
+        json_vars 'TITLE=\(.notification.title // .title // "Claude Notification" | tostring) MESSAGE=\(.notification.message // .message // "" | tostring) PRIORITY=\(.notification.priority // "medium" | tostring) LEVEL=\(.notification.level // .level // "" | tostring)'
 
         # Map notification level to priority if present
-        LEVEL=$(json_get '.notification.level // .level // ""')
         case "$LEVEL" in
             error|critical) PRIORITY="urgent" ;;
             warning) PRIORITY="high" ;;
@@ -447,7 +496,8 @@ case "$HOOK_TYPE" in
 
     stop)
         # Stop hook - Claude finished a task
-        REASON=$(json_get '.stop_reason // .reason // "Task completed"')
+        REASON=""
+        json_vars 'REASON=\(.stop_reason // .reason // "Task completed" | tostring)'
 
         # Classify stop reason explicitly
         case "$REASON" in
@@ -465,7 +515,8 @@ case "$HOOK_TYPE" in
 
     subagent-stop)
         # SubagentStop hook - a Task subagent finished
-        REASON=$(json_get '.stop_reason // .reason // ""')
+        REASON=""
+        json_vars 'REASON=\(.stop_reason // .reason // "" | tostring)'
 
         case "$REASON" in
             max_tokens)
@@ -520,8 +571,8 @@ case "$HOOK_TYPE" in
 
     post-tool)
         # PostToolUse hook - only notify on errors
-        TOOL=$(json_get '.tool_name // .tool // "unknown"')
-        ERROR=$(json_get '.tool_output.error // .error // ""')
+        TOOL="" ERROR=""
+        json_vars 'TOOL=\(.tool_name // .tool // "unknown" | tostring) ERROR=\(.tool_output.error // .error // "" | tostring)'
 
         # Only send notification if there was an error. delivery_class=routine: a failed
         # tool call is per-tool noise, not a session failure (ADR-002), so a hidden

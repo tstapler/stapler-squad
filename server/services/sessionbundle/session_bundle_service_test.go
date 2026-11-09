@@ -418,3 +418,20 @@ func TestAssembleBundle_IncludesTracesAndProfiles(t *testing.T) {
 	assert.Contains(t, manifest.IncludedSections, "client_traces")
 	assert.Contains(t, manifest.IncludedSections, "profile_goroutine")
 }
+
+func TestAssembleBundle_ShouldRedactSecrets_WhenArtifactsCarryTokens(t *testing.T) {
+	svc := sessionbundle.NewSessionBundleService(
+		&fakeBundleStorage{artBlob: &artifacts.SessionArtifactsBlob{
+			ExternalURLs: []string{"https://x.io/cb?token=abcd1234"},
+			Commands:     []artifacts.CommandArtifact{{Type: "git_commit", Command: "git commit --token abcd1234"}},
+		}},
+		&fakeCtxHistory{},
+		&fakeScrollback{lines: []byte("l")},
+	)
+	zipBytes, _, err := exportForTest(t, svc, newTestInstance("uuid-red"), 100)
+	require.NoError(t, err)
+	art := readZIP(t, zipBytes)["artifacts.json"]
+	require.NotEmpty(t, art, "artifacts.json must be in the bundle")
+	assert.NotContains(t, string(art), "abcd1234")
+	assert.Contains(t, string(art), "[redacted]")
+}

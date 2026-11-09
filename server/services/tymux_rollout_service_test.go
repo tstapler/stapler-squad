@@ -56,6 +56,9 @@ func TestReplaceTymuxd_MapsOutcomes(t *testing.T) {
 	}{
 		{"ok", nil, 0, false},
 		{"live sessions", fmt.Errorf("%w (2 live)", tymux.ErrLiveSessionsWouldBeInterrupted), connect.CodeFailedPrecondition, true},
+		{"handoff refused", fmt.Errorf("%w: schema", tymux.ErrHandoffRefused), connect.CodeFailedPrecondition, true},
+		{"handoff unavailable", tymux.ErrHandoffUnavailable, connect.CodeFailedPrecondition, true},
+		{"handoff unverified", fmt.Errorf("%w: timeout", tymux.ErrHandoffVerifyFailed), connect.CodeAborted, true},
 		{"other failure", errors.New("boom"), connect.CodeInternal, true},
 	}
 	for _, tc := range tests {

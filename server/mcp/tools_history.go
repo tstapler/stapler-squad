@@ -28,7 +28,7 @@ const (
 )
 
 // truncateSearchSnippets caps a result's snippets to maxCount and truncates
-// each snippet's text via session.SanitizeForAgentContext.
+// each snippet's text via backlog.SanitizeForAgentContext.
 func truncateSearchSnippets(snippets []*sessionv1.SearchSnippet, maxCount, maxLen int) []SnippetResult {
 	if len(snippets) > maxCount {
 		snippets = snippets[:maxCount]

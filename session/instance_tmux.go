@@ -15,6 +15,8 @@ import (
 	ptyPkg "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/qos"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -331,7 +333,11 @@ func AutoApproveSupported(program string) bool {
 // NewProcessManager's error directly instead of going through this
 // fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
-	i.pmMu.Lock()
+	if !i.pmMu.TryLock() {
+		waitStart := time.Now()
+		i.pmMu.Lock()
+		termlat.Default.Record(termlat.StagePMLockWait, termlat.Labels{}, time.Since(waitStart))
+	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
 		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
@@ -872,6 +878,12 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
 	}
 	i.processManager = newPM
+	i.wireTmuxSession(command)
+	if backendOverride == BackendTymux {
+		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
+	}
+	newPM.ResetExitOnce()
+	newPM.SetOnExitCallback(instanceOnExitCallback(i))
 
 	i.mu.Lock()
 	i.Backend = backendOverride
@@ -921,12 +933,26 @@ func (i *Instance) initTmuxSession() {
 
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
-	if i.pm().HasSession() {
+	// An unrestored tymux record has no pane yet but still owns a daemon session.
+	return i.killSession(i.tymuxSessionID() != "")
+}
+
+// killSession closes the process session when a pane is attached, and also when
+// includeUnrestored is set and the record only stores a daemon session id.
+func (i *Instance) killSession(includeUnrestored bool) error {
+	if i.pm().HasSession() || includeUnrestored {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
 	}
 	return nil
+}
+
+// killSessionAttachedByThisAttempt is KillSession for a failed Start's cleanup: it never
+// closes a stored daemon session the failed attempt did not attach or create, which a
+// transient create/list error must not turn into killing a running agent.
+func (i *Instance) killSessionAttachedByThisAttempt() error {
+	return i.killSession(false)
 }
 
 // KillSessionKeepWorktree terminates tmux session but preserves worktree for recovery scenarios.
@@ -1120,6 +1146,24 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	return false
 }
 
+// IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
+// pane (a liveness shadow or a not-yet-restored record), the record's persisted
+// daemon session. Only for "is some session still running" lookups: stream
+// paths must keep using IsBackendProcessAlive, since a true answer there means
+// a pane is attached and skips RestoreProcess.
+func (i *Instance) IsLiveOrStoredSessionLive() bool {
+	if i.IsBackendProcessAlive() {
+		return true
+	}
+	if i.pm().HasSession() {
+		return false
+	}
+	if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+		return p.StoredSessionLive()
+	}
+	return false
+}
+
 // GetCurrentWorkingDirectory returns the actual runtime working directory of
 // the instance's live pane/process (via pane or process introspection) — as
 // opposed to GetPath()/GetEffectiveRootDir(), which report the persisted
@@ -1128,6 +1172,35 @@ func (i *Instance) IsBackendProcessAlive() bool {
 // some OTHER session's real cwd sits inside a worktree about to be removed.
 func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
 	return i.pm().GetCurrentWorkingDirectory()
+}
+
+// PrepareRetainedTerminalView adopts an existing pane for inactive-session viewing.
+// handled distinguishes this read-only path from normal active-session restoration.
+func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled bool, err error) {
+	snap := i.Snapshot()
+	if snap.ArchivedAt == nil && (snap.Status == Active || snap.Status == Creating || snap.Status == Restoring) {
+		return false, nil
+	}
+	p, ok := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	if !ok {
+		if snap.ArchivedAt != nil {
+			return true, nil // An archived view must never enter the mutating restore path.
+		}
+		return false, nil
+	}
+	return true, p.AdoptForViewing(ctx)
+}
+
+// terminalScreenReady separates retained-screen reads from process/input readiness.
+func (i *Instance) terminalScreenReady() bool {
+	if i.Snapshot().Status == Paused {
+		return false
+	}
+	if i.started.Load() {
+		return true
+	}
+	_, retained := i.pm().(interface{ AdoptForViewing(context.Context) error })
+	return retained && i.pm().HasSession()
 }
 
 // RestoreProcess is the backend-agnostic replacement for reaching into a
@@ -1183,6 +1256,12 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 	if !i.started.Load() {
 		return nil, fmt.Errorf("session not started")
 	}
+	return i.pm().GetPTY()
+}
+
+// RestoredPTY returns the PTY of a pane RestoreProcess just attached. Unlike GetPTYReader it
+// has no started gate: a boot-loaded instance is not started until its first lazy restore.
+func (i *Instance) RestoredPTY() (*os.File, error) {
 	return i.pm().GetPTY()
 }
 
@@ -1366,7 +1445,7 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 // GetPaneDimensionsPriority in sequence, and all of them must share the same
 // overall deadline rather than each getting an independent fresh one.
 func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
@@ -1452,7 +1531,7 @@ func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.terminalScreenReady() {
 		return "", streamhub.ErrSessionNotStarted
 	}
 
@@ -1481,7 +1560,7 @@ func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSn
 	if !ok {
 		return streamhub.FullStateSnapshot{}, false, nil
 	}
-	if !i.started.Load() || i.Snapshot().Status == Paused {
+	if !i.terminalScreenReady() {
 		return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted
 	}
 	data, altScreen, ok, err := c.CapturePaneRedraw(ctx)
@@ -1494,6 +1573,36 @@ func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSn
 		i.SetAltScreenActiveBootstrap(altScreen)
 	}
 	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
+}
+
+// SetPaneActivity forwards the hub's per-session priority class to the backend daemon when it
+// takes hints; otherwise it is a no-op. Satisfies streamhub.ActivityHinter.
+func (i *Instance) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
+	h, ok := capabilityOf[PaneActivityHinter](i.pm())
+	if !ok {
+		return nil
+	}
+	return h.SetPaneActivity(ctx, activity)
+}
+
+// SupportsInStreamResync reports whether ResyncInStream can splice by sequence number right now.
+// Satisfies streamhub.InStreamResyncer.
+func (i *Instance) SupportsInStreamResync() bool {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	return ok && i.terminalScreenReady() && c.SupportsInStreamResync()
+}
+
+// ResyncInStream captures the pane and splices a redraw plus all later output into every raw
+// output subscriber's stream, in order. Satisfies streamhub.InStreamResyncer.
+func (i *Instance) ResyncInStream(ctx context.Context) error {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	if !ok {
+		return streamhub.ErrSessionNotStarted
+	}
+	if !i.terminalScreenReady() {
+		return streamhub.ErrSessionNotStarted
+	}
+	return c.ResyncInStream(ctx)
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.

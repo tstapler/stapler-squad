@@ -8,6 +8,8 @@ import (
 	"time"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+
+	"github.com/tstapler/stapler-squad/internal/termlat"
 )
 
 // Write path for the standing Attach stream.
@@ -114,9 +116,10 @@ func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
 func (s *tymuxGRPCSession) sendOnStreamCtx(ctx context.Context, req *v1.AttachRequest) (int, error) {
 	s.mu.RLock()
 	stream, gate := s.stream, s.sendGate
+	viewOnly := s.viewOnly
 	frameWait, payloadTimeout := s.sendLockWait, s.inputPayloadTimeout
 	s.mu.RUnlock()
-	if stream == nil {
+	if stream == nil || viewOnly {
 		return 0, errSessionNotStarted
 	}
 	if frameWait <= 0 {
@@ -140,11 +143,16 @@ func lockErr(err, busy error) error {
 }
 
 func sendFrame(ctx context.Context, stream attachStream, gate *streamSendGate, req *v1.AttachRequest, wait time.Duration) error {
+	lockStart := time.Now()
 	if err := gate.frame.acquire(ctx, wait); err != nil {
 		return lockErr(err, errSendBusy)
 	}
 	defer gate.frame.release()
-	if err := stream.Send(req); err != nil {
+	sendStart := time.Now()
+	termlat.Default.Record(termlat.StageStreamLockWait, tymuxLabels, sendStart.Sub(lockStart))
+	err := stream.Send(req)
+	termlat.Default.Record(termlat.StageStreamSend, tymuxLabels, time.Since(sendStart))
+	if err != nil {
 		return classifyRPCError("Attach.Send", err)
 	}
 	return nil
@@ -153,10 +161,12 @@ func sendFrame(ctx context.Context, stream attachStream, gate *streamSendGate, r
 // sendInputPayload sends data as one contiguous logical input (see the guarantees above) and
 // returns the number of bytes written, which is less than len(data) only alongside an error.
 func sendInputPayload(ctx context.Context, stream attachStream, gate *streamSendGate, data []byte, wait, payloadTimeout time.Duration) (int, error) {
+	lockStart := time.Now()
 	if err := gate.input.acquire(ctx, wait); err != nil {
 		return 0, lockErr(err, errInputBusy)
 	}
 	defer gate.input.release()
+	termlat.Default.Record(termlat.StageStreamLockWait, tymuxLabels, time.Since(lockStart))
 
 	deadline := time.Now().Add(payloadTimeout)
 	sent := 0

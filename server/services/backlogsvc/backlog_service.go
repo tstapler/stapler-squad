@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,6 +66,7 @@ type itemSourceBackend interface {
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
 	storage        *session.Storage
+	cleanup        *cleanupWiring
 	sourceBackend  itemSourceBackend
 	sessionCreator SessionCreator
 	sessionStopper services.SessionStopper
@@ -126,6 +128,10 @@ type BacklogService struct {
 	// the WIP cap by each computing freeSlots from their own stale snapshot
 	// (PR #199 review F2).
 	dequeueMu sync.Mutex
+
+	// spawnGuard holds the in-memory part of the dequeue spawn-failure backoff
+	// (backlog_service_dequeue_backoff.go).
+	spawnGuard dequeueSpawnGuard
 
 	// claimWiring holds the cross_host_claim_dedup checker and dispute resolver
 	// (backlog_service_claim.go). It is atomic because SetClaimChecker runs at
@@ -548,6 +554,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		resolveGitHubInput:   session.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
 		modelFamilies:        workflows.DefaultModelFamilies(),
+		cleanup:              newCleanupWiring(storage),
 	}
 }
 
@@ -830,7 +837,16 @@ func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *sessi
 // path, cloning it if necessary (mirrors SessionService.CreateSession's handling
 // of GitHub URLs). Plain filesystem paths pass through unchanged.
 func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
-	if input == "" || !session.IsGitHubURL(input) {
+	if input == "" {
+		return input, nil
+	}
+	if !session.IsGitHubURL(input) {
+		// "scheme://" input no recognizer accepts (e.g. "https://github.com/") is
+		// never a usable filesystem path. Configured GHE URLs still pass through
+		// unchanged, as before.
+		if strings.Contains(input, "://") && !s.isEnterpriseGitHubURL(input) {
+			return "", fmt.Errorf("repo_path %q is not a local path or a recognized GitHub URL", input)
+		}
 		return input, nil
 	}
 	localPath, _, err := s.resolveGitHubInput(input)
@@ -838,6 +854,13 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 		return "", fmt.Errorf("failed to resolve GitHub URL %q: %w", input, err)
 	}
 	return localPath, nil
+}
+
+func (s *BacklogService) isEnterpriseGitHubURL(input string) bool {
+	if s.cfg == nil {
+		return false
+	}
+	return session.IsGitHubURLWithHosts(input, s.EnterpriseHosts())
 }
 
 // itemSessionToProto converts an ItemSessionSummary to its proto representation.
@@ -1029,6 +1052,10 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
+
+					WaiverReason: c.WaiverReason,
+					WaivedBy:     c.WaivedBy,
+					WaivedAt:     c.WaivedAt,
 				}
 			}
 			p.AcceptanceCriteria = protoAC
@@ -1142,6 +1169,10 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
+
+					WaiverReason: c.WaiverReason,
+					WaivedBy:     c.WaivedBy,
+					WaivedAt:     c.WaivedAt,
 				}
 			}
 			p.AcceptanceCriteria = protoAC
@@ -1256,30 +1287,33 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 // cleanupItemWorktrees removes git worktrees for work-role item sessions.
 // Call commitAndPushItemWorktrees first to ensure changes are durable.
 // Errors are logged but do not fail the caller — cleanup is best-effort.
-func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) {
-	s.cleanupItemWorktreesExcept(ctx, sessions, "")
+func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) session.CleanupOutcome {
+	return s.cleanupItemWorktreesExcept(ctx, sessions, "")
 }
 
 // cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
-// removal. It also owns backlog-scaffolding cleanup (CleanupSlashCommands,
-// CleanupBacklogContextFile) for every worktree it removes — a second responsibility
-// beyond worktree removal itself; see CleanupSlashCommands' doc comment for why that's
-// safe here. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
-// directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
-// creating a fresh one, so a prior work session's worktree row can point at the exact
-// path the brand-new session just started using. Cleaning that up unconditionally —
-// as every caller used to — deleted the directory out from under the session that
-// just reused it, leaving a still-in_progress/review item with no worktree at all
-// (diffs and re-review's codebase-read verification both came up empty). exceptPath
-// lets the reopen call site keep that one path alive while still clearing out any
-// genuinely stale worktree from an earlier, differently-named revision (e.g. the
-// item's title changed between rework rounds).
-func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) {
+// removal. It is the single choke point for backlog-driven worktree removal: the
+// PRCleanupGate runs first and blocks (removing nothing) while a PR tied to the
+// worktrees is not terminal or the current-round session is live, and again
+// immediately before each removal. It also owns backlog-scaffolding cleanup
+// (CleanupSlashCommands, CleanupBacklogContextFile) for every worktree it removes —
+// a second responsibility beyond worktree removal itself; see CleanupSlashCommands'
+// doc comment for why that's safe here. Reopen/rework spawns reuse the same
+// "backlog/<item>" branch and worktree directory across revisions (see
+// SpawnSessionFromItem step 10's comment), so exceptPath keeps the one path the
+// brand-new session just started using while still clearing genuinely stale
+// worktrees from earlier, differently-named revisions.
+func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) session.CleanupOutcome {
+	return s.cleanupWorktrees(ctx, sessions, exceptPath, session.GateOptions{})
+}
+
+func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string, opts session.GateOptions) session.CleanupOutcome {
+	if out, blocked := s.gateOutcome(ctx, sessions, opts); blocked {
+		return out
+	}
+	failed := false
 	for _, is := range sessions {
-		if is.SessionUUID == "" {
-			continue
-		}
-		if is.Role != string(session.SessionRoleWork) {
+		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -1287,44 +1321,67 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 			continue
 		}
 		if wt.WorktreePath == "" {
-			// Epic 2.1: previously silently skipped here even when a worktree row was
-			// expected. Extra lookup needed since ItemSessionSummary lacks
-			// SessionType/Branch; a lookup failure falls back to silent skip.
-			if sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID); lookupErr == nil && session.ExpectsWorktree(*sessionData) {
-				log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
-					"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
-				if s.eventBus != nil {
-					s.eventBus.Publish(events.NewNotificationEvent(
-						is.BacklogItemID, "", uuid.New().String(),
-						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-						services.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
-						"Worktree row missing during item archival",
-						fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
-						map[string]string{"item_id": is.BacklogItemID},
-					))
-				}
-			}
+			s.warnMissingWorktreeRow(is)
 			continue
 		}
 		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
-		// Scaffolding first: if Cleanup below fails or the path isn't a removable
-		// worktree, the item-pinned /backlog:* files must not outlive the item.
-		_ = backlog.CleanupSlashCommands(wt.WorktreePath)
-		_ = backlog.CleanupBacklogContextFile(wt.WorktreePath)
-		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
-		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
-			continue
+		// Re-check right before removal: a PR attach or session resume can land
+		// between the first check and this removal (review C8).
+		if out, blocked := s.gateOutcome(ctx, sessions, opts); blocked {
+			return out
 		}
-		// The worktree directory is gone — stop the unfinished-changes scanner
-		// from rescanning it forever (BUG-034). Only after Cleanup succeeds: a
-		// failed cleanup means the path may still be a real worktree worth
-		// watching.
-		if s.repoWatchRemover != nil {
-			s.repoWatchRemover.RemoveRepo(wt.WorktreePath)
+		if !s.removeWorktree(wt) {
+			failed = true
 		}
+	}
+	if failed {
+		return session.CleanupOutcome{Status: session.CleanupFailed}
+	}
+	return session.CleanupDoneOutcome()
+}
+
+// removeWorktree deletes one worktree (scaffolding first) and reports success.
+func (s *BacklogService) removeWorktree(wt session.GitWorktreeData) bool {
+	// Scaffolding first: if Cleanup below fails or the path isn't a removable
+	// worktree, the item-pinned /backlog:* files must not outlive the item.
+	_ = backlog.CleanupSlashCommands(wt.WorktreePath)
+	_ = backlog.CleanupBacklogContextFile(wt.WorktreePath)
+	if cleanErr := s.cleanup.remove(wt); cleanErr != nil {
+		log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+		return false
+	}
+	// The worktree directory is gone — stop the unfinished-changes scanner
+	// from rescanning it forever (BUG-034). Only after Cleanup succeeds: a
+	// failed cleanup means the path may still be a real worktree worth
+	// watching.
+	if s.repoWatchRemover != nil {
+		s.repoWatchRemover.RemoveRepo(wt.WorktreePath)
+	}
+	return true
+}
+
+// warnMissingWorktreeRow surfaces a work session that expected a worktree but has no row.
+func (s *BacklogService) warnMissingWorktreeRow(is session.ItemSessionSummary) {
+	// Epic 2.1: previously silently skipped here even when a worktree row was
+	// expected. Extra lookup needed since ItemSessionSummary lacks
+	// SessionType/Branch; a lookup failure falls back to silent skip.
+	sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID)
+	if lookupErr != nil || !session.ExpectsWorktree(*sessionData) {
+		return
+	}
+	log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",
+		"session_id", is.SessionUUID, "item_id", is.BacklogItemID)
+	if s.eventBus != nil {
+		s.eventBus.Publish(events.NewNotificationEvent(
+			is.BacklogItemID, "", uuid.New().String(),
+			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+			services.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+			"Worktree row missing during item archival",
+			fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
+			map[string]string{"item_id": is.BacklogItemID},
+		))
 	}
 }
 
@@ -1335,16 +1392,20 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 // session.WorktreeCleaner) by internal transition paths that call the
 // storage layer directly (bounce-to-done, PR-merge done) and would otherwise
 // depend solely on the 60s reconcileTerminalItemSessions safety-net sweep.
-// Best-effort: a listing failure is logged, never returned — mirrors
-// cleanupItemWorktrees's and archiveItemWorkSessions's own contract.
-func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) {
+// Best-effort: a listing failure is logged, never returned. The returned outcome
+// is the worktree step's; archival is never gated by open PRs (OOM 2026-07-29) but
+// skips a live current-round work session (RULE L), whose pane and worktree are
+// held together.
+func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string) session.CleanupOutcome {
 	sessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("[CleanupTerminalItem] ListItemSessions item=%s: %v", itemID, err)
-		return
+		return session.CleanupOutcome{Status: session.CleanupFailed, Reason: err.Error()}
 	}
-	s.cleanupItemWorktrees(ctx, sessions)
-	s.archiveItemWorkSessions(ctx, sessions)
+	outcome := s.cleanupItemWorktrees(ctx, sessions)
+	archivable, _ := session.SplitLiveCurrentRound(ctx, s.cleanup.ruleLProbe(), time.Now(), sessions)
+	s.archiveItemWorkSessions(ctx, archivable)
+	return outcome
 }
 
 // archiveItemWorkSessions soft-archives every work- or review-role session in

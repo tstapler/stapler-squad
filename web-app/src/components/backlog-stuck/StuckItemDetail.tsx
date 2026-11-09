@@ -9,6 +9,7 @@ import { routes } from "@/lib/routes";
 import { useAnalytics } from "@/lib/analytics";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
+import { ConstituentReasons } from "./ConstituentReasons";
 import * as styles from "./StuckItemDetail.css";
 
 interface StuckItemDetailProps {
@@ -56,6 +57,9 @@ interface StuckItemDetailProps {
    * refreshed item. Omitted hides the Retry button.
    */
   onRefreshAutoMerge?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
+  /** Open reasons behind a MULTIPLE_REASONS row; each remediable one gets its own Retry via onTriggerRemediationNow. */
+  constituentReasons?: StuckReason[];
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
 }
 
 const AUTO_MERGE_TTL_MS = 10 * 60 * 1000; // mirrors github.repoSettingsTTL
@@ -243,6 +247,8 @@ export function StuckItemDetail({
   onApprovePlan,
   onDiagnose,
   onRefreshAutoMerge,
+  constituentReasons,
+  onTriggerRemediationNow,
 }: StuckItemDetailProps) {
   const { track } = useAnalytics();
   const unknown = isPrStatusUnknown(item);
@@ -361,6 +367,14 @@ export function StuckItemDetail({
           {why}
         </span>
       </div>
+
+      {item.reason === StuckReason.MULTIPLE_REASONS && constituentReasons && (
+        <ConstituentReasons
+          itemId={item.itemId}
+          reasons={constituentReasons}
+          onTriggerRemediationNow={onTriggerRemediationNow}
+        />
+      )}
 
       {isPrReady && !unknown && (
         <p className={styles.actionCopy} data-testid="stuck-item-action-copy">

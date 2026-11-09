@@ -19,6 +19,7 @@ genrule(
     ],
     outs = [
         "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/backlog_flow.pb.go",
         "gen/proto/go/session/v1/diagnose.pb.go",
         "gen/proto/go/session/v1/events.pb.go",
         "gen/proto/go/session/v1/github_user.pb.go",
@@ -35,6 +36,7 @@ genrule(
         "gen/proto/go/session/v1/session.pb.go",
         "gen/proto/go/session/v1/session_summary.pb.go",
         "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog_flow.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",
@@ -78,6 +80,7 @@ go_library(
     name = "sessionv1_go",
     srcs = [
         "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/backlog_flow.pb.go",
         "gen/proto/go/session/v1/diagnose.pb.go",
         "gen/proto/go/session/v1/events.pb.go",
         "gen/proto/go/session/v1/github_user.pb.go",
@@ -111,6 +114,7 @@ go_library(
     name = "sessionv1connect_go",
     srcs = [
         "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog_flow.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
         "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",

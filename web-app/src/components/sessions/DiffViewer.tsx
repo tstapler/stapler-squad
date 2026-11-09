@@ -6,6 +6,8 @@ import { DiffPane } from "./DiffPane";
 import { CIStatusBadge } from "./CIStatusBadge";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { diffHeader } from "./DiffViewer.css";
+import { displayedPullRequest } from "@/lib/pr/legacyPullRequest";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
 
 interface DiffViewerProps {
   session?: Session;
@@ -17,18 +19,20 @@ export function DiffViewer({ session }: DiffViewerProps) {
     useSessionVcsContext();
   // Mounted only while the diff tab is shown, so this is the "tab is visible" trigger.
   useEffect(() => { ensureDiff(); }, [ensureDiff]);
+  const multiPr = useSessionMultiPR();
+  const pr = session ? displayedPullRequest(session, multiPr) : undefined;
 
   return (
     <DiffPane
       autoFocus
       header={
-        session?.githubPrNumber ? (
+        pr ? (
           <div className={diffHeader}>
             <CIStatusBadge
-              checkConclusion={session.githubCheckConclusion}
-              prUrl={session.githubPrUrl}
-              prNumber={session.githubPrNumber}
-              lastChecked={session.lastPrStatusCheck}
+              checkConclusion={pr.checkConclusion}
+              prUrl={pr.url}
+              prNumber={pr.number}
+              lastChecked={session?.lastPrStatusCheck}
             />
           </div>
         ) : null

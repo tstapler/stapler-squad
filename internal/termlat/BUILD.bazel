@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "termlat",
+    srcs = [
+        "ext.go",
+        "resync.go",
+        "slowspan.go",
+        "termlat.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/termlat",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":termlat",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "termlat_test",
+    srcs = [
+        "dashboard_test.go",
+        "record_bench_test.go",
+        "slowspan_test.go",
+        "stages_ext_test.go",
+        "termlat_test.go",
+    ],
+    embed = [":termlat"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+    ],
+)

@@ -41,7 +41,8 @@
     "TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetParked",
     "TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounceCapExhausted",
     "TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingResolves",
-    "TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview"
+    "TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInProgressOrReview",
+    "TestListStuckBacklogItems_ShouldCountMergedPRsOfTheItemSet_WhenMultiPRBacklogScopeOn"
   ],
-  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
+  "lastModified": "2026-11-05T09:55:00-08:00"
 }

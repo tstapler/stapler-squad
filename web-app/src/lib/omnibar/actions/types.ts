@@ -1,4 +1,4 @@
-import { ThemeName } from "@/lib/contexts/ThemeContext";
+import type { ThemeName } from "@/lib/contexts/ThemeContext";
 
 export type OmnibarAction =
   | { type: "navigate_session"; sessionId: string; label: string }
@@ -12,4 +12,5 @@ export type OmnibarAction =
   | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string }
   | { type: "create_alias_session"; aliasName: string; branch?: string; label?: string; extraFlags?: string }
   | { type: "chat_backlog_item"; text: string }
+  | { type: "find_sessions_for_pr"; host: string; owner: string; repo: string; number: number }
   | { type: "fan_out"; path: string; count: number; prompt: string; title?: string; program?: string };

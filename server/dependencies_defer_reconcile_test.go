@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -27,4 +28,16 @@ func TestDeferToReconcile_should_BeTrueOnlyForStatusesWithNoActiveEdge(t *testin
 		inst.ForceStatus(tc.status)
 		assert.Equal(t, tc.want, deferToReconcile(inst), tc.status.String())
 	}
+}
+
+func TestShouldBootStart(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	started := session.NewStartedInstanceForTest(t, "boot-started", nil)
+
+	assert.True(t, shouldBootStart(&session.Instance{Status: session.Active}), "unstarted active instance boots")
+	assert.False(t, shouldBootStart(nil))
+	assert.False(t, shouldBootStart(started), "a client's lazy restore may have started it during the boot stagger")
+	assert.False(t, shouldBootStart(&session.Instance{Status: session.Active, ArchivedAt: &now}), "archived is never auto-started")
+	assert.False(t, shouldBootStart(&session.Instance{Status: session.Failed}), "failed is left to reconcile")
 }

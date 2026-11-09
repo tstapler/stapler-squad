@@ -36,6 +36,17 @@ bun run test:ui
 npx playwright test smoke.spec.ts
 ```
 
+## Playwright Projects
+
+| Project | Runs | Gating |
+|---|---|---|
+| `chromium`, `chromium-dom` | every spec except `MOBILE_ONLY_SPECS` and the dev-mode, demo and perf specs | yes |
+| `mobile-chromium` (Pixel 7, 390x844, touch) | `MOBILE_SPECS` | yes |
+| `mobile-webkit` (iPhone 14, `PW_WEBKIT=1`) | `MOBILE_SPECS` | informational (nightly) |
+| `desktop-firefox`, `desktop-webkit` | `SHORTCUT_SPECS` | informational |
+
+A spec that asserts touch, `isMobile` or a 390px layout belongs in `MOBILE_ONLY_SPECS` in `playwright.config.ts`; that adds it to `MOBILE_SPECS` and keeps it off the desktop projects, where a resized window is not a mobile test. `baseline/mobile-specs-registered.test.ts` fails when a new `*-mobile.spec.ts` is in neither list.
+
 ## How It Works
 
 ### Test Mode Architecture
@@ -314,17 +325,9 @@ Config directory resolution priority:
 
 This ensures test data never interferes with production data.
 
-## Next-baseline specs and fixtures (web-app-bun-build Phase 7)
+## Baseline fixtures and the e2e gate
 
-Specs such as `route-titles`, `route-focus-and-announce`, `history-behaviour`, `deep-link-trailing-slash`,
-`theme-fouc`, `viewport-meta`, `not-found`, `scroll-policy`, `login-static-assets` and `route-smoke` pin
-the behaviour of the Next build so a router swap can be compared against it. Their expected values live in
-`fixtures/route-titles.json` and `fixtures/next-baseline.json`; regenerate them, against the Next build
-only, with `CAPTURE_NEXT_FIXTURES=1 npx playwright test tools/capture-next-fixtures.spec.ts --project=chromium`.
-`tools/parity-diff.ts` compares computed styles between two running builds
-(`node --no-warnings tools/parity-diff.ts --a <url> --b <url>`); its allow-list, `tools/parity-allow.json`,
-needs a URL or quoted CSS rule as the `reason` for every entry. `baseline/build-coupled-specs.json` lists the
-specs that depend on a Next build property and how each was made build-neutral.
+`fixtures/route-titles.json` and `fixtures/next-baseline.json` (its `redirects` map) were recorded from the last Next build and are read by `route-titles.spec.ts`; the Next build is gone, so edit them by hand when a route's title or redirect changes on purpose. `baseline/next-e2e-baseline.json` holds the per-test pass/flaky/fail classes (also recorded from the last Next build) that `scripts/e2e-baseline-compare.ts` gates CI's `e2e (Bun build)` job against; there is no same-run Next control any more. `tools/parity-diff.ts` compares computed styles between two running builds (`node --no-warnings tools/parity-diff.ts --a <url> --b <url>`); its allow-list, `tools/parity-allow.json`, needs a URL or quoted CSS rule as the `reason` for every entry. `baseline/build-coupled-specs.json` lists the specs that once depended on a Next build property and how each was made build-neutral.
 
 ## Additional Resources
 

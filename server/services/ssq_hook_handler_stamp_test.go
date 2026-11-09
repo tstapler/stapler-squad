@@ -200,3 +200,49 @@ func TestSendNotification_ShouldDeliverClaudeNotificationViaTmux_WhenSessionVisi
 	assert.Equal(t, "uuid-visible", got.SessionID)
 	assert.Equal(t, "tmux", got.NotificationMetadata["source_app"])
 }
+
+// The batched jq call must hand hostile field values to ssq-notify verbatim
+// (never executing them), and the single git rev-parse must still yield the
+// branch/repo/sha/dirty stamps, including the detached-HEAD fallback.
+func TestHookHandler_ShouldStampGitContextAndQuoteHostileFields_WhenRunInRepo(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		full := append([]string{"-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+		if out, err := safeexec.CommandContext(context.Background(), "git", full...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "init")
+
+	const hostile = "it's \\\"q\\\" $(touch PWNED) `x`"
+	input := `{"title":"` + hostile + `","message":"m","level":"info"}`
+	gitEnv := []string{"GIT_DIR=" + filepath.Join(repo, ".git"), "GIT_WORK_TREE=" + repo}
+
+	meta := func(call, key string) string {
+		for _, tok := range strings.Fields(call) {
+			if v, ok := strings.CutPrefix(tok, key+"="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+
+	calls := runHookHandlerEnv(t, "notification", input, gitEnv...)
+	require.Len(t, calls, 1)
+	assert.Contains(t, calls[0], "-t it's \"q\" $(touch PWNED) `x`", "title must pass through verbatim")
+	assert.Equal(t, "main", meta(calls[0], "git_branch"))
+	assert.Equal(t, filepath.Base(repo), meta(calls[0], "git_repo"))
+	assert.Equal(t, "false", meta(calls[0], "git_dirty"))
+	assert.Len(t, meta(calls[0], "git_sha"), 7)
+
+	git("checkout", "-q", "--detach")
+	calls = runHookHandlerEnv(t, "stop", `{"stop_reason":"end_turn"}`, gitEnv...)
+	require.Len(t, calls, 1)
+	assert.Equal(t, meta(calls[0], "git_sha"), meta(calls[0], "git_branch"), "detached HEAD falls back to the short SHA")
+}

@@ -3,6 +3,8 @@ package prpoller
 import (
 	"context"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // PollerInvalidationAdapter satisfies server/services.GitHubPollerInvalidator,
@@ -38,9 +40,24 @@ func (a *PollerInvalidationAdapter) InvalidateForEvent(ctx context.Context, repo
 		return
 	}
 	if a.PRPoller != nil {
-		a.PRPoller.InvalidateAndRefresh(ctx, owner, repo, prNumber)
+		// Host unknown at this call site (the webhook's repoFullName carries none): github.com.
+		if ref, err := session.NewPRRef("", owner, repo, prNumber); err == nil {
+			a.PRPoller.InvalidateAndRefresh(ctx, ref, session.PRSourceWebhook)
+		}
 	}
 	if a.WorktreePoller != nil {
 		a.WorktreePoller.InvalidateCache(owner, repo, prNumber)
+	}
+}
+
+// InvalidateForReopened is InvalidateForEvent for a pull_request.reopened event: the
+// refresh may move a closed row back to open.
+func (a *PollerInvalidationAdapter) InvalidateForReopened(ctx context.Context, repoFullName string, prNumber int) {
+	owner, repo, ok := strings.Cut(repoFullName, "/")
+	if !ok || owner == "" || repo == "" || a.PRPoller == nil {
+		return
+	}
+	if ref, err := session.NewPRRef("", owner, repo, prNumber); err == nil {
+		a.PRPoller.InvalidateAndRefresh(ctx, ref, session.PRSourceWebhookReopened)
 	}
 }

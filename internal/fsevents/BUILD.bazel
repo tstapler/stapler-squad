@@ -38,5 +38,15 @@ go_test(
         "stream_darwin_test.go",
     ],
     embed = [":fsevents"],
-    deps = ["@org_uber_go_goleak//:goleak"],
+    deps = [
+        "@org_uber_go_goleak//:goleak",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+        ],
+        "//conditions:default": [],
+    }),
 )

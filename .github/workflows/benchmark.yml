@@ -141,7 +141,7 @@ jobs:
   go-tier2:
     name: Go Benchmarks (Tier 2 - Extended)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     # Only run on push to main, not on PRs (too slow for per-PR checks)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -155,14 +155,31 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        run: buf generate proto --template buf.gen.go-only.yaml
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+      - name: Create placeholder web UI dist
+        # server/web/embed.go does `//go:embed all:dist`; this job builds no web UI,
+        # and without the directory the root and server/* packages fail at setup.
+        run: mkdir -p server/web/dist && touch server/web/dist/.gitkeep
+
       - name: Run full benchmark suite
         run: |
+          set -o pipefail
           go test \
             -bench=. \
             -run='^$' \
             -benchmem \
-            -count=8 \
-            -timeout=30m \
+            -count=3 \
+            -timeout=25m \
             ./... | tee tier2-bench.txt
 
       - name: Save benchmark baseline
@@ -187,11 +204,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    # .size-limit.json's 6,349,052B cap (Story 5.9) is calibrated against the
-    # Bun build (minified by build.ts's default); building Next here instead
-    # measured Next's naturally larger, differently-chunked output against it.
-    env:
-      WEB_BUILD: bun
+    # .size-limit.json mirrors budgets.json's totalJsBytes tripwire (8,000,000 B), measured on the
+    # minified Bun build (build.ts's default). The per-PR growth gate lives in build.yml's web-checks.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -216,20 +230,7 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-bundle-${{ runner.os }}-
-
-      - name: Build web UI (Bun, minified)
+      - name: Build web UI (minified)
         run: cd web-app && bun run build
 
       - name: Check bundle size
@@ -243,7 +244,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-throughput:
     name: Frontend Terminal Throughput
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:
@@ -273,19 +274,6 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-throughput-${{ runner.os }}-
-
       - name: Install Playwright browsers
         # apt-get update (invoked internally by --with-deps) has stalled for
         # ~29 minutes against Ubuntu archive mirrors before now — a transient
@@ -304,10 +292,16 @@ jobs:
           echo "Playwright install failed after 3 attempts" >&2
           exit 1
 
-      - name: Build Next.js app
+      - name: Build web UI
+        env:
+          WEB_MINIFY: '0'
         run: cd web-app && bun run build
 
       - name: Run terminal throughput benchmark
+        env:
+          # The dev server's HMR client injects a <bun-hmr> overlay that
+          # intercepts the start-test click and hangs the run until timeout.
+          WEB_DEV_HMR: '0'
         run: |
           set -o pipefail
           cd web-app && npx playwright test tests/e2e/benchmarks/terminal-throughput.spec.ts --reporter=json 2>&1 | tee /tmp/throughput-raw.txt
@@ -366,7 +360,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-latency:
     name: E2E RPC Latency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     needs: frontend-bundle
     permissions:
@@ -405,20 +399,9 @@ jobs:
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-e2e-latency-${{ runner.os }}-
-
-      - name: Build Next.js app
+      - name: Build web UI
+        env:
+          WEB_MINIFY: '0'
         run: bun run build
         working-directory: web-app
 
@@ -581,7 +564,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-perf:
     name: E2E Perf Budget
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:

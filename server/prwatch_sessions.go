@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -25,18 +26,35 @@ type prwatchBacklogStore interface {
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
 }
 
-// prwatchRemoteResolver resolves owner/repo/host from a session's git remote.
-type prwatchRemoteResolver func(path string) (owner, repo, host string, ok bool)
+// prwatchRemoteResolver resolves owner/repo/host from a session's git remote
+// without blocking. resolved=false means "not known yet": the caller must not
+// cache it and asks again on a later poll.
+type prwatchRemoteResolver func(path string) (owner, repo, host string, resolved bool)
 
-func detectRemote(path string) (string, string, string, bool) {
+// detectRemote reads the worktree enricher's cache and queues a probe on a miss.
+// DetectWorktree's git-ref open() can hang on a TCC/iCloud path (ADR-038), so the
+// poller never calls it directly. Without a registered enricher nothing can bound
+// the probe, so the path stays unresolved.
+func detectRemote(path string) (owner, repo, host string, resolved bool) {
 	if path == "" {
+		return "", "", "", true
+	}
+	e := session.ActiveWorktreeEnricher()
+	if e == nil {
 		return "", "", "", false
 	}
-	info, err := session.DetectWorktree(path)
-	if err != nil || info == nil || info.GitHubOwner == "" || info.GitHubRepo == "" {
+	res, ok := e.Result(path)
+	if !ok {
+		e.Request(path)
 		return "", "", "", false
 	}
-	return info.GitHubOwner, info.GitHubRepo, info.GitHubHost, true
+	if res.Err != nil {
+		return "", "", "", false // retried once the cached error expires
+	}
+	if res.Info == nil {
+		return "", "", "", true
+	}
+	return res.Info.GitHubOwner, res.Info.GitHubRepo, res.Info.GitHubHost, true
 }
 
 // prwatchSessions implements prwatch.Sessions over live session snapshots.
@@ -48,6 +66,9 @@ type prwatchSessions struct {
 	resolve     prwatchRemoteResolver
 	clock       func() time.Time
 	tracker     *prwatch.ResumeTracker
+	// perPR reports whether reader:poller is effective: one entry per open PR
+	// instead of one per session, so a merged PR cannot hide an open one.
+	perPR func() bool
 
 	mu       sync.Mutex
 	resolved map[string][3]string // uuid -> owner, repo, host; resolved once
@@ -60,19 +81,45 @@ func newPRWatchSessions(snapshots func() []*session.InstanceSnapshot, view prwat
 		snapshots: snapshots, view: view, store: store, ignoreRepos: ignoreRepos,
 		resolve: detectRemote, clock: time.Now,
 		tracker: prwatch.NewResumeTracker(), resolved: map[string][3]string{},
+		perPR: func() bool { return config.SessionMultiPR(config.SessionMultiPRScopePoller) },
 	}
 }
 
 func (s *prwatchSessions) List(ctx context.Context) ([]prwatch.SessionRef, error) {
 	snaps := s.snapshots()
 	facts := make([]prwatch.SessionFacts, 0, len(snaps))
+	perPR := s.perPR()
 	for _, sn := range snaps {
-		facts = append(facts, s.factsOf(sn))
+		facts = append(facts, s.factsFor(sn, perPR)...)
 	}
 	return prwatch.ComputeWatchSet(ctx, prwatch.WatchSetInput{
 		Sessions: facts, IgnoreRepos: s.ignoreRepos,
 		Links: &prwatchBacklogLinks{store: s.store}, Tracker: s.tracker, Now: s.clock(),
 	}), nil
+}
+
+// factsFor returns the session's watch facts: one per open PR when perPR is on
+// and the session has any, else the single legacy-scalar fact (an all-terminal
+// session stays one entry so its skip reason still reads PR-terminal).
+func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
+	base := s.factsOf(sn)
+	if !perPR {
+		return []prwatch.SessionFacts{base}
+	}
+	var out []prwatch.SessionFacts
+	for _, v := range sn.GitHub.PRs {
+		if v.Terminal() {
+			continue
+		}
+		f := base
+		f.Owner, f.Repo, f.Host = v.Ref.Owner(), v.Ref.Repo(), v.Ref.Host()
+		f.PR, f.Terminal = v.Ref.Number(), false
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return []prwatch.SessionFacts{base}
+	}
+	return out
 }
 
 func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionFacts {
@@ -88,19 +135,26 @@ func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionF
 	return f
 }
 
+// remoteOf holds s.mu only for map access, never across the resolver, so one
+// slow path cannot stall List or any other session's resolution.
 func (s *prwatchSessions) remoteOf(sn *session.InstanceSnapshot) (owner, repo, host string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if r, ok := s.resolved[sn.UUID]; ok {
+	r, ok := s.resolved[sn.UUID]
+	s.mu.Unlock()
+	if ok {
 		return r[0], r[1], r[2]
 	}
 	path := sn.WorkingDir
 	if path == "" {
 		path = sn.Path
 	}
-	o, r, h, _ := s.resolve(path)
-	s.resolved[sn.UUID] = [3]string{o, r, h}
-	return o, r, h
+	o, rp, h, resolved := s.resolve(path)
+	if resolved {
+		s.mu.Lock()
+		s.resolved[sn.UUID] = [3]string{o, rp, h}
+		s.mu.Unlock()
+	}
+	return o, rp, h
 }
 
 func lifecycleOf(st session.Status) prwatch.Lifecycle {

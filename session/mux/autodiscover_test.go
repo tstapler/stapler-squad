@@ -92,7 +92,12 @@ func TestAutoDiscoveryStartStop(t *testing.T) {
 // A socket that accepts but never sends metadata must not hold a cancelled probe for its 2s timeout.
 func TestProbeSocketContext_ReturnsPromptly_When_CancelledWhileSocketIsSilent(t *testing.T) {
 	t.Parallel()
-	sock := filepath.Join(t.TempDir(), "silent.sock")
+	dir, err := os.MkdirTemp("/tmp", "ssq-probe-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "silent.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)

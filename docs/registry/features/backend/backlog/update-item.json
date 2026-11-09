@@ -19,7 +19,8 @@
     "TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL",
     "TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl",
     "TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview",
-    "TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview"
+    "TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview",
+    "TestUpdateBacklogItem_ShouldReportEachPRAssociationOutcome_WhenTrackingByURL"
   ],
-  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
+  "lastModified": "2026-11-05T09:55:00-08:00"
 }

@@ -23,6 +23,13 @@ module.exports = {
       "telemetry/rpcTiming.ts",
     ].map((path) => [`./src/lib/${path}`, { lines: 80 }]),
   ),
+  // Default 5000ms is too tight for this project's full-suite runs: with
+  // ~350 suites sharing jest-worker processes, scheduler contention alone
+  // has intermittently pushed otherwise-fast async tests (e.g.
+  // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
+  // with no logic bug — each passes in well under 1s run in isolation.
+  // Must sit here, not inside `projects[]`: jest ignores it per-project (tests there still got 5000ms).
+  testTimeout: 20000,
   projects: [
     {
       displayName: "web-app",
@@ -39,12 +46,6 @@ module.exports = {
       // contain at least one test". Narrowing here fixes the root cause so a
       // future __tests__/ helper file can't silently break the same way.
       testMatch: ["**/?(*.)+(spec|test).ts?(x)"],
-      // Default 5000ms is too tight for this project's full-suite runs: with
-      // ~350 suites sharing jest-worker processes, scheduler contention alone
-      // has intermittently pushed otherwise-fast async tests (e.g.
-      // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
-      // with no logic bug — each passes in well under 1s run in isolation.
-      testTimeout: 20000,
       moduleNameMapper: {
         // Window style modules get string class names (the proxy below trips React's
         // className check); these must stay ahead of the generic .css mappers.
@@ -59,10 +60,6 @@ module.exports = {
         // suites don't set up — map globally instead of per-suite jest.mock calls. A
         // suite wanting realistic data can still override with its own jest.mock.
         "^@/lib/api/guidanceApi$": "<rootDir>/src/__mocks__/guidanceApiMock.js",
-        // Lazy-loading seam: jest uses the Next impl (suites mock next/dynamic); stale-chunk tests import impl.bun directly.
-        "^@/lib/lazy/impl$": "<rootDir>/src/lib/lazy/impl.next.tsx",
-        // Navigation seam: only reached by suites that load the real facade; most mock "@/lib/nav" (jest.setup.js).
-        "^@/lib/nav/impl$": "<rootDir>/src/lib/nav/impl.next.tsx",
         // Path alias
         "^@/(.*)$": "<rootDir>/src/$1",
       },

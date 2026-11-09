@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "capability.go",
         "git_runner.go",
+        "git_wrapper_bypass.go",
         "parse.go",
         "shared.go",
         "soak.go",
@@ -46,6 +47,7 @@ go_test(
     srcs = [
         "capability_test.go",
         "git_runner_test.go",
+        "git_wrapper_bypass_test.go",
         "parse_test.go",
         "soak_test.go",
         "spawn_gate_test.go",

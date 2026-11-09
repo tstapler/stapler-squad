@@ -84,6 +84,10 @@ type RetryPolicy struct {
 	RetryOn      []string
 	InitialDelay time.Duration
 	MaxDelay     time.Duration
+	// InteractiveStallTimeout is the quiet period after which an interactive
+	// session is flagged for attention (never restarted). Zero means the driver
+	// default (see interactiveStallBudget).
+	InteractiveStallTimeout time.Duration
 }
 
 // resolveRetryPolicy merges a per-session override onto the global policy,
@@ -99,6 +103,8 @@ func resolveRetryPolicy(global config.RetryPolicyConfig, override *config.RetryP
 		RetryOn:      global.RetryOnOrDefault(),
 		InitialDelay: time.Duration(global.InitialDelaySeconds) * time.Second,
 		MaxDelay:     time.Duration(global.MaxDelaySecondsOrDefault()) * time.Second,
+
+		InteractiveStallTimeout: global.InteractiveStallTimeoutOrDefault(),
 	}
 	if override == nil {
 		return resolved
@@ -124,6 +130,9 @@ func resolveRetryPolicy(global config.RetryPolicyConfig, override *config.RetryP
 	}
 	if override.MaxDelaySeconds > 0 {
 		resolved.MaxDelay = time.Duration(override.MaxDelaySeconds) * time.Second
+	}
+	if override.InteractiveStallMinutes > 0 {
+		resolved.InteractiveStallTimeout = override.InteractiveStallTimeoutOrDefault()
 	}
 	return resolved
 }
@@ -364,8 +373,8 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	// (mirrors handleDriverFailure's existing D3 mitigation).
 	driverStop, ok := inst.registerContinuation(stop)
 	if !ok {
-		// Destroy already ran: no goroutine may outlive it. The restart above is torn down with
-		// the instance.
+		// Destroy already ran. The restart above has already happened; it is cleaned up only when
+		// this ran on a driver goroutine that StopSessionDriver waited for (within driverStopTimeout).
 		log.Info("SessionDriver: instance destroyed, not spawning retry continuation", "session", inst.Title)
 		return nil
 	}

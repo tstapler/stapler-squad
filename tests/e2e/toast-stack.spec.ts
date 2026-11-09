@@ -15,6 +15,8 @@ import {
   openTerminalSession,
   readTerminalFacts,
   sendNotification,
+  sendOnceStreamLive,
+  watchStreamLive,
   waitForIdleFrames,
   webSocketSends,
 } from './pages/NotificationPanel';
@@ -28,7 +30,8 @@ test.use(profiles.V1.use);
 
 interface HistoryRow {
   id: string;
-  sessionId: string;
+  // Proto JSON omits an empty string, so ambient server notifications with no session arrive without it.
+  sessionId?: string;
   isRead?: boolean;
   isPendingDecision?: boolean;
 }
@@ -39,7 +42,7 @@ async function historyFor(request: APIRequestContext, prefix: string): Promise<H
     data: { limit: 200 },
   });
   const body = (await response.json()) as { notifications?: HistoryRow[] };
-  return (body.notifications ?? []).filter((n) => n.sessionId.startsWith(prefix));
+  return (body.notifications ?? []).filter((n) => n.sessionId?.startsWith(prefix));
 }
 
 test.describe('toast stack (desktop)', () => {
@@ -50,13 +53,13 @@ test.describe('toast stack (desktop)', () => {
   test('toast_stack_should_show_exactly_3_toasts_and_chip_plus7_when_10_errors_seeded', async ({ page, request }) => {
     const prefix = `toast-cap-${Date.now()}`;
     const deck = new ToastDeck(page);
+    watchStreamLive(page);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-    // The first send is retried until the live stream is attached and delivers it.
-    await expect(async () => {
+    // The first send waits for the live stream, so it is delivered exactly once.
+    await sendOnceStreamLive(page, async () => {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-0`, type: 'ERROR', title: 'Failure 0' });
-      await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-    }).toPass({ timeout: 20_000 });
+    }, [deck.toasts.first()]);
 
     for (let i = 1; i < 10; i++) {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-${i}`, type: 'ERROR', title: `Failure ${i}` });
@@ -74,12 +77,12 @@ test.describe('toast stack (desktop)', () => {
     page.on('request', (r) => {
       if (/MarkNotificationRead|ClearNotificationHistory/.test(r.url())) historyMutations.push(r.url());
     });
+    watchStreamLive(page);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-    await expect(async () => {
+    await sendOnceStreamLive(page, async () => {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-info-0`, type: 'CUSTOM', title: 'Info 0' });
-      await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-    }).toPass({ timeout: 20_000 });
+    }, [deck.toasts.first()]);
     for (let i = 1; i < 6; i++) {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-info-${i}`, type: 'CUSTOM', title: `Info ${i}` });
     }
@@ -113,10 +116,9 @@ test.describe('toast stack over a terminal (desktop)', () => {
 
   async function seedDeck(page: import('@playwright/test').Page, request: APIRequestContext, prefix: string, count: number) {
     const deck = new ToastDeck(page);
-    await expect(async () => {
+    await sendOnceStreamLive(page, async () => {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-0`, type: 'ERROR', title: 'Failure 0' });
-      await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-    }).toPass({ timeout: 20_000 });
+    }, [deck.toasts.first()]);
     for (let i = 1; i < count; i++) {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-${i}`, type: 'ERROR', title: `Failure ${i}` });
     }
@@ -126,6 +128,7 @@ test.describe('toast stack over a terminal (desktop)', () => {
 
   test('deck_should_leave_cols_rows_node_overflow_and_frames_unchanged_when_toasts_arrive_move_all_and_undo', async ({ page, request }) => {
     await installWebSocketSendCounter(page);
+    watchStreamLive(page);
     const { client, session } = await openTerminalSession(page, BASE_URL, { marker: MARKER, titlePrefix: 'deck-invariants' });
     try {
       const before = await readTerminalFacts(page);
@@ -152,6 +155,7 @@ test.describe('toast stack over a terminal (desktop)', () => {
   });
 
   test('deck_should_sit_at_least_16px_left_of_the_open_tray_and_stay_visible', async ({ page, request }) => {
+    watchStreamLive(page);
     const { client, session } = await openTerminalSession(page, BASE_URL, { marker: MARKER, titlePrefix: 'deck-tray', waitForText: false });
     try {
       const deck = await seedDeck(page, request, `deck-tray-${Date.now()}`, 2);
@@ -173,6 +177,7 @@ test.describe('toast stack over a terminal (desktop)', () => {
   });
 
   test('deck_should_avoid_the_cursor_cell_and_the_scrollbar_when_the_cursor_is_on_the_last_row', async ({ page, request }) => {
+    watchStreamLive(page);
     const { client, session } = await openTerminalSession(page, BASE_URL, { marker: MARKER, titlePrefix: 'deck-cursor' });
     try {
       const textarea = page.getByRole('textbox', { name: 'Terminal input' });

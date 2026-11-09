@@ -101,10 +101,7 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
   });
 }
 
-// Navigation test surface. Tests mock the facade ("@/lib/nav"); production code that still imports
-// next/navigation or next/link (until PR 2b migrates it) is bridged to whatever the facade mock is, so
-// one mock controls both. Both module ids stay mocked until PR 2e removes the bridge.
-// Individual tests can override either via jest.mock().
+// Navigation test surface: tests mock the facade ("@/lib/nav"); individual tests can override via jest.mock().
 jest.mock("@/lib/nav", () => ({
   ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: jest.fn(() => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), forward: jest.fn() })),
@@ -112,30 +109,6 @@ jest.mock("@/lib/nav", () => ({
   useSearchParams: jest.fn(() => new URLSearchParams()),
   useParams: jest.fn(() => ({})),
 }));
-
-jest.mock("next/navigation", () => {
-  const viaFacade = (name) => (...args) => require("@/lib/nav")[name](...args);
-  return {
-    useRouter: viaFacade("useRouter"),
-    usePathname: viaFacade("usePathname"),
-    useSearchParams: viaFacade("useSearchParams"),
-    useParams: viaFacade("useParams"),
-  };
-}, { virtual: true });
-
-jest.mock("next/link", () => {
-  const React = require("react");
-  const actual = jest.requireActual("next/link").default;
-  const NEXT_ONLY_PROPS = ["prefetch", "scroll", "shallow", "legacyBehavior", "passHref", "locale"];
-  const Bridge = React.forwardRef(function LinkBridge(props, ref) {
-    const FacadeLink = require("@/lib/nav").Link;
-    if (!FacadeLink) return React.createElement(actual, { ...props, ref });
-    const rest = { ...props, resetScroll: props.scroll === false ? false : undefined };
-    NEXT_ONLY_PROPS.forEach((name) => delete rest[name]);
-    return React.createElement(FacadeLink, { ...rest, ref });
-  });
-  return { __esModule: true, default: Bridge };
-});
 
 // @xterm/addon-serialize calls HTMLCanvasElement.prototype.getContext at module load time,
 // which jsdom does not implement. Stub it globally to prevent the canvas error and keep

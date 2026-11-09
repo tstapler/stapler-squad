@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
+import { NotificationTray, ToastDeck, sendNotification, sendOnceStreamLive, watchStreamLive } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
 
@@ -25,12 +25,12 @@ const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
  */
 async function seedAndOpen(page: Page, request: Parameters<typeof sendNotification>[0], prefix: string) {
   await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
+  watchStreamLive(page);
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   const deck = new ToastDeck(page);
-  await expect(async () => {
+  await sendOnceStreamLive(page, async () => {
     await sendNotification(request, BASE_URL, { sessionId: `${prefix}-err-0`, type: 'ERROR', title: 'Failure 0' });
-    await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-  }).toPass({ timeout: 20_000 });
+  }, [deck.toasts.first()]);
   for (let i = 1; i < 3; i++) {
     await sendNotification(request, BASE_URL, { sessionId: `${prefix}-err-${i}`, type: 'ERROR', title: `Failure ${i}` });
   }

@@ -30,6 +30,16 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 	return s.ReviewQueuePoller.FindInstance(id)
 }
 
+// LiveSnapshot implements session.LiveSnapshotSource for the live-work probe: the
+// lock-free Snapshot() of a session tracked live in this process.
+func (s *SessionService) LiveSnapshot(sessionUUID string) (*session.InstanceSnapshot, bool) {
+	inst := s.findLifecycleInstance(nil, sessionUUID)
+	if inst == nil {
+		return nil, false
+	}
+	return inst.Snapshot(), true
+}
+
 // findInstanceByID returns the first of instances whose MatchesID(id) is
 // true, or nil — the shared linear-scan lookup behind every RPC handler
 // below that resolves a request's Id (UUID or legacy title) against an
@@ -114,7 +124,7 @@ func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, me
 // No-op (not an error) if the session doesn't exist anywhere or is already archived, so
 // callers can invoke this unconditionally from a sweep without extra existence checks.
 func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
-	inst := s.FindLiveInstance(sessionUUID)
+	inst := s.findLifecycleInstance(nil, sessionUUID)
 	if inst == nil {
 		if s.concStorage == nil {
 			return nil // fake InstanceStore (tests) — no storage-only fallback available
@@ -134,7 +144,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 		// unrelated mutation happens to call SaveInstances for it.
 		if archived {
 			log.Info("ArchiveSessionByUUID: archived via storage-only fallback (session not in live poller)", "uuid", sessionUUID)
-			if reInst := s.FindLiveInstance(sessionUUID); reInst != nil {
+			if reInst := s.findLifecycleInstance(nil, sessionUUID); reInst != nil {
 				if err := s.storage.SaveInstances([]*session.Instance{reInst}); err != nil {
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}
@@ -228,7 +238,7 @@ func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.
 	if err != nil {
 		return nil
 	}
-	if !shadow.IsBackendProcessAlive() {
+	if !shadow.IsLiveOrStoredSessionLive() {
 		return nil
 	}
 	log.Warn("findConfirmedLiveInstance: session missing from live poller map but tmux/process truth check confirms it is still alive", "uuid", sessionUUID)
@@ -289,6 +299,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		return "", false
 	}
 	for _, inst := range s.ReviewQueuePoller.GetInstances() {
+		// Not IsLiveOrStoredSessionLive: a pane-less view has no cwd to compare, so its probe is a wasted RPC.
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}
@@ -337,6 +348,7 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwner
 		return "", false
 	}
 	for _, inst := range s.ReviewQueuePoller.GetInstances() {
+		// Not IsLiveOrStoredSessionLive: the cwd check below needs a live pane, which a pane-less view lacks.
 		if inst == nil || inst.UUID == q.selfUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}

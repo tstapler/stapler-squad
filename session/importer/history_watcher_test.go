@@ -2,12 +2,15 @@ package importer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -247,4 +250,123 @@ func TestHistoryFileWatcher_FiltersAgentJSONL(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Empty(t, received, "agent-*.jsonl files should not trigger callback")
+}
+
+// A callback stuck on one path must not make handleEvent block: events for
+// other paths are accepted at once, repeats of the stuck path coalesce, and
+// everything is delivered once the callback is released.
+func TestHistoryFileWatcher_should_KeepAcceptingEvents_When_CallbackIsSlow(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	var mu sync.Mutex
+	counts := map[string]int{}
+
+	w := NewHistoryFileWatcher(t.TempDir(), func(path string) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		mu.Lock()
+		counts[path]++
+		mu.Unlock()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.queue.Start(ctx)
+
+	event := func(name string) fsnotify.Event {
+		return fsnotify.Event{Name: filepath.Join("/proj", name+".jsonl"), Op: fsnotify.Write}
+	}
+	go w.handleEvent(event("stuck")) // off the test goroutine so an inline callback fails by timeout
+	select {
+	case <-entered: // the single worker is now blocked inside the callback
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback never started")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			w.handleEvent(event("stuck")) // coalesces into one re-run
+		}
+		for i := 0; i < 100; i++ {
+			w.handleEvent(event(fmt.Sprintf("other-%d", i)))
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleEvent blocked behind a slow callback")
+	}
+
+	close(release)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(counts) == 101 && counts[filepath.Join("/proj", "stuck.jsonl")] == 2
+	}, 5*time.Second, time.Millisecond)
+}
+
+// Stopped (and so HistoryLinker.Wait) must not fire until an in-flight callback
+// finishes, and no callback may start after shutdown begins.
+func TestHistoryFileWatcher_should_WaitForInFlightCallback_When_Stopping(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	var calls atomic.Int32
+	w := NewHistoryFileWatcher(dir, func(string) {
+		calls.Add(1)
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	require.NoError(t, w.Start(context.Background()))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0600))
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback never started")
+	}
+	w.Stop()
+	w.queue.Enqueue(filepath.Join(dir, "b.jsonl")) // racing the cancel
+
+	select {
+	case <-w.Stopped():
+		t.Fatal("Stopped fired while a callback was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-w.Stopped():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stopped never fired after the callback finished")
+	}
+	w.runCallback(filepath.Join(dir, "c.jsonl"))
+	assert.EqualValues(t, 1, calls.Load(), "no callback may run after shutdown began")
+}
+
+func TestHistoryFileWatcher_should_GiveUpWaiting_When_CallbackExceedsDrainTimeout(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	w := NewHistoryFileWatcher(dir, func(string) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	w.drainTimeout = 10 * time.Millisecond
+	require.NoError(t, w.Start(context.Background()))
+	t.Cleanup(func() { close(release) })
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0600))
+	<-entered
+	w.Stop()
+	select {
+	case <-w.Stopped():
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain timeout did not bound the wait")
+	}
 }

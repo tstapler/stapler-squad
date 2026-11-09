@@ -19,7 +19,6 @@ jest.mock("@/lib/analytics/usePageView", () => ({ usePageView: () => undefined }
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlags: () => ({ flagList }),
 }));
-jest.mock("next/navigation", () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
 
 interface Overrides {
   enabled?: boolean;

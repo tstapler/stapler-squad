@@ -3,9 +3,13 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -202,3 +206,70 @@ func toolResultText(t *testing.T, result *mcpgo.CallToolResult) string {
 
 func intPtr(v int) *int       { return &v }
 func strPtr(v string) *string { return &v }
+
+func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t *testing.T) {
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "multi pr", Status: string(session.BacklogStatusPRPending)})
+	require.NoError(t, err)
+	sessUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+
+	ref := func(n int) session.PRRef {
+		r, rerr := session.NewPRRef("github.com", "acme", "app", n)
+		require.NoError(t, rerr)
+		return r
+	}
+	link := func(owner session.PROwner, n int, st session.PRState, at time.Time) {
+		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
+			Role: session.PRRolePrimary, Source: session.AttachSourceManual, AttachedAt: at,
+			Initial: session.PRInitial{State: st, Terminal: st.Terminal()},
+		})
+		require.NoError(t, lerr)
+	}
+	link(session.ItemPROwner(item.ID), 21, session.PRStateMerged, time.Time{})
+	old := time.Now().Add(-2 * time.Hour)
+	link(session.ItemPROwner(item.ID), 23, session.PRStateUnknown, old)
+	link(session.SessionPROwner(sessUUID), 23, session.PRStateUnknown, old)
+
+	run := func(on bool) string {
+		h := &backlogHandlers{storage: storage, backlogReaderOverride: func() bool { return on }}
+		res, callErr := h.getBacklogStuckReport(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+		require.NoError(t, callErr)
+		return res.Content[0].(mcpgo.TextContent).Text
+	}
+
+	text := run(true)
+	assert.Contains(t, text, "1 of 2 merged")
+	assert.Contains(t, text, "Waiting on #23 (unknown)")
+	assert.Contains(t, text, "detach #23 from the item")
+	assert.Contains(t, text, "detach #23 from session "+sessUUID)
+	assert.Contains(t, text, "Held longer than 1h0m0s")
+
+	assert.NotContains(t, run(false), "Pull requests (", "flag off leaves the report unchanged")
+}
+
+func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+	n, url := 5, ""
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	outcome := svc.CleanupTerminalItem(t.Context(), item.ID)
+	require.Equal(t, session.CleanupBlocked, outcome.Status, "pr_number=5 with no link fails closed")
+
+	h := &backlogHandlers{storage: storage, backlogSvc: svc}
+	res, err := h.getBacklogStuckReport(t.Context(), makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+
+	text := res.Content[0].(mcpgo.TextContent).Text
+	assert.Contains(t, text, "Worktree cleanup blocked")
+	assert.Contains(t, text, "item "+item.ID, "the report names the holding owner")
+}

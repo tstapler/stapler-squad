@@ -94,7 +94,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^scripts/e2e-confirm\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -128,35 +128,35 @@ jobs:
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     uses: ./.github/workflows/_prepare.yml
     with:
-      # PRs skip the Next web build (~130 s on the critical path): nothing downstream reads it
-      # (e2e-binary-bun rebuilds for Bun; e2e-binary-next is main-only and keeps the real build).
+      # PRs skip the web build (~130 s on the critical path): nothing downstream reads it
+      # (e2e-binary-bun rebuilds it).
       build-web-ui: ${{ github.event_name != 'pull_request' }}
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # web-checks: the former web-build-smoke-next, web-build-smoke-bun, built-assets-guard,
-  # storybook-build and web-supply-chain jobs run as sequential steps of ONE job (five checks
-  # per PR became one). Each phase keeps its original intent:
-  #   - smoke-next / smoke-bun prove `make web-build` works on a bare checkout, with none of
-  #     the manual buf/bun pre-steps `prepare` runs by hand (a missing Makefile prerequisite,
-  #     e.g. `web-app/out` not depending on `proto-gen`, see #144). `git clean -fdx` between the
-  #     phases restores the "bare checkout" state; the Bun/Next caches live outside the tree
-  #     or are restored per phase, so they are unaffected.
-  #   - smoke-next also builds Storybook (webpackFinal needs babel-loader; an undeclared
-  #     transitive dep fails here under bunfig's isolated linker). That covers the old
-  #     storybook-build job, which only ran a subset of the same build.
+  # web-checks: the former web-build-smoke, built-assets-guard, storybook-build and
+  # web-supply-chain jobs run as sequential steps of ONE job. Each phase keeps its original intent:
+  #   - the smoke phase proves `make web-build` works on a bare checkout, with none of the manual
+  #     buf/bun pre-steps `prepare` runs by hand (a missing Makefile prerequisite, e.g.
+  #     `web-app/out` not depending on `proto-gen`, see #144).
+  #   - it also builds Storybook (webpackFinal needs babel-loader; an undeclared transitive dep
+  #     fails here under bunfig's isolated linker). That covers the old storybook-build job.
   #   - built-assets guard: every file of the Bun build must be auth-exempt or on the public
   #     allowlist (server/middleware/built_assets_test.go); REQUIRE_BUILT_OUT turns a missing
   #     out/ into a failure instead of a skip.
   #   - supply chain: the install must resolve the same screened tree twice, with no github:
   #     source, banned version or no-op trustedDependencies entry (Story 6.10). Runs last, on
   #     the tree the smoke phases built.
-  # A failed phase does not hide the later ones (`!cancelled()` + the `ready` gate below).
+  # A failed phase does not hide the later ones (`!cancelled()`).
   # ─────────────────────────────────────────────────────────────────────────────
   web-checks:
-    name: Web build checks (smoke next+bun, built-assets, supply chain)
+    name: Web build checks (smoke, built-assets, supply chain)
     runs-on: ubuntu-latest
     needs: detect-changes
     timeout-minutes: 45
+    # actions: read lets the growth gate download main's stats artifact.
+    permissions:
+      contents: read
+      actions: read
     # always() for the same reason as `prepare` above (detect-changes is skipped off pull_request).
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     steps:
@@ -202,63 +202,59 @@ jobs:
           path: ~/.stapler-squad/shared-node-modules
           key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
 
-      - name: Restore Next.js build cache
-        id: ready
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-smoke-${{ runner.os }}-
-
-      # ── phase 1: Next smoke (+ Storybook) ──────────────────────────────────────
-      - name: make web-build (no manual pre-steps)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+      # ── phase 1: Bun smoke, from a bare checkout ────────────────────────────────
+      # Retried once: wall time is a budget (maxWallMs) and a loaded runner can miss it.
+      - name: make web-build (unminified, the Makefile default)
         env:
-          WEB_BUILD: next
-        run: make web-build
+          WEB_MINIFY: '0'
+        run: make web-build || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make web-build; }
 
-      - name: Verify proto bindings were generated (next)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+      - name: Verify proto bindings were generated
+        if: ${{ !cancelled() }}
         run: test -f web-app/src/gen/session/v1/session_pb.ts
 
       - name: Build Storybook
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: web-app
         env:
           STORYBOOK_DISABLE_TELEMETRY: '1'
         run: bun run build-storybook
 
-      # ── phase 2: Bun smoke, from a clean tree ───────────────────────────────────
-      # Single -f: leaves the submodule checkouts alone.
-      - name: Reset to a clean tree for the Bun smoke
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
-        run: git clean -fdx -e web-app/.next/cache
-
-      # Retried once: wall time is a budget (maxWallMs) and a loaded runner can miss it.
-      - name: make web-build (WEB_BUILD=bun, unminified cutover default)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
-        env:
-          WEB_BUILD: bun
-          WEB_MINIFY: '0'
-        run: make web-build || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make web-build; }
-
-      - name: Verify proto bindings were generated (bun)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
-        run: test -f web-app/src/gen/session/v1/session_pb.ts
-
       # Byte budgets apply to the minified build (ADR-004); it is written outside web-app/out, so
       # it never reaches the embedded server/web/dist. build.ts runs verify-output itself.
       - name: Minified size build and budget check
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        id: min-build
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: |
           bun build/build.ts --out .build/out-min --stats .build/stats-minified.json \
             || { echo "retrying once (host load)"; bun build/build.ts --out .build/out-min --stats .build/stats-minified.json; }
 
+      # Growth gate: fail only if this build is bigger than main's last measured build, so main
+      # drifting over an absolute cap never blocks an unrelated PR. No baseline (first run, expired
+      # artifact, push to main) skips the gate; the absolute ceilings in budgets.json still applied above.
+      - name: Download main's build stats (baseline)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.min-build.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: web-app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The PR build measures the merge ref, so the baseline is main's push run at the merge commit's
+          # first parent (main's tip when the ref was made). Successful runs at that exact SHA only; no fallback.
+          base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[0].sha')
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?head_sha=$base&branch=main&event=push&status=success&per_page=1" --jq '.workflow_runs[0].id // empty')
+          if [ -z "$run" ]; then echo "no successful main build run at $base; growth gate will skip"; exit 0; fi
+          echo "baseline: main @ $base, run $run"
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name web-build-bun-stats --dir .build/baseline
+
+      - name: Bundle growth vs main
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.min-build.outcome == 'success' }}
+        working-directory: web-app
+        run: bun build/compare-stats-cli.ts .build/stats-minified.json .build/baseline
+
       - name: Write build stats to the step summary
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun build/stats-cli.ts .build/stats.json .build/stats-minified.json >> "$GITHUB_STEP_SUMMARY"
 
@@ -272,27 +268,27 @@ jobs:
             web-app/.build/stats-minified.json
           if-no-files-found: warn
 
-      # ── phase 3: auth-exemption walk of the Bun build (was built-assets-guard) ──
+      # ── phase 2: auth-exemption walk of the build (was built-assets-guard) ──
       # The guard tests exactly what would be embedded, read from web-app/out in this workspace.
       - name: Generate protobuf and ent code
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/prepare-stub
 
       - name: Walk every built file against the auth exemption
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         env:
           REQUIRE_BUILT_OUT: '1'
         run: go test ./server/middleware -run 'TestBuiltAssets' -count=1 -v
 
-      # ── phase 4: web-app install and dependency screen (was web-supply-chain) ───
+      # ── phase 3: web-app install and dependency screen (was web-supply-chain) ───
       - name: Install (frozen)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun install --frozen-lockfile
 
       # bun#44713: a first plain install after a lockfile edit can still rewrite it.
       - name: Lockfile is stable across repeated installs
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: |
           bun install
@@ -300,7 +296,7 @@ jobs:
           git diff --exit-code -- bun.lock
 
       - name: Dependency screen
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun run check:dependency-screen
 
@@ -310,15 +306,6 @@ jobs:
         with:
           label: web-checks
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # e2e-next: the full Playwright suite (every spec under tests/e2e/, every project) against
-  # the Next build, using the harness's own isolated global-setup (dynamic free port,
-  # PID-scoped temp dir -- never :8543). Runs on push to main / workflow_dispatch only, not on
-  # pull_request: e2e-bun is the single PR e2e. Uploads its Playwright JSON report with
-  # if: always() so e2e-bun's comparator can read it even when this job itself fails (plan
-  # Story 0.1's gate rule judges a spec missing from the baseline against this same-run
-  # report). Firefox/WebKit coverage lives in nightly.yml.
-  # ─────────────────────────────────────────────────────────────────────────────
   # Resolves the Playwright version pinned by tests/e2e/bun.lock so the shards can run in the
   # matching official image (browsers + OS libraries preinstalled) instead of `apt-get` +
   # `playwright install --with-deps` on every shard runner.
@@ -350,215 +337,18 @@ jobs:
           case "$E2E_SHARD_TOTAL" in ''|*[!0-9]*|0) echo "::error::E2E_SHARD_TOTAL must be a positive integer, got '$E2E_SHARD_TOTAL'" >&2; exit 1;; esac
           echo "matrix=$(jq -nc --argjson n "$E2E_SHARD_TOTAL" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
 
-  # Builds the Next-mode e2e binary once; the Next shards download it instead of each running
-  # `go build` (prepare's artifact is already a Next-mode build, so a plain `go build` suffices).
-  e2e-binary-next:
-    name: e2e binary (Next build)
-    runs-on: ubuntu-latest
-    needs: [detect-changes, prepare]
-    timeout-minutes: 20
-    if: always() && github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
-
-      - name: Build binary (Next build, from prepare's shared artifact)
-        run: |
-          go build -o stapler-squad .
-          go build -o seed-demo ./tests/demo/seed
-          go build -o seed-hidden ./tests/e2e/seed-hidden
-          go build -o e2e-sshd ./tests/e2e/sshd
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-binary-next
-          path: |
-            stapler-squad
-            seed-demo
-            seed-hidden
-            e2e-sshd
-          if-no-files-found: error
-          retention-days: 1
-
-  e2e-next-shard:
-    name: e2e (Next build) shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-env, e2e-binary-next]
-    if: always() && github.event_name != 'pull_request'
-    timeout-minutes: 50
-    # Official Playwright image: browsers and OS libraries are baked in, so there is no
-    # apt-get / `playwright install` per shard. The tag comes from bun.lock via e2e-env.
-    container:
-      image: mcr.microsoft.com/playwright:v${{ needs.e2e-env.outputs.playwright-version }}-noble
-      options: --init --ipc=host
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.e2e-env.outputs.shards) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Next binary
-        uses: actions/download-artifact@v4
-        with:
-          name: e2e-binary-next
-
-      - name: Make binary executable
-        run: chmod +x stapler-squad seed-demo seed-hidden e2e-sshd
-
-      # setup-bun unzips its download, the server and some specs shell out to tmux; install only
-      # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
-      # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
-      - name: Ensure unzip, tmux and git
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          missing=()
-          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
-            for attempt in 1 2 3; do
-              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
-              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
-              sleep 10
-            done
-          fi
-          tmux -V; git --version
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Install test dependencies
-        run: cd tests/e2e && bun install --frozen-lockfile
-
-      - name: Check Playwright version
-        run: npx --prefix tests/e2e playwright --version
-
-      # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
-      # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
-      # Only a blown budget or a harness crash (no blob report) fails a shard. The soft timeout
-      # fires before the job's hard 50m.
-      # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
-      # nightly.yml's secondary-browser jobs — see its header for why.
-      - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Next build)
-        env:
-          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
-          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
-          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
-          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
-          WEB_BUILD: next
-        run: |
-          cd tests/e2e
-          timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -eq 124 ]; then
-              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }} exceeded its 40m budget"
-              echo "CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }} exceeded its 40m budget" >> "$GITHUB_STEP_SUMMARY"
-              exit $EXIT_CODE
-            fi
-            ls blob-report/*.zip > /dev/null
-          }
-
-      # The run step above tolerates raw test failures (report-only). A server that never started or a
-      # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
-      - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Next build)
-        run: |
-          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-next shard ${{ matrix.shard }}"
-          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-next shard ${{ matrix.shard }} (stress pass)"
-
-      - name: Upload blob report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-next-blob-${{ matrix.shard }}
-          path: tests/e2e/blob-report
-          if-no-files-found: error
-          retention-days: 1
-
-  e2e-next:
-    name: e2e (Next build)
-    runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-env, e2e-next-shard]
-    # e2e-env failing leaves the shards skipped (no matrix); still run so this check goes red.
-    if: always() && (needs.e2e-next-shard.result != 'skipped' || needs.e2e-env.result == 'failure')
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github/actions
-            tests/e2e
-            scripts
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install test dependencies
-        run: cd tests/e2e && bun install --frozen-lockfile
-
-      - name: Download shard blob reports
-        if: needs.e2e-next-shard.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          pattern: e2e-next-blob-*
-          path: tests/e2e/all-blobs
-          merge-multiple: true
-
-      - name: Merge shards into one Playwright JSON report
-        if: needs.e2e-next-shard.result == 'success'
-        env:
-          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
-          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
-        run: cd tests/e2e && npx playwright merge-reports --reporter=json ./all-blobs
-
-      - name: Fail if the merged report is empty or has runner errors
-        if: needs.e2e-next-shard.result == 'success'
-        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/playwright-report/report.json --label "merged e2e-next"
-
-      - name: Fail if any shard did not complete
-        if: needs.e2e-next-shard.result != 'success'
-        run: |
-          echo "::error::a Next e2e shard failed or blew its budget (result: ${{ needs.e2e-next-shard.result }})"
-          exit 1
-
-      - name: Upload Playwright JSON report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-next-report
-          path: tests/e2e/playwright-report/report.json
-          if-no-files-found: warn
-          retention-days: 7
-
   # ─────────────────────────────────────────────────────────────────────────────
-  # e2e-bun: the single PR e2e. The same full suite against the Bun build, scored against the
-  # recorded Next baseline (tests/e2e/baseline/next-e2e-baseline.json, Task 0.1e) and the
-  # expected-diff list (tests/e2e/baseline/bun-expected-diff.json, Story 7.11) by
-  # scripts/e2e-baseline-compare.ts (Task 7.10c) -- on push/dispatch the job's result is the
-  # comparator's verdict, not Playwright's raw exit code. The comparator needs the same-run Next
-  # report, which only exists off pull_request, so on PRs it is skipped and the job fails only
-  # on a failed/incomplete shard.
+  # e2e-bun: the one e2e run. The full suite (every spec under tests/e2e/, every Chromium project)
+  # against the web build, scored by scripts/e2e-baseline-compare.ts against the committed per-test classes
+  # (tests/e2e/baseline/next-e2e-baseline.json, recorded from the last Next build) and the expected-diff list
+  # (tests/e2e/baseline/bun-expected-diff.json). There is no same-run Next control any more, so on push/dispatch
+  # the job's result is the comparator's verdict with Next treated as clean: a baseline-'pass' test that
+  # hard-fails (after the one-worker confirmation rerun) fails the job, as does a failing spec absent from the
+  # baseline. On PRs the comparator is skipped and the job fails only on a failed/incomplete shard.
+  # Firefox/WebKit coverage lives in nightly.yml.
   # ─────────────────────────────────────────────────────────────────────────────
-  # Builds the Bun-mode e2e binary once (web UI rebuilt for Bun); the Bun shards download it
-  # instead of each repeating buf setup, the node_modules restore and `make stapler-squad`.
+  # Builds the e2e binary once; the shards download it instead of each repeating buf setup,
+  # the node_modules restore and `make stapler-squad`.
   e2e-binary-bun:
     name: e2e binary (Bun build)
     runs-on: ubuntu-latest
@@ -598,9 +388,8 @@ jobs:
           version: '1.41.0'
           setup_only: 'true'
 
-      # proto/ent code generation is not WEB_BUILD-dependent, so this still saves the buf/ent
-      # steps below even though the web UI itself is rebuilt for Bun (next step's `make`).
-      - name: Download generated files (proto/ent; web UI rebuilt below for Bun)
+      # The artifact carries proto/ent code (and a stub UI on PRs); the next step builds the real UI.
+      - name: Download generated files (proto/ent)
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
@@ -612,11 +401,7 @@ jobs:
           path: ~/.stapler-squad/shared-node-modules
           key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
 
-      # The Makefile's WEB_BUILD_STAMP seam (Makefile:228-240) detects the mode flip from
-      # prepare's Next-mode artifact and rebuilds web-app/out + server/web/dist for Bun once.
-      - name: Build binary (Bun build)
-        env:
-          WEB_BUILD: bun
+      - name: Build binary
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
 
       - name: Verify the real web UI was embedded (not prepare's stub)
@@ -670,7 +455,9 @@ jobs:
       - name: Runner utilization sampler
         uses: ./.github/actions/runner-utilization
 
-      - name: Download Bun binary
+      - uses: tstapler/gha-actions/mem-sampler@b365b0a976467f8e22798bb60162bd1de27f6be6 # v0.1.2
+
+      - name: Download binary
         uses: actions/download-artifact@v4
         with:
           name: e2e-binary-bun
@@ -718,10 +505,11 @@ jobs:
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
-          WEB_BUILD: bun
+          MEM_LABEL: e2e-shard-${{ matrix.shard }}
         run: |
           cd tests/e2e
-          timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
+          mem-sampler --out "$GITHUB_WORKSPACE/ci-mem-head/metrics.json" --label "$MEM_LABEL" -- \
+            timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -753,23 +541,52 @@ jobs:
         with:
           label: e2e-bun-shard-${{ matrix.shard }}
 
+  # Besides merging the shards and running the comparator, this job reruns the tests the comparator would fail
+  # (on main only) with one worker, so only a test that fails again in isolation gates -- see scripts/e2e-confirm.ts.
+  # Why: with E2E_WORKERS x shards a different handful of tests hard-fails on Bun every run (load flakiness). It runs
+  # in the Playwright image (not a separate job, so the per-PR check count in docs/reference/ci-job-budget.md is unchanged).
   e2e-bun:
     name: e2e (Bun build)
     runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-env, e2e-bun-shard, e2e-next]
+    needs: [detect-changes, e2e-env, e2e-binary-bun, e2e-bun-shard]
     # e2e-env failing leaves the shards skipped (no matrix); still run so this check goes red.
-    if: >-
-      always() && (needs.e2e-bun-shard.result != 'skipped' || needs.e2e-env.result == 'failure') &&
-      (github.event_name == 'pull_request' ||
-      (needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'))
-    timeout-minutes: 15
+    if: always() && (needs.e2e-bun-shard.result != 'skipped' || needs.e2e-env.result == 'failure')
+    # Merge + comparator ~2 min; on main add container start, select, and up to 18 min of rerun.
+    timeout-minutes: 35
+    # An empty playwright-version (e2e-env failed) would make the image `v-noble`, which fails to pull with an
+    # opaque error; fall back to a plain image so the first step can say what is wrong. PRs pay for this container
+    # and the full checkout too: a container cannot be conditional on the event without changing the job shape
+    # (and so the per-PR check count), and the cost is roughly one image pull.
+    container:
+      image: ${{ needs.e2e-env.outputs.playwright-version != '' && format('mcr.microsoft.com/playwright:v{0}-noble', needs.e2e-env.outputs.playwright-version) || 'ubuntu:24.04' }}
+      options: --init --ipc=host
+    # Container jobs default `run` to sh (dash), which rejects `set -o pipefail` in the comparator step.
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Fail clearly if e2e-env produced no Playwright version
+        if: needs.e2e-env.outputs.playwright-version == ''
+        run: |
+          echo "::error::e2e-env produced no playwright-version (see the e2e-env job); the Playwright image tag cannot be built"
+          exit 1
+
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github/actions
-            tests/e2e
-            scripts
+
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -816,13 +633,87 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Download e2e-next's Playwright JSON report
-        if: always() && github.event_name != 'pull_request'
+      # Fresh per-spec durations for run-ci-shard.sh's balanced assignment: download this artifact and commit it as
+      # tests/e2e/shard-timings.json when the suite or its slow specs shift (see tests/e2e/scripts/shard-assign.ts).
+      # Take it from a full, uncut run: a shard cut off by its global timeout leaves unreached specs with no durations.
+      - name: Write shard timings
+        if: always() && hashFiles('tests/e2e/playwright-report/report.json') != ''
+        continue-on-error: true
+        run: |
+          bun tests/e2e/scripts/shard-assign.ts timings --report tests/e2e/playwright-report/report.json --out tests/e2e/shard-timings.new.json
+          bun tests/e2e/scripts/shard-assign.ts drift --report tests/e2e/playwright-report/report.json --total ${{ env.E2E_SHARD_TOTAL }} | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload shard timings
+        if: always() && hashFiles('tests/e2e/shard-timings.new.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shard-timings
+          path: tests/e2e/shard-timings.new.json
+          retention-days: 7
+
+      # Main only (the comparator is main only). Selects the tests the comparator would fail; ends there with no
+      # failures, and with more than 40 reruns nothing (that many failures is not load flakiness).
+      - name: Select the tests to confirm
+        id: select
+        if: always() && github.event_name != 'pull_request' && needs.e2e-bun-shard.result == 'success'
+        run: |
+          mkdir -p /tmp/e2e-bun-confirmation/reruns
+          bun scripts/e2e-confirm.ts select \
+            --baseline tests/e2e/baseline/next-e2e-baseline.json \
+            --expected-diff tests/e2e/baseline/bun-expected-diff.json \
+            --bun-report tests/e2e/playwright-report/report.json \
+            --out /tmp/e2e-bun-confirmation/selection.json | tee -a "$GITHUB_STEP_SUMMARY"
+        continue-on-error: true
+
+      - name: Download binary
+        if: steps.select.outputs.status == 'rerun'
         uses: actions/download-artifact@v4
         with:
-          name: e2e-next-report
-          path: /tmp/e2e-next-report
+          name: e2e-binary-bun
+
+      # The same binary, one worker, only the selected tests. An error here leaves the original failures in force.
+      - name: Rerun the failing tests with one worker
+        if: steps.select.outputs.status == 'rerun'
         continue-on-error: true
+        # Hard cap above the 18 min --budget-ms: a hang in Playwright teardown or spawnSync must not eat the
+        # job's 35 min and lose the comparator verdict (the step is continue-on-error, so the gate still runs).
+        timeout-minutes: 22
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
+          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
+        run: |
+          chmod +x stapler-squad seed-demo seed-hidden e2e-sshd
+          # 18 of this job's 35 minutes; unreached tests keep their failure and are reported as not rerun.
+          bun scripts/e2e-confirm.ts run --selection /tmp/e2e-bun-confirmation/selection.json \
+            --out-dir /tmp/e2e-bun-confirmation/reruns --budget-ms 1080000
+
+      # Only tests that fail again in the isolated rerun keep gating. Without a selection the comparator reads
+      # the unconfirmed report, exactly as before.
+      - name: Fold the confirmation rerun into the Bun report
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          report=tests/e2e/playwright-report/report.json
+          confirmed=tests/e2e/playwright-report/report-confirmed.json
+          if [ -f /tmp/e2e-bun-confirmation/selection.json ] && [ -f "$report" ]; then
+            bun scripts/e2e-confirm.ts merge --bun-report "$report" \
+              --selection /tmp/e2e-bun-confirmation/selection.json \
+              --rerun-dir /tmp/e2e-bun-confirmation/reruns --out "$confirmed" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No confirmation selection; the comparator reads the unconfirmed Bun report." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload confirmation results
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bun-confirmation
+          path: |
+            /tmp/e2e-bun-confirmation
+            tests/e2e/playwright-report/report-confirmed.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run the baseline comparator
         if: always() && github.event_name != 'pull_request'
@@ -830,11 +721,12 @@ jobs:
         # comparator failure -- this job's result must be the comparator's verdict.
         run: |
           set -o pipefail
+          report=tests/e2e/playwright-report/report-confirmed.json
+          [ -f "$report" ] || report=tests/e2e/playwright-report/report.json
           bun scripts/e2e-baseline-compare.ts \
             --baseline tests/e2e/baseline/next-e2e-baseline.json \
             --expected-diff tests/e2e/baseline/bun-expected-diff.json \
-            --next-report /tmp/e2e-next-report/report.json \
-            --bun-reports tests/e2e/playwright-report/report.json \
+            --bun-reports "$report" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -910,6 +802,9 @@ jobs:
       - name: Set up the tymux fidelity oracle (xterm.js via Bun)
         uses: ./.github/actions/setup-fidelity-oracle
 
+      # Per-process RSS in the job log (the -race runs of heavy packages are the memory/time risk).
+      - uses: tstapler/gha-actions/mem-sampler@b365b0a976467f8e22798bb60162bd1de27f6be6 # v0.1.2
+
       - name: Run affected-package tests
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
@@ -927,7 +822,7 @@ jobs:
             echo "$1"
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "Running the full suite instead (this job is the only Go test gate on a PR)."
-              TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=22m \
+              TMUX_BIN="$(pwd)/bin/tmux" mem-sampler --out ci-mem-head/metrics.json --label test-affected -- gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test.json" --junitfile "$RUNNER_TEMP/go-junit.xml" -- -exec "env GODEBUG=gctrace=1" -race -short -timeout=22m \
                 -coverprofile=coverage.affected.out -covermode=atomic ./...
             else
               echo "Nothing to narrow -- test-tmux/test-rest (main-only) already cover the full suite."
@@ -979,8 +874,28 @@ jobs:
           # of package paths that must word-split into separate `go test`
           # arguments, not one quoted string.
           # shellcheck disable=SC2086
-          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=15m \
+          TMUX_BIN="$(pwd)/bin/tmux" mem-sampler --out ci-mem-head/metrics.json --label test-affected -- gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test.json" --junitfile "$RUNNER_TEMP/go-junit.xml" -- -exec "env GODEBUG=gctrace=1" -race -short -timeout=15m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
+
+      - name: Report CI memory
+        if: always()
+        uses: tstapler/gha-actions/mem-sampler/report@b365b0a976467f8e22798bb60162bd1de27f6be6 # v0.1.2
+        with:
+          metrics: ci-mem-head/metrics.json
+          title: CI memory (Go affected-package tests)
+          tag: ci-memory-test-affected
+          baseline-cache: 'false'  # PR-only signal: main runs the full suite in other jobs
+
+      # -memprofile is rejected for multi-package runs; the JSON stream (with gctrace from the test
+      # binaries only, via -exec) gives slowest packages/tests and per-package GC pressure instead.
+      - name: Go test diagnostics
+        if: always()
+        uses: tstapler/gha-actions/go-diagnostics-upload@b365b0a976467f8e22798bb60162bd1de27f6be6 # v0.1.2
+        with:
+          json-file: ${{ runner.temp }}/go-test.json
+          junit-file: ${{ runner.temp }}/go-junit.xml
+          name: go-test-affected-diagnostics
+          retention-days: '7'
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
       # against a per-PR, per-affected-packages-only profile (it would swing
@@ -1154,7 +1069,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # go-guards: the former test-delivery-guards, test-oracle, pty-race-regression and
   # install-check jobs as sequential steps of one job (four checks per PR became one). They are
-  # independent guards; a failure in one does not stop the rest (`!cancelled()` + `ready` gate).
+  # independent guards; a failure in one does not stop the rest (`!cancelled()`).
   #   - delivery guards: the `//go:build sinkguard` type-based guard tests (delivery-gate sinks,
   #     terminal-write callers) are excluded from every other job's default build tags.
   #   - git oracle: the `//go:build gitoracle` differential tests (go-git fork plan Story 1.3.3)

@@ -57,6 +57,11 @@ test.describe("backlog-github-sync-settings", () => {
     await sourcesPage.goto();
   });
 
+  test.afterEach(async () => {
+    await sourcesPage.goto();
+    await sourcesPage.deleteSourcesWithPrefix("E2E ");
+  });
+
   test("forward and backward sync toggles persist across reload", async ({ page }) => {
     await sourcesPage.addSource({
       displayName: "E2E Sync Toggle Source",

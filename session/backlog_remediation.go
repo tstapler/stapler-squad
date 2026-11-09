@@ -346,6 +346,41 @@ func (s *Storage) RemediationBlocked(ctx context.Context, itemID string, reason 
 	}
 }
 
+// RemediationBlockedItems is RemediationBlocked for every item with an open row of
+// reason, from a single read — for sweeps that would otherwise peek once per candidate.
+// Items absent from the map are not blocked.
+func (s *Storage) RemediationBlockedItems(ctx context.Context, reason domain.StuckReason) (map[string]bool, error) {
+	rows, err := s.FindOpenStuckStates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("remediation blocked items %s: %w", reason, err)
+	}
+	now := time.Now()
+	blocked := make(map[string]bool)
+	for _, row := range rows {
+		if row.Reason != reason {
+			continue
+		}
+		switch EvaluateRemediation(row, now, ServerStartTime) {
+		case RemediationSkippedParked, RemediationSkippedNotDue:
+			blocked[row.ItemID] = true
+		}
+	}
+	// A snooze silences the UI, not the gate: a snoozed row keeps its item blocked.
+	snoozed, err := s.Repo.FindSnoozedStuckItemIDs(ctx, reason)
+	if err != nil {
+		return nil, fmt.Errorf("remediation blocked items %s: %w", reason, err)
+	}
+	for _, id := range snoozed {
+		blocked[id] = true
+	}
+	return blocked, nil
+}
+
+// OpenStuckState returns the open row for (itemID, reason), if any.
+func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool, error) {
+	return s.findOpenStuckStateForReason(ctx, itemID, reason)
+}
+
 // RecordRemediationAttempt is a thin passthrough to *EntRepository, mirroring
 // MarkStuck/ResolveStuck's rationale: callers outside package session cannot
 // reach the unexported repo field. Returns false, nil (never an error) when

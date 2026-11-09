@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "@/lib/nav";
+import { useAnalytics } from "@/lib/analytics";
 import {
   useBacklogSourcesService,
   type ItemSource,
@@ -45,6 +46,7 @@ function isAuthFailure(errorMessage?: string): boolean {
 }
 
 export function BacklogSourcesSettings() {
+  const { track } = useAnalytics();
   const {
     listItemSources,
     createItemSource,
@@ -335,12 +337,12 @@ export function BacklogSourcesSettings() {
                     className={`${styles.toggle} ${source.enabled ? styles.toggleOn : ""} ${
                       enabledTogglePendingId === source.id ? styles.togglePending : ""
                     }`}
-                    onClick={() => handleToggleEnabled(source)}
+                    onClick={() => { track({ name: "backlog_source_enabled_toggled", category: "user_action", component: "BacklogSourcesSettings" }); handleToggleEnabled(source); }}
                     aria-label={`${source.enabled ? "Disable" : "Enable"} ${source.displayName}`}
                   />
                   <button
                     className={styles.removeBtn}
-                    onClick={() => handleDelete(source)}
+                    onClick={() => { track({ name: "backlog_source_deleted", category: "user_action", component: "BacklogSourcesSettings" }); handleDelete(source); }}
                     aria-label={`Remove ${source.displayName}`}
                   >
                     ✕
@@ -359,7 +361,7 @@ export function BacklogSourcesSettings() {
                       className={`${styles.toggle} ${source.forwardSyncEnabled ? styles.toggleOn : ""} ${
                         forwardSyncTogglePendingId === source.id ? styles.togglePending : ""
                       }`}
-                      onClick={() => handleToggleForwardSync(source)}
+                      onClick={() => { track({ name: "backlog_source_forward_sync_toggled", category: "user_action", component: "BacklogSourcesSettings" }); handleToggleForwardSync(source); }}
                       aria-label={`${source.forwardSyncEnabled ? "Disable" : "Enable"} closing GitHub issues when done`}
                     />
                     <span>Close GitHub issues when I finish here</span>
@@ -386,7 +388,7 @@ export function BacklogSourcesSettings() {
                       className={`${styles.toggle} ${source.backwardSyncEnabled ? styles.toggleOn : ""} ${
                         backwardSyncPreviewPendingId === source.id ? styles.togglePending : ""
                       }`}
-                      onClick={() => handleToggleBackwardSync(source)}
+                      onClick={() => { track({ name: "backlog_source_backward_sync_toggled", category: "user_action", component: "BacklogSourcesSettings" }); handleToggleBackwardSync(source); }}
                       aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`}
                     />
                     <span>Reflect GitHub status back here</span>
@@ -415,13 +417,13 @@ export function BacklogSourcesSettings() {
                 <div className={styles.actionRow}>
                   <button
                     className={styles.smallBtn}
-                    onClick={() => handleSyncNow(source)}
+                    onClick={() => { track({ name: "backlog_source_sync_now", category: "user_action", component: "BacklogSourcesSettings" }); handleSyncNow(source); }}
                     disabled={syncingId === source.id || !source.enabled}
                     title={!source.enabled ? "Enable this source to sync it" : undefined}
                   >
                     {syncingId === source.id ? "Syncing…" : "Sync now"}
                   </button>
-                  <button className={styles.smallBtn} onClick={() => handleToggleHistory(source)}>
+                  <button className={styles.smallBtn} onClick={() => { track({ name: "backlog_source_history_toggled", category: "user_action", component: "BacklogSourcesSettings" }); handleToggleHistory(source); }}>
                     {expandedId === source.id ? "Hide history" : "View history"}
                   </button>
                 </div>
@@ -459,7 +461,7 @@ export function BacklogSourcesSettings() {
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Add a Source</h3>
         <div className={styles.form}>
-          <select className={styles.select} value={pluginId} onChange={(e) => handlePluginChange(e.target.value)}>
+          <select aria-label="Source type" className={styles.select} value={pluginId} onChange={(e) => handlePluginChange(e.target.value)}>
             {PLUGIN_SCHEMAS.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label}
@@ -504,7 +506,7 @@ export function BacklogSourcesSettings() {
               />
             )
           )}
-          <button className={styles.addBtn} onClick={handleAddSource} disabled={!canSubmit}>
+          <button className={styles.addBtn} onClick={() => { track({ name: "backlog_source_added", category: "user_action", component: "BacklogSourcesSettings" }); handleAddSource(); }} disabled={!canSubmit}>
             {submitting ? "Adding…" : "Add Source"}
           </button>
         </div>

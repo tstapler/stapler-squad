@@ -350,3 +350,30 @@ func TestMostRecentCompletedWorkSession_should_returnNil_When_NoCompletedWorkSes
 	reviewOnly := []session.ItemSessionSummary{{ID: "s1", Role: session.SessionRoleReview, EndedAt: &time.Time{}}}
 	assert.Nil(t, MostRecentCompletedWorkSession(reviewOnly))
 }
+
+func TestIsNoProgressReview(t *testing.T) {
+	t.Parallel()
+	fail := string(session.ReviewOutcomeFail)
+	pass := string(session.ReviewOutcomePass)
+	tests := []struct {
+		name   string
+		recent []session.ReviewVerdictSummary
+		want   bool
+	}{
+		{"same sha both fail", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, true},
+		{"different sha", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "b"}}, false},
+		{"latest empty sha", []session.ReviewVerdictSummary{{OverallOutcome: fail}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"both empty sha", []session.ReviewVerdictSummary{{OverallOutcome: fail}, {OverallOutcome: fail}}, false},
+		{"latest truncated", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a", DiffTruncated: true}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"prior truncated", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a", DiffTruncated: true}}, false},
+		{"latest pass", []session.ReviewVerdictSummary{{OverallOutcome: pass, ReviewedCommitSha: "a"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"override set", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a", OverrideBy: "user"}, {OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+		{"fewer than two", []session.ReviewVerdictSummary{{OverallOutcome: fail, ReviewedCommitSha: "a"}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsNoProgressReview(tc.recent))
+		})
+	}
+}

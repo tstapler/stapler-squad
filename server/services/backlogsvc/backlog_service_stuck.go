@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -237,6 +238,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	}
 
 	s.populateAutoMerge(ctx, items, req.Msg.GetRefreshAutoMerge())
+	s.populatePRCounts(ctx, items)
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
 }
@@ -385,7 +387,10 @@ func pluralSuffix(n int) string {
 // AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner/
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
-// connect.CodeUnimplemented until a future phase adds it here.
+// connect.CodeUnimplemented until a future phase adds it here (except
+// multiple_reasons, which TriggerRemediationNow rejects earlier with
+// CodeFailedPrecondition). The web-app mirrors this set as REMEDIABLE_STUCK_REASONS
+// (web-app/src/components/backlog-stuck/stuckReason.ts); keep the two in sync.
 //
 // Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
 // and domain.StuckReasonSteerFailed both fall through to the default case, so
@@ -426,7 +431,9 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 // dispatcher-triggered one, so it counts toward the same 5-attempt cap. The
 // wrapped action's own circuit breaker (IsRepeatedFailure/
 // IsRepeatedNoVerdictFailure inside AutoReopenAfterFailedReview, for example)
-// still applies — this RPC does not bypass it.
+// still applies — this RPC does not bypass it. multiple_reasons is an aggregate
+// with no action of its own: it returns CodeFailedPrecondition naming the
+// item's open constituent reasons.
 // +api: backlog:trigger-remediation-now
 func (s *BacklogService) TriggerRemediationNow(
 	ctx context.Context,
@@ -441,6 +448,10 @@ func (s *BacklogService) TriggerRemediationNow(
 	reason := services.FromProtoStuckReason(req.Msg.Reason)
 	if !reason.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
+	}
+
+	if reason == domain.StuckReasonMultipleReasons {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, s.multipleReasonsRemediationError(ctx, req.Msg.ItemId))
 	}
 
 	action := s.remediationActionByReason(reason)
@@ -474,4 +485,25 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil
+}
+
+// multipleReasonsRemediationError explains that multiple_reasons is an aggregate
+// escalation row with no action of its own, naming the item's open constituent
+// reasons so the caller can retry each one individually.
+func (s *BacklogService) multipleReasonsRemediationError(ctx context.Context, itemID string) error {
+	rows, err := s.storage.FindOpenStuckStates(ctx)
+	if err != nil {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually (could not list them: %w)", err)
+	}
+	var names []string
+	for _, row := range rows {
+		if row.ItemID != itemID || row.Reason == domain.StuckReasonMultipleReasons {
+			continue
+		}
+		names = append(names, string(row.Reason))
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own, and no constituent reasons are open")
+	}
+	return fmt.Errorf("multiple_reasons is an aggregate with no remediation of its own; retry each constituent reason individually: [%s]", strings.Join(names, ", "))
 }

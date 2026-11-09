@@ -1,6 +1,7 @@
 [
  "account",
  "analytics",
+ "artifacts",
  "backlog",
  "changelog",
  "config",
@@ -15,6 +16,7 @@
  "login",
  "logs",
  "notifications",
+ "owner-inbox",
  "resolve",
  "review-queue",
  "rules",

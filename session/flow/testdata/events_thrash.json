@@ -1,0 +1,4203 @@
+{
+ "description": "Synthetic golden events mirroring live shapes (items 0791f5b4 and a90b99cb); titles and notes are synthesized. Assert shapes, not live totals.",
+ "items": [
+  {
+   "id": "thrash-a",
+   "title": "Synthetic ready/in_progress thrash item"
+  },
+  {
+   "id": "thrash-b",
+   "title": "Synthetic pr_pending/in_progress thrash item"
+  },
+  {
+   "id": "bounce-a",
+   "title": "Synthetic item with 17 review bounces"
+  },
+  {
+   "id": "tz-a",
+   "title": "Synthetic mixed-offset item"
+  },
+  {
+   "id": "loop-a",
+   "title": "Synthetic self-loop item"
+  }
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:00:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 2,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:01:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 3,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:02:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 4,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:03:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 5,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:04:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 6,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:05:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 7,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:06:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 8,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:07:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 9,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:08:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 10,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:09:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 11,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:10:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 12,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:11:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 13,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:12:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 14,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:13:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 15,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:14:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 16,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:15:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 17,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:16:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 18,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:17:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 19,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:18:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 20,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:19:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 21,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:20:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 22,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:21:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 23,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:22:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 24,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:23:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 25,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:24:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 26,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:25:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 27,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:26:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 28,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:27:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 29,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:28:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 30,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:29:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 31,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:30:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 32,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:31:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 33,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:32:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 34,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:33:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 35,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:34:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 36,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:35:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 37,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:36:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 38,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:37:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 39,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:38:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 40,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:39:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 41,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:40:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 42,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:41:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 43,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:42:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 44,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:43:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 45,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:44:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 46,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:45:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 47,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:46:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 48,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:47:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 49,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:48:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 50,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:49:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 51,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:50:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 52,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:51:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 53,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:52:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 54,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:53:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 55,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:54:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 56,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:55:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 57,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:56:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 58,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:57:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 59,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 08:58:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 60,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 08:59:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 61,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:00:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 62,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:01:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 63,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:02:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 64,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:03:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 65,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:04:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 66,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:05:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 67,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:06:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 68,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:07:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 69,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:08:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 70,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:09:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 71,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:10:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 72,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:11:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 73,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:12:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 74,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:13:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 75,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:14:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 76,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:15:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 77,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:16:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 78,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:17:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 79,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:18:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 80,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:19:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 81,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:20:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 82,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:21:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 83,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:22:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 84,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:23:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 85,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:24:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 86,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:25:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 87,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:26:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 88,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:27:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 89,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:28:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 90,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:29:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 91,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:30:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 92,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:31:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 93,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:32:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 94,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:33:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 95,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:34:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 96,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:35:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 97,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:36:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 98,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:37:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 99,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:38:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 100,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:39:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 101,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:40:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 102,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:41:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 103,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:42:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 104,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:43:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 105,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:44:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 106,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:45:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 107,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:46:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 108,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:47:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 109,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:48:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 110,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:49:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 111,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:50:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 112,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:51:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 113,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:52:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 114,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:53:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 115,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:54:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 116,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:55:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 117,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:56:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 118,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:57:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 119,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 09:58:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 120,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 09:59:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 121,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:00:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 122,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:01:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 123,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:02:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 124,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:03:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 125,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:04:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 126,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:05:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 127,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:06:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 128,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:07:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 129,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:08:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 130,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:09:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 131,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:10:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 132,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:11:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 133,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:12:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 134,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:13:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 135,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:14:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 136,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:15:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 137,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:16:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 138,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:17:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 139,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:18:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 140,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:19:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 141,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:20:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 142,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:21:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 143,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:22:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 144,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:23:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 145,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:24:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 146,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:25:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 147,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:26:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 148,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:27:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 149,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:28:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 150,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:29:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 151,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:30:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 152,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:31:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 153,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:32:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 154,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:33:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 155,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:34:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 156,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:35:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 157,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:36:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 158,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:37:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 159,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:38:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 160,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:39:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 161,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:40:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 162,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:41:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 163,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:42:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 164,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:43:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 165,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:44:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 166,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:45:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 167,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:46:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 168,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:47:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 169,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:48:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 170,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:49:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 171,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:50:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 172,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:51:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 173,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:52:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 174,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:53:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 175,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:54:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 176,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:55:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 177,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:56:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 178,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:57:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 179,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 10:58:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 180,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 10:59:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 181,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:00:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 182,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:01:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 183,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:02:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 184,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:03:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 185,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:04:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 186,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:05:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 187,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:06:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 188,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:07:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 189,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:08:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 190,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:09:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 191,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:10:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 192,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:11:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 193,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:12:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 194,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:13:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 195,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:14:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 196,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:15:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 197,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:16:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 198,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:17:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 199,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:18:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 200,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:19:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 201,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:20:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 202,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:21:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 203,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:22:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 204,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:23:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 205,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:24:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 206,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:25:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 207,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:26:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 208,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:27:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 209,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:28:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 210,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:29:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 211,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:30:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 212,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:31:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 213,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:32:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 214,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:33:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 215,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:34:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 216,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 11:35:00.000000+00:00",
+   "note": "dequeued: WIP slot freed",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 217,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 11:36:00.000000+00:00",
+   "note": "dequeue claim (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 218,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:36:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 219,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:37:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 220,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:38:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 221,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:39:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 222,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:40:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 223,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:41:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 224,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:42:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 225,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:43:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 226,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:44:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 227,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:45:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 228,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:46:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 229,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:47:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 230,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:48:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 231,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:49:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 232,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:50:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 233,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:51:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 234,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:52:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 235,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:53:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 236,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:54:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 237,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:55:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 238,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:56:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 239,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:57:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 240,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 14:58:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 241,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 14:59:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 242,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:00:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 243,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:01:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 244,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:02:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 245,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:03:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 246,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:04:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 247,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:05:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 248,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:06:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 249,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:07:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 250,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:08:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 251,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:09:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 252,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:10:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 253,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:11:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 254,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:12:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 255,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:13:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 256,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:14:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 257,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:15:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 258,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:16:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 259,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:17:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 260,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:18:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 261,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:19:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 262,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:20:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 263,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:21:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 264,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:22:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 265,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:23:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 266,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:24:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 267,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:25:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 268,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:26:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 269,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:27:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 270,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:28:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 271,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:29:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 272,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:30:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 273,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:31:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 274,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:32:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 275,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:33:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 276,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:34:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 277,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:35:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 278,
+   "item_id": "thrash-a",
+   "from": "in_progress",
+   "to": "ready",
+   "at": "2026-10-20 15:36:00.000000+00:00",
+   "note": "synthetic reopen",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 279,
+   "item_id": "thrash-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-20 15:37:00.000000+00:00",
+   "note": "dequeue spawn failed (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 280,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 281,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 282,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:02:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 283,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:03:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 284,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:04:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 285,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:05:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 286,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:06:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 287,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:07:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 288,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 289,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 290,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 291,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:30:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 292,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:31:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 293,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:32:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 294,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:33:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 295,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:34:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 296,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:54:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 297,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 298,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 299,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 300,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 00:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 301,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 00:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 302,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 01:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 303,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 01:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 304,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 01:21:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 305,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 01:22:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 306,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 01:23:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 307,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 01:24:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 308,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 01:25:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 309,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 01:26:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 310,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 01:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 311,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 01:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 312,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 313,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 314,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:30:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 315,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:31:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 316,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:32:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 317,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:33:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 318,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:34:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 319,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:35:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 320,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 321,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 322,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 323,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 03:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 324,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 03:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 325,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 326,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 327,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:02:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 328,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:22:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 329,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:23:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 330,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:24:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 331,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:25:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 332,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:26:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 333,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 334,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 335,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 336,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:49:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 337,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:50:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 338,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:51:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 339,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:52:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 340,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:53:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 341,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:54:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 342,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 04:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 343,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 04:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 344,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 06:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 345,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 06:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 346,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 06:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 347,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 06:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 348,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 349,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 350,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:02:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 351,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:03:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 352,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:23:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 353,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:24:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 354,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:25:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 355,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:26:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 356,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 357,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 358,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 359,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:30:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 360,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:50:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 361,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:51:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 362,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:52:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 363,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:53:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 364,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:54:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 365,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 366,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 07:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 367,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 07:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 368,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 09:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 369,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 09:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 370,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 09:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 371,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 372,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 373,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:02:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 374,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:03:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 375,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:04:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 376,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:24:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 377,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:25:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 378,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:26:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 379,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 380,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 381,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 382,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:30:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 383,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:31:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 384,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:51:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 385,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:52:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 386,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:53:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 387,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:54:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 388,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 389,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 390,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 10:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 391,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 10:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 392,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 12:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 393,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 12:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 394,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 395,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:01:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 396,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:02:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 397,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:03:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 398,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:04:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 399,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:05:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 400,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:25:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 401,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:26:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 402,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:27:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 403,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:28:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 404,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:29:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 405,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:30:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 406,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:31:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 407,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:32:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 408,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:52:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 409,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:53:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 410,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:54:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 411,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:55:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 412,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:56:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 413,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:57:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 414,
+   "item_id": "thrash-b",
+   "from": "pr_pending",
+   "to": "in_progress",
+   "at": "2026-10-21 13:58:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 415,
+   "item_id": "thrash-b",
+   "from": "in_progress",
+   "to": "pr_pending",
+   "at": "2026-10-21 13:59:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 416,
+   "item_id": "bounce-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-22 00:00:00.000000+00:00",
+   "note": "synthetic start",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 417,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 01:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 418,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 02:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 419,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 03:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 420,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 04:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 421,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 05:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 422,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 06:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 423,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 07:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 424,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 08:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 425,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 09:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 426,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 10:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 427,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 11:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 428,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 12:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 429,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 13:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 430,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 14:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 431,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 15:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 432,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 16:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 433,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 17:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 434,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 18:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 435,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 19:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 436,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 20:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 437,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 21:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 438,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-22 22:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 439,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-22 23:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 440,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 00:00:00.000000+00:00",
+   "note": "auto-reopened after failed review verdict (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 441,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 01:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 442,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 02:00:00.000000+00:00",
+   "note": "request_review recovering stale review (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 443,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 03:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 444,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 04:00:00.000000+00:00",
+   "note": "request_review recovering stale review (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 445,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 05:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 446,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 06:00:00.000000+00:00",
+   "note": "request_review recovering stale review (synthetic)",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 447,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 07:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 448,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 08:00:00.000000+00:00",
+   "note": "manual reopen (synthetic)",
+   "triggered_by": "user"
+  },
+  {
+   "seq": 449,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 09:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 450,
+   "item_id": "tz-a",
+   "from": "idea",
+   "to": "ready",
+   "at": "2026-10-23 09:00:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "user"
+  },
+  {
+   "seq": 451,
+   "item_id": "tz-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-23 09:10:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 452,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "in_progress",
+   "at": "2026-10-23 10:00:00.000000+00:00",
+   "note": "manual reopen (synthetic)",
+   "triggered_by": "user"
+  },
+  {
+   "seq": 453,
+   "item_id": "tz-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 03:00:00.000000-07:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 454,
+   "item_id": "tz-a",
+   "from": "review",
+   "to": "pr_pending",
+   "at": "2026-10-23 03:30:00.000000-07:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 455,
+   "item_id": "bounce-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-23 11:00:00.000000+00:00",
+   "note": "request_review synthetic",
+   "triggered_by": "agent"
+  },
+  {
+   "seq": 456,
+   "item_id": "tz-a",
+   "from": "pr_pending",
+   "to": "done",
+   "at": "2026-10-23 04:00:00.000000-07:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 457,
+   "item_id": "tz-a",
+   "from": "done",
+   "to": "archived",
+   "at": "2026-10-23 04:30:00.000000-07:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 458,
+   "item_id": "bounce-a",
+   "from": "review",
+   "to": "pr_pending",
+   "at": "2026-10-23 12:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 459,
+   "item_id": "bounce-a",
+   "from": "pr_pending",
+   "to": "done",
+   "at": "2026-10-23 13:00:00.000000+00:00",
+   "note": "",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 460,
+   "item_id": "loop-a",
+   "from": "idea",
+   "to": "ready",
+   "at": "2026-10-24 09:00:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 461,
+   "item_id": "loop-a",
+   "from": "ready",
+   "to": "ready",
+   "at": "2026-10-24 09:05:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 462,
+   "item_id": "loop-a",
+   "from": "ready",
+   "to": "in_progress",
+   "at": "2026-10-24 09:10:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 463,
+   "item_id": "loop-a",
+   "from": "in_progress",
+   "to": "in_progress",
+   "at": "2026-10-24 09:15:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "system"
+  },
+  {
+   "seq": 464,
+   "item_id": "loop-a",
+   "from": "in_progress",
+   "to": "review",
+   "at": "2026-10-24 09:20:00.000000+00:00",
+   "note": "synthetic",
+   "triggered_by": "system"
+  }
+ ]
+}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -238,7 +239,58 @@ func (i *Instance) GetCategoryPath() []string {
 	return parts
 }
 
-// MarkViewed records that the user has viewed this session.
+// AcquireTerminalView inhibits automatic hibernation until the returned cleanup runs.
+func (i *Instance) AcquireTerminalView() (func(), error) {
+	for {
+		viewers := i.terminalViewers.Load()
+		if viewers < 0 {
+			return nil, fmt.Errorf("session is being automatically hibernated; reconnect to resume")
+		}
+		if i.terminalViewers.CompareAndSwap(viewers, viewers+1) {
+			break
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Publish the idle baseline before making the session eligible again.
+			i.terminalViewClosedAt.Store(time.Now().UnixNano())
+			i.terminalViewers.Add(-1)
+		})
+	}, nil
+}
+
+// HasTerminalViewers reports whether any terminal transport is attached.
+func (i *Instance) HasTerminalViewers() bool {
+	return i.terminalViewers.Load() > 0
+}
+
+func (i *Instance) hibernationIdleDuration() time.Duration {
+	idle := i.TimeSinceLastMeaningfulOutput(i.Snapshot().CreatedAt)
+	if closedAt := i.terminalViewClosedAt.Load(); closedAt != 0 {
+		if sinceClose := time.Since(time.Unix(0, closedAt)); sinceClose < idle {
+			idle = sinceClose
+		}
+	}
+	return idle
+}
+
+func (i *Instance) hibernateAutomatically(ctx context.Context, reason string) error {
+	if !i.terminalViewers.CompareAndSwap(0, -1) {
+		return nil
+	}
+	i.SetHibernateReason(reason)
+	if err := i.Hibernate(ctx); err != nil {
+		i.terminalViewers.Store(0)
+		return err
+	}
+	go func() {
+		i.hibernateTeardownWG.Wait()
+		i.terminalViewers.Store(0)
+	}()
+	return nil
+}
+
 func (i *Instance) MarkViewed() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -444,22 +496,40 @@ func (i *Instance) Started() bool {
 // than the endless-retry bug this self-heal fixes: a session whose VNC/CDP
 // setup was also skipped by that same failure will not get it retroactively.
 func (i *Instance) MarkStartedIfTmuxAlive() {
-	if err := i.sendSyncErr(func(s *instanceState) error {
-		markStartedIfTmuxAliveLocked(s)
-		return nil
-	}); err != nil {
-		// sendSyncErr itself failed (e.g. the actor mailbox is shut down) --
-		// markStartedIfTmuxAliveLocked never ran, so this self-heal was a
-		// silent no-op. Log so that's observable instead of the caller (a
-		// capture/resize path) just seeing the stale Started()==false state
-		// persist with no clue why the self-heal didn't take effect.
-		log.Warn("MarkStartedIfTmuxAlive: sendSyncErr failed, self-heal did not run", "session", i.Title, "err", err)
+	// Bounded: a boot Start() ahead of us in the mailbox must not park a WebSocket goroutine forever.
+	ctx, cancel := context.WithTimeout(context.Background(), markStartedMailboxTimeout)
+	defer cancel()
+	marked, err := sendCtxValue(ctx, i, func(s *instanceState) (bool, error) {
+		return markStartedIfTmuxAliveLocked(s), nil
+	})
+	if err != nil {
+		// The closure may not have run; log so a stale Started()==false is explainable.
+		log.Warn("MarkStartedIfTmuxAlive: actor call failed, self-heal did not run", "session", i.Title, "err", err)
+		return
+	}
+	if marked {
+		i.wireLazilyRestoredInstance()
+	}
+}
+
+// markStartedMailboxTimeout bounds MarkStartedIfTmuxAlive's wait on the actor mailbox.
+const markStartedMailboxTimeout = 10 * time.Second
+
+// wireLazilyRestoredInstance does what startLocked would have done for an instance that was
+// marked started without Start() running: startLocked is the only place that registers the exit
+// callback, and the controller needs started==true. Runs outside the actor (StartController
+// takes i.mu itself).
+func (i *Instance) wireLazilyRestoredInstance() {
+	i.pm().ResetExitOnce()
+	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
+	if err := i.StartController(); err != nil {
+		log.Warn("MarkStartedIfTmuxAlive: failed to start controller", "session", i.Title, "err", err)
 	}
 }
 
 // markStartedIfTmuxAliveLocked is MarkStartedIfTmuxAlive's actor-safe body.
-// Called only from within a sendSyncErr closure.
-func markStartedIfTmuxAliveLocked(s *instanceState) {
+// Called only from within an actor closure; reports whether this call flipped started.
+func markStartedIfTmuxAliveLocked(s *instanceState) (marked bool) {
 	i := s.inst
 	i.mu.Lock()
 	if i.started.Load() {
@@ -467,7 +537,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 		// serialized ahead of this one via the actor mailbox) already got
 		// here first — nothing to do.
 		i.mu.Unlock()
-		return
+		return false
 	}
 	switch i.Status {
 	case Creating:
@@ -479,7 +549,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 			// method exists to avoid.
 			i.mu.Unlock()
 			log.Warn("MarkStartedIfTmuxAlive: Creating -> Active transition failed, not self-healing", "session", i.Title, "err", err)
-			return
+			return false
 		}
 	case Active:
 		// Already Active; only the started flag is missing.
@@ -487,12 +557,13 @@ func markStartedIfTmuxAliveLocked(s *instanceState) {
 		// Paused/Stopped/PermanentlyFailed/Hibernated/Crashed/Failed: leave
 		// untouched, see doc comment above.
 		i.mu.Unlock()
-		return
+		return false
 	}
 	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
 	i.FireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
+	return true
 }
 
 // IsHotRestoreRecoverable reports whether the instance's current status is

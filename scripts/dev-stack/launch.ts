@@ -4,12 +4,11 @@ import * as http from "http";
 import * as os from "os";
 import * as path from "path";
 import { allocatePort } from "./ports";
-import { parseWebBuildMode } from "./web-build-mode";
 
 /**
  * StackLauncher (see project_plans/isolated-dev-stacks/implementation/plan.md,
  * Epic 3.2 / Story 3.2.1). Spawns and supervises a BackendChild (the Go
- * binary) and a FrontendChild (`next dev`) sharing one STAPLER_SQUAD_INSTANCE
+ * binary) and a FrontendChild (the Bun dev server) sharing one STAPLER_SQUAD_INSTANCE
  * identity, then tears both down process-group-aware on request.
  *
  * IMPORTANT: this module registers ZERO process.on(...) handlers at module
@@ -211,7 +210,7 @@ function defaultSpawnBackend(config: DevStackConfig): ChildProcess {
   });
 }
 
-/** Exported for tests: the frontend spawn args/env/cwd, mode-selected via the single parseWebBuildMode owner (Story 5.7). */
+/** Exported for tests: the frontend spawn args/env/cwd. */
 export function frontendSpawnPlan(config: DevStackConfig, env: Record<string, string | undefined> = process.env): {
   command: string;
   args: string[];
@@ -219,13 +218,13 @@ export function frontendSpawnPlan(config: DevStackConfig, env: Record<string, st
   env: Record<string, string | undefined>;
 } {
   const webAppDir = path.join(repoRoot(), "web-app");
-  const baseEnv = { ...env, NEXT_PUBLIC_API_URL: config.apiBaseUrl };
-  if (parseWebBuildMode(env) === "bun") {
-    // web-app/build/dev.ts (Story 5.6): bunfig.toml's [serve.static] plugin entry is resolved relative to cwd.
-    return { command: "bun", args: ["build/dev.ts"], cwd: webAppDir, env: { ...baseEnv, PORT: String(config.frontendPort) } };
-  }
-  const nextBin = path.join(webAppDir, "node_modules", ".bin", "next");
-  return { command: nextBin, args: ["dev", "--port", String(config.frontendPort), "--hostname", "localhost"], cwd: webAppDir, env: baseEnv };
+  // web-app/build/dev.ts: bunfig.toml's [serve.static] plugin entry is resolved relative to cwd.
+  return {
+    command: "bun",
+    args: ["build/dev.ts"],
+    cwd: webAppDir,
+    env: { ...env, NEXT_PUBLIC_API_URL: config.apiBaseUrl, PORT: String(config.frontendPort) },
+  };
 }
 
 function defaultSpawnFrontend(config: DevStackConfig): ChildProcess {
@@ -253,7 +252,7 @@ function defaultCheckBackendReady(config: DevStackConfig): Promise<boolean> {
 }
 
 function defaultCheckFrontendReady(config: DevStackConfig): Promise<boolean> {
-  // Any HTTP response counts as "responds" — next dev may 404 briefly during
+  // Any HTTP response counts as "responds" — the dev server may 404 briefly during
   // compile (and bun dev.ts's first request waits on its own initial bundle), but
   // that still means it's listening on the port (Task 3.2.1c).
   return httpProbe(`http://localhost:${config.frontendPort}`, () => true);
@@ -556,7 +555,7 @@ export async function startDevStack(
       );
     } catch (err) {
       throw new Error(
-        `Frontend readiness check timed out after ${maxAttempts} attempts. Last output from next dev:\n${frontendBuffer.tail()}`,
+        `Frontend readiness check timed out after ${maxAttempts} attempts. Last output from the dev server:\n${frontendBuffer.tail()}`,
         { cause: err },
       );
     }

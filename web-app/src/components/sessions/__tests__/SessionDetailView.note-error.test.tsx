@@ -16,12 +16,12 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionDetailView } from "../SessionDetailView";
-import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import type { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";
 
-jest.mock("next/dynamic", () => require("./sessionDetailViewTestFixtures").mockNextDynamic());
+jest.mock("@/lib/lazy", () => ({ lazyComponent: require("./sessionDetailViewTestFixtures").mockLazyComponent() }));
 
 jest.mock("../DiffViewer", () => require("./sessionDetailViewTestFixtures").mockDiffViewer());
 jest.mock("../VcsPanel", () => require("./sessionDetailViewTestFixtures").mockVcsPanel());

@@ -19,7 +19,7 @@ func TestIntegration_DetectDaemonVersions_FindsRealRunningDaemon(t *testing.T) {
 	withFastRetryBounds(t, 8, 50*time.Millisecond, 300*time.Millisecond)
 	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 
 	info := DetectDaemonVersions(context.Background(), cfg)
 
@@ -37,7 +37,7 @@ func TestIntegration_ReplaceDaemon_RestartsOntoConfiguredBinary(t *testing.T) {
 	withFastRetryBounds(t, 8, 50*time.Millisecond, 300*time.Millisecond)
 	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 	oldPID := readTymuxdPID(t)
 
 	after, err := ReplaceDaemon(context.Background(), cfg, false)

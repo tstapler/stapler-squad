@@ -6,7 +6,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import { SessionClient } from './session-client';
-import { webBuildMode } from './web-build';
 
 const execPromise = promisify(exec);
 
@@ -69,8 +68,6 @@ export async function prepareSharedAssets(): Promise<SharedAssets> {
     // `npx playwright` leaves npm_config_user_agent=npm/..., which web-app's bun-only
     // preinstall guard rejects when make triggers `bun install`.
     const { npm_config_user_agent: _npmUserAgent, ...makeEnv } = process.env;
-    // The Makefile seam reads WEB_BUILD; set it explicitly so a typo fails here, not as a silent Next build.
-    makeEnv.WEB_BUILD = webBuildMode();
     await execPromise('make stapler-squad', { cwd: projectRoot, env: makeEnv });
     console.log('✅ Binary up to date');
     // The Makefile writes one repo-root path that concurrent runs would race a rebuild over;
@@ -196,6 +193,9 @@ export class TestServer {
         // A private tmux server, so this run's sessions never share the live service's
         // default server (where its leaked-control-mode sweeper could see them).
         STAPLER_SQUAD_TMUX_SOCKET: this.tmuxSocket(),
+        // The idle seed sessions would otherwise be flagged stale 5 min into the run, raising
+        // "No activity for Nm" toasts over whatever spec is running on this long-lived server.
+        STAPLER_SQUAD_REVIEW_STALENESS_THRESHOLD: '24h',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

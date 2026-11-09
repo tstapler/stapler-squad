@@ -4,22 +4,6 @@ import { baseUrl } from '../helpers/base-url';
 
 const BASE_URL = baseUrl();
 
-export interface NotFoundBaseline {
-  status: number;
-  /** Pathname after client-side redirects settle ("/" means the sessions page took over). */
-  finalPath: string;
-  title: string;
-}
-
-/** Loads a path that matches no route and reports what the build does with it (Story 7.7a). */
-export async function measureNotFound(page: Page, missing = "/nonexistent"): Promise<NotFoundBaseline> {
-  const response = await page.goto(`${BASE_URL}${missing}`, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("main").first()).toBeVisible();
-  // A client redirect, if the build does one, lands within a few seconds; none means the URL is kept.
-  await page.waitForURL((url) => url.pathname !== missing, { timeout: 5000 }).catch(() => undefined);
-  return { status: response?.status() ?? 0, finalPath: new URL(page.url()).pathname, title: await page.title() };
-}
-
 export interface ScrollPolicyBaseline {
   /** scrollTop of the long page's scroll container before navigating. */
   scrolledTo: number;

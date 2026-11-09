@@ -26,6 +26,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//log",
+        "//session/git/ignorewalk",
         "//session/git/redact",
         "//telemetry",
         "@com_github_go_git_go_billy_v5//:go-billy",

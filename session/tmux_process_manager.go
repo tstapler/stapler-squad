@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -72,6 +73,10 @@ func (tm *TmuxProcessManager) inspector() panePIDInspector {
 	}
 	return procinfo.NewProcessInspector()
 }
+
+// ErrTmuxSessionNotInitialized is returned by operations that need the underlying tmux
+// session before initTmuxSession has attached one (or after it was cleared).
+var ErrTmuxSessionNotInitialized = errors.New("tmux session not initialized")
 
 // HasSession reports whether a tmux session has been initialized.
 func (tm *TmuxProcessManager) HasSession() bool {
@@ -168,7 +173,7 @@ func (tm *TmuxProcessManager) DoesSessionExistNoCache() bool {
 func (tm *TmuxProcessManager) SetDetachedSize(width, height int, instanceTitle string) error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	tm.mu.Lock()
 	if width == tm.lastPreviewWidth && height == tm.lastPreviewHeight {
@@ -199,7 +204,7 @@ func (tm *TmuxProcessManager) SetDetachedSize(width, height int, instanceTitle s
 func (tm *TmuxProcessManager) Attach() (chan struct{}, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return nil, fmt.Errorf("tmux session not initialized")
+		return nil, ErrTmuxSessionNotInitialized
 	}
 	return s.Attach()
 }
@@ -230,7 +235,7 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	content, err := s.CapturePaneContent()
 	if err != nil {
@@ -258,7 +263,7 @@ func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (st
 
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	content, err := s.CapturePaneContentContext(ctx)
 	if err != nil {
@@ -277,7 +282,7 @@ func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (st
 func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	content, err := s.CapturePaneContentPriority()
 	if err != nil {
@@ -291,7 +296,7 @@ func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {
 func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	return s.CapturePaneContentRaw()
 }
@@ -303,7 +308,7 @@ func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 func (tm *TmuxProcessManager) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	return s.CapturePaneContentRawPriority(ctx)
 }
@@ -316,7 +321,7 @@ func (tm *TmuxProcessManager) CapturePaneContentRawPriority(ctx context.Context)
 func (tm *TmuxProcessManager) IsAlternateScreenActive() (bool, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return false, fmt.Errorf("tmux session not initialized")
+		return false, ErrTmuxSessionNotInitialized
 	}
 	return s.IsAlternateScreenActive()
 }
@@ -325,7 +330,7 @@ func (tm *TmuxProcessManager) IsAlternateScreenActive() (bool, error) {
 func (tm *TmuxProcessManager) CapturePaneContentWithOptions(startLine, endLine string) (string, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	return s.CapturePaneContentWithOptions(startLine, endLine)
 }
@@ -334,7 +339,7 @@ func (tm *TmuxProcessManager) CapturePaneContentWithOptions(startLine, endLine s
 func (tm *TmuxProcessManager) GetPaneDimensions() (width, height int, err error) {
 	s := tm.session.Load()
 	if s == nil {
-		return 0, 0, fmt.Errorf("tmux session not initialized")
+		return 0, 0, ErrTmuxSessionNotInitialized
 	}
 	return s.GetPaneDimensions()
 }
@@ -347,7 +352,7 @@ func (tm *TmuxProcessManager) GetPaneDimensions() (width, height int, err error)
 func (tm *TmuxProcessManager) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
 	s := tm.session.Load()
 	if s == nil {
-		return 0, 0, fmt.Errorf("tmux session not initialized")
+		return 0, 0, ErrTmuxSessionNotInitialized
 	}
 	return s.GetPaneDimensionsPriority(ctx)
 }
@@ -356,7 +361,7 @@ func (tm *TmuxProcessManager) GetPaneDimensionsPriority(ctx context.Context) (wi
 func (tm *TmuxProcessManager) GetCursorPosition() (x, y int, err error) {
 	s := tm.session.Load()
 	if s == nil {
-		return 0, 0, fmt.Errorf("tmux session not initialized")
+		return 0, 0, ErrTmuxSessionNotInitialized
 	}
 	return s.GetCursorPosition()
 }
@@ -365,7 +370,7 @@ func (tm *TmuxProcessManager) GetCursorPosition() (x, y int, err error) {
 func (tm *TmuxProcessManager) GetPTY() (*os.File, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return nil, fmt.Errorf("tmux session not initialized")
+		return nil, ErrTmuxSessionNotInitialized
 	}
 	return s.GetPTY()
 }
@@ -374,7 +379,7 @@ func (tm *TmuxProcessManager) GetPTY() (*os.File, error) {
 func (tm *TmuxProcessManager) SendKeys(keys string) (int, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return 0, fmt.Errorf("tmux session not initialized")
+		return 0, ErrTmuxSessionNotInitialized
 	}
 	return s.SendKeys(keys)
 }
@@ -383,7 +388,7 @@ func (tm *TmuxProcessManager) SendKeys(keys string) (int, error) {
 func (tm *TmuxProcessManager) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	return s.SendInputViaControlMode(ctx, data)
 }
@@ -422,7 +427,7 @@ func (tm *TmuxProcessManager) RefreshClientPriority(ctx context.Context) error {
 func (tm *TmuxProcessManager) TapEnter() error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	return s.TapEnter()
 }
@@ -440,7 +445,7 @@ func (tm *TmuxProcessManager) HasUpdated() (updated bool, hasPrompt bool, conten
 func (tm *TmuxProcessManager) RestoreWithWorkDir(workDir string) error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	err := s.RestoreWithWorkDir(workDir)
 	if err == nil {
@@ -462,7 +467,7 @@ func (tm *TmuxProcessManager) primePanePID() {
 func (tm *TmuxProcessManager) Start(dir string) error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	err := s.Start(dir)
 	if err == nil {
@@ -494,7 +499,7 @@ func (tm *TmuxProcessManager) HasMeaningfulContent(content string) bool {
 func (tm *TmuxProcessManager) CaptureViewport(lines int) (string, error) {
 	s := tm.session.Load()
 	if s == nil {
-		return "", fmt.Errorf("tmux session not initialized")
+		return "", ErrTmuxSessionNotInitialized
 	}
 	if lines <= 0 {
 		_, height, err := s.GetPaneDimensions()
@@ -515,7 +520,7 @@ func (tm *TmuxProcessManager) CaptureViewport(lines int) (string, error) {
 func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 	s := tm.session.Load()
 	if s == nil {
-		return fmt.Errorf("tmux session not initialized")
+		return ErrTmuxSessionNotInitialized
 	}
 	if _, err := s.SendKeys(prompt); err != nil {
 		return fmt.Errorf("error sending keys to tmux session: %w", err)
@@ -579,7 +584,7 @@ func (tm *TmuxProcessManager) GetPanePID() (int32, error) {
 	}
 	s := tm.session.Load()
 	if s == nil {
-		return 0, fmt.Errorf("tmux session not initialized")
+		return 0, ErrTmuxSessionNotInitialized
 	}
 	pid, err := s.GetPanePID()
 	if err != nil {

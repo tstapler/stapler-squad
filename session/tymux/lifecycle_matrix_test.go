@@ -119,6 +119,149 @@ func startedMatrixSession(t *testing.T, dir string, ft *fakeTransport) TymuxMana
 	return sess
 }
 
+func TestLifecycleMatrix_AdoptForViewing(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			dir := t.TempDir()
+			calls := &matrixCalls{}
+			sess := NewTymuxGRPCSession(matrixTransport(dir, p, calls))
+			sess.SetStoredSessionID(testSessionID)
+			viewer, ok := sess.(interface{ AdoptForViewing(context.Context) error })
+			require.True(t, ok, "viewing needs a nonmutating adoption capability")
+			require.NoError(t, viewer.AdoptForViewing(context.Background()))
+			if p.liveness == v1.Liveness_LIVENESS_LIVE {
+				t.Cleanup(func() { require.NoError(t, sess.DetachSafely()) })
+			}
+			require.True(t, sess.HasSession())
+			_, err := sess.CapturePaneContentRaw()
+			require.NoError(t, err)
+			_, err = sess.CapturePaneContent()
+			if p.liveness == v1.Liveness_LIVENESS_DEAD {
+				require.ErrorIs(t, err, ErrPaneExited)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Zero(t, calls.create.Load())
+			assert.Zero(t, calls.revive.Load())
+			assert.Zero(t, calls.kill.Load())
+		})
+	}
+}
+
+func TestLifecycleMatrix_ViewOnlyPreservesRecordCleanup(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			calls := &matrixCalls{}
+			s := NewTymuxGRPCSession(matrixTransport(t.TempDir(), p, calls)).(*tymuxGRPCSession)
+			s.SetStoredSessionID(testSessionID)
+			require.NoError(t, s.AdoptForViewing(context.Background()))
+			assert.Zero(t, calls.kill.Load(), "viewing never kills")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "explicit cleanup retains exact-record ownership")
+			require.NoError(t, s.Close())
+			assert.EqualValues(t, 1, calls.kill.Load(), "repeat cleanup must not kill again")
+		})
+	}
+}
+
+func TestLifecycleMatrix_ViewOnlyDoesNotTakeAnotherManagersClaim(t *testing.T) {
+	resetClaims(t)
+	calls := &matrixCalls{}
+	ft := matrixTransport(t.TempDir(), matrixStates[0], calls)
+	owner := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	claimedSessions.Store(testSessionID, any(owner))
+	viewer := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	viewer.SetStoredSessionID(testSessionID)
+	require.NoError(t, viewer.AdoptForViewing(context.Background()))
+	require.NoError(t, viewer.Close())
+	assert.Zero(t, calls.kill.Load())
+	claim, ok := claimedSessions.Load(testSessionID)
+	require.True(t, ok)
+	assert.Same(t, owner, claim)
+}
+
+func TestLifecycleMatrix_ViewOnlyLiveStreamCannotWriteOrRevive(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	calls := &matrixCalls{}
+	ft := matrixTransport(dir, matrixStates[0], calls)
+	var stream *fakeAttachStream
+	ft.attachFn = func(ctx context.Context) attachStream {
+		stream = newFakeAttachStream(ctx)
+		return stream
+	}
+	sess := NewTymuxGRPCSession(ft)
+	sess.SetStoredSessionID(testSessionID)
+	s := sess.(*tymuxGRPCSession)
+	require.NoError(t, s.AdoptForViewing(context.Background()))
+	t.Cleanup(func() { require.NoError(t, s.DetachSafely()) })
+	require.NotNil(t, s.stream, "a live retained pane still streams updates")
+	_, updates := s.SubscribeToControlModeUpdates()
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("live update")}})
+	require.Equal(t, []byte("live update"), <-updates)
+	_, err := s.SendKeys("do not send")
+	require.Error(t, err)
+	require.Error(t, s.SetWindowSize(80, 24))
+	ft.attachFn = func(ctx context.Context) attachStream {
+		f := newFakeAttachStream(ctx)
+		f.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane dead"))
+		return f
+	}
+	_, _, ok, _ := s.ReconnectLoop(context.Background(), testPaneID, "test")
+	require.False(t, ok)
+	assert.Zero(t, calls.revive.Load())
+	assert.Zero(t, calls.create.Load())
+	assert.Zero(t, calls.kill.Load())
+}
+
+func TestLifecycleMatrix_ViewOnlyRetriesFailedLiveAttach(t *testing.T) {
+	resetClaims(t)
+	calls := &matrixCalls{}
+	ft := matrixTransport(t.TempDir(), matrixStates[0], calls)
+	ft.attachFn = func(context.Context) attachStream { return nil }
+	s := NewTymuxGRPCSession(ft).(*tymuxGRPCSession)
+	s.SetStoredSessionID(testSessionID)
+	require.Error(t, s.AdoptForViewing(context.Background()))
+	var stream *fakeAttachStream
+	ft.attachFn = func(ctx context.Context) attachStream {
+		stream = newFakeAttachStream(ctx)
+		return stream
+	}
+	require.NoError(t, s.AdoptForViewing(context.Background()))
+	t.Cleanup(func() { require.NoError(t, s.DetachSafely()) })
+	_, updates := s.SubscribeToControlModeUpdates()
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("retry update")}})
+	require.Equal(t, []byte("retry update"), <-updates)
+	assert.Zero(t, calls.create.Load())
+	assert.Zero(t, calls.revive.Load())
+	assert.Zero(t, calls.kill.Load())
+}
+
+func TestLifecycleMatrix_AdoptForViewing_DoesNotFallbackByName(t *testing.T) {
+	for _, id := range []string{"", "missing-id"} {
+		t.Run("id="+id, func(t *testing.T) {
+			resetClaims(t)
+			dir := t.TempDir()
+			calls := &matrixCalls{}
+			sess := NewTymuxGRPCSession(matrixTransport(dir, matrixStates[0], calls))
+			sess.SetStoredSessionID(id)
+			viewer, ok := sess.(interface{ AdoptForViewing(context.Context) error })
+			require.True(t, ok)
+			adoptErr := viewer.AdoptForViewing(context.Background())
+			require.Error(t, adoptErr)
+			if id != "" {
+				assert.Equal(t, connect.CodeNotFound, connect.CodeOf(adoptErr))
+			}
+			assert.False(t, sess.HasSession())
+			assert.Zero(t, calls.create.Load())
+			assert.Zero(t, calls.revive.Load())
+			assert.Zero(t, calls.kill.Load())
+		})
+	}
+}
+
 func TestLifecycleMatrix_IsAlive(t *testing.T) {
 	for _, p := range matrixStates {
 		t.Run(p.name, func(t *testing.T) {
@@ -343,6 +486,23 @@ func TestLifecycleMatrix_IsAlive_DaemonFaults(t *testing.T) {
 		}
 		assert.True(t, sess.IsAlive(), "a blip must not turn a BACKOFF pane into dead")
 	})
+	t.Run("pane gone after a pending verdict is dead even when the daemon then goes unreachable", func(t *testing.T) {
+		dir := t.TempDir()
+		ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+		sess := startedMatrixSession(t, dir, ft)
+		require.True(t, sess.IsAlive())
+		ft.capturePaneFn = func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, notFound
+		}
+		ft.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{}), nil
+		}
+		require.False(t, sess.IsAlive())
+		ft.capturePaneFn = func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, unavailable
+		}
+		assert.False(t, sess.IsAlive(), "a confirmed-gone pane must not revive from the stale pending verdict")
+	})
 	t.Run("pane status call failing on a dead pane means plain exit", func(t *testing.T) {
 		dir := t.TempDir()
 		p := matrixStates[3] // BACKOFF
@@ -378,6 +538,36 @@ func TestLifecycleMatrix_IsAlive_CachesLifecycleCapability(t *testing.T) {
 	}
 }
 
+// The capability and status RPCs must carry a deadline, so a wedged daemon cannot stall IsAlive.
+func TestLifecycleMatrix_IsAlive_BoundsLifecycleRPCs(t *testing.T) {
+	dir := t.TempDir()
+	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+	var statusHadDeadline atomic.Bool
+	inner := ft.paneStatusFn
+	ft.paneStatusFn = func(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+		_, ok := ctx.Deadline()
+		statusHadDeadline.Store(ok)
+		return inner(ctx, req)
+	}
+	sess := startedMatrixSession(t, dir, ft)
+	require.True(t, sess.IsAlive())
+	assert.True(t, ft.lastServerInfoHadDeadline.Load(), "GetServerInfo ran unbounded")
+	assert.True(t, statusHadDeadline.Load(), "GetPaneStatus ran unbounded")
+}
+
+// A transient GetServerInfo failure must not be remembered as "daemon lacks pane.lifecycle".
+func TestLifecycleMatrix_IsAlive_TransientServerInfoErrorIsNotCached(t *testing.T) {
+	t.Setenv(restartModeEnv, "never") // keep Start from caching the capability before the blip
+	dir := t.TempDir()
+	ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+	sess := startedMatrixSession(t, dir, ft)
+	blip := error(connect.NewError(connect.CodeUnavailable, errors.New("blip")))
+	ft.serverInfoErr.Store(&blip)
+	require.False(t, sess.IsAlive(), "state unknowable during the blip")
+	ft.serverInfoErr.Store(nil)
+	assert.True(t, sess.IsAlive(), "the blip was cached as an unsupported capability")
+}
+
 func TestLifecycleMatrix_Close(t *testing.T) {
 	for _, p := range matrixStates {
 		t.Run(p.name, func(t *testing.T) {
@@ -403,18 +593,24 @@ func TestLifecycleMatrix_Close_DaemonFaults(t *testing.T) {
 		}
 		assert.NoError(t, sess.Close())
 	})
-	t.Run("kill unavailable surfaces unreachable once", func(t *testing.T) {
+	t.Run("kill unavailable remains retryable until confirmed", func(t *testing.T) {
 		dir := t.TempDir()
 		var kills atomic.Int32
 		ft := matrixTransport(dir, live, &matrixCalls{})
 		sess := startedMatrixSession(t, dir, ft)
-		ft.killSessionFn = func(context.Context, *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
-			kills.Add(1)
-			return nil, connect.NewError(connect.CodeUnavailable, errors.New("refused"))
+		ft.killSessionFn = func(ctx context.Context, _ *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			_, bounded := ctx.Deadline()
+			assert.True(t, bounded, "cleanup RPC must be bounded")
+			if kills.Add(1) < 3 {
+				return nil, connect.NewError(connect.CodeUnavailable, errors.New("refused"))
+			}
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		}
 		require.ErrorIs(t, sess.Close(), ErrTymuxdUnreachable)
-		_ = sess.Close()
-		assert.Equal(t, int32(1), kills.Load(), "bounded: a failed kill is not retried by the next Close")
+		require.ErrorIs(t, sess.Close(), ErrTymuxdUnreachable, "retry must not silently skip the failed kill")
+		require.NoError(t, sess.Close())
+		require.NoError(t, sess.Close(), "successful cleanup remains idempotent")
+		assert.Equal(t, int32(3), kills.Load())
 	})
 }
 

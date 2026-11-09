@@ -68,6 +68,10 @@ func TestAuth_should_ExemptClaimGossipEndpoints_When_PeerHasNoPasskeySession(t *
 	code, reached = serveThroughAuth(http.MethodGet, hostclaim.ClaimLookupEndpointPath+"?url=https://github.com/o/r/issues/1")
 	assert.True(t, reached)
 	assert.Equal(t, http.StatusOK, code)
+
+	code, reached = serveThroughAuth(http.MethodGet, hostclaim.SessionFederationEndpointPath)
+	assert.True(t, reached)
+	assert.Equal(t, http.StatusOK, code)
 }
 
 func TestAuth_should_RedirectToLogin_When_UnauthenticatedRequestHitsOtherInternalPath(t *testing.T) {

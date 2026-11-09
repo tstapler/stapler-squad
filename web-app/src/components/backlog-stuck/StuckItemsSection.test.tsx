@@ -355,6 +355,38 @@ describe("StuckItemsSection", () => {
     });
   });
 
+  describe("StuckItemsSection_should_ListConstituentReasons_When_MultipleReasonsCardExpanded", () => {
+    const shared = "c0n57170-0000-0000-0000-000000000000";
+    const expandEscalationCard = () => {
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.MULTIPLE_REASONS));
+      fireEvent.click(present(card));
+    };
+
+    it("lists only this item's non-escalation reasons, even under an active reason filter", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ itemId: shared, reason: StuckReason.BOUNCING, prNumber: 0, prUrl: "" }),
+            makeItem({ itemId: shared, reason: StuckReason.PUSH_FAILED, prNumber: 0, prUrl: "" }),
+            makeItem({ itemId: shared, reason: StuckReason.MULTIPLE_REASONS, prNumber: 0, prUrl: "" }),
+            makeItem({ itemId: "other-item", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" }),
+          ],
+        })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId(`stuck-filter-chip-${StuckReason.MULTIPLE_REASONS}`));
+      expandEscalationCard();
+
+      const list = screen.getByTestId("stuck-constituent-reasons");
+      expect(within(list).getByTestId(`stuck-constituent-reason-${StuckReason.BOUNCING}`)).toBeInTheDocument();
+      expect(within(list).getByTestId(`stuck-constituent-reason-${StuckReason.PUSH_FAILED}`)).toBeInTheDocument();
+      expect(within(list).queryByTestId(`stuck-constituent-reason-${StuckReason.MULTIPLE_REASONS}`)).not.toBeInTheDocument();
+      expect(within(list).queryByTestId(`stuck-constituent-reason-${StuckReason.REWORK_CAP}`)).not.toBeInTheDocument();
+    });
+  });
+
   describe("StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap", () => {
     it("hides the reset-parked button when no item has hit the attempt cap", () => {
       mockUseStuckBacklogItems.mockReturnValue(

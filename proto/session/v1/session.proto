@@ -6,6 +6,7 @@ option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
 
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
+import "session/v1/github_user.proto";
 import "session/v1/events.proto";
 import "session/v1/notification_action.proto";
 
@@ -104,6 +105,16 @@ service SessionService {
   rpc PostPRComment(PostPRCommentRequest) returns (PostPRCommentResponse) {}
   rpc MergePR(MergePRRequest) returns (MergePRResponse) {}
   rpc ClosePR(ClosePRRequest) returns (ClosePRResponse) {}
+  // PR set management for a session. UI-only: never reachable from MCP tools.
+  rpc PinSessionPullRequest(PinSessionPullRequestRequest) returns (PinSessionPullRequestResponse) {}
+  rpc RefreshSessionPullRequests(RefreshSessionPullRequestsRequest) returns (RefreshSessionPullRequestsResponse) {}
+  rpc DetachSessionPullRequest(DetachSessionPullRequestRequest) returns (DetachSessionPullRequestResponse) {}
+  rpc AttachSessionPullRequest(AttachSessionPullRequestRequest) returns (AttachSessionPullRequestResponse) {}
+  // AskSessionToFixPullRequest types a fix request for one attached PR into the
+  // session's pane (server-built prompt; the client never supplies text).
+  rpc AskSessionToFixPullRequest(AskSessionToFixPullRequestRequest) returns (AskSessionToFixPullRequestResponse) {}
+  // Item-scoped detach: the release for an item-direct PR hold. UI-only.
+  rpc DetachItemPullRequest(DetachItemPullRequestRequest) returns (DetachItemPullRequestResponse) {}
 
   // SendNotification allows tmux sessions to send notifications to the server.
   // Notifications are broadcast to all connected clients (web UI and TUI).
@@ -301,6 +312,23 @@ service SessionService {
   // with a stale or path-mismatched UUID. Useful when a session is stuck in a crash
   // loop with "No conversation found" errors.
   rpc ClearConversationState(ClearConversationStateRequest) returns (ClearConversationStateResponse) {}
+
+  // RescanSessionArtifacts resets the session's transcript scan position and
+  // queues a fresh artifact scan (the Artifacts tab's Rescan button). It works in
+  // any session state; the result arrives as a SessionUpdatedEvent(["artifacts"]).
+  rpc RescanSessionArtifacts(RescanSessionArtifactsRequest) returns (RescanSessionArtifactsResponse) {}
+
+  // SearchSessionArtifacts finds sessions by what they produced: a PR, commit,
+  // branch, issue, plan doc or free text. Results are sessions, best first.
+  rpc SearchSessionArtifacts(SearchSessionArtifactsRequest) returns (SearchSessionArtifactsResponse) {}
+
+  // FindSessionsByPullRequest lists the sessions tied to one PR: those with an
+  // attached link (Tracked) first, then those that only saw it (Seen in transcript).
+  rpc FindSessionsByPullRequest(FindSessionsByPullRequestRequest) returns (FindSessionsByPullRequestResponse) {}
+
+  // ListSessionArtifacts browses the typed artifact records of every visible
+  // session, newest first, filtered by kind, repo, PR state or PR (the /artifacts page).
+  rpc ListSessionArtifacts(ListSessionArtifactsRequest) returns (ListSessionArtifactsResponse) {}
 
   // File Viewer RPCs
 
@@ -660,6 +688,14 @@ service SessionService {
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
 
+  // ClearTerminalStatusIfLive clears Stopped/Failed/PermanentlyFailed on sessions
+  // whose backing process (tymux pane or tmux session) is still alive, by
+  // hot-attaching without restarting the process or the service. Not-live,
+  // archived and non-terminal sessions are reported per-session and untouched.
+  // A request with exactly one id that is not cleared fails instead
+  // (FailedPrecondition/NotFound/Internal); at most 100 ids per request.
+  rpc ClearTerminalStatusIfLive(ClearTerminalStatusIfLiveRequest) returns (ClearTerminalStatusIfLiveResponse) {}
+
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
 
@@ -692,6 +728,14 @@ service SessionService {
   // ~/.claude/settings.json. Idempotent per hook.
   // +api: hooks:install
   rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
+
+  // GetTCCEnrichmentStatus lists heuristic protected roots discovered by background enrichment.
+  // +api: tcc:enrichment-status
+  rpc GetTCCEnrichmentStatus(GetTCCEnrichmentStatusRequest) returns (GetTCCEnrichmentStatusResponse) {}
+
+  // ContinueTCCEnrichment persists app consent, not an OS permission grant.
+  // +api: tcc:continue-enrichment
+  rpc ContinueTCCEnrichment(ContinueTCCEnrichmentRequest) returns (ContinueTCCEnrichmentResponse) {}
 
   // GetTmuxVersionStatus reports any detected tmux client/server version
   // mismatch (see session/tmux/version_check.go) -- a mismatch disables
@@ -755,6 +799,9 @@ message ListSessionsRequest {
   // When true, return only hidden (system/background) sessions, regardless of
   // include_hidden. Used by the tray's Background activity section.
   bool hidden_only = 9;
+
+  // Only sessions with a non-orphan link to this PR. Unset means no filter.
+  PullRequestRef pr = 10;
 }
 
 message ListSessionsResponse {
@@ -1512,6 +1559,8 @@ message GetPRInfoResponse {
 message GetPRCommentsRequest {
   // Session identifier (must be a PR session)
   string id = 1;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 2;
 }
 
 message GetPRCommentsResponse {
@@ -1524,6 +1573,8 @@ message PostPRCommentRequest {
   string id = 1;
   // Comment body (required)
   string body = 2;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 3;
 }
 
 message PostPRCommentResponse {
@@ -1536,8 +1587,21 @@ message PostPRCommentResponse {
 message MergePRRequest {
   // Session identifier (must be a PR session)
   string id = 1;
-  // Merge method: "merge", "squash", or "rebase" (default: "merge")
-  optional string method = 2;
+  // Deprecated: use merge_method. Legacy string: "merge", "squash", or "rebase".
+  // Honored only when merge_method is unspecified.
+  optional string method = 2 [deprecated = true];
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 3;
+  // Merge method; wins over the legacy method string when set. Unspecified
+  // falls back to method, then to MERGE.
+  MergeMethod merge_method = 4;
+}
+
+enum MergeMethod {
+  MERGE_METHOD_UNSPECIFIED = 0;
+  MERGE_METHOD_MERGE = 1;
+  MERGE_METHOD_SQUASH = 2;
+  MERGE_METHOD_REBASE = 3;
 }
 
 message MergePRResponse {
@@ -1550,6 +1614,8 @@ message MergePRResponse {
 message ClosePRRequest {
   // Session identifier (must be a PR session)
   string id = 1;
+  // Target PR; unset means the session's active PR.
+  PullRequestRef pr = 2;
 }
 
 message ClosePRResponse {
@@ -1558,6 +1624,88 @@ message ClosePRResponse {
   // Human-readable message
   string message = 2;
 }
+
+// PinSessionPullRequestRequest pins pr as the session's active PR. An unset pr
+// clears the current pin.
+message PinSessionPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+message PinSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// RefreshSessionPullRequestsRequest re-polls the session's open, unknown and
+// unverified-terminal PRs and returns the refreshed list.
+message RefreshSessionPullRequestsRequest {
+  string id = 1;
+}
+
+message RefreshSessionPullRequestsResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// DetachSessionPullRequestRequest removes pr from this session only and blocks
+// automatic re-attachment until the user attaches it again.
+message DetachSessionPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+message DetachSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
+}
+
+// AttachSessionPullRequestRequest links the PR at url to the session after
+// checking on GitHub that it exists; it clears this session's tombstone for it.
+message AttachSessionPullRequestRequest {
+  string id = 1;
+  string url = 2;
+}
+
+// AttachPullRequestResult says what AttachSessionPullRequest did.
+enum AttachPullRequestResult {
+  ATTACH_PULL_REQUEST_RESULT_UNSPECIFIED = 0;
+  // The PR was newly linked to the session.
+  ATTACH_PULL_REQUEST_RESULT_ATTACHED = 1;
+  // The session already tracked this PR; nothing was written.
+  ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED = 2;
+}
+
+message AttachSessionPullRequestResponse {
+  repeated SessionPullRequest pull_requests = 1;
+  AttachPullRequestResult result = 2;
+  // The PR the URL resolved to, for the toast ("#12 acme/app").
+  PullRequestRef pr = 3;
+}
+
+// AskSessionToFixPullRequestRequest asks the session to fix what blocks pr. An
+// unset pr means the session's active PR; a set one must be attached to it.
+message AskSessionToFixPullRequestRequest {
+  string id = 1;
+  PullRequestRef pr = 2;
+}
+
+// AskSessionToFixPullRequestResponse reuses the Up Next nudge vocabulary
+// (NudgeOutcome, NudgeReason) so both surfaces render the same copy.
+message AskSessionToFixPullRequestResponse {
+  NudgeOutcome outcome = 1;
+  repeated NudgeReason reasons = 2;
+  // The PR the request targeted (the resolved active PR when the request left it unset).
+  PullRequestRef pr = 3;
+  // Human-readable, sanitized; never a token.
+  string detail = 4;
+}
+
+// DetachItemPullRequestRequest removes pr from this backlog item only (its
+// item-direct link) and blocks automatic re-attachment. Session links are untouched.
+message DetachItemPullRequestRequest {
+  string item_id = 1;
+  PullRequestRef pr = 2;
+}
+
+message DetachItemPullRequestResponse {}
 
 // SendNotificationRequest allows tmux sessions to send notifications.
 message SendNotificationRequest {
@@ -3712,6 +3860,114 @@ message ClearConversationStateResponse {
   string message = 2;
 }
 
+// RescanSessionArtifactsRequest names the session whose transcript to rescan.
+message RescanSessionArtifactsRequest {
+  // Session identifier (title or stable UUID).
+  string id = 1;
+}
+
+// RescanSessionArtifactsResponse reports whether a scan was queued.
+message RescanSessionArtifactsResponse {
+  // False when the session has no linked transcript, so there was nothing to scan.
+  bool scan_started = 1;
+}
+
+// SearchSessionArtifactsRequest searches what sessions produced.
+message SearchSessionArtifactsRequest {
+  // Required, at least 2 characters; 1 character is InvalidArgument.
+  string query = 1;
+  // Maximum sessions to return (default 20, max 100).
+  int32 limit = 2;
+  // Only sessions with a link to, or a transcript mention of, this PR.
+  PullRequestRef pr = 3;
+  // Best-effort exclude hidden (automation) sessions, as in SearchClaudeHistoryRequest.
+  bool exclude_automation_sessions = 4;
+  // Archived sessions are excluded unless true, as in ListSessionsRequest.
+  bool include_archived = 5;
+}
+
+// ArtifactMatch is one artifact of a session that matched a query.
+message ArtifactMatch {
+  // "pr", "branch", "commit", "issue", "plan_doc", "ci_link" or "command".
+  string type = 1;
+  // The matched artifact in display form: a PR ref, SHA, branch name, path or URL.
+  string text = 2;
+  float score = 3;
+}
+
+// SessionArtifactHit is one session in a result, with the artifacts that matched.
+message SessionArtifactHit {
+  string session_id = 1;
+  string title = 2;
+  // "session_pr" (Tracked) or "artifact" (Seen in transcript) for a PR lookup;
+  // "artifact" for a text search.
+  string source = 3;
+  google.protobuf.Timestamp last_activity = 4;
+  repeated ArtifactMatch matches = 5;
+}
+
+message SearchSessionArtifactsResponse {
+  repeated SessionArtifactHit hits = 1;
+  // Visible sessions whose scan_state is not_linked or scanning, so results may be incomplete.
+  int32 unscanned_session_count = 2;
+}
+
+message FindSessionsByPullRequestRequest {
+  PullRequestRef pr = 1;
+  bool exclude_automation_sessions = 2;
+  bool include_archived = 3;
+}
+
+message FindSessionsByPullRequestResponse {
+  // Tracked rows first, then Seen in transcript; each group by last_activity
+  // descending then title; one row per session.
+  repeated SessionArtifactHit hits = 1;
+  int32 unscanned_session_count = 2;
+}
+
+// ListSessionArtifactsRequest filters and pages the cross-session artifact browse.
+message ListSessionArtifactsRequest {
+  // Record kinds to keep ("pr", "branch", "commit", "issue", "plan_doc", "ci_link",
+  // "command"); empty keeps every kind.
+  repeated string types = 1;
+  // "owner/repo", case-insensitive; keeps only records that name that repo (PR and issue records).
+  string repo = 2;
+  // PR state ("open", "merged", "closed", "unknown"); keeps only PR records in that state.
+  string state = 3;
+  // Keeps only the sessions tied to this PR (attached link or transcript mention).
+  PullRequestRef pr = 4;
+  // Opaque token from the previous response's next_page_token.
+  string page_token = 5;
+  // Rows per page (default 50, max 200).
+  int32 page_size = 6;
+  bool exclude_automation_sessions = 7;
+  bool include_archived = 8;
+}
+
+// SessionArtifactRow is one artifact record with the session that produced it.
+message SessionArtifactRow {
+  string session_id = 1;
+  string session_title = 2;
+  google.protobuf.Timestamp session_last_activity = 3;
+  bool session_archived = 4;
+  ArtifactRecordProto record = 5;
+  // Set for PR records: the session's own PR entry when it tracks the PR,
+  // otherwise a minimal entry with state "unknown".
+  SessionPullRequest pull_request = 6;
+  // "session_pr" (Tracked) or "artifact" (Seen in transcript).
+  string source = 7;
+}
+
+message ListSessionArtifactsResponse {
+  repeated SessionArtifactRow rows = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+  // Rows matching the filters across all pages.
+  int32 total_count = 3;
+  // Visible sessions whose scan_state is not_linked or scanning, so results may be incomplete.
+  int32 unscanned_session_count = 4;
+}
+
 // ============================================================================
 // Feature Flag Messages
 // ============================================================================
@@ -3790,6 +4046,33 @@ message InstallHooksResponse {
   // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
   repeated string messages = 2;
 }
+
+message GetTCCEnrichmentStatusRequest {}
+
+message TCCEnrichmentRoot {
+  string id = 1;
+  string root = 2;
+  repeated string paths = 3;
+  repeated string session_titles = 4;
+  bool app_consented = 5;
+  // Enrichment outcome only: pending, unresolved/slow, error, denied, or completed.
+  // "denied" means a probe failed with a permission error (EPERM/EACCES).
+  string outcome = 6;
+  // System Settings deep link for this root's TCC service; set only when outcome is denied.
+  string settings_url = 7;
+}
+
+message GetTCCEnrichmentStatusResponse {
+  bool enabled = 1;
+  repeated TCCEnrichmentRoot roots = 2;
+}
+
+message ContinueTCCEnrichmentRequest {
+  // Must be a known opaque ID returned by GetTCCEnrichmentStatus.
+  string root_id = 1;
+}
+
+message ContinueTCCEnrichmentResponse {}
 
 message GetTmuxVersionStatusRequest {}
 
@@ -4457,6 +4740,22 @@ message ArchiveSessionRequest {
 }
 
 message ArchiveSessionResponse {}
+
+message ClearTerminalStatusIfLiveRequest {
+  // Session UUIDs or titles. At least one is required.
+  repeated string session_ids = 1;
+}
+
+message ClearTerminalStatusIfLiveResult {
+  string session_id = 1;
+  // One of: cleared, not_live, archived, not_terminal, not_found, error.
+  string outcome = 2;
+  string message = 3;
+}
+
+message ClearTerminalStatusIfLiveResponse {
+  repeated ClearTerminalStatusIfLiveResult results = 1;
+}
 
 message UnarchiveSessionRequest {
   string session_id = 1;

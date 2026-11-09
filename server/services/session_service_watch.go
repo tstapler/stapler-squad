@@ -85,6 +85,25 @@ func (s *SessionService) WatchSessions(
 		}
 	}
 
+	// Peer sessions arrive on a separate channel; they carry Seq 0 so the client's
+	// after_seq bookkeeping only ever sees the local EventBus counter.
+	var peerCh <-chan *sessionv1.SessionEvent
+	if s.federation != nil {
+		var cancelPeers func()
+		peerCh, cancelPeers = s.federation.Watch().Subscribe()
+		defer cancelPeers()
+		if req.Msg.AfterSeq == 0 {
+			for _, ps := range s.federation.filteredByWatch(req.Msg) {
+				if err := stream.Send(&sessionv1.SessionEvent{
+					Timestamp: timestamppb.Now(),
+					Event:     &sessionv1.SessionEvent_SessionCreated{SessionCreated: &sessionv1.SessionCreatedEvent{Session: ps}},
+				}); err != nil {
+					return fmt.Errorf("failed to send peer snapshot: %w", err)
+				}
+			}
+		}
+	}
+
 	// Stream events until client disconnects or context is canceled
 	heartbeat := time.NewTicker(events.HeartbeatInterval)
 	defer heartbeat.Stop()
@@ -97,6 +116,17 @@ func (s *SessionService) WatchSessions(
 		case <-heartbeat.C:
 			if err := stream.Send(&sessionv1.SessionEvent{Timestamp: timestamppb.Now(), Heartbeat: true}); err != nil {
 				return fmt.Errorf("failed to send session heartbeat: %w", err)
+			}
+		case pe, ok := <-peerCh:
+			if !ok {
+				peerCh = nil
+				continue
+			}
+			if !peerEventMatches(pe, req.Msg) {
+				continue
+			}
+			if err := stream.Send(pe); err != nil {
+				return fmt.Errorf("failed to send peer event: %w", err)
 			}
 		case event, ok := <-eventCh:
 			if !ok {

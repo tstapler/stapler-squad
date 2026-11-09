@@ -8,6 +8,7 @@ go_library(
         "claim_index.go",
         "claim_lookup_auth.go",
         "claim_url.go",
+        "federation.go",
         "host_advertiser.go",
         "host_identity.go",
         "host_registry.go",
@@ -33,6 +34,7 @@ go_test(
     srcs = [
         "claim_gossiper_test.go",
         "claim_index_test.go",
+        "federation_test.go",
         "host_identity_test.go",
         "host_registry_test.go",
     ],
@@ -44,5 +46,7 @@ go_test(
         "//log",
         "//session/internal/peeraddr",
         "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

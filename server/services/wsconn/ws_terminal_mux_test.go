@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ type muxTestClient struct {
 
 func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestClient, *TerminalMuxBridge) {
 	t.Helper()
-	bridge := NewTerminalMuxBridge(serve, poolSize)
+	bridge := NewTerminalMuxBridge(serve, poolSize, WithTerminalMuxDispatchers(allowAllDispatcher))
 	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(bridge))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
@@ -53,6 +54,11 @@ func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestC
 	}()
 	t.Cleanup(func() { _ = conn.Close() })
 	return c, bridge
+}
+
+// allowAllDispatcher stands in for a listener chain with no auth: every OPEN's re-check passes.
+func allowAllDispatcher(string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 }
 
 func (c *muxTestClient) send(frame []byte) {
@@ -497,5 +503,108 @@ func TestMuxBridge_should_ReportCounts_And_ValidateRequestedSize(t *testing.T) {
 	for raw, want := range map[string]bool{"0": true, "64": true, " 3 ": true, "65": false, "-1": false, "x": false, "": false} {
 		_, ok := ParseTerminalMuxPoolSize(raw)
 		assert.Equal(t, want, ok, raw)
+	}
+}
+
+func TestMuxBridge_should_RefuseOpen_When_NoDispatcherConfigured(t *testing.T) {
+	t.Parallel()
+	bridge := NewTerminalMuxBridge(echoServe, 1)
+	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(bridge))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodeMuxEmpty(muxFrameOpen, 1)))
+	for {
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err)
+		f, derr := decodeMuxFrame(msg)
+		require.NoError(t, derr)
+		if f.Type == muxFrameClose {
+			assert.Equal(t, uint16(websocket.ClosePolicyViolation), f.Code)
+			assert.Equal(t, "unauthorized", f.Reason)
+			return
+		}
+	}
+}
+
+func dispatcherReturning(status int) UnaryDispatchers {
+	return func(string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+	}
+}
+
+func dialMuxWith(t *testing.T, d UnaryDispatchers, served *atomic.Int32) *websocket.Conn {
+	t.Helper()
+	serve := func(conn streamConn, m string) { served.Add(1); echoServe(conn, m) }
+	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(NewTerminalMuxBridge(serve, 1, WithTerminalMuxDispatchers(d))))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// readUntilClose returns the first stream CLOSE frame, failing if the socket ends first.
+func readUntilClose(t *testing.T, conn *websocket.Conn) muxFrame {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(muxTestWait)))
+	for {
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err)
+		f, derr := decodeMuxFrame(msg)
+		require.NoError(t, derr)
+		if f.Type == muxFrameClose {
+			return f
+		}
+	}
+}
+
+func TestMuxBridge_should_RefuseOpen_When_ChainAnswersAnythingButNoContent(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusOK, http.StatusCreated, http.StatusFound, http.StatusForbidden, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			var served atomic.Int32
+			conn := dialMuxWith(t, dispatcherReturning(status), &served)
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodeMuxEmpty(muxFrameOpen, 1)))
+			f := readUntilClose(t, conn)
+			assert.Equal(t, uint16(websocket.ClosePolicyViolation), f.Code)
+			assert.Equal(t, "unauthorized", f.Reason)
+			assert.Zero(t, served.Load(), "handler must not run for a refused OPEN")
+		})
+	}
+}
+
+func TestMuxBridge_should_CloseSocketAfterThreeStrikes_When_ChainAnswers302Or403(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusFound, http.StatusForbidden, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			var served atomic.Int32
+			conn := dialMuxWith(t, dispatcherReturning(status), &served)
+			for id := uint32(1); id <= muxMaxOpenDenials; id++ {
+				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodeMuxEmpty(muxFrameOpen, id)))
+			}
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(muxTestWait)))
+			for {
+				_, _, err := conn.ReadMessage()
+				if err != nil {
+					assert.True(t, websocket.IsCloseError(err, websocket.ClosePolicyViolation), "got %v", err)
+					break
+				}
+			}
+			assert.Zero(t, served.Load())
+		})
+	}
+}
+
+func TestMuxBridge_should_KeepSocketOpen_When_ChainFailsTransiently(t *testing.T) {
+	t.Parallel()
+	var served atomic.Int32
+	conn := dialMuxWith(t, dispatcherReturning(http.StatusInternalServerError), &served)
+	for id := uint32(1); id <= muxMaxOpenDenials+2; id++ {
+		require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodeMuxEmpty(muxFrameOpen, id)))
+		assert.Equal(t, id, readUntilClose(t, conn).ID, "each transient failure is refused but never ends the socket")
 	}
 }

@@ -5,13 +5,18 @@ go_library(
     name = "prpoller",
     srcs = [
         "poller_invalidation_adapter.go",
+        "pr_poll_classify.go",
+        "pr_state_poller.go",
         "pr_status_poller.go",
+        "pr_terminal_listener.go",
         "worktree_pr_poller.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/prpoller",
     visibility = ["//visibility:public"],
     deps = [
+        "//config",
         "//github",
+        "//internal/qos",
         "//log",
         "//session",
         "//telemetry",
@@ -30,6 +35,7 @@ alias(
 go_test(
     name = "prpoller_test",
     srcs = [
+        "helpers_test.go",
         "poller_invalidation_adapter_test.go",
         "pr_status_poller_discovery_test.go",
         "pr_status_poller_test.go",

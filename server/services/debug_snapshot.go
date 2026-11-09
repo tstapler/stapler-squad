@@ -63,6 +63,8 @@ type SessionSnapshot struct {
 	PaneContentTruncated bool      `json:"pane_content_truncated,omitempty"`
 	InstanceType         string    `json:"instance_type"`
 	GitHubPRNumber       int       `json:"github_pr_number,omitempty"`
+	// PullRequests lists every attached PR as "host/owner/repo#n state".
+	PullRequests []string `json:"pull_requests,omitempty"`
 }
 
 // TmuxSnapshot captures global tmux state.
@@ -169,6 +171,7 @@ func collectSessionSnapshots(ctx context.Context, instances []*session.Instance)
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
 			LastOutputSignature:  data.LastOutputSignature,
 			GitHubPRNumber:       data.GitHubPRNumber,
+			PullRequests:         describePRs(inst.Snapshot().GitHub.PRs),
 		}
 
 		// Capture pane content with per-instance timeout
@@ -407,4 +410,12 @@ func pruneOldSnapshots(dir string) {
 			log.Warn("pruneOldSnapshots: failed to remove stale debug snapshot", "path", path, "err", err)
 		}
 	}
+}
+
+func describePRs(prs []session.PRView) []string {
+	out := make([]string, 0, len(prs))
+	for _, v := range prs {
+		out = append(out, fmt.Sprintf("%s %s", v.Ref, v.State))
+	}
+	return out
 }

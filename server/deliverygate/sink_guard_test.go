@@ -53,6 +53,7 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + svcPkgPath + ".StartVerdictSteering":                     "subscribes for backlog item changes only; ignores notifications",
 	"consumer: " + svcPkgPath + ".WatchUnfinishedWork":                      "converts only the unfinished-work event types (convertUnfinishedEvent); other types, notifications included, are dropped",
 	"consumer: " + svcPkgPath + ".waitForEvent":                             "generic wait for a caller-supplied match predicate on a session transition; forwards nothing to a client",
+	"consumer: " + svcPkgPath + ".wireWriterUpgrade":                        "terminal read-only upgrade; reacts only to session-updated/archived events for its own instance, forwards nothing",
 	"consumer: " + svcPkgPath + ".watchBacklogItems":                        "backlog item stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".watchWorkflows":                           "workflow stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".start":                                    "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
@@ -67,9 +68,10 @@ var reviewedAppendCallers = map[finding]string{}
 // non-test server code. The legacy per-site notification checks were removed
 // in Story 2.9; a new entry needs a reason that is not "notification".
 var reviewedRawHiddenReads = map[finding]string{
-	"hidden: " + modulePath + "/server/services.ListSessions":        "session-list include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.WatchSessions":       "session-stream include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.isAutomationSession": "automation-session classification",
+	"hidden: " + modulePath + "/server/services.instanceMatchesListFilters": "session-list include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services.externalMatchesListFilters": "session-list include_hidden filtering for external sessions, not notification delivery",
+	"hidden: " + modulePath + "/server/services.WatchSessions":              "session-stream include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services.isAutomationSession":        "automation-session classification",
 }
 
 // scanResult holds the findings of one scan, by category.

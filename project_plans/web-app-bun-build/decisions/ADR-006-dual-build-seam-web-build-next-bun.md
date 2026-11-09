@@ -1,6 +1,6 @@
 # ADR-006: Dual-build seam `WEB_BUILD=next|bun`, one output contract (`web-app/out/`)
 
-Status: Proposed — default pending owner confirmation (flagged choice F6). Date: 2026-10-19
+Status: Accepted, then fully executed: the seam was deleted by PR 9 on 2026-11-01 (flagged choice F6). Date: 2026-10-19
 Evidence: `research/architecture.md` §8 and F1-F3, F13; `requirements.md` Risk Control.
 
 ## Context
@@ -30,3 +30,7 @@ Two builds to keep green for a bounded period (F2 drift risk), mitigated by the 
 - Rollback is a ladder with an expiry: flipping the default or reverting PR 8 works until PR 9 merges; afterwards only a forward fix (the `web-dual-build-last` tag restores both builds only by discarding later commits).
 - Every realised flip or rollback restarts the service; `make install-service` kills the tmux server and all live sessions unless the deployed unit passes `--tmux-keep-server` (plan Story 8.5 makes the check a precondition and writes the runbook, including branch-protection required-check names).
 - The tool and test runners for Bun-only code are specified in plan Story 3.0 (Jest project `build` shelling out to a pinned `bun`; `bun test` stays forbidden).
+
+## Amendment (PR 9, 2026-11-01)
+
+Executed and closed. `WEB_BUILD`, the stamp file, `impl.next.tsx`/`lazy/impl.next.tsx`, the per-build aliases, the build-seam plugin, `web-build-smoke-next`-style CI legs and `e2e-next` were deleted; `src/lib/nav/index.ts` and `src/lib/lazy/index.ts` import the Bun-side implementations directly. The tag `web-dual-build-last` marks the last commit with both builds. There is no rollback to Next, only a forward fix.

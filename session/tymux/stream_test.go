@@ -182,6 +182,7 @@ var _ attachStream = (*wedgedAttachStream)(nil)
 // fakeTransport itself (for attachCalls assertions).
 func startedSessionWithStream(t *testing.T) (TymuxManager, *fakeAttachStream, *fakeTransport) {
 	t.Helper()
+	t.Setenv(restartModeEnv, "never") // Start must not cache the capability before a test sets its own
 	resetClaims(t)
 	dir := t.TempDir()
 	var stream *fakeAttachStream
@@ -523,43 +524,62 @@ func TestReconnectLoop_TransparentlyReattaches_OnTransientDrop_WithoutClosingAtt
 	assert.False(t, reconnecting, "ReconnectState must clear once the reconnect succeeds")
 }
 
-func TestReconnectLoop_GivesUp_AfterMaxAttempts_ClosesAttachChannel_AndFiresDistinctExitReason(t *testing.T) {
+func TestReconnectLoop_RecoversAfterInitialRetryBudget(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 2)
+	sess.DetachSafely()
+	concrete.mu.Lock()
+	concrete.abortReconnect = make(chan struct{})
+	concrete.mu.Unlock()
+	concrete.closing.Store(false)
+	var attempts atomic.Int32
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		if attempts.Add(1) <= 3 {
+			st.sendFn = func(*v1.AttachRequest) error { return errors.New("daemon unavailable") }
+		} else {
+			st.push(&v1.AttachEvent{})
+		}
+		return st
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, _, ok, _ := concrete.ReconnectLoop(ctx, testPaneID, "error")
+	require.True(t, ok, "a daemon outage must remain recoverable beyond the initial retry budget")
+	stream.CloseResponse()
+	assert.EqualValues(t, 4, attempts.Load())
+}
+
+func TestReconnectLoop_TransportOutageRemainsRecoverableUntilCanceled(t *testing.T) {
 	sess, stream, transport := startedSessionWithStream(t)
 	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 2)
-
+	var attempts atomic.Int32
 	transport.attachFn = func(ctx context.Context) attachStream {
-		s := newFakeAttachStream(ctx)
-		s.sendFn = func(*v1.AttachRequest) error { return errors.New("boom: unreachable") }
-		return s
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error {
+			if attempts.Add(1) == 4 {
+				go sess.DetachSafely()
+			}
+			return errors.New("daemon unavailable")
+		}
+		return st
 	}
-
 	reasons := make(chan string, 1)
 	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
-
-	before := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
-
 	done, err := sess.Attach()
 	require.NoError(t, err)
-
-	close(stream.events) // drop
-
+	close(stream.events)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Attach's channel never closed after ReconnectLoop exhausted its attempts")
+		t.Fatal("DetachSafely did not interrupt persistent reconnect")
 	}
-
+	assert.GreaterOrEqual(t, attempts.Load(), int32(4))
 	select {
 	case reason := <-reasons:
-		assert.Contains(t, reason, "reconnect failed", "the give-up reason must be distinguishable from an ordinary process exit")
-	case <-time.After(time.Second):
-		t.Fatal("exit callback never fired after ReconnectLoop exhaustion")
+		t.Fatalf("transport outage must not deliver process exit: %s", reason)
+	default:
 	}
-
-	// REQ-10: true exhaustion (closing never observed) must be recorded
-	// distinctly from a deliberate-close interruption.
-	after := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
-	assert.Equal(t, before+1, after, "session_lifecycle_ends_total{subsystem=tymux_reconnect,reason=reconnect_exhausted} must increment by exactly 1")
 }
 
 // TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary is
@@ -1034,7 +1054,419 @@ func TestReconnectLoop_StopsAtFirstNotFound_WithDistinctExitReason(t *testing.T)
 		t.Fatal("Attach's channel never closed")
 	}
 	assert.EqualValues(t, 2, atomic.LoadInt32(&transport.attachCalls), "initial attach plus exactly one redial")
-	reason := <-reasons
+	var reason string
+	select {
+	case reason = <-reasons:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit callback never fired")
+	}
 	assert.Contains(t, reason, "pane no longer exists")
 	assert.NotContains(t, reason, "unreachable")
+}
+
+func notFoundErr() error { return connect.NewError(connect.CodeNotFound, errors.New("no such pane")) }
+
+// A deliberate Close() racing a NotFound redial must stay deliberate_close: no exit delivered.
+func TestReconnectLoop_NotFoundDuringDeliberateClose_StaysDeliberateClose(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	transport.attachFn = func(ctx context.Context) attachStream {
+		concrete.beginClosing()
+		st := newFakeAttachStream(ctx)
+		st.recvErr = notFoundErr()
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateClose, reason)
+	select {
+	case got := <-exits:
+		t.Fatalf("deliberate close must not deliver an exit, got %q", got)
+	default:
+	}
+}
+
+// A NotFound on the old pane id inside a session that respawned its pane is followed, not given up on.
+func TestReconnectLoop_FollowsReplacedPane_InsteadOfGivingUp(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 5)
+	transport.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+		return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{
+			fakeSession(testSessionID, "pane-2", t.TempDir(), v1.Liveness_LIVENESS_LIVE),
+		}}), nil
+	}
+	var mu sync.Mutex
+	var dialed []string
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(req *v1.AttachRequest) error {
+			mu.Lock()
+			dialed = append(dialed, req.GetPaneId())
+			mu.Unlock()
+			if req.GetPaneId() == testPaneID {
+				st.recvErr = notFoundErr()
+			}
+			return nil
+		}
+		st.push(&v1.AttachEvent{})
+		return st
+	}
+
+	stream, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	require.True(t, ok, "the replaced pane must be followed")
+	assert.Equal(t, lifecycle.ReasonUnknown, reason)
+	require.NotNil(t, stream)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{testPaneID, "pane-2"}, dialed)
+}
+
+// A NotFound the daemon cannot confirm (ListSessions failing) is not definitive: keep retrying.
+func TestReconnectLoop_UnconfirmedNotFound_KeepsRetrying(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	transport.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("restarting"))
+	}
+	before := atomic.LoadInt32(&transport.attachCalls)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.recvErr = notFoundErr()
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonReconnectExhausted, reason)
+	assert.EqualValues(t, 3, atomic.LoadInt32(&transport.attachCalls)-before, "all attempts used")
+	select {
+	case got := <-exits:
+		assert.Contains(t, got, "not found", "the daemon answered NotFound, so it was reachable")
+		assert.NotContains(t, got, "unreachable")
+	default:
+		t.Fatal("exhaustion must deliver an exit")
+	}
+}
+
+// Close() landing while the pane-gone ListSessions is in flight stays deliberate_close.
+func TestReconnectLoop_CloseDuringPaneGoneConfirm_StaysDeliberateClose(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	transport.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+		concrete.beginClosing()
+		return connect.NewResponse(&v1.ListSessionsResponse{}), nil
+	}
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.recvErr = notFoundErr()
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateClose, reason)
+	select {
+	case got := <-exits:
+		t.Fatalf("deliberate close must not deliver an exit, got %q", got)
+	default:
+	}
+}
+
+// The pane-gone ListSessions must be cancelled by a deliberate Close(), not run to completion.
+func TestReconnectLoop_CloseInterruptsPaneGoneConfirm(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	interrupted := make(chan bool, 1)
+	transport.listSessionsFn = func(ctx context.Context, _ *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+		concrete.beginClosing()
+		select {
+		case <-ctx.Done():
+			interrupted <- true
+		case <-time.After(250 * time.Millisecond):
+			interrupted <- false
+		}
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("list aborted"))
+	}
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.recvErr = notFoundErr()
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateClose, reason)
+	assert.True(t, <-interrupted, "Close() must cancel the in-flight ListSessions")
+}
+
+// A listed-but-dead session whose pane is between automatic restarts is not gone: keep retrying.
+func TestReconnectLoop_RestartPending_KeepsRetryingInsteadOfGivingUp(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state v1.PaneState
+		calls int32
+	}{
+		{"backoff", v1.PaneState_PANE_STATE_BACKOFF, 3},
+		{"restarting", v1.PaneState_PANE_STATE_RESTARTING, 3},
+		{"exited", v1.PaneState_PANE_STATE_EXITED, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, _, transport := startedSessionWithStream(t)
+			concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+			transport.capabilities = []string{capPaneLifecycle}
+			transport.paneStatusFn = func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+				return connect.NewResponse(&v1.PaneStatus{State: tc.state}), nil
+			}
+			transport.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+				return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{
+					fakeSession(testSessionID, testPaneID, t.TempDir(), v1.Liveness_LIVENESS_DEAD),
+				}}), nil
+			}
+			before := atomic.LoadInt32(&transport.attachCalls)
+			transport.attachFn = func(ctx context.Context) attachStream {
+				st := newFakeAttachStream(ctx)
+				st.recvErr = notFoundErr()
+				return st
+			}
+
+			_, _, ok, _ := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+			assert.False(t, ok)
+			assert.EqualValues(t, tc.calls, atomic.LoadInt32(&transport.attachCalls)-before)
+		})
+	}
+}
+
+// After a drop the loop must dial the pane the session now owns, not the id readAttachLoop started with.
+func TestReconnectLoop_DialsCurrentPane_NotStaleArgument(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 1)
+	concrete.mu.Lock()
+	concrete.paneID = "pane-2"
+	concrete.mu.Unlock()
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(req *v1.AttachRequest) error {
+			if req.GetPaneId() != "pane-2" {
+				st.recvErr = notFoundErr()
+			}
+			return nil
+		}
+		st.push(&v1.AttachEvent{})
+		return st
+	}
+
+	_, _, ok, _ := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.True(t, ok, "a single-attempt budget must not be spent on the dead pane")
+}
+
+func exitedEvent(code int32) *v1.AttachEvent {
+	return &v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}}
+}
+
+func setPaneState(transport *fakeTransport, state v1.PaneState) {
+	transport.capabilities = []string{capPaneLifecycle}
+	transport.paneStatusFn = func(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+		return connect.NewResponse(&v1.PaneStatus{State: state}), nil
+	}
+}
+
+// Exited while tymuxd's restart policy is about to relaunch the pane must not end the session:
+// no exit callback, no ReviveSession (it would bypass the backoff), and the stream redials.
+func TestHandleAttachEvent_ExitedWithRestartPending_KeepsSessionAndReattaches(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+	setPaneState(transport, v1.PaneState_PANE_STATE_BACKOFF)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	var revived int32
+	transport.reviveSessionFn = func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+	var calls int32
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		if atomic.AddInt32(&calls, 1) == 1 {
+			st.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane not live yet"))
+		} else {
+			st.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{Snapshot: &v1.PaneSnapshot{Liveness: v1.Liveness_LIVENESS_LIVE}}})
+		}
+		return st
+	}
+	_, err := sess.Attach()
+	require.NoError(t, err)
+
+	stream.push(exitedEvent(130))
+	close(stream.events) // tymuxd closes the stream right after Exited
+
+	wait.RequireEventually(t, func() bool { return atomic.LoadInt32(&calls) >= 2 }, time.Second, time.Millisecond, "stream never redialled")
+	wait.RequireEventually(t, func() bool {
+		concrete.mu.RLock()
+		defer concrete.mu.RUnlock()
+		return !concrete.reconnecting && concrete.liveness == v1.Liveness_LIVENESS_LIVE
+	}, time.Second, time.Millisecond, "reattach never completed")
+
+	concrete.mu.RLock()
+	exited := concrete.exited
+	concrete.mu.RUnlock()
+	assert.False(t, exited)
+	assert.EqualValues(t, 0, atomic.LoadInt32(&revived))
+	select {
+	case got := <-exits:
+		t.Fatalf("restart-pending Exited must not deliver an exit, got %q", got)
+	default:
+	}
+}
+
+func TestHandleAttachEvent_ExitedWithoutRestartPending_DeliversExit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state v1.PaneState
+		caps  bool
+	}{
+		{"exited state", v1.PaneState_PANE_STATE_EXITED, true},
+		{"failed state", v1.PaneState_PANE_STATE_FAILED, true},
+		{"no lifecycle capability", v1.PaneState_PANE_STATE_BACKOFF, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, stream, transport := startedSessionWithStream(t)
+			setPaneState(transport, tc.state)
+			if !tc.caps {
+				transport.capabilities = nil
+			}
+			exits := make(chan string, 1)
+			sess.SetOnExitCallback(func(reason string) { exits <- reason })
+			_, err := sess.Attach()
+			require.NoError(t, err)
+
+			stream.push(exitedEvent(1))
+
+			select {
+			case got := <-exits:
+				assert.Equal(t, "exited: code=1", got)
+			case <-time.After(time.Second):
+				t.Fatal("exit was never delivered")
+			}
+		})
+	}
+}
+
+// A deliberate Close must keep Exited final even if the daemon reports a pending restart.
+func TestHandleAttachEvent_ExitedDuringClose_IsNotRestartPending(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := sess.(*tymuxGRPCSession)
+	setPaneState(transport, v1.PaneState_PANE_STATE_BACKOFF)
+	assert.True(t, concrete.exitFollowedByRestart())
+
+	concrete.beginClosing()
+
+	assert.False(t, concrete.exitFollowedByRestart())
+}
+
+// A FAILED pane (restart budget spent) is an operator matter: stop reviving, deliver the exit.
+func TestReconnectLoop_TerminalPaneState_GivesUpWithoutRevive(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+	setPaneState(transport, v1.PaneState_PANE_STATE_FAILED)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	var revived int32
+	transport.reviveSessionFn = func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane not live"))
+		return st
+	}
+
+	_, _, ok, reason := concrete.ReconnectLoop(context.Background(), testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonReconnectExhausted, reason)
+	assert.EqualValues(t, 0, atomic.LoadInt32(&revived))
+	assert.Len(t, exits, 1)
+}
+
+// A reopen cancels the generation's ctx without beginClosing(): that is a supersede, not exhaustion.
+func TestReconnectLoop_GenerationCancelledWithoutClosing_IsSupersedeAndDeliversNoExit(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 3)
+	exits := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { exits <- reason })
+	genCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, ok, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+
+	assert.False(t, ok)
+	assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	assert.Empty(t, exits)
+}
+
+// A reconnect generation cancelled by a reopen must neither wait out its backoff nor install the
+// stream it dialled over its replacement's.
+func TestReconnectLoop_SupersededDuringDial_DoesNotInstallStream(t *testing.T) {
+	sess, original, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 5)
+	genCtx, cancelGen := context.WithCancel(context.Background())
+	defer cancelGen()
+	var dialedCtx context.Context
+	transport.attachFn = func(ctx context.Context) attachStream {
+		dialedCtx = ctx
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error { cancelGen(); return nil } // reopen lands mid-dial
+		st.push(&v1.AttachEvent{})
+		return st
+	}
+
+	stream, _, ok, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+
+	require.False(t, ok, "a superseded loop must not report a successful reconnect")
+	assert.Nil(t, stream)
+	assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	concrete.mu.RLock()
+	installed := concrete.stream
+	concrete.mu.RUnlock()
+	assert.Same(t, attachStream(original), installed, "the replacement's stream must stay installed")
+	require.NotNil(t, dialedCtx)
+	assert.Error(t, dialedCtx.Err(), "the stream dialled by the superseded loop must be closed")
+}
+
+func TestReconnectLoop_SupersededDuringBackoff_ReturnsPromptly(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+	concrete := setReconnectBackoff(sess, time.Hour, time.Hour, 5)
+	genCtx, cancelGen := context.WithCancel(context.Background())
+	defer cancelGen()
+	transport.attachFn = func(ctx context.Context) attachStream {
+		st := newFakeAttachStream(ctx)
+		st.sendFn = func(*v1.AttachRequest) error { go cancelGen(); return errors.New("daemon unavailable") }
+		return st
+	}
+	done := make(chan lifecycle.Reason, 1)
+	go func() {
+		_, _, _, reason := concrete.ReconnectLoop(genCtx, testPaneID, "error")
+		done <- reason
+	}()
+	select {
+	case reason := <-done:
+		assert.Equal(t, lifecycle.ReasonDeliberateSupersede, reason)
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded loop kept sleeping in backoff")
+	}
 }

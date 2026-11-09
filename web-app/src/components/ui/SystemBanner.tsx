@@ -31,6 +31,8 @@ export interface SystemBannerProps {
   id: string;
   icon?: string;
   message: ReactNode;
+  /** Keep mandatory pre-action information visible rather than line-clamped. */
+  alwaysExpanded?: boolean;
   actions?: SystemBannerAction[];
   onDismiss?: () => void;
   testId?: string;
@@ -158,7 +160,7 @@ function SystemBannerRowActions({
  * and aren't forced through this -- reach for this component for a
  * single-message, whole-app system-health signal.
  */
-export function SystemBanner({ severity, id, icon, message, actions, onDismiss, testId, pager }: SystemBannerProps) {
+export function SystemBanner({ severity, id, icon, message, alwaysExpanded = false, actions, onDismiss, testId, pager }: SystemBannerProps) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const textRef = useRef<HTMLSpanElement>(null);
@@ -177,7 +179,7 @@ export function SystemBanner({ severity, id, icon, message, actions, onDismiss, 
       <div className={styles.row}>
         <span
           ref={textRef}
-          className={expanded ? styles.text[severity] : `${styles.text[severity]} ${styles.textClamp}`}
+          className={expanded || alwaysExpanded ? styles.text[severity] : `${styles.text[severity]} ${styles.textClamp}`}
         >
           {icon && <span className={styles.icon}>{icon}</span>}
           {message}
@@ -185,7 +187,7 @@ export function SystemBanner({ severity, id, icon, message, actions, onDismiss, 
         <SystemBannerRowActions
           id={id}
           severity={severity}
-          overflowing={overflowing}
+          overflowing={overflowing && !alwaysExpanded}
           expanded={expanded}
           onToggleExpanded={() => setExpanded((prev) => !prev)}
           actions={actions}

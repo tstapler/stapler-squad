@@ -109,14 +109,16 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// Use mutex for thread safety
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	// Update the title
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 
+	// After releasing i.mu: pm() takes pmMu, and updateProcessManagerForRestart nests i.mu inside
+	// pmMu, so calling it with i.mu held would be an ABBA deadlock.
+	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
 }
@@ -449,10 +451,19 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		inst.GitHubReviewFeedback = update.Reviews
 		inst.GitHubMergeable = update.Mergeable
 		inst.LastPRStatusCheck = time.Now()
+		applyLegacyUpdateToActivePR(inst, update)
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)
 		return result, nil
 	})
 	return result
+}
+
+// syncProcessLabel tells the process manager the record's new title: tymux keys record identity
+// and daemon session names on it, so a stale label would leave the old one registered.
+func (i *Instance) syncProcessLabel(title string) {
+	if l, ok := capabilityOf[SessionLabeler](i.pm()); ok {
+		l.SetSessionLabel(title)
+	}
 }

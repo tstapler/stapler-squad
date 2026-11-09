@@ -415,10 +415,10 @@ func (s *SessionBundleService) collectArtifacts(ctx context.Context, c *bundleCo
 		return
 	}
 	if artBlob == nil {
-		c.omit("artifacts", "no artifacts recorded for this session")
+		c.omit("artifacts", "no artifact scan recorded for this session (not_linked or scan pending)")
 		return
 	}
-	c.addMarshaled("artifacts", artBlob)
+	c.addMarshaled("artifacts", artBlob.Redacted())
 }
 
 func (c *bundleCollector) totalUncompressed() int {

@@ -15,6 +15,7 @@ bazel_dep(name = "bazel_lib", version = "3.7.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.from_file(go_mod = "//:go.mod")
+
 # One nogo for the whole repo (Story 8.4): the twins of every tools/lint analyzer, scoped by tools/bzl/nogo/nogo_config.json.
 go_sdk.nogo(nogo = "//tools/bzl/nogo:nogo")
 
@@ -44,34 +45,34 @@ http_archive(
     urls = ["https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz"],
 )
 
-# Task 0.7c: prebuilt tymuxd v1.12.0 (Makefile TYMUX_VERSION), sha256 from scripts/tymuxd-checksums.txt.
+# Task 0.7c: prebuilt tymuxd v1.17.0 (Makefile TYMUX_VERSION), sha256 from scripts/tymuxd-checksums.txt.
 # Fetch/pin only: the binary is never executed by a build action.
 http_archive(
     name = "tymuxd_aarch64_apple_darwin",
     build_file_content = """exports_files(["tymuxd"])""",
-    sha256 = "2f8250ddfae7b97584798113bd50aca12062544c7d974ab5b26a1459bbfa1c17",
-    urls = ["https://github.com/tstapler/tymux/releases/download/v1.12.0/tymux-aarch64-apple-darwin.tar.gz"],
+    sha256 = "ea645d821970f586c322278043bb9646dbcef4834d4a36b627c75764a75e3eac",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-aarch64-apple-darwin.tar.gz"],
 )
 
 http_archive(
     name = "tymuxd_x86_64_apple_darwin",
     build_file_content = """exports_files(["tymuxd"])""",
-    sha256 = "6d9e080a3d1fc857efe3ebf74c7c73df1b30042525a38e821707e543209a816b",
-    urls = ["https://github.com/tstapler/tymux/releases/download/v1.12.0/tymux-x86_64-apple-darwin.tar.gz"],
+    sha256 = "f00f62d0388604e32321aba459b2a5405eb64a1661766c28318b03815203a274",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-x86_64-apple-darwin.tar.gz"],
 )
 
 http_archive(
     name = "tymuxd_x86_64_unknown_linux_musl",
     build_file_content = """exports_files(["tymuxd"])""",
-    sha256 = "fbc337e819dc951b296b91afff87e89ceeb148767f452eb1e7e508be65db0fd9",
-    urls = ["https://github.com/tstapler/tymux/releases/download/v1.12.0/tymux-x86_64-unknown-linux-musl.tar.gz"],
+    sha256 = "4cf61e0fdf8c7e69ac7790145f7080fa4b85c23bd96f7a94d86d4bdc7a392e18",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-x86_64-unknown-linux-musl.tar.gz"],
 )
 
 http_archive(
     name = "tymuxd_aarch64_unknown_linux_musl",
     build_file_content = """exports_files(["tymuxd"])""",
-    sha256 = "dddd29b23c3dc6c51919fe13d4bdc89aa2ad9c299b8b0acb50ab8322fc5eae85",
-    urls = ["https://github.com/tstapler/tymux/releases/download/v1.12.0/tymux-aarch64-unknown-linux-musl.tar.gz"],
+    sha256 = "066a84fce33cde098cc9c59dffb648f0f9052a92f7e6f8dbe4014ec42148a13c",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-aarch64-unknown-linux-musl.tar.gz"],
 )
 
 # Story 3.1 (ADR-003): pinned Bun and Node per OS/arch (sha256 from the upstream SHASUMS256.txt of each

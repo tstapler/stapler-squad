@@ -1,6 +1,6 @@
 # ADR-008: vanilla-extract stays; `eval@0.1.8` is carried as a `bun patch`
 
-Status: Accepted by owner (patch approach); mechanics proposed. Date: 2026-10-19
+Status: Accepted (patch approach). Date: 2026-10-19
 Evidence: `docs/explanation/bun-migration-feasibility.md` §3.1, `research/stack.md` §3, `research/architecture.md` §6, `research/pitfalls.md` R3 and §3.2. Upstream: vanilla-extract#1664 (open, no comments); oven-sh/bun#33520 (patches silently not applied on a warm cache).
 
 ## Context

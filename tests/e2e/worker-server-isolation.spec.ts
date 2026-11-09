@@ -17,11 +17,7 @@ const sockets: string[] = JSON.parse(process.env.TEST_SERVER_TMUX_SOCKETS ?? '[]
 
 
 test.describe('worker server pool isolation', () => {
-  // One project is enough: the pool is shared by all of them.
-  test.beforeEach(({}, testInfo) => {
-    test.skip(testInfo.project.name !== 'chromium', 'pool is shared across projects');
-  });
-
+  // Runs in the chromium project only: playwright.config.ts ignores it elsewhere (the pool is shared).
   test('every slot has a distinct port, data dir and tmux socket', async () => {
     expect(urls.length).toBeGreaterThanOrEqual(1);
     expect(urls).toHaveLength(dirs.length);

@@ -13,7 +13,7 @@
 //   - package server/analytics/escapedb, which owns db/escape_events.db, may
 //     select only EscapeEvent.
 //
-// The motivating bug: session.EntRepository.ListAnalyticsBySessionID read
+// The motivating bug: session.EntRepository.ListAnalyticsBySessionID (now server/analytics.ListBySessionID) read
 // AnalyticsEvent through the sessions.db client, whose analytics_events table is
 // empty; the rows are in analytics.db. A deliberate exception needs
 // //nolint:nowrongdbentity with the reason.

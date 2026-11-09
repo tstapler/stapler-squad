@@ -8,6 +8,7 @@ import {
   isNonRetriableConnectError,
   isWorktreeMissingError,
   connectTimeoutMs,
+  connectCodeForRejectedStream,
   FOREGROUND_CONNECT_TIMEOUT_MS,
   CONNECT_TIMEOUT_MS,
   FOREGROUND_FAST_ATTEMPTS,
@@ -228,5 +229,20 @@ describe("connectTimeoutMs", () => {
   it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundFalseRegardlessOfAttempt", () => {
     expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
     expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
+  });
+});
+
+describe("connectCodeForRejectedStream", () => {
+  it("maps a 1008 pooled-OPEN refusal and a 401 to a non-retriable Unauthenticated", () => {
+    for (const [status, close] of [[-1, 1008], [401, null]] as const) {
+      const code = connectCodeForRejectedStream(status, close);
+      expect(code).toBe(Code.Unauthenticated);
+      expect(isNonRetriableConnectError(new ConnectError("x", code))).toBe(true);
+    }
+  });
+
+  it("keeps other failures Unknown (retriable)", () => {
+    expect(connectCodeForRejectedStream(-1, 1006)).toBe(Code.Unknown);
+    expect(connectCodeForRejectedStream(500, null)).toBe(Code.Unknown);
   });
 });

@@ -47,12 +47,13 @@ test("the path reader can fail: a workflow with only web-app/src misses the buil
   assert.deepEqual(pullRequestPaths(old), ["web-app/src/**"]);
 });
 
-test("every .next/cache step is skipped under WEB_BUILD=bun", () => {
-  for (const file of [".github/workflows/benchmark.yml", ".github/actions/prepare/action.yml"]) {
-    const blocks = read(file).split(/\n(?= *- name: )/).filter((b) => b.includes("path: web-app/.next/cache"));
-    assert.ok(blocks.length > 0, `${file} has no .next/cache step`);
-    for (const b of blocks) assert.match(b, /if: env\.WEB_BUILD != 'bun'/, `${file}: ${b.split("\n")[0]}`);
-  }
+test("no workflow or composite action still builds, caches or selects Next", () => {
+  const files = [".github/workflows", ".github/actions"].flatMap((dir) =>
+    readdirSync(path.join(root, dir), { recursive: true })
+      .filter((n) => /\.ya?ml$/.test(n))
+      .map((n) => `${dir}/${n}`),
+  );
+  for (const file of files) assert.doesNotMatch(read(file), /web-app\/\.next|WEB_BUILD|NEXT_BUILD_MODE|e2e-next/, file);
 });
 
 test("Lighthouse has one config, served by the Go server, covering a nested deep link", () => {

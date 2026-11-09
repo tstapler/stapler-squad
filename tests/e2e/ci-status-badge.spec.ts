@@ -23,6 +23,7 @@ import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
 import { SessionDetailPage } from "./pages/SessionDetailPage";
 import { baseUrl } from './helpers/base-url';
+import { prJson } from "./helpers/multi-pr";
 
 const BASE_URL = baseUrl();
 
@@ -30,7 +31,12 @@ interface CIFixture {
   githubPrNumber: number;
   githubPrUrl: string;
   githubCheckConclusion: string;
+  /** Mirrors the legacy scalars, as the server does (`pull_requests` holds the active PR). */
+  pullRequests?: Record<string, unknown>[];
 }
+
+/** The `pull_requests` entry that mirrors the legacy acme/widgets #42 fixture. */
+const mirroredPr = (checkConclusion: string) => [prJson({ number: 42, owner: "acme", repo: "widgets", isActive: true, checkConclusion })];
 
 /**
  * Intercepts ListSessions and injects `fields` onto the session matching `sessionId`.
@@ -92,6 +98,7 @@ test.describe("ci-status-badge", () => {
         githubPrNumber: 42,
         githubPrUrl: "https://github.com/acme/widgets/pull/42",
         githubCheckConclusion: conclusion,
+        pullRequests: mirroredPr(conclusion),
       });
 
       const sessionDetailPage = new SessionDetailPage(page);
@@ -111,6 +118,7 @@ test.describe("ci-status-badge", () => {
       githubPrNumber: 42,
       githubPrUrl: "https://github.com/acme/widgets/pull/42",
       githubCheckConclusion: "success",
+      pullRequests: mirroredPr("success"),
     });
 
     const sessionDetailPage = new SessionDetailPage(page);

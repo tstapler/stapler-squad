@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -23,6 +22,9 @@ var ErrConflict = errors.New("conflict")
 // when a caller attempts to reassign an already-pr_pending item's tracked
 // PR to a different PR number without a valid PRReassignmentGuard.
 var ErrPRReassignmentNotAllowed = errors.New("PR reassignment not allowed")
+
+// ErrPRDetached is returned when a writer tries to attach a PR the owner detached.
+var ErrPRDetached = errors.New("PR was detached from this owner")
 
 // PRReassignmentGuard carries the caller-verified preconditions required
 // before SetBacklogItemPRAndTransition (session/storage.go) will accept a
@@ -181,17 +183,18 @@ type ProjectData struct {
 
 // ReviewVerdictSummary is a domain DTO for a review verdict embedded in ItemSessionSummary.
 type ReviewVerdictSummary struct {
-	ID             string
-	OverallOutcome string
-	PerCriterion   string // JSON []CriterionVerdict
-	Summary        string
-	DiffHash       string
-	DiffTokenCount int
-	DiffTruncated  bool
-	OverrideBy     string
-	OverrideReason string
-	OverrideAt     *time.Time
-	CreatedAt      time.Time
+	ID                string
+	OverallOutcome    string
+	PerCriterion      string // JSON []CriterionVerdict
+	Summary           string
+	DiffHash          string
+	DiffTokenCount    int
+	DiffTruncated     bool
+	ReviewedCommitSha string
+	OverrideBy        string
+	OverrideReason    string
+	OverrideAt        *time.Time
+	CreatedAt         time.Time
 }
 
 // ItemSessionSummary is the domain DTO replacing *ent.ItemSession in Storage returns.
@@ -251,6 +254,7 @@ type ItemSessionSummary struct {
 	TriageResult        string // raw JSON stored in triage_result column
 	TriageResultSummary string // summary field parsed from TriageResult
 	VerificationNotes   string // freeform verification evidence reported via request_review
+	DiffTruncated       bool   // review session: diff handed to the reviewer was truncated
 	OverallOutcome      string // from linked review_verdict (empty if none)
 	ReviewVerdict       *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
@@ -322,6 +326,9 @@ type SourceSyncEventData struct {
 // BacklogItemData is the domain model for a backlog item.
 type BacklogItemData struct {
 	ID string
+	// ClearedAcWaivers lists waivers an UpdateBacklogItem call dropped because their criterion
+	// text changed or disappeared. It is set only on that call's return value, never persisted.
+	ClearedAcWaivers []AcCriterion
 	// PublicIDRaw is the raw public_id column value ("" when unset — see
 	// session/ent/schema/backlog_item.go's field comment for why that's a
 	// real SQL NULL underneath, not a deliberately-empty string). Do not
@@ -794,17 +801,6 @@ type ShellRepository interface {
 type InitialPromptRepository interface {
 	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
 	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
-}
-
-// BundleStorage is the narrow persistence interface SessionBundleService needs
-// to assemble a RUM session diagnostic bundle. *Storage satisfies this interface.
-type BundleStorage interface {
-	// ListAnalyticsBySessionID returns up to 2000 analytics events for the given
-	// session UUID, ordered by created_at DESC (most-recent first).
-	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)
-	// GetSessionArtifactsByUUID returns the artifact blob for the session with
-	// the given UUID, or (nil, nil) when the session has no stored artifacts.
-	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
 }
 
 // RepositoryOption is a function that configures a repository

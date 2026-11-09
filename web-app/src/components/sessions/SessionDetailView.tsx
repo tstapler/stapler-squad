@@ -33,6 +33,7 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import { GoalPanel } from "./GoalPanel";
+import { SessionPullRequestsSection } from "./SessionPullRequestsSection";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { HandoffSummarySection } from "./HandoffSummarySection";
@@ -44,6 +45,8 @@ import { setActiveSessionUUID } from "@/lib/telemetry/active-session";
 import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
+import { SessionInactiveNotice } from "./SessionInactiveNotice";
+import { useTerminalHardFailed } from "@/lib/terminal/terminalConnectionStatus";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
 import { routes } from "@/lib/routes";
@@ -474,6 +477,19 @@ export function SessionDetailView({
   const tabRowRef = useRef<HTMLDivElement>(null);
   usePublishStackTopOffset(tabRowRef, measureEnabled);
 
+  // Vertical wheel -> horizontal scroll on the tab strip (needs a non-passive listener).
+  useEffect(() => {
+    const strip = tabRowRef.current?.querySelector<HTMLElement>('[role="tablist"]');
+    if (!strip) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaX !== 0 || strip.scrollWidth <= strip.clientWidth) return;
+      e.preventDefault();
+      strip.scrollLeft += e.deltaY;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, []);
+
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
   const notifiedShellExitsRef = useRef<Set<string>>(new Set());
@@ -745,6 +761,20 @@ export function SessionDetailView({
     }
   };
 
+  const [isRetryingNow, setIsRetryingNow] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const terminalShowsRetry = useTerminalHardFailed(session.id);
+  // retrySession resolves false on failure (archived, retry already in flight, internal error).
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingNow(true);
+    setRetryError(null);
+    try {
+      if (!(await actions.retry())) setRetryError("Failed to retry session.");
+    } finally {
+      setIsRetryingNow(false);
+    }
+  }, [actions]);
+
   const handleResumeFromCrash = async () => {
     await actions.resumeFromCrash();
   };
@@ -1014,6 +1044,17 @@ export function SessionDetailView({
         >
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
+            {session.instanceType !== InstanceType.EXTERNAL && !session.hidden && (
+              <SessionInactiveNotice
+                status={session.status}
+                archived={session.archivedAt !== undefined}
+                terminalReadOnly={session.terminalReadOnly}
+                terminalShowsRetry={terminalShowsRetry}
+                retryError={retryError}
+                onRetryNow={handleRetryNow}
+                retrying={isRetryingNow}
+              />
+            )}
             {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
               <div className={styles.noTerminalPlaceholder}>
                 <span className={styles.noTerminalIcon}>⛓️</span>
@@ -1563,18 +1604,8 @@ export function SessionDetailView({
                   </span>
                 </div>
               )}
-              {/* GitHub PR */}
-              {session.githubPrUrl && (
-                <div className={styles.infoItem}>
-                  <span className={styles.infoLabel}>GitHub PR:</span>
-                  <span className={styles.infoValue}>
-                    <a href={session.githubPrUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-link, #3b82f6)' }}>
-                      #{session.githubPrNumber} {session.githubPrState && `(${session.githubPrState})`}
-                      {session.githubPrIsDraft && " [Draft]"}
-                    </a>
-                  </span>
-                </div>
-              )}
+              {/* GitHub PR(s): the Pull requests list, or the legacy single link with the flag off */}
+              <SessionPullRequestsSection session={session} />
               {session.githubOwner && session.githubRepo && (
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>GitHub Repo:</span>

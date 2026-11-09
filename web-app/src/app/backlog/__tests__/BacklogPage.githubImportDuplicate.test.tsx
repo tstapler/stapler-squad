@@ -39,11 +39,18 @@ jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogPageTestFi
 // Overrides useBacklogServiceMockFactory's importGitHubIssue with a
 // controllable jest.fn() so each test can resolve it with a chosen
 // `alreadyExisted` value.
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => {
+  const items: never[] = [];
+  return { useStuckBacklogItems: () => ({ items }) };
+});
+
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
+  const listForeignClaims = jest.fn().mockResolvedValue([]); // stable identity: the page effect depends on it
   return {
     ...actual,
     useBacklogService: () => ({
+      listForeignClaims,
       createBacklogItem: jest.fn(),
       importGitHubIssue,
       triggerTriage: jest.fn(),
@@ -75,6 +82,7 @@ jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
       type="button"
       onClick={() => onSelect("octocat", "hello-world", [SELECTED_ISSUE])}
     >
+      {/* analytics-exempt */}
       Mock select issue
     </button>
   ),

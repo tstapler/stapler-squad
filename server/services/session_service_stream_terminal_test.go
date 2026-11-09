@@ -23,6 +23,20 @@ import (
 // bidirectional streaming (used by StreamTerminal) requires full-duplex
 // HTTP/2; the plain HTTP/1.1 server used by newNotificationTestServer only
 // supports unary and server-streaming RPCs.
+func TestWaitForTerminalResume_Cancelled(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Status: session.Active}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, waitForTerminalResume(ctx, inst), context.Canceled)
+}
+
+func TestWaitForTerminalResume_FailedStartup(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Status: session.Hibernated}
+	require.ErrorContains(t, waitForTerminalResume(context.Background(), inst), "session startup failed")
+}
+
 func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)

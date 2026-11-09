@@ -191,7 +191,9 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
       actions.add("restart_session");
       break;
     case "pr_pending":
-      // No status-specific primary action today — only backward transitions.
+      // Regardless of linked sessions: the work session may have been deleted,
+      // and force-restart is the only way back to a worker for PR fixes.
+      actions.add("restart_session");
       break;
     case "done":
       actions.add("archive");

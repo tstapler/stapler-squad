@@ -11,6 +11,10 @@ import (
 // four workflow-engine mode flags (Task 1.5.9c) are proved through the
 // production per-class reader in backlog_gate_classes_test.go.
 var configSurfaceProofs = map[surfaceID]proofEntry{
+	"flag:tcc:enrichment-pre-consent": {
+		testName:   "TestConfigSurfaceProof_TCCEnrichmentConsent_ChangesStartupGate",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"quota.enabled": {
 		testName:   "TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode",
 		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
@@ -182,6 +186,14 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"proto.UpdateTransitionGateRequest.order_index": {
 		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
 		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
+	"flag:session_multi_pr": {
+		testName:   "TestConfigSurfaceProof_SessionMultiPR_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:artifact_scan_v2": {
+		testName:   "TestConfigSurfaceProof_ArtifactScanV2_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:agent_wake_triggers": {
 		testName:   "TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag",

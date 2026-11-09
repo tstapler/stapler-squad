@@ -1,4 +1,4 @@
-// Bun build pipeline: `bun build/build.ts` writes a verified web-app/out/ (WEB_BUILD=bun in the Makefile).
+// Bun build pipeline: `bun build/build.ts` writes a verified web-app/out/ (`make web-build`).
 // Env: WEB_MINIFY=0 turns minification off (default on). NODE_ENV is never read; builds are always "production".
 // Flags: --root <dir> --out <dir> --stats <file> --allowlist <file> --budgets <file> --no-enforce-bytes
 import { rmSync } from "node:fs";

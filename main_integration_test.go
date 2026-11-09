@@ -21,7 +21,7 @@ func TestMainWiring_should_StartClaimIndexAndClaimGossiperAlongsideAdvertiser_Wh
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	startHostGossip(ctx, mux, configDir, []string{"hosta.example"}, nil, 8444, storage, nil)
+	startHostGossip(ctx, mux, configDir, []string{"hosta.example"}, nil, 8444, storage, nil, nil)
 
 	for _, path := range []string{hostclaim.AdvertisementEndpointPath, hostclaim.ClaimAdvertisementEndpointPath} {
 		rec := httptest.NewRecorder()

@@ -71,11 +71,20 @@ func resolveDaemonAddr() string {
 	if v := os.Getenv("TYMUXD_ADDR"); v != "" {
 		return v
 	}
-	instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE")
-	if instanceID == "" || instanceID == "shared" {
+	return instanceDaemonAddr()
+}
+
+func namedInstance() bool {
+	id := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	return id != "" && id != "shared"
+}
+
+// instanceDaemonAddr is the address derived from STAPLER_SQUAD_INSTANCE alone, ignoring TYMUXD_ADDR.
+func instanceDaemonAddr() string {
+	if !namedInstance() {
 		return defaultTymuxdAddr
 	}
-	port := instanceDaemonPortBase + crc32.ChecksumIEEE([]byte(instanceID))%instanceDaemonPortSpan
+	port := instanceDaemonPortBase + crc32.ChecksumIEEE([]byte(os.Getenv("STAPLER_SQUAD_INSTANCE")))%instanceDaemonPortSpan
 	return fmt.Sprintf("http://127.0.0.1:%d", port)
 }
 

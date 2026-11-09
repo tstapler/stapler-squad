@@ -8,7 +8,7 @@ import { useNotificationCommands, useNotificationState } from "@/lib/contexts/no
 import { countNeedsAttention } from "@/lib/utils/notificationGrouping";
 import { capBadgeCount } from "@/lib/utils/notificationMapping";
 import { trayHandle, trayHandleDot, trayQuietBadge } from "./NotificationPanel.css";
-import { overflowChip, trayEntry } from "./NotificationToast.css";
+import { overflowChip, trayEntry, trayEntryBell } from "./NotificationToast.css";
 import type { TrayAffordance } from "./trayVariant";
 
 /** A mousedown on a button would blur xterm's textarea (and collapse a soft keyboard). */
@@ -102,18 +102,32 @@ interface TrayEntryChipProps {
 }
 
 /**
- * The phone deck's tray entry: the "+N more" row, the keyboard chip, or the undo bar.
- * There is no bell here; the bottom nav's Alerts tab is the standing entry to the tray.
- * Renders nothing when there is nothing to say. Rendered by the deck's dock, never by a page.
+ * The phone deck's tray entry: the "+N more" row, the keyboard chip, the undo bar, or the resting bell.
+ * The deck mounts it only once there is something to say; from then on this one node stays mounted
+ * and changes content in place (TH-7..TH-9). Rendered by the deck's dock, never by a page.
  */
 export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: TrayEntryChipProps) {
-  const { isPanelOpen } = useNotificationState();
+  const { isPanelOpen, quietMode } = useNotificationState();
+  const { unreadCount, needsAttention } = useTrayCounts();
   const wide = content === "more-row" || content === "keyboard-chip";
-  if (!undo && !wide) return null;
 
   return (
     <div className={trayEntry} data-testid="tray-entry" data-content={content} data-undo={undo ? "true" : "false"}>
-      {undo ?? (
+      {undo ?? (!wide ? (
+        <button
+          type="button"
+          className={trayEntryBell}
+          data-testid="tray-entry-open"
+          aria-expanded={isPanelOpen}
+          aria-controls={TRAY_ID}
+          aria-label={trayEntryLabel(unreadCount, needsAttention, quietMode)}
+          onClick={onOpen}
+          {...keepTerminalFocus}
+        >
+          <BellIcon />
+          {unreadCount > 0 && <span>{capBadgeCount(unreadCount)}</span>}
+        </button>
+      ) : (
         <button
           type="button"
           className={overflowChip}
@@ -126,7 +140,7 @@ export function TrayEntryChip({ content, chipText, chipLabel, undo, onOpen }: Tr
         >
           {chipText}
         </button>
-      )}
+      ))}
     </div>
   );
 }

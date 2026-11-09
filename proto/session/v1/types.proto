@@ -388,6 +388,107 @@ message Session {
   // empty otherwise. A string (not an enum) so a new value never breaks
   // older clients, which treat anything unrecognized as unknown.
   string background_outcome = 99;
+
+  // True when a UI terminal attached to this session is read-only (server drops input):
+  // archived, hidden, or a tymux session that is not ACTIVE. Computed by
+  // session.TerminalInputBlock, the same predicate the terminal stream uses.
+  bool terminal_read_only = 100;
+
+  // Every pull request attached to this session; the entry with is_active
+  // matches the legacy github_pr_* scalars above (25, 26, 33-35).
+  repeated SessionPullRequest pull_requests = 102;
+
+  // Why cleanup is holding this session's worktree. Detail responses only.
+  repeated PrHold pr_holds = 101;
+
+  // Session federation: owning host of a session mirrored from a peer
+  // instance. Empty for sessions that live on this instance.
+  string host_id = 110;
+
+  // Human-readable label of the owning host (first advertised address).
+  string host_display_name = 111;
+
+  // True when the owning peer is currently unreachable and this entry is the
+  // last snapshot received from it.
+  bool host_stale = 112;
+}
+
+// PullRequestRef identifies one pull request. An unset ref never means PR 0.
+message PullRequestRef {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+}
+
+// PollError is the persisted reason the last poll of a PR failed.
+enum PollError {
+  POLL_ERROR_NONE = 0;
+  POLL_ERROR_AUTH = 1;
+  POLL_ERROR_RATE_LIMITED = 2;
+  POLL_ERROR_NOT_FOUND = 3;
+  POLL_ERROR_REPO_INACCESSIBLE = 4;
+  POLL_ERROR_NETWORK = 5;
+}
+
+// SessionPullRequest is one PR attached to a session, with its poll health.
+message SessionPullRequest {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+  string url = 5;
+  // "open", "closed", "merged" or "unknown".
+  string state = 6;
+  bool is_draft = 7;
+  string role = 8;
+  string head_branch = 9;
+  string base_branch = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp merged_at = 12;
+  google.protobuf.Timestamp closed_at = 13;
+  bool is_active = 14;
+  bool pinned = 15;
+  string attach_source = 16;
+  string check_conclusion = 17;
+  int32 approved_count = 18;
+  int32 changes_requested_count = 19;
+  PollError poll_error = 20;
+  google.protobuf.Timestamp last_polled_at = 21;
+  google.protobuf.Timestamp rate_limit_reset_at = 22;
+  // Derived by the adapter (state unknown and terminal), not stored.
+  bool outcome_unverified = 23;
+  // PR title as last seen by the poller; empty until the first successful poll.
+  string title = 24;
+  // Counted failed polls of an unverified-terminal row (outcome_unverified);
+  // 0 for every other row. The hold ends at verify_attempt_limit.
+  int32 verify_attempts = 25;
+  // The counted-failure count that ends the hold on an unverified-terminal row.
+  int32 verify_attempt_limit = 26;
+  // True once verify_attempts reached the limit over the minimum span: the hold
+  // has ended and the row is treated as closed.
+  bool verify_exhausted = 27;
+  // True on a backlog item's PR list when the item itself links the PR
+  // (item-direct); false when it came only from the current round's session.
+  bool item_direct = 28;
+}
+
+// PrHold explains one reason a worktree or session is not being cleaned up.
+message PrHold {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_OPEN_PR = 1;
+    KIND_UNVERIFIED = 2;
+    KIND_UNKNOWN = 3;
+    KIND_SUPERSEDED_ROUND = 4;
+    KIND_SESSION_ACTIVE = 5;
+    KIND_MAX_HOLD = 6;
+  }
+  Kind kind = 1;
+  PullRequestRef pr = 2;
+  string owner_session_id = 3;
+  int32 idle_window_seconds = 4;
+  google.protobuf.Timestamp last_activity_at = 5;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
@@ -425,6 +526,82 @@ message SessionArtifacts {
   repeated string external_urls = 3;
   // When the JSONL file was last successfully scanned.
   google.protobuf.Timestamp last_scanned_at = 4;
+  // Outcome of the last transcript scan: "not_linked", "scanning", "none_found",
+  // "has_data" or "failed". Empty from servers that predate this field.
+  string scan_state = 5;
+  // False for programs that never get a transcript (non-Claude), so the UI can
+  // say so instead of "waiting for transcript link".
+  bool transcript_supported = 6;
+  // Typed, timestamped records (blob v2), oldest first. Empty for sessions scanned
+  // before v2 and from servers that predate the field; pr_urls, commit_shas and
+  // external_urls stay populated either way.
+  repeated ArtifactRecordProto records = 7;
+}
+
+// ArtifactRecordProto is one typed finding from a session transcript. kind names
+// the populated member of the oneof: "pr", "branch", "commit", "issue", "plan_doc",
+// "ci_link" or "command".
+message ArtifactRecordProto {
+  string kind = 1;
+  // When the transcript line that produced the record was written; unset if unknown.
+  google.protobuf.Timestamp first_seen_at = 2;
+  oneof record {
+    ArtifactPRRecord pr = 10;
+    ArtifactBranchRecord branch = 11;
+    ArtifactCommitRecord commit = 12;
+    ArtifactIssueRecord issue = 13;
+    ArtifactPlanDocRecord plan_doc = 14;
+    ArtifactCILinkRecord ci_link = 15;
+    ArtifactCommandRecord command = 16;
+  }
+}
+
+message ArtifactPRRecord {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+  // "created" when the session ran gh pr create, "mentioned" when it only saw the PR.
+  string source = 5;
+  string branch = 6;
+  string base = 7;
+}
+
+message ArtifactBranchRecord {
+  string name = 1;
+  // "created" or "pushed".
+  string action = 2;
+}
+
+message ArtifactCommitRecord {
+  string sha = 1;
+  string subject = 2;
+  string branch = 3;
+}
+
+message ArtifactIssueRecord {
+  string host = 1;
+  string owner = 2;
+  string repo = 3;
+  int32 number = 4;
+  // "fixes", "closes", "resolves" or "mentioned".
+  string relation = 5;
+}
+
+message ArtifactPlanDocRecord {
+  string path = 1;
+}
+
+message ArtifactCILinkRecord {
+  string url = 1;
+}
+
+message ArtifactCommandRecord {
+  string type = 1;
+  string command = 2;
+  string detail = 3;
+  // Text the command printed, at most 512 bytes.
+  string result = 4;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.

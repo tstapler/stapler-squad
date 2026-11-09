@@ -37,6 +37,10 @@ jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
   useWatchBacklogItems: jest.fn(() => ({ items: [], connectionState: "live" })),
 }));
 
+jest.mock("@/lib/api/guidanceApi", () => ({
+  useListAllPendingGuidanceRequestsQuery: () => ({ data: [] }),
+}));
+
 let capturedOnSessionClick: ((sessionId: string) => void) | undefined;
 
 jest.mock("@/components/sessions/ReviewQueuePanel", () => ({
@@ -49,7 +53,7 @@ jest.mock("@/components/sessions/ReviewQueuePanel", () => ({
 jest.mock("@/components/sessions/SessionDetail", () => ({
   SessionDetail: (props: { onClose?: () => void }) => (
     <div data-testid="session-detail">
-      <button onClick={props.onClose}>Close</button>
+      <button onClick={props.onClose}>{/* analytics-exempt */}Close</button>
     </div>
   ),
 }));
@@ -146,13 +150,13 @@ function Openers() {
       <button
         data-testid="opener-1"
         onClick={() => capturedOnSessionClick?.(sessionOne.id)}
-      >
+      >{/* analytics-exempt */}
         Open Session One
       </button>
       <button
         data-testid="opener-2"
         onClick={() => capturedOnSessionClick?.(sessionTwo.id)}
-      >
+      >{/* analytics-exempt */}
         Open Session Two
       </button>
     </>

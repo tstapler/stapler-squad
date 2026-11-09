@@ -12,7 +12,7 @@
  * ships with Epic 5; this script gains that leg when it does.
  */
 import { test, expect } from '@playwright/test';
-import { ToastDeck, sendNotification } from './pages/NotificationPanel';
+import { ToastDeck, sendNotification, sendOnceStreamLive, watchStreamLive } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
 
@@ -31,12 +31,12 @@ test.describe('notification triage walkthrough', () => {
     const prefix = `triage-${Date.now()}`;
     const deck = new ToastDeck(page);
     let taps = 0;
+    watchStreamLive(page);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-    await expect(async () => {
+    await sendOnceStreamLive(page, async () => {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-info-0`, type: 'CUSTOM', title: 'Info 0' });
-      await expect(deck.toasts.first()).toBeVisible({ timeout: 1_500 });
-    }).toPass({ timeout: 20_000 });
+    }, [deck.toasts.first()]);
     for (let i = 1; i < 6; i++) {
       await sendNotification(request, BASE_URL, { sessionId: `${prefix}-info-${i}`, type: 'CUSTOM', title: `Info ${i}` });
     }

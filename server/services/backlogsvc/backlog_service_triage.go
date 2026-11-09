@@ -525,6 +525,11 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// A manual spawn means the operator is retrying: forget any dequeue spawn backoff.
+	if triggeredBy == session.TriggeredByUser {
+		s.clearDequeueSpawnFailure(ctx, item.ID)
+	}
+
 	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
 	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
 	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
@@ -557,7 +562,8 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// (stop review session + transition back to in_progress so restart begins from
 	// the work phase where the git worktree and slash commands are set up).
 	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
-		item.Status == string(session.BacklogStatusReview)) {
+		item.Status == string(session.BacklogStatusReview) ||
+		item.Status == string(session.BacklogStatusPRPending)) {
 		var forceErr error
 		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
@@ -822,6 +828,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return fmt.Errorf("check unresolved blockers: %w", err)
 	}
 
+	spawnBlocked := s.dequeueBlockedSet(ctx)
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -833,6 +840,10 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		// A held claim is skipped before it is attempted: no repeated claim
 		// failure and no head-of-line blocking (the next item still gets its turn).
 		if s.heldByTransitionDenial(ctx, "DequeueNextQueuedItems", &item) {
+			continue
+		}
+		// Sit out an earlier spawn failure's backoff instead of re-claiming every sweep.
+		if s.dequeueSpawnBlocks(item.ID, spawnBlocked) {
 			continue
 		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
@@ -874,9 +885,12 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// sibling one. The item is left claimed (in_progress) with no live
 			// session and no visible error anywhere.
 			s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
+		} else {
+			s.recordDequeueSpawnFailure(ctx, item, fromStatus, spawnErr)
 		}
 		return false
 	}
+	s.onDequeueSpawnSucceeded(ctx, item.ID)
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
 }
@@ -1276,7 +1290,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree row pointing at this exact path — cleaning it up here would delete the
 	// directory the session spawned above just started using.
 	if isReopen {
-		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
+		// Only PR clauses may hold prior rounds' worktrees: the session just spawned
+		// is live by construction and is not in priorSessions.
+		s.cleanupWorktrees(session.WithCleanupPath(ctx, session.CleanupPathRework), priorSessions, worktreePath, session.GateOptions{IgnoreLive: true})
 		// Archive the superseded prior-round work session(s) now that the new
 		// session has replaced them — otherwise every rework round piles up a
 		// fresh work session that's never cleaned up until the item eventually
@@ -1324,11 +1340,15 @@ func (s *BacklogService) spawnSessionAfterGates(
 // Best-effort: failures are logged, not returned — a leftover live session is a
 // known, already-recoverable condition (hasActiveWorkSession blocks the next
 // spawn until it's cleared), not a reason to fail the caller's transition.
-func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) {
+//
+// It is an intentionally ungated explicit operator action (path inventory row 14), so
+// instead of blocking it returns one line per stopped session that links an open or
+// unknown PR, and logs them in one structured line.
+func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, itemID string) (openPRWarnings []string) {
 	sessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.Warn("[stopLiveWorkAndReviewSessions] failed to list sessions", "item", itemID, "error", err)
-		return
+		return nil
 	}
 	for _, itemSession := range sessions {
 		if itemSession.EndedAt != nil {
@@ -1336,6 +1356,9 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 		}
 		if itemSession.Role != string(session.SessionRoleWork) && itemSession.Role != string(session.SessionRoleReview) {
 			continue
+		}
+		if w := s.openPRWarning(ctx, itemSession.SessionUUID); w != "" {
+			openPRWarnings = append(openPRWarnings, w)
 		}
 		if s.sessionStopper != nil {
 			if stopErr := s.sessionStopper.StopSessionByUUID(ctx, itemSession.SessionUUID); stopErr != nil {
@@ -1347,20 +1370,83 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 			log.Warn("[stopLiveWorkAndReviewSessions] failed to mark session ended", "session", itemSession.SessionUUID, "item", itemID, "error", endErr)
 		}
 	}
+	if len(openPRWarnings) > 0 {
+		log.Warn("[stopLiveWorkAndReviewSessions] stopped sessions that link open or unknown PRs", "item", itemID, "warnings", openPRWarnings)
+		s.publishOpenPRWarning(itemID, openPRWarnings)
+	}
+	return openPRWarnings
+}
+
+// openPRWarning names the open or unknown PRs a session links ("" when none or unreadable).
+func (s *BacklogService) openPRWarning(ctx context.Context, sessionUUID string) string {
+	gate := s.CleanupGate()
+	if gate == nil || sessionUUID == "" {
+		return ""
+	}
+	refs, err := gate.OpenPRsOfSession(ctx, sessionUUID)
+	if err != nil || len(refs) == 0 {
+		return ""
+	}
+	names := make([]string, len(refs))
+	for i, r := range refs {
+		names[i] = r.String()
+	}
+	return fmt.Sprintf("session %s links PR(s) not yet merged or closed: %s", sessionUUID, strings.Join(names, ", "))
+}
+
+// publishOpenPRWarning raises a visible warning for an ungated explicit stop.
+func (s *BacklogService) publishOpenPRWarning(itemID string, warnings []string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		services.DerivePriority(false, true),
+		"Stopped sessions with open PRs",
+		strings.Join(warnings, "; "),
+		map[string]string{"item_id": itemID},
+	))
+}
+
+// prPendingScopedStuckReasons are the stuck reasons that only describe a pr_pending item.
+var prPendingScopedStuckReasons = []domain.StuckReason{
+	domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed,
+	domain.StuckReasonPRNeedsFix, domain.StuckReasonPRPendingNoPR, domain.StuckReasonMergedPRUnverified,
+	domain.StuckReasonMultipleReasons, domain.StuckReasonSteerFailed, domain.StuckReasonRespawnBlockedActive,
 }
 
 // forceResetItem stops any in-flight work or review sessions for the item, and — if
 // the item is currently in review — transitions it back to in_progress. Used when
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
 func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
+	// Refuse before any mutation: spawnSessionAfterGates rejects an item with a live
+	// Jules session, so resetting first would leave it in_progress with no new session.
+	if sessions, listErr := s.storage.ListItemSessions(ctx, item.ID); listErr == nil {
+		if jules := findActiveJulesSession(sessions); jules != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("a Jules session (%s) is still running for this item; wait for it to finish before force-restarting", jules.SessionUUID))
+		}
+	}
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
-	if item.Status == string(session.BacklogStatusReview) {
+	wasPRPending := item.Status == string(session.BacklogStatusPRPending)
+	if item.Status == string(session.BacklogStatusReview) || wasPRPending {
 		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		})
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
+		}
+		if wasPRPending {
+			// Leaving pr_pending: clear stuck rows that only apply there so the item
+			// doesn't re-enter stuck right after the spawn. The rework counter is
+			// deliberately untouched: force is an explicit operator override of the cap.
+			for _, reason := range prPendingScopedStuckReasons {
+				//nolint:silenttransition // best-effort: a row left open is resolved by the next sweep once its status precondition is gone.
+				if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, reason); resolveErr != nil {
+					log.Warn("[forceResetItem] ResolveStuck failed", "reason", reason, "item", item.ID, "error", resolveErr)
+				}
+			}
 		}
 		return updated, nil
 	}
@@ -3087,7 +3173,7 @@ func (s *BacklogService) TriggerReReview(
 	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions. Read AFTER
 	// the drift precondition above (5c) so a just-synced branch's diff reflects the
 	// merge rather than the stale pre-sync state.
-	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
+	workSessionDiff, diffTruncated := s.getWorkSessionDiffTruncated(ctx, item.RepoPath, mostRecentWorkSession)
 
 	verificationNotes := ""
 	if mostRecentWorkSession != nil {
@@ -3373,10 +3459,12 @@ Do not modify the code. Only write the review verdict.
 			ConfiguredProgram:      reviewConfiguredProgram,
 			ExecutorFallbackReason: reviewFallbackReason,
 		}, session.ReviewVerdictData{
-			OverallOutcome: overall,
-			PerCriterion:   string(perCriterionJSON),
-			Summary:        reviewSummary,
-			DiffHash:       s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
+			OverallOutcome:    overall,
+			PerCriterion:      string(perCriterionJSON),
+			Summary:           reviewSummary,
+			DiffHash:          s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
+			ReviewedCommitSha: s.storage.ComputeReviewedCommitSha(cleanupCtx, item.ID),
+			DiffTruncated:     diffTruncated,
 		})
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
@@ -3483,10 +3571,11 @@ Do not modify the code. Only write the review verdict.
 
 	// 11. Create ItemSession with role=review.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleReview,
-		AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+		ItemID:        item.ID,
+		SessionUUID:   inst.UUID,
+		SessionRole:   session.SessionRoleReview,
+		AcSnapshot:    session.AcCriteriaJSON(acSnapshotJSON),
+		DiffTruncated: diffTruncated,
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create re-review item session: %w", err))
@@ -3576,7 +3665,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	// otherwise lingers indefinitely and can later be found "missing" by a session that
 	// still references it.
 	if len(freed) > 0 {
-		s.cleanupItemWorktrees(ctx, freed)
+		s.cleanupItemWorktrees(session.WithCleanupPath(ctx, session.CleanupPathTombstone), freed)
 	}
 }
 
@@ -3749,8 +3838,15 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 // session's dedicated worktree path and base SHA; falls back to the item's repo when
 // the worktree directory is gone (commits remain accessible via the shared object store).
 func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) string {
+	diff, _ := s.getWorkSessionDiffTruncated(ctx, repoPath, workSession)
+	return diff
+}
+
+// getWorkSessionDiffTruncated is getWorkSessionDiff plus whether the diff was
+// truncated to fit the review budget.
+func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) (string, bool) {
 	if workSession == nil {
-		return ""
+		return "", false
 	}
 	diffDir := repoPath
 	diffBaseSHA := ""
@@ -3773,9 +3869,9 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	}
 	if haveWorktree {
 		// Try the dedicated worktree first.
-		diff, _, diffErr := backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+		diff, truncated, diffErr := backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
-			return diff
+			return diff, truncated
 		}
 		// Worktree path is gone — fall through to repo fallback using the same base SHA
 		// and an explicit branch ref: repoPath's own checked-out HEAD is not the work
@@ -3793,9 +3889,9 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
 		diffBaseSHA = workSession.BaseCommitSha
 	}
-	diff, _, diffErr := backlog.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
+	diff, truncated, diffErr := backlog.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
-		return diff
+		return diff, truncated
 	}
 	log.Warn("[TriggerReReview] GetGitDiff fallback failed", "dir", diffDir, "error", diffErr)
 
@@ -3822,7 +3918,7 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	if diffHeadRef != "" {
 		if recoveredSHA, recoverErr := backlog.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
 			log.Warn("[TriggerReReview] RecoverBaseCommitSHA failed", "dir", recoverDir, "error", recoverErr)
-		} else if recoveredDiff, _, retryErr := backlog.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := backlog.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
 			log.Warn("[TriggerReReview] retry with recovered base failed", "base", recoveredSHA, "dir", recoverDir, "error", retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -3832,10 +3928,10 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 			log.Warn("[TriggerReReview] recovered base produced an empty diff — not trusting it", "base", recoveredSHA, "ref", diffHeadRef)
 		} else {
 			log.Info("[TriggerReReview] auto-repaired broken base commit", "ref", diffHeadRef, "recovered", recoveredSHA, "recorded", diffBaseSHA)
-			return recoveredDiff
+			return recoveredDiff, recoveredTruncated
 		}
 	}
-	return ""
+	return "", false
 }
 
 // resolveACSnapshot returns the acceptance criteria to use for a re-review. It prefers

@@ -5,11 +5,14 @@ import "github.com/linkdata/deadlock"
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -41,6 +44,24 @@ type ReviewQueuePollerConfig struct {
 
 // DefaultReviewQueuePollerConfig returns sensible defaults for polling.
 func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
+	cfg := baseReviewQueuePollerConfig()
+	if d, ok := stalenessThresholdFromEnv(); ok {
+		cfg.StalenessThreshold = d
+	}
+	return cfg
+}
+
+// StalenessThresholdEnv overrides StalenessThreshold (a Go duration, e.g. "24h").
+// The e2e harness sets it so long-lived test servers never flag their idle
+// seed sessions stale mid-run, which raised toasts over unrelated specs.
+const StalenessThresholdEnv = "STAPLER_SQUAD_REVIEW_STALENESS_THRESHOLD"
+
+func stalenessThresholdFromEnv() (time.Duration, bool) {
+	d, err := time.ParseDuration(os.Getenv(StalenessThresholdEnv))
+	return d, err == nil && d > 0
+}
+
+func baseReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	return ReviewQueuePollerConfig{
 		PollInterval:       2 * time.Second,  // Poll every 2 seconds for immediate detection
 		SlowPollInterval:   8 * time.Second,  // Back off to 8s when queue is empty
@@ -288,7 +309,7 @@ func (rqp *ReviewQueuePoller) Start(ctx context.Context) {
 	rqp.checkSessions()
 
 	rqp.wg.Add(1)
-	go rqp.pollLoop()
+	go proflabel.Do("review_queue_poller", rqp.pollLoop)
 
 	log.Info("ReviewQueuePoller started", "poll_interval", rqp.config.PollInterval)
 }
@@ -382,6 +403,10 @@ func (rqp *ReviewQueuePoller) pollLoop() {
 			}
 
 		case <-timer.C:
+			if qos.Default.Defer("review_queue_poller", qos.BackgroundMaxDeferral) {
+				timer.Reset(interval)
+				continue
+			}
 			rqp.tickCount.Add(1)
 
 			if err := rqp.checkSessionsSafe(); err != nil {

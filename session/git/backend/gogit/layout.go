@@ -255,6 +255,10 @@ func readGitfile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return parseGitfile(path, data)
+}
+
+func parseGitfile(path string, data []byte) (string, error) {
 	const prefix = "gitdir: "
 	if len(data) > maxGitfileSize || !strings.HasPrefix(string(data), prefix) {
 		return "", fmt.Errorf("%s is not a valid gitfile", path)

@@ -9,7 +9,7 @@ import type { WorkflowProto } from "@/gen/session/v1/session_pb";
 // pre-built object) so each test file gets its own fresh jest.fn() instances, matching
 // the semantics the inline factories had before extraction.
 
-export const mockNextDynamic = () => (_loader?: () => Promise<{ default: React.ComponentType }>) => {
+export const mockLazyComponent = () => (_loader?: () => Promise<{ default: React.ComponentType }>) => {
   return function DynamicStub() {
     return <div data-testid="terminal-output" />;
   };

@@ -20,11 +20,36 @@ type redrawManager struct {
 	ok        bool
 	err       error
 	calls     int
+	noPane    bool
 }
 
 func (m *redrawManager) CapturePaneRedraw(context.Context) (string, bool, bool, error) {
 	m.calls++
 	return m.data, m.altScreen, m.ok, m.err
+}
+
+func (m *redrawManager) HasSession() bool                       { return !m.noPane }
+func (m *redrawManager) CapturePaneContentRaw() (string, error) { return m.data, m.err }
+
+func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{Failed, PermanentlyFailed, Stopped, Crashed} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := redrawInstance(&redrawManager{data: "final screen", ok: true}, status)
+			inst.started.Store(false)
+			raw, err := inst.CapturePaneContentRaw()
+			require.NoError(t, err)
+			assert.Equal(t, "final screen", string(raw))
+			_, ok, err := inst.CapturePaneRedraw(context.Background())
+			require.NoError(t, err)
+			assert.True(t, ok)
+			assert.False(t, inst.Started())
+			assert.Equal(t, status, inst.GetLifecycleStatus())
+			_, err = inst.CapturePaneContent()
+			assert.ErrorIs(t, err, streamhub.ErrSessionNotStarted, "semantic polling retains its start gate")
+		})
+	}
 }
 
 func redrawInstance(mgr tymux.TymuxManager, status Status) *Instance {
@@ -94,7 +119,7 @@ func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 
 func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(t *testing.T) {
 	t.Parallel()
-	notStarted := redrawInstance(&redrawManager{ok: true}, Running)
+	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, Running)
 	notStarted.started.Store(false)
 	cases := map[string]*Instance{
 		"not started": notStarted,

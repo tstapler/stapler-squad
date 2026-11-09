@@ -5,18 +5,42 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
 )
 
 // HistoryFileWatcher watches ~/.claude/projects/ for new JSONL files.
+//
+// The event loop only classifies events and enqueues paths; callback runs on a
+// single scanqueue worker, so a slow callback (a HistoryLinker pass) never stops
+// fsnotify events from draining. One worker keeps callbacks serialized, as they
+// were when run inline. Events for a path already queued or running coalesce
+// into one (newest wins), and callers re-read the file, so nothing is lost.
 type HistoryFileWatcher struct {
 	watchDir string
 	callback func(filePath string)
-	watcher  *fsnotify.Watcher
+	watcher  dirwatch.Watcher
 	stopped  chan struct{}
+	queue    *scanqueue.Queue
+	cancel   context.CancelFunc
+
+	// mu guards the callback accounting that lets shutdown wait for an
+	// in-flight callback and refuse to start another one after it.
+	mu           sync.Mutex
+	closed       bool
+	running      int
+	drained      chan struct{} // closed once closed && running == 0
+	drainOnce    sync.Once
+	drainTimeout time.Duration
 }
+
+// defaultHistoryDrainTimeout bounds how long shutdown waits for a running callback.
+const defaultHistoryDrainTimeout = 30 * time.Second
 
 // NewHistoryFileWatcher creates a watcher for the given directory.
 // If watchDir is empty, defaults to ~/.claude/projects/.
@@ -27,10 +51,57 @@ func NewHistoryFileWatcher(watchDir string, callback func(filePath string)) *His
 			watchDir = filepath.Join(homeDir, ".claude", "projects")
 		}
 	}
-	return &HistoryFileWatcher{
+	w := &HistoryFileWatcher{
 		watchDir: watchDir,
 		callback: callback,
 		stopped:  make(chan struct{}),
+		drained:  make(chan struct{}),
+
+		drainTimeout: defaultHistoryDrainTimeout,
+	}
+	w.queue = scanqueue.New(scanqueue.Config{Workers: 1}, w.runCallback)
+	return w
+}
+
+// runCallback invokes the callback unless shutdown has begun, and tracks it so
+// run can wait for it. A callback is never interrupted (it takes no ctx).
+func (w *HistoryFileWatcher) runCallback(path string) {
+	w.mu.Lock()
+	if w.closed || w.callback == nil {
+		w.mu.Unlock()
+		return
+	}
+	w.running++
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.running--
+		done := w.closed && w.running == 0
+		w.mu.Unlock()
+		if done {
+			w.drainOnce.Do(func() { close(w.drained) })
+		}
+	}()
+	w.callback(path)
+}
+
+// closeAndDrain stops new callbacks, then waits up to drainTimeout for a running
+// one, so HistoryLinker.Wait returns only after its writes are done.
+func (w *HistoryFileWatcher) closeAndDrain() {
+	w.mu.Lock()
+	w.closed = true
+	idle := w.running == 0
+	w.mu.Unlock()
+	if idle {
+		w.drainOnce.Do(func() { close(w.drained) })
+		return
+	}
+	t := time.NewTimer(w.drainTimeout)
+	defer t.Stop()
+	select {
+	case <-w.drained:
+	case <-t.C:
+		log.Warn("history file watcher: callback still running at shutdown", "timeout", w.drainTimeout)
 	}
 }
 
@@ -43,13 +114,15 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		return nil
 	}
 
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := dirwatch.New(dirwatch.WithName("history"), dirwatch.RootAt(w.watchDir))
 	if err != nil {
 		close(w.stopped)
 		return err
 	}
 	w.watcher = watcher
 
+	// RootAt: one FSEvents stream covers every project dir (a stream per dir would
+	// exhaust the ~512 per-process limit at a few hundred projects).
 	if err := watcher.Add(w.watchDir); err != nil {
 		_ = watcher.Close()
 		close(w.stopped)
@@ -62,24 +135,37 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		if walkErr != nil || !d.IsDir() || path == w.watchDir {
 			return nil
 		}
-		if skipHistoryDir(path) {
+		if w.skipHistoryDir(path) {
 			return filepath.SkipDir
 		}
 		_ = watcher.Add(path)
 		return nil
 	})
 
+	ctx, w.cancel = context.WithCancel(ctx)
+	w.queue.Start(ctx)
 	go w.run(ctx)
+	startedAt := time.Now()
+	// An FSEvents stream can deliver late or lose a write right after starting, with no
+	// error: re-enqueue transcripts modified since the watch started, once, shortly after.
+	time.AfterFunc(historyCatchUpDelay, func() {
+		if ctx.Err() == nil {
+			w.enqueueModifiedSince(startedAt.Add(-time.Minute))
+		}
+	})
 	return nil
 }
 
-// Stopped returns a channel that is closed when the watcher goroutine has exited.
+// Stopped returns a channel that is closed when the watcher goroutine has exited
+// and any in-flight callback has finished (or drainTimeout elapsed).
 func (w *HistoryFileWatcher) Stopped() <-chan struct{} {
 	return w.stopped
 }
 
 func (w *HistoryFileWatcher) run(ctx context.Context) {
-	defer close(w.stopped)
+	defer close(w.stopped) // runs last: Stopped() means no callback is running
+	defer w.closeAndDrain()
+	defer w.cancel() // stops the queue workers
 	defer func() {
 		if w.watcher != nil {
 			_ = w.watcher.Close()
@@ -90,12 +176,12 @@ func (w *HistoryFileWatcher) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-w.watcher.Events:
+		case event, ok := <-w.watcher.Events():
 			if !ok {
 				return
 			}
 			w.handleEvent(event)
-		case err, ok := <-w.watcher.Errors:
+		case err, ok := <-w.watcher.Errors():
 			if !ok {
 				return
 			}
@@ -134,9 +220,7 @@ func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
-	if w.callback != nil {
-		w.callback(path)
-	}
+	w.queue.Enqueue(path)
 }
 
 // watchNewDir adds a newly created subdirectory to the fsnotify watch list
@@ -144,7 +228,7 @@ func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
 // arrive non-empty if Claude Code writes its transcript before this handler
 // gets to process the CREATE event for the directory itself.
 func (w *HistoryFileWatcher) watchNewDir(dir string) {
-	if skipHistoryDir(dir) {
+	if w.skipHistoryDir(dir) {
 		return
 	}
 	if err := w.watcher.Add(dir); err != nil {
@@ -164,23 +248,55 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
 			continue
 		}
-		if w.callback != nil {
-			w.callback(filepath.Join(dir, name))
+		w.queue.Enqueue(filepath.Join(dir, name))
+	}
+}
+
+// historyCatchUpDelay is the one-shot safety-net rescan after the watch starts.
+const historyCatchUpDelay = 15 * time.Second
+
+// enqueueModifiedSince enqueues every project-level transcript written after since.
+func (w *HistoryFileWatcher) enqueueModifiedSince(since time.Time) {
+	projects, err := os.ReadDir(w.watchDir)
+	if err != nil {
+		return
+	}
+	for _, p := range projects {
+		if !p.IsDir() {
+			continue
+		}
+		dir := filepath.Join(w.watchDir, p.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			name := f.Name()
+			if f.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
+				continue
+			}
+			if info, err := f.Info(); err == nil && info.ModTime().After(since) {
+				w.queue.Enqueue(filepath.Join(dir, name))
+			}
 		}
 	}
 }
 
 // skipHistoryDir reports whether dir holds only files this watcher ignores. Claude Code
-// writes subagent transcripts (agent-*.jsonl, *.meta.json) under <session>/subagents/;
-// handleEvent drops them, but fsnotify's kqueue backend opens one fd per file in every
-// watched directory, so watching them cost ~8,000 fds on a long-lived instance.
-func skipHistoryDir(dir string) bool {
-	return filepath.Base(dir) == "subagents"
+// writes transcripts as <project>/<session>.jsonl; everything below a project dir
+// (<session>/subagents, <session>/tool-results, ...) is never consumed. On kqueue each
+// file in a watched dir costs an fd: subagents alone cost ~8,000 and tool-results
+// ~1,200 on a long-lived instance, so only the project dirs themselves are watched.
+func (w *HistoryFileWatcher) skipHistoryDir(dir string) bool {
+	return filepath.Dir(dir) != filepath.Clean(w.watchDir)
 }
 
 // Stop closes the watcher.
 func (w *HistoryFileWatcher) Stop() {
 	if w.watcher != nil {
 		_ = w.watcher.Close()
+	}
+	if w.cancel != nil {
+		w.cancel()
 	}
 }

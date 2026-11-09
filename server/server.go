@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
@@ -38,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -68,6 +70,7 @@ type Server struct {
 	wsUnaryBridge              atomic.Pointer[wsconn.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
 	terminalMuxBridge          atomic.Pointer[wsconn.TerminalMuxBridge] // serves /actuator/terminal-mux
 	unfinishedScanner          *unfinished.Scanner                      // serves /actuator/unfinished-scanner; nil without deps
+	prLinkGC                   *session.SessionPRLinkGC                 // orphan session-PR link collector; nil without storage
 	tlsConfig                  *tls.Config                              // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler          // nil when auth is disabled
 	requiresAuth               bool                                     // explicit: a real validator is wired
@@ -231,6 +234,24 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.joinAfterCancel(serverCtx, deps.PRStatusPoller.Wait)
 	log.Info("PRStatusPoller started")
 
+	if deps.Storage != nil {
+		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler.Start(serverCtx)
+		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
+
+		// The collector gates itself on session_multi_pr each pass, so it is
+		// always started and does nothing while the flag is off.
+		if gc := deps.Storage.NewSessionPRLinkGC(0); gc != nil {
+			gc.Start(serverCtx)
+			srv.joinAfterCancel(serverCtx, gc.Wait)
+			srv.prLinkGC = gc
+		}
+	}
+
+	if deps.StopPRMaintenance != nil {
+		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
+	}
+
 	if deps.SessionTagClassificationPoller != nil {
 		deps.SessionTagClassificationPoller.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, deps.SessionTagClassificationPoller.Wait)
@@ -250,6 +271,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		})
 		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
 	}
+
+	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
 
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
@@ -499,7 +522,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
 	muxPool := wsconn.TerminalMuxPoolSizeFromEnv()
 	muxBridge := wsconn.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
-		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		wsconn.WithTerminalMuxDispatchers(srv.unaryDispatcher))
 	srv.terminalMuxBridge.Store(muxBridge)
 	srv.mux.Handle(wsconn.TerminalMuxPath, muxBridge)
 	log.Info("Registered terminal mux", "path", wsconn.TerminalMuxPath, "poolSize", muxPool)
@@ -528,7 +552,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"programs:cli-flag-probe",
 			services.ProgramCLIFlagProbeEnabled,
 			services.ProgramCLIFlagProbeGatedMethod,
-		)),
+		), interceptors.NewFederatedSessionGuard()),
 	)
 	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
 	_ = streamhub.DefaultTapRegistry()
@@ -609,6 +633,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		watchInsightsPath := "/api" + sessionv1connect.InsightsServiceWatchInsightsProcedure
 		srv.mux.Handle(watchInsightsPath, insightsWsBridge.Handler("/api"))
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
+	}
+
+	// Register BacklogFlowService handler (backlog flow observability).
+	if deps.BacklogFlowService != nil {
+		flowPath, flowHandler := sessionv1connect.NewBacklogFlowServiceHandler(deps.BacklogFlowService, ConnectOptions(deps.ErrorRegistry)...)
+		flowAPIPath := "/api" + flowPath
+		srv.RegisterConnectHandler(flowAPIPath, http.StripPrefix("/api", flowHandler))
+		log.Info("Registered BacklogFlowService handler", "path", flowAPIPath)
 	}
 
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
@@ -708,7 +740,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := sessionbundle.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc := sessionbundle.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -1183,7 +1215,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck, flowMCPOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
@@ -1280,9 +1312,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
 	// Escape events have their own database and retention.
+	var escapeDriver dialect.Driver // nil keeps escape analytics on raw rows only (tests wire a client without the DB handle)
+	if deps.EscapeEventsDB != nil {
+		escapeDriver = deps.EscapeEventsDB.Driver()
+	}
 	if deps.EscapeEventsClient != nil {
-		escapedb.StartRetentionEnforcer(serverCtx, deps.EscapeEventsClient,
-			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+		escapedb.NewRetention(deps.EscapeEventsClient, escapeDriver, escapedb.RetentionConfig{
+			RawRetentionDays:  cfg.EscapeAnalyticsRetentionDays,
+			MaxRowsPerSession: cfg.EscapeAnalyticsMaxRowsPerSession,
+		}).Start(serverCtx, &srv.backgroundTasksWG)
 		srv.closeAfterJoin = append(srv.closeAfterJoin, func() {
 			if err := deps.EscapeEventsClient.Close(); err != nil {
 				log.Warn("escape events DB close failed", "err", err)
@@ -1295,8 +1333,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
-	if deps.EscapeEventsClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
-		escapeWriter := escapedb.NewEscapeEventBatchWriter(deps.EscapeEventsClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+	if escapeDriver != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := escapedb.NewEscapeEventBatchWriter(escapeDriver)
 		srv.goBackground(func() { escapeWriter.Start(serverCtx) })
 		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
 		log.Info("Escape analytics batch writer started",
@@ -1310,6 +1348,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
 	if deps.EscapeEventsClient != nil {
 		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
+		deps.SessionService.SetEscapeAggregateReader(escapedb.NewReader(deps.EscapeEventsClient, escapeDriver, escapedb.RollupTiers{RawDays: cfg.EscapeAnalyticsRetentionDays}, nil))
 		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 
@@ -1681,6 +1720,7 @@ func (s *Server) Start(ctx context.Context) error {
 				errCh <- lerr
 				return
 			}
+			markListenerUp()
 			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
@@ -1690,6 +1730,7 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 			resolvedAddr := ln.Addr().String()
 			s.addr.Store(&resolvedAddr)
+			markListenerUp()
 			// Log the real, OS-assigned address (never the pre-bind ":0"
 			// request) now that the listener has actually bound.
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
@@ -1741,6 +1782,13 @@ func (s *Server) Shutdown() error {
 	if s.finalStatsFlush != nil {
 		defer s.finalStatsFlush()
 	}
+	// Return every pane the QoS hints boosted or demoted to Normal: tymuxd keeps hints until it
+	// restarts, so a stopped squad must not leave one behind.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tymux.ResetPaneActivities(ctx)
+	}()
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.
@@ -2271,6 +2319,7 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 		connect.WithInterceptors(
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
+			interceptors.NewClientGoneInterceptor(),
 			interceptors.NewDBQueryCountInterceptor(),
 			interceptors.NewRequestFlowInterceptor(),
 		),

@@ -519,6 +519,12 @@ type WorktreeInfo struct {
 	GitHubHost string
 }
 
+// isEmptyDetection reports the zero result DetectWorktree returns for a path
+// with no .git (or no readable remote and not a worktree).
+func (w *WorktreeInfo) isEmptyDetection() bool {
+	return w == nil || (!w.IsWorktree && w.MainRepoRoot == "" && w.RemoteURL == "" && w.GitHubOwner == "")
+}
+
 // DetectWorktree checks if the given path is a git worktree and extracts relevant info.
 // Results are cached per-path for 5 minutes to avoid repeated git subprocess calls on
 // every LoadInstances invocation for sessions whose GitHubOwner was never resolved.
@@ -598,6 +604,18 @@ func EnterpriseHostsForRemoteParsing() []string {
 		hosts = append(hosts, h.Host)
 	}
 	return hosts
+}
+
+// OriginGitHubRepo resolves the GitHub owner, repo and host of repoPath's origin
+// remote ("" host means github.com). ok is false when the path has no readable
+// origin or it is not a GitHub remote.
+func OriginGitHubRepo(repoPath string) (owner, repo, host string, ok bool) {
+	remote, err := readOriginRemoteURL(repoPath)
+	if err != nil {
+		return "", "", "", false
+	}
+	owner, repo, host = parseGitHubRemoteURL(remote)
+	return owner, repo, host, owner != "" && repo != ""
 }
 
 // parseGitHubRemoteURL extracts owner, repo, and host from a GitHub remote
@@ -749,4 +767,11 @@ func (d InstanceData) ActiveDir() string {
 		return d.Worktree.WorktreePath
 	}
 	return d.Path
+}
+
+// ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
+// store, so repoPath may be any checkout of the repo. An absent branch is an error.
+func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
+	return string(sha), err
 }

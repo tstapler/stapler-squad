@@ -4,10 +4,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // CI encoding of gate S2's overlay and CSS-dependant criteria (project_plans/web-app-bun-build/research/spike-results.md,
-// section S2-overlay and S2-csstoken), per Story 5.6's AC. Run only under WEB_BUILD=bun (playwright.dev-mode.config.ts's
-// global-setup spawns the frontend via scripts/dev-stack/launch.ts's frontendSpawnPlan, which reads WEB_BUILD): the CI
-// step and Story 5.11's web-build-smoke-bun job set it before invoking this config; run by hand the same way:
-//   WEB_BUILD=bun npx playwright test --config=tests/e2e/playwright.dev-mode.config.ts tests/e2e/dev-mode-hmr.spec.ts
+// section S2-overlay and S2-csstoken), per Story 5.6's AC. playwright.dev-mode.config.ts's global-setup spawns the
+// frontend via scripts/dev-stack/launch.ts's frontendSpawnPlan (the Bun dev server); run by hand with:
+//   npx playwright test --config=tests/e2e/playwright.dev-mode.config.ts tests/e2e/dev-mode-hmr.spec.ts
 //
 // Edits a real source file and restores it even on failure — never leaves the worktree dirty.
 const TARGET = path.resolve(__dirname, '../../web-app/src/app/test/terminal-stress/page.tsx');

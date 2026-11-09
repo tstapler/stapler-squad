@@ -248,4 +248,75 @@ export class SessionDetailPage {
   getInsightsToolsBreakdownTable(): Locator {
     return this.page.getByTestId("tools-breakdown-table");
   }
+
+  // ---------------------------------------------------------------------
+  // Pull requests section / PR chip (session-multi-pr-tracking, ux.md S1-S4).
+  // ---------------------------------------------------------------------
+
+  /** The detail "Pull requests" section (PullRequestList). */
+  getPullRequestsSection(): Locator {
+    return this.page.getByTestId("pr-section");
+  }
+
+  getPullRequestsHeading(): Locator {
+    return this.getPullRequestsSection().getByRole("heading", { name: /^Pull requests/ });
+  }
+
+  getPullRequestRow(number: number): Locator {
+    return this.page.getByTestId(`pr-row-${number}`);
+  }
+
+  getPullRequestRowMenuButton(number: number): Locator {
+    return this.page.getByTestId(`pr-menu-${number}`);
+  }
+
+  getPullRequestRowMenuItem(command: string, number: number): Locator {
+    return this.page.getByTestId(`pr-menu-${command}-${number}`);
+  }
+
+  /** The PR chip on the open session's card or row (list view). */
+  getPrChip(scope: Locator = this.page.locator("body")): Locator {
+    return scope.getByTestId("pr-chip");
+  }
+
+  getPrMoreButton(scope: Locator = this.page.locator("body")): Locator {
+    return scope.getByTestId("pr-more-button");
+  }
+
+  getPullRequestToast(): Locator {
+    return this.page.getByTestId("pr-undo-toast");
+  }
+
+  getPullRequestLiveRegion(): Locator {
+    return this.page.getByTestId("pr-live-region");
+  }
+
+  /** Opens the session's detail (Info tab) by deep link and waits for the section to mount. */
+  async openPullRequests(sessionId: string) {
+    await this.page.goto(`${BASE_URL}/?session=${sessionId}&tab=info`, { waitUntil: "domcontentloaded" });
+    await this.getPullRequestsSection().waitFor();
+  }
+
+  // VCS widget PR switcher (S4)
+  getPrSwitcherRadioGroup(): Locator {
+    return this.page.getByRole("radiogroup", { name: /^Pull request/ });
+  }
+
+  getPrSwitcherSelect(): Locator {
+    return this.page.getByRole("combobox", { name: "Pull request" });
+  }
+
+  // Artifacts tab (S7)
+  async openArtifactsTab() {
+    await this.page.getByRole("tab", { name: "Artifacts", exact: true }).click();
+  }
+
+  /** The Artifacts tab's own tabpanel (the pane window has its own role=tabpanel too). */
+  getArtifactsPanel(): Locator {
+    return this.page.getByRole("tabpanel", { name: "Artifacts" });
+  }
+
+  getArtifactsGroup(key: string | number): Locator {
+    return this.page.getByTestId(`artifact-group-${key}`);
+  }
 }

@@ -57,6 +57,8 @@ use) instead of raw `go test`, for readable pass/fail-per-test output — see
 Makefile's `GOTESTSUM_BIN`. One-off single-package/single-test runs below still use
 plain `go test`.
 
+**Parallel by default.** Every new Go test calls `t.Parallel()` (and its subtests too) unless it mutates process-global state (`t.Setenv`, global caches, a fixed file path, `os.Chdir`); inject those dependencies instead of mutating them so the test stays eligible. `make test`'s `-p 1` is package-level serialization for a few contention-prone packages, not a reason to skip `t.Parallel()` inside a package. See the `deterministic-fast-tests` skill.
+
 ```bash
 make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
@@ -304,7 +306,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | 62872 | Manual instance #1 — `--remote-port` |
 | 62873 | Manual instance #2 — `PORT` (when a second concurrent instance is needed, e.g. comparing before/after) |
 | 62874 | Manual instance #2 — `--remote-port` |
-| 62875 | Bun dev server (`web-app/build/dev.ts`, `WEB_BUILD=bun`; localhost only) |
+| 62875 | Bun dev server (`web-app/build/dev.ts`; localhost only) |
 | 62876–62880 | Spare |
 
 `tests/e2e/` doesn't use this block — it allocates a free ephemeral port per run via `findFreePort()` (`tests/e2e/helpers/test-server.ts`), which needs no fixed reservation.
@@ -344,7 +346,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (otelc weave: always on in the one `stapler-squad` binary; install/smoke/test recipes) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
-| Build the web UI: `WEB_BUILD` next/bun, `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
+| Build the web UI (Bun): `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
+| Rebuild ghostty-web's WASM with native DECSTR (unbuilt patch, Zig 0.15.2, rollback); ghostty-vs-xterm differential harness lives in `web-app/src/lib/terminal/__tests__/differential/` | `docs/how-to/rebuild-ghostty-web-wasm.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
@@ -370,6 +373,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
+| Graceful tymuxd handoff: upgrade/downgrade the daemon without killing panes (D1-D6, compat matrix, rollback, squad vs daemon) | `docs/explanation/graceful-tymuxd-handoff.md` |
 | Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
@@ -383,9 +387,12 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
+| Escape events: batched writes, short raw window, hourly/daily rollups, backfill, range-edge rules | `docs/explanation/escape-events-rollups.md` |
+| Operate escape-event rollups: check state, metrics, backup, rollback | `docs/how-to/operate-escape-event-rollups.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
+| `session/git` policy: complete git parity, fix the go-git fork instead of working around it, how to verify against the git CLI and ship a fork change | `session/git/AGENTS.md` |
 | Unfinished-scanner caches: `/actuator/unfinished-scanner` counters, shadow verify, per-flag rollback | `docs/how-to/tune-unfinished-scanner-caches.md` |
 | Start a git backend cohort shadow soak (`git_backend_cohorts`), read counters (`/actuator/git-backend`, `make git-soak-status`), flip criteria, revert | `docs/how-to/flip-git-backend-cohort.md` |
 | Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
@@ -395,6 +402,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
+| Terminal input/output latency per stage, backend and listener: `/actuator/terminal-latency`, `terminal_latency.stage_duration`, echo p95 alert | `docs/reference/terminal-latency-telemetry.md` |
+| Find where terminal input lag sits with the `ssq-terminal-experience` dashboard (echo split, capture decomposition, HOL per hop, drops) | `docs/how-to/find-terminal-input-lag.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |
@@ -402,6 +411,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
 | Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
+| Filesystem watchers: FSEvents-backed `internal/dirwatch`, `STAPLER_SQUAD_DIRWATCH=fsnotify` rollback, `fs.watches`/`fs.streams` gauges, stream cap, decision record | `docs/how-to/tune-fs-watchers.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
 | Bazel build of record: build, test, add a dependency, regenerate BUILD files | `docs/how-to/build-with-bazel.md`, `bazel-stapler-squad` skill |
 | Bazel shared caches, `user.bazelrc`, idle shutdown, orphan output-base timer | `docs/how-to/set-up-bazel-worktree-caches.md` |
@@ -410,3 +420,5 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Protect the live service from a Bazel memory spike (owner-run) | `docs/how-to/protect-live-service-from-bazel.md` |
 | Bazel configs, TagConfigs, make-to-bazel map, PermanentExceptions | `docs/reference/bazel-targets-and-configs.md` |
 | Why Bazel (drivers, supersession of the ci-speed ADR) | `docs/explanation/why-bazel.md` |
+| Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
+| Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |

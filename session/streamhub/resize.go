@@ -2,6 +2,7 @@ package streamhub
 
 import (
 	"context"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -51,13 +52,28 @@ func (h *StreamHub) ResizeActivity() (generation uint64, resizing bool) {
 // calls with, so an early disconnect stops those calls instead of always
 // waiting out a fixed ceiling.
 func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size TerminalSize) {
+	h.RequestResizeNotify(ctx, id, size, nil)
+}
+
+// RequestResizeNotify is RequestResize that also calls paneResized exactly once: right after the
+// pane has been resized (before the repaint capture, which can take seconds), or when the call
+// returns without resizing (unchanged size, rejected vote, unknown subscriber). A caller that
+// must order input after the resize waits for this, not for the capture. paneResized runs on the
+// resizing goroutine and must not block. nil is allowed.
+func (h *StreamHub) RequestResizeNotify(ctx context.Context, id SubscriberID, size TerminalSize, paneResized func()) {
+	signal := sync.OnceFunc(func() {
+		if paneResized != nil {
+			paneResized()
+		}
+	})
+	defer signal()
 	h.mu.Lock()
 	sub, ok := h.subscribers[id]
 	h.mu.Unlock()
 	if !ok {
 		return
 	}
-	if !sub.capability.CanResize {
+	if !sub.currentCapability().CanResize {
 		log.Info("streamhub resize vote rejected: subscriber cannot resize",
 			"session", h.sessionName, "subscriber_id", string(id))
 		return
@@ -71,9 +87,17 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	// hub.go for the full race this closes.
 	h.resizeApplyMu.Lock()
 	defer h.resizeApplyMu.Unlock()
+	h.paneResized = signal // guarded by resizeApplyMu, which applyNegotiatedSize runs under
+	defer func() { h.paneResized = nil }()
 
 	sub.recordResizeVote(size)
-	votes := h.collectResizeVotes()
+	h.renegotiateLocked(ctx)
+}
+
+// renegotiateLocked recomputes the negotiated size from current votes and applies it if it
+// changed. The caller must hold resizeApplyMu.
+func (h *StreamHub) renegotiateLocked(ctx context.Context) {
+	votes := h.preferInteractive(h.collectResizeVotes())
 	negotiated := negotiateSize(votes)
 
 	h.resizeMu.Lock()
@@ -105,7 +129,7 @@ func (h *StreamHub) collectResizeVotes() []ResizeVote {
 
 	votes := make([]ResizeVote, 0, len(h.subscribers))
 	for id, sub := range h.subscribers {
-		if !sub.capability.CanResize {
+		if !sub.currentCapability().CanResize {
 			continue
 		}
 		if size, voted := sub.currentResizeVote(); voted {
@@ -133,4 +157,22 @@ func negotiateSize(votes []ResizeVote) TerminalSize {
 		}
 	}
 	return result
+}
+
+// UpgradeSubscriber replaces an attached subscriber's capability, so a viewer
+// that attached read-only can start voting on size once it is allowed to write.
+// It reports false for an unknown SubscriberID.
+func (h *StreamHub) UpgradeSubscriber(id SubscriberID, capability SubscriberCapability) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sub, ok := h.subscribers[id]
+	if !ok {
+		return false
+	}
+	capability.ManualFirstPaint = sub.capability.ManualFirstPaint // attach-time only
+	sub.upgraded.Store(&capability)
+	log.Info("streamhub subscriber capability upgraded",
+		"session", h.sessionName, "subscriber_id", string(id),
+		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
+	return true
 }

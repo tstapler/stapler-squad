@@ -123,3 +123,18 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 	_, isTmux := inst.processManager.(*TmuxBackend)
 	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
 }
+
+// An empty persisted Backend means tmux whatever the global selection, including "native".
+func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	cfg := config.LoadConfig()
+	cfg.ProcessManagerBackend = string(BackendNative)
+	require.NoError(t, config.SaveConfig(cfg))
+
+	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-native"))
+
+	require.NoError(t, err)
+	assert.Equal(t, BackendTmux, inst.Backend)
+	_, isTmux := inst.processManager.(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
+}

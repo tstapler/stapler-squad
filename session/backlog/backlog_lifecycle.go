@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,8 +16,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/git/backend"
-	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -127,6 +124,19 @@ type BacklogLifecycleListener struct {
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
+
+	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
+	backlogReaderOverride func() bool
+
+	// liveWork holds the shared live-work probe, its test clock and the per-item
+	// hold bookkeeping (backlog_lifecycle_live_work.go).
+	liveWork liveWorkState
+
+	// terminalWork is the bounded worker behind PRStatesWentTerminal.
+	terminalWork struct {
+		once sync.Once
+		ch   chan []int
+	}
 
 	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
 	// ciRerunner disables the free-rerun shortcut.
@@ -781,10 +791,14 @@ func (l *BacklogLifecycleListener) getWorktreeCleaner() WorktreeCleaner {
 // after a successful terminal transition so cleanup does not depend solely
 // on the 60s sweep. No-op when unwired (matches WorktreeCleaner's nil-safety
 // contract).
-func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) {
+func (l *BacklogLifecycleListener) cleanupTerminalItemSync(ctx context.Context, itemID string) session.CleanupOutcome {
 	if c := l.getWorktreeCleaner(); c != nil {
-		c.CleanupTerminalItem(ctx, itemID)
+		if session.CleanupPathFrom(ctx) == session.CleanupPathUnknown {
+			ctx = session.WithCleanupPath(ctx, session.CleanupPathHook)
+		}
+		return c.CleanupTerminalItem(ctx, itemID)
 	}
+	return session.CleanupDoneOutcome()
 }
 
 // SetSessionLivenessChecker wires the function used by the zombie-session
@@ -1890,40 +1904,13 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 // falsely marking 0f5d760b (and the others) shipped. A branch mismatch falls
 // through to the branch-name lookup below, same as the worktree-gone case.
 func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
-	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
-	if err != nil {
-		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session", "session", sessionUUID, "error", err)
-		return ""
-	}
-	if wt.WorktreePath != "" {
-		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath)
-			if branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
-				sha, headErr := GetGitHeadSHA(wt.WorktreePath)
-				if headErr == nil && sha != "" {
-					return sha
-				}
-			} else if branchErr == nil {
-				log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: worktree path now holds a different branch than the session's (path recycled?) — falling back to repo-wide branch lookup", "worktree_path", wt.WorktreePath, "branch", branch, "expected_branch", wt.BranchName)
-			}
-		}
-	}
-	if wt.BranchName == "" {
-		return ""
-	}
-	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
-	if revErr != nil {
-		log.Warn("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
-		return ""
-	}
-	return sha
+	return l.storage.ResolveLatestWorkCommit(ctx, sessionUUID, repoPath)
 }
 
 // ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
 // store, so repoPath may be any checkout of the repo. An absent branch is an error.
 func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
-	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
-	return string(sha), err
+	return session.ResolveBranchTip(ctx, repoPath, branch)
 }
 
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
@@ -1964,6 +1951,35 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)
 	return nil
+}
+
+// otherPRsHoldItem reports, under reader:backlog, that the item's derived PR set
+// has an open or unknown PR (or could not be read, which holds: later, never earlier).
+func (l *BacklogLifecycleListener) otherPRsHoldItem(ctx context.Context, er *session.EntRepository, itemID string) (bool, string) {
+	if !l.backlogReaderEnabled() {
+		return false, ""
+	}
+	prs, err := er.ItemPRsByID(ctx, itemID)
+	if err != nil {
+		return true, "pr set unreadable: " + err.Error()
+	}
+	if session.ItemPRVerdict(prs) == session.ItemVerdictOpen {
+		return true, "verdict open"
+	}
+	return false, ""
+}
+
+// liveHoldFromRows is reconcileBouncingItems' pre-network guard: true when the item
+// PR rows already give verdict Done and a live work session holds it.
+func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *session.EntRepository, itemID, title string) bool {
+	if l.LiveWorkProbe() == nil || !l.backlogReaderEnabled() {
+		return false
+	}
+	prs, err := er.ItemPRsByID(ctx, itemID)
+	if err != nil || session.ItemPRVerdict(prs) != session.ItemVerdictDone {
+		return false
+	}
+	return l.holdMergedItemForLiveWork(ctx, er, itemID, title)
 }
 
 // reconcileBouncingItems flags items that have crossed in_progress->review
@@ -2019,11 +2035,22 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// ReconcilePRPending already uses for its own merge->done transition,
 		// rather than inventing a new one.
 		if item.PrNumber > 0 && item.RepoPath != "" {
+			// Cheap local check first: rows already say the set is Done and a session
+			// is live, so skip the GitHub call and the refresh for the whole hold.
+			if l.liveHoldFromRows(ctx, er, item.ID, item.Title) {
+				continue
+			}
 			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
 			merged, mergedErr := checker.IsPRMerged(ctx, item.PrNumber)
 			if mergedErr != nil {
 				log.Debug("[BacklogLifecycle] reconcileBouncingItems IsPRMerged failed", "item", item.ID, "pr", item.PrNumber, "error", mergedErr)
 			} else if merged {
+				// reader:backlog: the scalar PR merging is not enough while another PR of the
+				// item's set is open or unknown; re-evaluated next pass, not flagged bouncing.
+				if hold, why := l.otherPRsHoldItem(ctx, er, item.ID); hold {
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: tracked PR merged but the item PR set still holds it", "item", item.ID, "pr", item.PrNumber, "reason", why)
+					continue
+				}
 				// Story 6 guard (adversarial-review.md's Blocker): re-verify,
 				// via a live GitHub lookup, that PR #item.PrNumber's head
 				// branch still matches this item's currently-tracked branch
@@ -2032,6 +2059,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				// verifyPRAssociationForFixSpawn's own contract.
 				if !l.verifyPRAssociationForFixSpawn(ctx, item.ID, item.RepoPath, item.PrNumber) {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems: PR head branch no longer verifiably matches the tracked branch — skipping auto-done transition (was this item's PR attached via report_pr_created's override_reason path?)", "item", item.ID, "pr", item.PrNumber)
+					continue
+				}
+				if l.holdMergedItemForLiveWork(ctx, er, item.ID, item.Title) {
 					continue
 				}
 				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: PR #%d for this item is confirmed merged on GitHub, so the item's rework cycle is treated as converged rather than bouncing.", item.PrNumber)
@@ -2298,6 +2328,18 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			resolve = row.ItemStatus != session.BacklogStatusInProgress && row.ItemStatus != session.BacklogStatusReview
 		case domain.StuckReasonTransitionDenied:
 			resolve = !session.TransitionDenialAnchored(row)
+		case domain.StuckReasonSpawnFailed:
+			// Only the dequeue-backoff use is anchored; the review-reopen use (item
+			// stranded in_progress) keeps waiting for its own event site. in_progress
+			// stays in the anchor: it is the transient claim state of a retry, and
+			// resolving there would erase the backoff count. Rows written by #1460 lack the
+			// prefix until the next failed retry rewrites the context (MarkStuck's upsert), so they
+			// are skipped here only until then.
+			if !domain.IsDequeueSpawnFailedContext(row.Context) {
+				continue
+			}
+			resolve = row.ItemStatus != session.BacklogStatusReady && row.ItemStatus != session.BacklogStatusQueued &&
+				row.ItemStatus != session.BacklogStatusInProgress
 		default:
 			// push_failed, rework_cap, multiple_reasons, and any future
 			// reason with no non-terminal anchor: stays open until the

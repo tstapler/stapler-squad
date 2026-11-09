@@ -1,9 +1,5 @@
 /**
- * One behavioural suite for every `NavImpl`, so drift between impl.next, impl.router and impl.memory is a red test.
- *
- * For impl.next the harness mocks only the external `next/navigation` module and imports the real wrapper: the suite
- * proves the wrapper's own logic (normalisation, option mapping, ReplaceSearch), not Next itself. Parity with real
- * Next is evidenced only by the Next-baselined e2e specs (plan Stories 7.1-7.4).
+ * One behavioural suite for every `NavImpl`, so drift between impl.router and impl.memory is a red test.
  */
 import { act, fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
@@ -19,7 +15,7 @@ export interface NavHarness {
   keptScroll(): boolean;
   /** After `<Redirect to>` mounted, whether the implementation redirected to `to`; `shown` is what the hooks report. */
   redirectedTo(to: string, shown: string | null): boolean;
-  /** Parts a harness cannot observe (Next is mocked; its Link and search-param sync are not the wrapper's logic). */
+  /** Parts a harness cannot observe. */
   observes: { linkClick: boolean; replaceSearchHooks: boolean; scrollOption: boolean };
 }
 

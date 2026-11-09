@@ -334,7 +334,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *ses
 	changed := false
 	for i, ac := range updated {
 		outcome, ok := outcomeByIdx[ac.Index]
-		if !ok {
+		if !ok || ac.Status == session.AcStatusWaived {
 			continue
 		}
 		var newStatus session.AcStatus

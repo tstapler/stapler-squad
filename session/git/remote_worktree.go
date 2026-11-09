@@ -196,7 +196,7 @@ func (r *RemoteWorktreeOps) InitializeProjectDirectory(ctx context.Context, proj
 	// (`[ -e .git ]` above already prevents the normal re-run case) — mirrors
 	// createInitialCommit's repoHasAnyRef guard in util.go.
 	script := fmt.Sprintf(`set -e
-export LC_ALL=C GIT_TERMINAL_PROMPT=0
+export %[2]s
 mkdir -p %[1]s
 cd %[1]s
 if [ -e .git ]; then
@@ -211,12 +211,23 @@ printf '%%s' '# Project gitignore
 ' > .gitignore
 git add .gitignore
 git -c user.name='Stapler Squad' -c user.email='stapler-squad@localhost' commit -m 'Initial commit'
-`, posixShellQuote(projectPath))
+`, posixShellQuote(projectPath), requiredGitEnvExports())
 
 	if out, err := r.runner.Run(ctx, "", "sh", "-c", script); err != nil {
 		return fmt.Errorf("remote project init failed at %s: %s (%w)", projectPath, bytesToTrimmedString(out), err)
 	}
 	return nil
+}
+
+// requiredGitEnvExports renders backend.RequiredGitEnv as quoted arguments for `export`, because an
+// SSH session cannot carry the environment a local git process gets.
+func requiredGitEnvExports() string {
+	env := backend.RequiredGitEnv()
+	quoted := make([]string, len(env))
+	for i, kv := range env {
+		quoted[i] = posixShellQuote(kv)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // posixShellQuote POSIX-single-quotes s so it survives the remote `sh -c` this

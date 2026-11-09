@@ -116,6 +116,7 @@ go_library(
         "//session/tymux",
         "//telemetry",
         "@com_github_spf13_cobra//:cobra",
+        "@com_github_zalando_go_keyring//:go-keyring",
         "@com_tailscale//net/netmon",
         "@com_tailscale//types/logger",
         "@com_tailscale//util/eventbus",
@@ -208,6 +209,7 @@ go_test(
         "main_cleanup_test.go",
         "main_integration_test.go",
         "main_test.go",
+        "main_tymux_supervise_test.go",
         "netchange_source_integration_test.go",
         "netchange_source_test.go",
         "open_url_test.go",
@@ -226,6 +228,7 @@ go_test(
         "//session/hostclaim",
         "//session/tymux",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@org_uber_go_goleak//:goleak",
     ],
 )

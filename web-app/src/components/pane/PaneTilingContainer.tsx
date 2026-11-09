@@ -21,6 +21,7 @@ import {
   mobilePickerSheet,
   mobilePickerSheetTitle,
   mobilePickerPaneItem,
+  mobilePickerPaneList,
   mobilePickerPaneLabel,
   mobilePickerCancelButton,
 } from "@/styles/pane/panePickerOverlay.css";
@@ -108,10 +109,12 @@ export function PaneTilingContainer({
 
       if (eligiblePanes.length === 0) {
         // Auto-split: reducer creates a new detail pane beside the session-list pane.
-        dispatch({ type: "ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: session.id });
+        dispatch({ type: "ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: session.id, tab: tab ? resolvedTab : undefined });
       } else if (eligiblePanes.length === 1 && eligiblePanes[0].sessionId === session.id) {
         // Already showing this session: just focus, so ASSIGN_SESSION doesn't reset the active tab.
+        // A caller that names a tab (the PR chip's "+N" wants Info) still switches to it.
         dispatch({ type: "FOCUS_PANE", paneId: eligiblePanes[0].id });
+        if (tab) dispatch({ type: "ASSIGN_TAB", paneId: eligiblePanes[0].id, tab: resolvedTab });
       } else if (eligiblePanes.length === 1) {
         // Single detail pane: assign directly. If focused pane is the detail pane,
         // eligiblePanes[0] === focusedLeaf, so the intent shortcut still fires — just
@@ -384,22 +387,26 @@ export function PaneTilingContainer({
               </span>
               Temporary modal
             </button>
-            {mobilePickerPanes.map((p) => (
-              <button
-                key={p.id}
-                className={mobilePickerPaneItem}
-                onClick={() => {
-                  dispatch({ type: "ASSIGN_SESSION", paneId: p.id, sessionId: mobilePickerSession.id });
-                  dispatch({ type: "ASSIGN_TAB", paneId: p.id, tab: "terminal" });
-                  dispatch({ type: "FOCUS_PANE", paneId: p.id });
-                  cancelPicker();
-                }}
-              >
-                {/* analytics-exempt */}
-                <span className={mobilePickerPaneLabel}>{p.letter}</span>
-                {p.label}
-              </button>
-            ))}
+            {mobilePickerPanes.length > 0 && (
+              <div className={mobilePickerPaneList} data-testid="mobile-picker-pane-list">
+                {mobilePickerPanes.map((p) => (
+                  <button
+                    key={p.id}
+                    className={mobilePickerPaneItem}
+                    onClick={() => {
+                      dispatch({ type: "ASSIGN_SESSION", paneId: p.id, sessionId: mobilePickerSession.id });
+                      dispatch({ type: "ASSIGN_TAB", paneId: p.id, tab: "terminal" });
+                      dispatch({ type: "FOCUS_PANE", paneId: p.id });
+                      cancelPicker();
+                    }}
+                  >
+                    {/* analytics-exempt */}
+                    <span className={mobilePickerPaneLabel}>{p.letter}</span>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <button className={mobilePickerCancelButton} onClick={cancelPicker}>
               {/* analytics-exempt */}
               Cancel

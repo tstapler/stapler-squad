@@ -75,6 +75,8 @@ import {
 } from "./Omnibar.css";
 import { lazyComponent } from "@/lib/lazy";
 import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
+import { OmnibarFindPrAction } from "./OmnibarFindPrAction";
+import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
 import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
 import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
@@ -310,14 +312,51 @@ export function Omnibar({
 }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
-  const { createBacklogItemFromChat } = useBacklogService();
+  const { createBacklogItemFromChat, parseBacklogItemIntent, getBacklogItem, updateBacklogItem } = useBacklogService();
   const { trackItem } = useBacklogCreationNotifier();
   const { addNotification } = useNotificationCommands();
+  const knownRepoPaths = useSessionRepoPaths();
+
+  // Fire-and-forget: best-effort title/description/AC enrichment for items triage
+  // did not pick up. Skips if the user edited the item while the LLM call ran.
+  const enrichBacklogItemInBackground = useCallback(
+    async (item: BacklogItem, text: string) => {
+      const draft = await parseBacklogItemIntent(text, knownRepoPaths);
+      if (!draft) return;
+      const current = await getBacklogItem(item.id);
+      if (
+        !current ||
+        current.title !== item.title ||
+        current.description !== item.description ||
+        current.acCriteria.length !== item.acCriteria.length
+      ) {
+        return;
+      }
+      const updated = await updateBacklogItem(item.id, {
+        title: draft.title || item.title,
+        description: draft.description || item.description,
+        ...(draft.acceptanceCriteria.length > 0 && {
+          acCriteria: draft.acceptanceCriteria.map((acText, index) => ({ index, text: acText, status: "pending" as const })),
+        }),
+      });
+      if (!updated) return;
+      addNotification({
+        sessionId: "",
+        sessionName: "",
+        title: "Backlog item enriched",
+        message: updated.title,
+        notificationType: "info",
+        onView: () => router.push(`/backlog?item=${item.id}`),
+      });
+    },
+    [parseBacklogItemIntent, getBacklogItem, updateBacklogItem, knownRepoPaths, addNotification, router]
+  );
+
   const createBacklogItemInBackground = useCallback(
-    async (text: string) => {
+    async (text: string, repoPath: string) => {
       let result: Awaited<ReturnType<typeof createBacklogItemFromChat>> = null;
       try {
-        result = await createBacklogItemFromChat(text);
+        result = await createBacklogItemFromChat(text, undefined, repoPath);
       } catch {
         // fall through to the failure notification
       }
@@ -331,17 +370,23 @@ export function Omnibar({
         });
         return;
       }
-      trackItem(result.item.id, result.item.title);
+      const { item, triageTriggered } = result;
+      trackItem(item.id, item.title);
       addNotification({
         sessionId: "",
         sessionName: "",
-        title: "Backlog item created — triage starting",
-        message: result.item.title,
+        title: triageTriggered
+          ? "Backlog item created — triage underway"
+          : "Backlog item created — triage could not start",
+        message: triageTriggered
+          ? item.title
+          : `${item.title}\n${repoPath ? "Check the repo path and re-run triage from the item." : "Add a repo path to enable automatic triage."}`,
         notificationType: "info",
-        onView: () => router.push(`/backlog?item=${result.item.id}`),
+        onView: () => router.push(`/backlog?item=${item.id}`),
       });
+      if (!triageTriggered) enrichBacklogItemInBackground(item, text).catch(() => {});
     },
-    [createBacklogItemFromChat, trackItem, addNotification, router]
+    [createBacklogItemFromChat, trackItem, addNotification, router, enrichBacklogItemInBackground]
   );
 
   // Input state
@@ -676,6 +721,14 @@ export function Omnibar({
 
   // Discovery mode derived from modeState
   const isDiscoveryMode = modeState.type === "discovery";
+
+  // A pasted github.com PR URL also offers "Find sessions for owner/repo#N" (design/ux.md S9).
+  const findPrRef = useRef<HTMLButtonElement>(null);
+  const findPrTarget = useMemo(() => {
+    const ref = detection?.gitHubRef;
+    if (detection?.type !== InputType.GitHubPR || !ref?.prNumber || isDiscoveryMode) return null;
+    return { host: ref.host ?? "github.com", owner: ref.owner, repo: ref.repo, number: ref.prNumber };
+  }, [detection, isDiscoveryMode]);
 
   // @command autocomplete — active while user is typing "@slug" (no space yet)
   const {
@@ -1132,6 +1185,11 @@ export function Omnibar({
   // Handle keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (findPrTarget && e.key === "ArrowDown" && e.target === inputRef.current) {
+        e.preventDefault();
+        findPrRef.current?.focus();
+        return;
+      }
       // Alias palette keyboard navigation
       if (activeDropdown === "alias" && filteredAliases.length > 0) {
         if (e.key === "ArrowDown") {
@@ -1345,6 +1403,7 @@ export function Omnibar({
       filteredAliases,
       completeAlias,
       input,
+      findPrTarget,
     ],
   );
 
@@ -1847,10 +1906,10 @@ export function Omnibar({
         <div className={modal} data-testid="omnibar-modal" onClick={(e) => e.stopPropagation()}>
           <BacklogComposeWidget
             initialText={backlogComposeText}
-            onSubmit={(text) => {
+            onSubmit={(text, repoPath) => {
               setBacklogComposeText(null);
               onClose();
-              void createBacklogItemInBackground(text);
+              void createBacklogItemInBackground(text, repoPath);
             }}
             onCancel={(draft) => {
               setInput(draft);
@@ -2206,6 +2265,16 @@ export function Omnibar({
               {typeInfo.icon} {typeInfo.label}
             </span>
           </div>
+        )}
+
+        {findPrTarget && sessionType !== "one_off" && (
+          <OmnibarFindPrAction
+            ref={findPrRef}
+            pr={findPrTarget}
+            onOpenSession={onNavigateToSession}
+            onDone={onClose}
+            onFocusInput={() => inputRef.current?.focus()}
+          />
         )}
 
         {/* Creation form + footer — delegated to OmnibarCreationPanel */}

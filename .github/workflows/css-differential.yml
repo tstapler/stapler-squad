@@ -1,7 +1,6 @@
 name: CSS differential
 
-# Story 5.10: proves vanilla-extract output under Bun equals Node's (oracle) and that the Bun build's CSS
-# matches the Next build's (census) on every Bun bump. A separate workflow, not a build.yml job: a nightly
+# Story 5.10: proves vanilla-extract output under Bun equals Node's (oracle) on every Bun bump. A separate workflow, not a build.yml job: a nightly
 # schedule on build.yml would rerun every job in it.
 on:
   schedule:
@@ -25,7 +24,7 @@ concurrency:
 
 jobs:
   css-differential:
-    name: VE oracle and Next/Bun CSS census
+    name: VE oracle
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -64,29 +63,3 @@ jobs:
       - name: Oracle - every .css.ts matches Node byte for byte
         working-directory: web-app
         run: bun run oracle:ve
-
-      - name: Build with Next
-        env:
-          WEB_BUILD: next
-        run: make web-build
-
-      - name: Keep the Next output
-        run: cp -r web-app/out "$RUNNER_TEMP/next-out"
-
-      - name: Build with Bun (minified, to a separate directory)
-        working-directory: web-app
-        run: bun build/build.ts --out "$RUNNER_TEMP/bun-out" --stats "$RUNNER_TEMP/bun-stats.json"
-
-      - name: Census - theme custom properties and cascade winners
-        working-directory: web-app
-        run: bun build/oracle/census-cli.ts --next "$RUNNER_TEMP/next-out" --bun "$RUNNER_TEMP/bun-out" | tee "$RUNNER_TEMP/census.json"
-
-      - name: Summarise
-        if: always()
-        run: |
-          {
-            echo '### CSS census'
-            echo '```json'
-            cat "$RUNNER_TEMP/census.json" 2>/dev/null || echo 'no census output'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"

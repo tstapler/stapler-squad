@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/zalando/go-keyring"
 
 	"connectrpc.com/connect"
@@ -23,9 +24,11 @@ import (
 	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	serverevents "github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -580,6 +583,7 @@ func TestBuildDependencies_should_WireNudgeCollaborators_When_DepsBuilt(t *testi
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
 	require.NotNil(t, deps.GitHubUserService)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
 	resp, err := deps.GitHubUserService.NudgeSessionForPR(context.Background(), connect.NewRequest(&sessionv1.NudgeSessionForPRRequest{
 		Pr:        &sessionv1.PRKey{Owner: "acme", Repo: "api", Number: 1},
@@ -669,4 +673,67 @@ func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLI
 	require.NotNil(t, provider, "status must show the non-loopback state")
 	assert.Equal(t, prwatch.InboxStateNonLoopback, provider().InboxState)
 	assert.NotNil(t, deps.SessionService, "the server still boots")
+}
+
+// The scan handler used to seed the legacy PR number from the first PR URL it found.
+// ADR-004: a URL the scanner merely found is not polled, so no link and no number
+// change appear, whatever the session already holds.
+func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
+	for name, held := range map[string]int{"session with no PR": 0, "session holding #11": 11} {
+		t.Run(name, func(t *testing.T) {
+			inst := &session.Instance{Title: "scan-no-seed", UUID: "uuid-scan-no-seed", GitHubOwner: "acme", GitHubRepo: "app"}
+			if held > 0 {
+				inst.GitHubPRNumber = held
+			}
+			handler := artifactScanCompleteHandler(func() []*session.Instance { return []*session.Instance{inst} }, serverevents.NewEventBus(4))
+
+			handler("scan-no-seed", &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
+
+			gh := inst.Snapshot().GitHub
+			assert.Empty(t, gh.PRs)
+			assert.Equal(t, held, gh.GitHubPRNumber)
+			assert.NotNil(t, inst.Snapshot().Artifacts, "the blob is still attached")
+		})
+	}
+}
+
+// A finished scan makes its session searchable without a restart (Story 9.1 "Incremental").
+func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Title: "indexed", UUID: "uuid-indexed"}
+	idx := search.NewArtifactIndex(nil)
+	handler := indexScannedArtifacts(func() []*session.Instance { return []*session.Instance{inst} }, idx)
+
+	handler("indexed", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-fresh"}}})
+	hits := idx.Search("feat-fresh", 5)
+	require.Len(t, hits, 1)
+	assert.Equal(t, "uuid-indexed", hits[0].SessionID)
+
+	handler("someone-else", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-ignored"}}})
+	assert.Equal(t, 1, idx.DocCount(), "a title with no live session indexes nothing")
+}
+
+func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStoredBlobs(t *testing.T) {
+	t.Parallel()
+	inst := &session.Instance{Title: "stored", UUID: "uuid-stored",
+		Artifacts: &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-stored"}}}}
+	idx := search.NewArtifactIndex(nil)
+	ready := make(chan struct{})
+	buildArtifactIndexInBackground(func() []*session.Instance { return []*session.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)
+
+	assert.Zero(t, idx.DocCount(), "nothing is indexed before the listener is up")
+	close(ready)
+	require.Eventually(t, func() bool { return idx.DocCount() == 1 }, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestWireDepsIntoServer_should_StartSessionPRLinkGC_When_StoragePresent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	require.NotNil(t, srv.prLinkGC, "wireDepsIntoServer must construct the orphan session-PR link collector")
+	assert.True(t, srv.prLinkGC.Started(), "and start it")
 }

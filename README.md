@@ -119,7 +119,7 @@ brew install go node buf
 git clone https://github.com/tstapler/stapler-squad.git
 cd stapler-squad
 
-# 3. Build (compiles proto code, Next.js web UI, and Go binary)
+# 3. Build (compiles proto code, the web UI, and Go binary)
 make build
 
 # 4. Install to ~/.local/bin

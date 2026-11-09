@@ -108,4 +108,51 @@ describe("mobile picker sheet", () => {
     expect(screen.getByTestId("session-peek-modal").textContent).toBe("session-X");
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it("keeps the fixed actions and Cancel outside a scrollable pane list when 15+ panes exist", async () => {
+    const ids = Array.from({ length: 16 }, (_, i) => `p${i}`);
+    const held: LeafPane = { ...leaf("p1"), sessionId: "session-X" };
+    const root = ids.slice(1).reduce<PaneState["root"]>(
+      (acc, id, i) => ({
+        type: "split", id: `s${i}`, direction: "vertical", ratio: 0.5,
+        first: acc, second: id === "p1" ? held : leaf(id),
+      }),
+      leaf("p0"),
+    );
+    const state: PaneState = { root, focusedPaneId: "p0", zoomedPaneId: null };
+    const dispatch = jest.fn();
+    const session = { id: "session-X" } as Session;
+    const props = { sessions: [session], paneState: state, dispatch };
+
+    const { rerender } = render(<PaneTilingContainer {...props} externalSessionAssign={null} />);
+    await act(async () => {
+      rerender(<PaneTilingContainer {...props} externalSessionAssign={{ sessionId: "session-X", version: 1 }} />);
+    });
+
+    const list = screen.getByTestId("mobile-picker-pane-list");
+    expect(list.children.length).toBeGreaterThanOrEqual(15);
+    for (const testId of ["mobile-picker-open-existing", "mobile-picker-new-pane", "mobile-picker-peek-modal"]) {
+      expect(list.contains(screen.getByTestId(testId))).toBe(false);
+    }
+    const cancel = screen.getByText("Cancel");
+    expect(list.contains(cancel)).toBe(false);
+    expect(list.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(list.children[0] as HTMLElement);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "ASSIGN_SESSION", sessionId: "session-X" }));
+  });
+
+  it("omits the pane list when there are no other panes", async () => {
+    const state: PaneState = { root: leaf("p1"), focusedPaneId: "p1", zoomedPaneId: null };
+    const dispatch = jest.fn();
+    const session = { id: "session-X" } as Session;
+    const props = { sessions: [session], paneState: state, dispatch };
+
+    const { rerender } = render(<PaneTilingContainer {...props} externalSessionAssign={null} />);
+    await act(async () => {
+      rerender(<PaneTilingContainer {...props} externalSessionAssign={{ sessionId: "session-X", version: 1 }} />);
+    });
+
+    expect(screen.queryByTestId("mobile-picker-pane-list")).toBeNull();
+  });
 });

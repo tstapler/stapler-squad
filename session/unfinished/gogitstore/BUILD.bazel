@@ -15,9 +15,9 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/session/unfinished/gogitstore",
     visibility = ["//visibility:public"],
     deps = [
+        "//internal/dirwatch",
         "//log",
         "@com_github_edsrzf_mmap_go//:mmap-go",
-        "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_go_git_go_billy_v5//:go-billy",
         "@com_github_go_git_go_billy_v5//osfs",
         "@com_github_go_git_go_git_v5//:go-git",
@@ -67,6 +67,7 @@ go_test(
     embed = [":gogitstore"],
     deps = [
         "//executor/safeexec",
+        "//internal/dirwatch",
         "//session/unfinished/internal/testrepo",
         "//testutil/wait",
         "@com_github_go_git_go_billy_v5//:go-billy",

@@ -66,3 +66,11 @@ go tool pprof mem.prof
 go test -bench=BenchmarkAttachDetachPerformance -trace=trace.out ./app -timeout=15m
 go tool trace trace.out
 ```
+
+## tymux transport: Unix socket vs loopback TCP
+
+```bash
+go test -run NONE -bench BenchmarkTransportRoundTrip -benchmem -count=5 ./session/tymux &
+```
+
+`session/tymux/transport_uds_integration_test.go` times `GetServerInfo` and a 200x50 `CapturePane` against one in-process server on both transports. Read it with these limits: the server is a Go connect handler, not the Rust tymuxd; the client is sequential on one connection per transport; both transports are warmed first and sub-benchmark order alternates per RPC, but other load on the machine still moves the medians. Last measured on an Apple M5 Max (darwin/arm64, `-count=5`, medians): `GetServerInfo` ~208 us over TCP vs ~126 us over the socket; `CapturePane` ~1.79 ms vs ~1.76 ms (within noise, dominated by protobuf marshalling).

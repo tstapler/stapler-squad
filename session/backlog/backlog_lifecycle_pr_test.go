@@ -108,7 +108,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildFallbackPRBody(tt.item, origin)
+			got := buildFallbackPRBody(tt.item, origin, "")
 			for _, want := range tt.wantContains {
 				require.Contains(t, got, want)
 			}
@@ -130,7 +130,7 @@ func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 		Description: "<script>alert(1)</script>" + strings.Repeat("a", 2000),
 	}
 
-	got := buildFallbackPRBody(item, PRFooterOrigin{BaseURL: "https://ssq.example.com"})
+	got := buildFallbackPRBody(item, PRFooterOrigin{BaseURL: "https://ssq.example.com"}, "")
 
 	require.NotContains(t, got, "<script>")
 	require.Contains(t, got, "[truncated]")
@@ -207,7 +207,7 @@ func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 	t.Parallel()
 
 	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
-	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID})
+	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID}, "")
 
 	require.Contains(t, got, "Backlog item: "+item.ID)
 	require.Contains(t, got, testHostID.String())
@@ -220,7 +220,7 @@ func TestAppendBacklogFooter(t *testing.T) {
 
 	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	origin := PRFooterOrigin{BaseURL: "https://ssq.example.com", HostID: testHostID, Hostname: "onyx.lan"}
-	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item)
+	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item, "")
 
 	require.True(t, strings.HasPrefix(got, "## Summary\n\nBody text.\n\nBacklog item: https://ssq.example.com/backlog?item="+item.ID))
 	require.Contains(t, got, testHostID.String())
@@ -547,4 +547,118 @@ func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReass
 
 	require.ErrorIs(t, err, session.ErrPreconditionFailed)
 	assert.Equal(t, string(session.BacklogStatusInProgress), h.status(t, item.ID))
+}
+
+func TestPRBodies_ClosingKeyword(t *testing.T) {
+	t.Parallel()
+	const issue = "https://github.com/acme/widget/issues/42"
+	tests := []struct {
+		name, externalURL, remote string
+		wantCloses                bool
+	}{
+		{"same repo", issue, "https://github.com/acme/widget.git", true},
+		{"cross repo", issue, "https://github.com/other/project.git", false},
+		{"no external URL", "", "https://github.com/acme/widget.git", false},
+		{"remote unknown", issue, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			item := &session.BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
+			bodies := map[string]string{
+				"fallback": buildFallbackPRBody(item, PRFooterOrigin{}, tt.remote),
+				"drafted":  appendBacklogFooter("## Summary\n\nBody.\n", PRFooterOrigin{}, item, tt.remote),
+			}
+			for path, body := range bodies {
+				if tt.wantCloses {
+					require.Contains(t, body, "Closes #42", path)
+					require.NotContains(t, body, "Closes "+issue, path+": must be the bare #N form")
+				} else {
+					require.NotContains(t, body, "Closes", path)
+					require.NotContains(t, body, "Related:", path)
+				}
+			}
+		})
+	}
+}
+
+// triggerValuesFor returns the pr_fix_trigger marker values stored for itemID, oldest first.
+func triggerValuesFor(t *testing.T, er *session.EntRepository, itemID string) []string {
+	t.Helper()
+	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, session.FlowMarkerPRFixTrigger,
+		time.Unix(0, 0), time.Now().Add(100*365*24*time.Hour))
+	require.NoError(t, err)
+	vals := make([]string, 0, len(got))
+	for _, m := range got {
+		vals = append(vals, m.Value)
+	}
+	return vals
+}
+
+func TestPrFixReopen_should_RecordTriggerOnce_When_PollerDecidesFix(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9301)
+	er := storage.Repo
+	clk := newFakeMarkerClock()
+	er.SetMarkerClock(clk.Now)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "CI failed"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	for i := 0; i < 5; i++ {
+		listener.ReconcilePRPending(ctx, er)
+	}
+	assert.Equal(t, []string{session.PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
+
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"},
+	})
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
+
+	clk.Advance(session.TriggerRecordMinInterval)
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
+}
+
+func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9302)
+	er := storage.Repo
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, HasConflicts: true, HasBlockingReviews: true, FeedbackText: "all"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{session.PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
+}
+
+func TestPrFixReopen_should_RecordClosedTriggerWithoutCountingUnknown_When_PRClosedWithoutMerge(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item := newPRPendingTestItem(t, storage, 9303)
+	er := storage.Repo
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	before := session.PRFixTriggerUnknownCount()
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, []string{session.PRFixTriggerClosed}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, before, session.PRFixTriggerUnknownCount(), "closed branch must not move the unknown counter")
 }

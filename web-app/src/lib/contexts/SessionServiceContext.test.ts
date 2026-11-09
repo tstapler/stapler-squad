@@ -52,6 +52,8 @@ describe("SessionServiceContext", () => {
       pinSession: jest.fn(),
       unpinSession: jest.fn(),
       retrySession: jest.fn(),
+      archiveSession: jest.fn(),
+      unarchiveSession: jest.fn(),
       clearConversationState: jest.fn(),
       acknowledgeSession: jest.fn(),
       createCheckpoint: jest.fn(),

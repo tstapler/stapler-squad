@@ -1,11 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { computeOutputStats, type BuildStats } from "../stats";
-import { validateAllowlist, verifyOutput, type AllowlistEntry, type Budgets } from "../verify-output";
+import { validateAllowlist, verifyOutput, type AllowlistEntry, type Budgets, type HeavyModule } from "../verify-output";
 import type { BuildContext } from "./context";
 import type { Stage } from "./runner";
 
 export const DEFAULT_BUDGETS = path.resolve(__dirname, "../budgets.json");
+export const DEFAULT_HEAVY_MODULES = path.resolve(__dirname, "../heavy-modules.json");
 export const DEFAULT_ALLOWLIST = path.resolve(__dirname, "../../../server/middleware/testdata/public-allowlist.json");
 
 function readJson<T>(file: string): T {
@@ -48,6 +49,7 @@ export const verify: Stage<BuildContext> = {
       stats,
       budgets: readJson<Budgets>(ctx.opts.budgetsPath ?? DEFAULT_BUDGETS),
       allowlist,
+      heavyModules: readJson<HeavyModule[]>(DEFAULT_HEAVY_MODULES),
       enforceBytes: ctx.opts.enforceBytes,
       loginClosure: ctx.loginClosure,
     });

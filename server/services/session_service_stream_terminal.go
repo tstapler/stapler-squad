@@ -28,16 +28,46 @@ const (
 	fallbackPTYRows = 24
 )
 
-// StreamTerminal provides bidirectional streaming for terminal I/O.
-// Implements bidirectional streaming where:
-// - Client sends: terminal input and resize events
-// - Server sends: raw terminal output
-//
-// NOTE: browser clients never reach this method directly — the WebSocket
-// handler (connectrpc_websocket.go) intercepts StreamTerminal calls made
-// over its custom websocket transport before they reach here. This handler
-// exists to satisfy the ConnectRPC service interface and could be used by
-// non-browser gRPC/Connect clients.
+// CapturePollEvery is the poll interval of the resume and capture loops.
+const CapturePollEvery = 150 * time.Millisecond
+
+// ResumeHibernatedInstance restarts a hibernated instance's controller and
+// session driver before streaming. Hibernate() kills the tmux session
+// entirely, so without this, the streaming paths below would find no tmux
+// session and silently create a bare replacement, leaving Status stuck at
+// Hibernated even though a live tmux session now exists underneath it. The
+// brief race between this returning and the resumed tmux session actually
+// existing is absorbed by RestoreWithWorkDir's own retry/backoff (~1.5s
+// total) inside the streaming paths that follow.
+func ResumeHibernatedInstance(instance *session.Instance, sessionID string) error {
+	log.Info("[WebSocket] resuming hibernated session before streaming", "session", sessionID)
+	if err := instance.ResumeFromHibernation(context.Background()); err != nil {
+		return fmt.Errorf("failed to resume hibernated session %q: %w", sessionID, err)
+	}
+	return nil
+}
+
+func waitForTerminalResume(ctx context.Context, instance *session.Instance) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(CapturePollEvery)
+	defer ticker.Stop()
+	for !instance.Started() {
+		switch instance.GetLifecycleStatus() {
+		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
+			return fmt.Errorf("session startup failed: %s", instance.GetLifecycleStatus())
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for terminal resume: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
+// StreamTerminal provides bidirectional terminal I/O for native Connect/gRPC clients.
+// Browser clients use the WebSocket handler instead.
 //
 //nolint:gocognit,gocyclo,funlen // pre-existing complexity relocated verbatim by the session_service.go split (sdd:fix-hotspot, 2026-09-12); reducing it is a separate follow-up, not a file move
 func (s *SessionService) StreamTerminal(
@@ -83,6 +113,25 @@ func (s *SessionService) StreamTerminal(
 
 	if instance == nil {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", initialMsg.SessionId))
+	}
+
+	releaseView, err := instance.AcquireTerminalView()
+	if err != nil {
+		return connect.NewError(connect.CodeUnavailable, err)
+	}
+	defer releaseView()
+	if instance.IsHibernated() {
+		if err := ResumeHibernatedInstance(instance, initialMsg.SessionId); err != nil {
+			return connect.NewError(connect.CodeUnavailable, err)
+		}
+		if err := waitForTerminalResume(ctx, instance); err != nil {
+			return connect.NewError(connect.CodeUnavailable, err)
+		}
+	}
+	if instance.IsActive() && !instance.Started() {
+		if err := waitForTerminalResume(ctx, instance); err != nil {
+			return connect.NewError(connect.CodeUnavailable, err)
+		}
 	}
 
 	// Verify session is started and not paused

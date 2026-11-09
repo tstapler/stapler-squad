@@ -12,7 +12,7 @@ PR 8 has not merged yet, so no soak window has started and none of the dated fie
 - Second Soak window (PR 8b -> PR 9 gate): >= 7 further days after PR 8b merges.
 - T3 (ADR-007 Vite 8 fallback trigger) is counted from CI across the whole Soak window: a Bun bundler crash or miscompile in >= 2 CI runs fires it, regardless of which PR's CI run it appears in.
 
-**PR 9 deadline reminders (pre-mortem failure mode 9):** once PR 8 merges on date D, two dated reminders are created — D+21 (earliest PR 9) and D+45 (stop-loss decision point) — via `mcp__stapler-squad__schedule_wake` or a scheduled routine (see `docs/how-to/build-web-app.md`'s Soak section for the mechanism). Their links will be recorded here as a new dated entry once PR 8 actually merges; no date is fabricated in advance of that merge.
+**PR 9 deadline reminders (pre-mortem failure mode 9):** once PR 8 merges on date D, two dated reminders are created — D+21 (earliest PR 9) and D+45 (stop-loss decision point) — via `mcp__stapler-squad__schedule_wake` or a scheduled routine (mechanism: `schedule_wake` or a scheduled routine). Their links will be recorded here as a new dated entry once PR 8 actually merges; no date is fabricated in advance of that merge.
 
 **Stop-loss principle:** the dual-build tax (two CI cells, aliases, conditionals in tests) must not become permanent. If PR 9 has not merged by D+45, the owner decides in writing — recorded as a new entry in this file — between finishing PR 9 and reverting to Next outright. Epics 1, 2c, 2d, and 7a remain valuable under Next either way, so a stop-loss revert at D+45 does not waste that work.
 
@@ -63,3 +63,21 @@ any live tmux session.
 | Green `workflow_dispatch` of the edited workflow (Story 8.2 precondition c) | see PR body | |
 
 No required-check name changed (`web-build-gate` is unchanged; the only workflow edit pins `web-build-smoke-next` to `WEB_BUILD: next` so it stays the Next canary).
+
+## Story 9.1-9.3: Owner decision to shorten the soak and remove Next (PR 9)
+
+**Date**: 2026-11-01. **Decided by**: the owner (Tyler Stapler), in the session that prepared PR 9.
+
+**Change to the Story 8.4 soak defaults**: the 14-day / 3-session first window and the 7-day second window are shortened to the time Bun has already been the default (PR #1206, 2026-10-28, about 4 days), and Next is removed now. **Reason**: the owner wants Bun speed and to drop the dual-build complexity. The plan lets the owner lengthen but not shorten these defaults without a recorded reason; this entry is that record. The D+21 and D+45 reminders (Story 8.4b) are moot.
+
+**State at PR 9**:
+
+| Item | Status |
+|---|---|
+| Soak window 1 (14 days, 3 sessions) | Not completed; shortened by the owner decision above |
+| PR 8b (minification on) | **Not done.** `WEB_MINIFY ?= 0` stays in the `Makefile`; PR 9 does not turn minification on. Soak window 2 therefore never started |
+| `e2e-bun` green on `main` | **Not met** when PR 9 was prepared: separate fixes (an a11y fix and an e2e flake triage) are in flight. PR 9 must not merge before that job is green on `main` |
+| `web-build-gate` / `WEB_BUILD_GATE_MEMBERS` | Neither exists in this repo's workflows, so there is no variable to set before merging |
+| Rollback | None to Next once PR 9 merges; forward fix only. Tag `web-dual-build-last` marks the last dual-build commit |
+
+**Comparator without a Next control** (Story 7.10 follow-through): `e2e-bun` no longer has a same-run Next report to tell Bun-only failures from shared ones. `scripts/e2e-baseline-compare.ts` now treats Next as clean when no `--next-report` is given, so the committed per-test classes in `tests/e2e/baseline/next-e2e-baseline.json` (recorded from the last Next build, kept as is) are the gate: a baseline-`pass` test that hard-fails after the one-worker confirmation rerun fails the job, as does a failing spec absent from the baseline. Baseline entries whose test was deleted with the Next-only specs are reported, not failed.

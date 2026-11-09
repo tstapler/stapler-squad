@@ -8,9 +8,9 @@
  *  - Clicking the tab renders `SessionSummaryPanel` with the session's id.
  *
  * Renders `SessionDetailView` directly (not the `SessionDetail` wrapper) so
- * that mocking `next/dynamic` here only affects this component's own
+ * that mocking `@/lib/lazy` here only affects this component's own
  * dynamic-imported `TerminalOutput`, not a second, outer dynamic-imported
- * layer — see `SessionDetail.embedded.test.tsx`, where mocking `next/dynamic`
+ * layer — see `SessionDetail.embedded.test.tsx`, where mocking `@/lib/lazy`
  * at that level also stubs out the dynamically-imported `SessionDetailView`
  * itself and breaks several of that file's own assertions (pre-existing,
  * unrelated to this change).
@@ -19,14 +19,14 @@ import React from "react";
 import { render, screen, within, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionDetailView } from "../SessionDetailView";
-import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import type { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";
 
 // --- Component mocks (mirrors SessionDetail.embedded.test.tsx conventions) ---
 
-jest.mock("next/dynamic", () => require("./sessionDetailViewTestFixtures").mockNextDynamic());
+jest.mock("@/lib/lazy", () => ({ lazyComponent: require("./sessionDetailViewTestFixtures").mockLazyComponent() }));
 
 jest.mock("../DiffViewer", () => require("./sessionDetailViewTestFixtures").mockDiffViewer());
 jest.mock("../VcsPanel", () => require("./sessionDetailViewTestFixtures").mockVcsPanel());

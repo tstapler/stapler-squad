@@ -515,3 +515,19 @@ func TestInvokeNotificationAction_ShouldPassConfirmToTheAnswerRouter_WhenRetryAn
 	require.NotNil(t, f.questions.last.Load())
 	assert.True(t, f.questions.last.Load().Confirm)
 }
+
+func TestInvokeNotificationAction_ShouldStoreAnswerRemotely_WhenRouteIsDurableRecord(t *testing.T) {
+	t.Parallel()
+	remote := stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+
+	stored := newDispatchFixture()
+	stored.questions.route = routeDurableRecord
+	assert.Equal(t, outApplied, stored.invoke(t, remote, answerReq("k1"), nil).Outcome)
+	assert.EqualValues(t, 1, stored.questions.writes.Load(), "stored answer reached the replier")
+
+	live := newDispatchFixture()
+	live.flags.off[scopeChannelTierB] = true // production default: spikeS6TierBPassed is false
+	resp := live.invoke(t, remote, answerReq("k1"), nil)
+	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, resp.Outcome)
+	assert.Zero(t, live.questions.writes.Load(), "live keystroke never reaches the pane remotely")
+}

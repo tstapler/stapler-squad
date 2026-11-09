@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -366,6 +367,61 @@ func TestSweeper_sweepResourcePressure_should_respectGracePeriod_When_SessionHad
 	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
 
 	assert.Equal(t, Active, inst.Status)
+}
+
+type terminalViewLiveProvider struct{ instances []*Instance }
+
+func (p terminalViewLiveProvider) GetInstances() []*Instance { return p.instances }
+
+func TestSweeper_AttachedTerminalPreventsAutomaticHibernation(t *testing.T) {
+	t.Parallel()
+	for _, pressure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pressure=%t", pressure), func(t *testing.T) {
+			t.Parallel()
+			reader := &memorytest.FakeReader{SystemPct: 95}
+			sweeper, _, cleanup := makeTestSweeper(t, reader, 85)
+			defer cleanup()
+			inst := makeIdleInstance(t, "viewed", "viewed", time.Hour)
+			release, err := inst.AcquireTerminalView()
+			require.NoError(t, err)
+			defer release()
+			sweeper.SetLiveProvider(terminalViewLiveProvider{instances: []*Instance{inst}})
+			if pressure {
+				sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+			} else {
+				sweeper.cfg.Hibernation.IdleTimeoutMinutes = 20
+				sweeper.sweep(context.Background())
+			}
+			assert.Equal(t, Active, inst.GetLifecycleStatus())
+			assert.Empty(t, inst.hibernateReason)
+		})
+	}
+}
+
+func TestTerminalViewLease(t *testing.T) {
+	t.Parallel()
+	inst := makeIdleInstance(t, "lease", "lease", time.Hour)
+	releaseA, err := inst.AcquireTerminalView()
+	require.NoError(t, err)
+	releaseB, err := inst.AcquireTerminalView()
+	require.NoError(t, err)
+	assert.True(t, inst.HasTerminalViewers())
+	releaseA()
+	releaseA() // Cleanup must be idempotent, including with multiple panes.
+	assert.True(t, inst.HasTerminalViewers())
+	releaseB()
+	assert.False(t, inst.HasTerminalViewers())
+	assert.Less(t, inst.hibernationIdleDuration(), time.Minute)
+}
+
+func TestTerminalViewLeaseRejectsAttachmentDuringAutomaticHibernation(t *testing.T) {
+	t.Parallel()
+	inst := makeIdleInstance(t, "race", "race", time.Hour)
+	inst.terminalViewers.Store(-1)
+	release, err := inst.AcquireTerminalView()
+	require.Error(t, err)
+	assert.Nil(t, release)
+	assert.Equal(t, int64(-1), inst.terminalViewers.Load())
 }
 
 // --- Benchmarks for ListSessions hot path ---

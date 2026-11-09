@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -51,6 +52,27 @@ type RedrawCapturer interface {
 	CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error)
 }
 
+// PaneActivityHinter lets a backend tell its supervising daemon how latency-sensitive the pane
+// is (tymuxd's SetPaneActivity). Backends without it (tmux) simply never get hints.
+type PaneActivityHinter interface {
+	SetPaneActivity(ctx context.Context, activity qos.Activity) error
+}
+
+// InStreamResyncer repairs every raw-output subscriber's stream by sequence number: a capture is
+// spliced into the stream as a redraw followed by exactly the output after it. Only backends
+// whose output carries sequence numbers (tymux, against a daemon that reports them) have it.
+type InStreamResyncer interface {
+	SupportsInStreamResync() bool
+	ResyncInStream(ctx context.Context) error
+}
+
+// DaemonReadiness confirms a backend's supervised daemon is reachable (tymuxd). Instance asks
+// before a backend migration tears down the old session, so an unreachable daemon cannot make
+// termination unconfirmable.
+type DaemonReadiness interface {
+	ensureDaemonReady() error
+}
+
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.
 type AltScreenQuerier interface {
 	IsAlternateScreenActive() (bool, error)
@@ -66,6 +88,24 @@ type CachedScreenCapturer interface {
 // it can be persisted and adopted again after a restart (tymux only).
 type DaemonSessionIDReporter interface {
 	DaemonSessionID() string
+}
+
+// StoredSessionProber answers "is the record's persisted daemon session live"
+// for a view that was never started in this process (a liveness shadow), where
+// HasSession is false by construction.
+type StoredSessionProber interface {
+	StoredSessionLive() bool
+}
+
+// AdoptedSessionReleaser lets a failed Start release a session it adopted (one that ran before
+// the attempt) instead of killing it. False means nothing was adopted.
+type AdoptedSessionReleaser interface {
+	ReleaseAdoptedSession() bool
+}
+
+// SessionLabeler follows an Instance rename: tymux identifies a record by its label.
+type SessionLabeler interface {
+	SetSessionLabel(label string)
 }
 
 // PaneCwdReporter reports the pane's live working directory (not a cached start dir).

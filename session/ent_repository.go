@@ -19,7 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -55,7 +54,22 @@ type EntRepository struct {
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	DbPath          string
 	pendingGuidance pendingGuidanceCache
+
+	// prVerifyCountersTrusted flips true once this process's PR startup
+	// maintenance has succeeded; until then stored verification counters on
+	// unverified-terminal rows read as zero (see linkStateToView).
+	prVerifyCountersTrusted atomic.Bool
+	prDrops                 prDropTracker
+	// afterPRLinkHook (tests only) runs inside AttachSessionPR's transaction after
+	// the link upsert, to inject a failure before the mirror update.
+	afterPRLinkHook func() error
 	migrationMode   bool // When true, enables dual-write mode for migration
+
+	// markerLimiter is built lazily (markerLimiterOnce) from markerClock, an
+	// injectable test clock (nil => time.Now); see RecordFlowMarker.
+	markerLimiter     *MarkerLimiter
+	markerLimiterOnce sync.Once
+	markerClock       func() time.Time
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -533,6 +547,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		}
 	}
 
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
+	}
+
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -613,6 +631,10 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 		if err := r.upsertClaudeSessionRow(ctx, tx, sess, data); err != nil {
 			return err
 		}
+	}
+
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
 	}
 
 	// Commit transaction
@@ -724,6 +746,37 @@ func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	}
 }
 
+// setGitHubPRMirrorFields writes the legacy scalar PR columns on a full save.
+// A session whose snapshot carries links writes them unconditionally so a detach
+// or an open PR can clear the number, URL and terminal flag; a session whose legacy
+// number has no link keeps its stored number/URL untouched. A session without links
+// keeps the old set-only behavior, so a stale in-memory zero cannot erase data (its
+// stale terminal=true is cleared by the immediate title-keyed write, not here).
+func setGitHubPRMirrorFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
+	switch {
+	case data.LegacyPRUnrepresented:
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		}
+	case data.HasPRLinks:
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL).
+			SetGithubPrNumber(data.GitHubPRNumber).
+			SetGithubPrStatusTerminal(data.GitHubPRStatusTerminal)
+	default:
+		if data.GitHubPRURL != "" {
+			sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+		}
+		if data.GitHubPRNumber > 0 {
+			sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+		}
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		} else if data.TerminalClearPending {
+			sessionUpdate.SetGithubPrStatusTerminal(false)
+		}
+	}
+}
+
 func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -750,15 +803,7 @@ func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data Instanc
 	if !data.CreationProgressUpdatedAt.IsZero() {
 		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
-	if data.GitHubPRURL != "" {
-		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
-	}
-	if data.GitHubPRNumber > 0 {
-		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
-	}
-	if data.GitHubPRStatusTerminal {
-		sessionUpdate.SetGithubPrStatusTerminal(true)
-	}
+	setGitHubPRMirrorFields(sessionUpdate, data)
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
 	}
@@ -1006,6 +1051,13 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
 	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete shells: %w", err)
+	}
+
+	// PR links and detach tombstones are keyed by the session uuid, not an FK.
+	if sess.UUID != "" {
+		if err := deleteOwnerPRRows(ctx, tx, SessionPROwner(sess.UUID)); err != nil {
+			return err
+		}
 	}
 
 	// Finally delete the session
@@ -2120,48 +2172,6 @@ func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program
 		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
 	}
 	return convertAnalyticsEntries(entries), nil
-}
-
-// ListAnalyticsBySessionID returns up to 2000 analytics events recorded for
-// the given session UUID, ordered by created_at DESC (most-recent first).
-// The 2000-row cap prevents unbounded reads for long-lived sessions.
-func (r *EntRepository) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
-	//nolint:nowrongdbentity known latent bug (ADR-036): analytics_events rows live in analytics.db, so this reads an empty table; fixed when analytics_events gets its own handle
-	entries, err := r.Client.AnalyticsEvent.Query().
-		Where(analyticsevent.SessionIDEQ(sessionID)).
-		Order(ent.Desc(analyticsevent.FieldCreatedAt)).
-		Limit(2000).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ListAnalyticsBySessionID %q: %w", sessionID, err)
-	}
-	return convertAnalyticsEventEntries(entries), nil
-}
-
-// convertAnalyticsEventEntry maps a single ent.AnalyticsEvent row to AnalyticsData.
-// Fields that have no counterpart in AnalyticsEvent are left as zero values.
-func convertAnalyticsEventEntry(e *ent.AnalyticsEvent) AnalyticsData {
-	var durationMs int64
-	if e.DurationMs != nil {
-		durationMs = *e.DurationMs
-	}
-	return AnalyticsData{
-		ID:              e.ID,
-		SessionID:       e.SessionID,
-		ToolName:        e.EventName,
-		CommandCategory: e.EventCategory,
-		DurationMs:      durationMs,
-		CreatedAt:       e.CreatedAt,
-	}
-}
-
-// convertAnalyticsEventEntries maps a slice of ent.AnalyticsEvent rows to the domain model.
-func convertAnalyticsEventEntries(es []*ent.AnalyticsEvent) []AnalyticsData {
-	out := make([]AnalyticsData, len(es))
-	for i, e := range es {
-		out[i] = convertAnalyticsEventEntry(e)
-	}
-	return out
 }
 
 func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {

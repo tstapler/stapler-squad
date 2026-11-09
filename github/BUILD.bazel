@@ -24,6 +24,7 @@ go_library(
         "priority.go",
         "rate_limit.go",
         "releases.go",
+        "repo_probe.go",
         "repo_ref.go",
         "repo_settings.go",
         "repo_settings_cache.go",
