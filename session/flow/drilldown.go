@@ -210,7 +210,10 @@ func (a *Aggregator) computeDrilldown(ctx context.Context, q DrilldownQuery, w F
 	if err != nil {
 		return nil, err
 	}
-	durations := r.drillDurations(q.Key)
+	durations, err := r.drillDurations(q.Key)
+	if err != nil {
+		return nil, fmt.Errorf("drill %q durations: %w", q.Key, err)
+	}
 	items := ListPage[DrillItem]{TotalCount: page.TotalCount, ReturnedCount: page.ReturnedCount, HasMore: page.HasMore, Truncated: page.Truncated}
 	for _, id := range page.Items {
 		m := meta[id]
@@ -221,8 +224,10 @@ func (a *Aggregator) computeDrilldown(ctx context.Context, q DrilldownQuery, w F
 	return &DrilldownPage{Key: q.Key, Meta: r.meta(map[SectionName]bool{}), Items: items}, nil
 }
 
-// drillDurations returns per-item durations for the keys that have one.
-func (r *run) drillDurations(key DrillKey) map[ItemID]time.Duration {
+// drillDurations returns per-item durations for the keys that have one. A
+// source error fails the page (errors are never cached) rather than caching
+// a page with missing durations.
+func (r *run) drillDurations(key DrillKey) (map[ItemID]time.Duration, error) {
 	switch {
 	case key == DrillLeadTime:
 		return r.leadDurations()
@@ -231,14 +236,14 @@ func (r *run) drillDurations(key DrillKey) map[ItemID]time.Duration {
 	case strings.HasPrefix(string(key), "stuck."):
 		return r.stuckDurations(key)
 	}
-	return map[ItemID]time.Duration{}
+	return map[ItemID]time.Duration{}, nil
 }
 
-func (r *run) leadDurations() map[ItemID]time.Duration {
+func (r *run) leadDurations() (map[ItemID]time.Duration, error) {
 	out := map[ItemID]time.Duration{}
 	ev, err := r.loadEvents()
 	if err != nil {
-		return out
+		return nil, err
 	}
 	byItem, ids := groupByItem(ev.spans)
 	for _, id := range ids {
@@ -250,26 +255,26 @@ func (r *run) leadDurations() map[ItemID]time.Duration {
 			out[id] = merged.Sub(start)
 		}
 	}
-	return out
+	return out, nil
 }
 
-func (r *run) prfixDurations() map[ItemID]time.Duration {
+func (r *run) prfixDurations() (map[ItemID]time.Duration, error) {
 	out := map[ItemID]time.Duration{}
 	ev, err := r.loadEvents()
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, c := range r.prfixResult(ev).Cycles {
 		out[c.Item] += c.Duration
 	}
-	return out
+	return out, nil
 }
 
-func (r *run) stuckDurations(key DrillKey) map[ItemID]time.Duration {
+func (r *run) stuckDurations(key DrillKey) (map[ItemID]time.Duration, error) {
 	out := map[ItemID]time.Duration{}
 	all, err := r.loadStuck()
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, iv := range r.stuckInWindow(all) {
 		if DrillStuckReason(iv.Reason) != key {
@@ -281,5 +286,5 @@ func (r *run) stuckDurations(key DrillKey) map[ItemID]time.Duration {
 		}
 		out[iv.ItemID] += max(end.Sub(iv.FirstDetectedAt), 0)
 	}
-	return out
+	return out, nil
 }

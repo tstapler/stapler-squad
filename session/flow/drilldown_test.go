@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -114,4 +115,23 @@ func TestDrilldown_should_PageAndListValidKeys_When_OffsetOrUnknownKey(t *testin
 	empty, err := agg.Drilldown(context.Background(), DrilldownQuery{Key: DrillThrashEpisode, Query: q})
 	require.NoError(t, err, "a registered key with no items is an empty page, not an unknown key")
 	assert.Zero(t, empty.Items.TotalCount)
+}
+
+func TestRun_should_ReturnError_When_DurationSourceFails(t *testing.T) {
+	t.Parallel()
+	f := fixtureSrc(t)
+	f.eventsErr = errors.New("db down")
+	agg := NewAggregator(f.sources(), fixtureClock)
+	w, err := WindowSpec{Days: 30}.Window(fixtureClock)
+	require.NoError(t, err)
+
+	for _, key := range []DrillKey{DrillLeadTime, DrillPRFixDwell} {
+		r := newRun(context.Background(), agg, FlowQuery{Window: WindowSpec{Days: 30}}, w)
+		_, err := r.drillDurations(key)
+		assert.ErrorContains(t, err, "db down", key)
+	}
+	f.stuckErr = errors.New("stuck down")
+	r := newRun(context.Background(), agg, FlowQuery{Window: WindowSpec{Days: 30}}, w)
+	_, err = r.drillDurations(DrillKey("stuck.no_progress"))
+	assert.ErrorContains(t, err, "stuck down")
 }
