@@ -167,10 +167,10 @@ Goroutine leaks appear as a count that grows monotonically without bound. The se
 
 - logs a WARN when the count first exceeds 1.5x the budget ("elevated");
 - logs an ERROR, and `/actuator/health` reports `runtime` as `degraded`, once it has stayed above 1.5x the budget for 30 minutes ("sustained");
-- does the same ("drifting") when the session-adjusted count has risen steadily, at least 40 goroutines/hour with R-squared of 0.8 or better, over at least an hour of history in a 2 hour window, even while inside the limit;
+- logs an ERROR and sets `state` to `drifting` (health stays `ok` until the constants have soaked in production) when the session-adjusted count has risen steadily, at least 40 goroutines/hour and 100 in total with R-squared of 0.8 or better, over at least 90 minutes of a 2 hour window, even while inside the limit;
 - does the same immediately if the count exceeds a hard ceiling, 2000 or twice the budget, whichever is larger.
 
-A short spike above budget never degrades health, and the 30-minute clock only resets after the count has stayed under the limit for 5 minutes. Until the session poller is populated at startup the watch skips its samples instead of judging against an empty budget (a server with no sessions at all therefore only gets the ceiling check). `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`.
+A short spike above budget never degrades health, and the 30-minute clock only resets after the count has stayed under the limit for 5 minutes. Until the session poller first holds an instance the watch skips its samples instead of judging against an empty budget (a server that has never had a session therefore only gets the ceiling check); after that, zero sessions is a real zero. `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit`, `elevated_for_s` and `drift_per_hour` under `components.runtime.detail`.
 
 To track manually:
 

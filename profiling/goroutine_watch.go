@@ -32,7 +32,7 @@ const (
 	// Drift check: least-squares slope of (count - typical per-session cost) over a trailing window,
 	// sampled once a minute. It catches slow leaks that stay inside the 1.5x headroom.
 	driftWindow      = 2 * time.Hour
-	driftMinSpan     = time.Hour // history needed before judging
+	driftMinSpan     = 90 * time.Minute // history needed before judging
 	driftMinSamples  = 30
 	driftSampleEvery = time.Minute
 	driftPerHour     = 40.0 // goroutines/hour of sustained rise
@@ -57,8 +57,8 @@ const (
 	GoroutinesElevated GoroutineState = "elevated"
 	// GoroutinesSustained: above budget continuously for goroutineSustainFor. Likely a leak.
 	GoroutinesSustained GoroutineState = "sustained"
-	// GoroutinesDrifting: a steady upward trend over the last hour or more, even though the count is
-	// still within its limit. Likely a slow leak.
+	// GoroutinesDrifting: a steady upward trend over 90+ minutes, even though the count is still
+	// within its limit. Likely a slow leak; reported but not a health fault (see Degraded).
 	GoroutinesDrifting GoroutineState = "drifting"
 	// GoroutinesOverCeiling: above the hard ceiling right now.
 	GoroutinesOverCeiling GoroutineState = "over_ceiling"
@@ -76,9 +76,11 @@ type GoroutineVerdict struct {
 	DriftPerHour float64       // fitted slope of the session-adjusted count, goroutines/hour
 }
 
-// Degraded reports whether /actuator/health should flag this verdict.
+// Degraded reports whether /actuator/health should flag this verdict. Drifting is deliberately
+// excluded: its per-session constant is calibrated from one snapshot, so it is logged at ERROR and
+// shown in the health detail's state, but does not fail health until it has soaked in production.
 func (v GoroutineVerdict) Degraded() bool {
-	return v.State == GoroutinesSustained || v.State == GoroutinesDrifting || v.State == GoroutinesOverCeiling
+	return v.State == GoroutinesSustained || v.State == GoroutinesOverCeiling
 }
 
 // ExpectedGoroutines is the budget for a process with the given number of live sessions.

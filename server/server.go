@@ -210,15 +210,19 @@ const sessionHealthCheckInterval = 15 * time.Second
 
 // liveSessionCount reports how many sessions own goroutines (Active or Creating; hibernated,
 // paused, stopped and failed ones hold none) and whether the review-queue poller has been given its
-// instances yet. An empty poller reads as unknown rather than zero, so the leak watch does not
-// judge the process against an empty budget during startup.
+// instances yet. Until it first holds one the count is unknown, so the leak watch does not judge the
+// process against an empty budget during startup; once seen, an empty poller is a real zero.
 func liveSessionCount(deps *ServerDependencies) func() (int, bool) {
+	var populated atomic.Bool
 	return func() (int, bool) {
 		if deps.ReviewQueuePoller == nil {
 			return 0, false
 		}
 		all := deps.ReviewQueuePoller.GetInstances()
-		if len(all) == 0 {
+		if len(all) > 0 {
+			populated.Store(true)
+		}
+		if !populated.Load() {
 			return 0, false
 		}
 		n := 0

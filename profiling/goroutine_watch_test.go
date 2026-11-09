@@ -181,13 +181,13 @@ func TestGoroutineWatch_should_FlagADrift_WhenTheCountClimbsSteadilyInsideItsLim
 
 	assert.Equal(t, GoroutinesDrifting, v.State)
 	assert.InDelta(t, 150, v.DriftPerHour, 5)
-	assert.True(t, v.Degraded())
+	assert.False(t, v.Degraded(), "drift is reported, not yet a health fault")
 }
 
-func TestGoroutineWatch_should_NotFlagADrift_BeforeAnHourOfHistory(t *testing.T) {
+func TestGoroutineWatch_should_NotFlagADrift_BeforeNinetyMinutesOfHistory(t *testing.T) {
 	t.Parallel()
 	w := &GoroutineWatch{}
-	v := feed(w, 50*time.Minute, 20, func(m float64) int { return 700 + int(m*2.5) })
+	v := feed(w, 80*time.Minute, 20, func(m float64) int { return 700 + int(m*2.5) })
 	assert.Equal(t, GoroutinesOK, v.State)
 }
 
