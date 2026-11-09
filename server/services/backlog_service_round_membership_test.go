@@ -18,6 +18,7 @@ import (
 // and bounce paths create their work ItemSession through the same
 // CreateItemSession(work) call, which these assertions exercise at the data level.
 func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWorkSession(t *testing.T) {
+	t.Parallel()
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
