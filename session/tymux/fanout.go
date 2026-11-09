@@ -13,6 +13,22 @@ import (
 // memory if a subscriber stops reading entirely.
 const subscriberBufferSize = 64
 
+// fanoutSubscriber is one subscriber's channel plus whether Broadcast has dropped a frame for it
+// since its last repaint.
+type fanoutSubscriber struct {
+	ch      chan []byte
+	dropped bool
+	// resyncing is true between BeginRepaint and FinishRepaint: a repaint capture is in flight, so
+	// Broadcast holds frames here (at most cap(ch)-1) instead of queueing them. heldLost records
+	// that one did not fit. Guarded by ClientFanout.mu.
+	resyncing bool
+	held      [][]byte
+	heldLost  bool
+	// stamps holds the enqueue time of each queued frame (same order) for a timed subscriber, so
+	// Dequeued can report the queue wait without changing the frame channel's type. nil if untimed.
+	stamps chan time.Time
+}
+
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
 // standing Attach stream's output events (Story 2.3.2): the GoF Observer
 // pattern per Pattern Decisions, satisfying SubscribeToControlModeUpdates'
@@ -23,19 +39,30 @@ const subscriberBufferSize = 64
 // stall the standing stream's reader goroutine — matching the existing
 // lossy-broadcast precedent tymuxd's own output_gap semantics already
 // establish server-side (ADR-003-adjacent design, see Attach's proto doc).
+// A drop leaves a hole in a byte stream the consumer parses statefully, so
+// it is reported through SetOnDrop and healed with RepaintDropped.
 type ClientFanout struct {
 	mu          sync.Mutex
-	subscribers map[string]*fanoutSub
+	subscribers map[string]*fanoutSubscriber
 	nextID      uint64
+	onDrop      func()
 	rec         *termlat.Recorder
 }
 
-// fanoutSub is one subscriber's queue. A timed subscriber also keeps the enqueue time of each
-// queued frame in stamps (same capacity, same order), so Dequeued can report the queue wait
-// without changing the frame channel's type.
-type fanoutSub struct {
-	ch     chan []byte
-	stamps chan time.Time // nil for an untimed subscriber
+// sendLocked queues data without blocking and reports whether it fit. A timed subscriber also
+// stamps the enqueue time (see Dequeued). Only the broadcasting paths send, all under ClientFanout.mu.
+func (s *fanoutSubscriber) sendLocked(data []byte) bool {
+	if len(s.ch) == cap(s.ch) {
+		return false
+	}
+	if s.stamps != nil {
+		select {
+		case s.stamps <- time.Now():
+		default: // a consumer that never calls Dequeued: lose the sample, never block the reader
+		}
+	}
+	s.ch <- data
+	return true
 }
 
 var tymuxLabels = termlat.Labels{Backend: "tymux"}
@@ -44,7 +71,15 @@ var tymuxLabels = termlat.Labels{Backend: "tymux"}
 func NewClientFanout() *ClientFanout { return newClientFanoutRecording(termlat.Default) }
 
 func newClientFanoutRecording(rec *termlat.Recorder) *ClientFanout {
-	return &ClientFanout{subscribers: make(map[string]*fanoutSub), rec: rec}
+	return &ClientFanout{subscribers: make(map[string]*fanoutSubscriber), rec: rec}
+}
+
+// SetOnDrop registers fn to run (outside the fanout's lock, on the broadcasting goroutine)
+// whenever a Broadcast drops a frame for a full subscriber. fn must not block.
+func (f *ClientFanout) SetOnDrop(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onDrop = fn
 }
 
 // Subscribe registers a new subscriber and returns its id (for
@@ -61,7 +96,7 @@ func (f *ClientFanout) subscribe(timed bool) (string, chan []byte) {
 	defer f.mu.Unlock()
 	f.nextID++
 	id := strconv.FormatUint(f.nextID, 10)
-	sub := &fanoutSub{ch: make(chan []byte, subscriberBufferSize)}
+	sub := &fanoutSubscriber{ch: make(chan []byte, subscriberBufferSize)}
 	if timed {
 		// A consumer is between receive and Dequeued for at most one frame, so the stamps can
 		// outnumber the queue by one; the slack keeps Broadcast from ever blocking on a stamp.
@@ -104,22 +139,109 @@ func (f *ClientFanout) Unsubscribe(id string) {
 // goroutine).
 func (f *ClientFanout) Broadcast(data []byte) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	dropped := false
 	for _, sub := range f.subscribers {
-		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, float64(len(sub.ch)))
-		if len(sub.ch) == cap(sub.ch) {
-			f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
+		if sub.resyncing {
+			if len(sub.held) < cap(sub.ch)-1 {
+				sub.held = append(sub.held, data)
+			} else {
+				sub.heldLost = true
+			}
 			continue
 		}
-		// Broadcast is the only sender and holds f.mu, so the room just checked cannot vanish.
-		if sub.stamps != nil {
-			select {
-			case sub.stamps <- time.Now():
-			default: // a consumer that never calls Dequeued: lose the sample, never block the reader
+		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, float64(len(sub.ch)))
+		if !sub.sendLocked(data) {
+			f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
+			sub.dropped = true
+			dropped = true
+		}
+	}
+	onDrop := f.onDrop
+	f.mu.Unlock()
+	if dropped && onDrop != nil {
+		onDrop()
+	}
+}
+
+// BeginRepaint claims every subscriber that has lost a frame and returns their ids. Until
+// FinishRepaint their new output is held, so everything still queued pre-dates the capture the
+// caller takes next.
+func (f *ClientFanout) BeginRepaint() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []string
+	for id, sub := range f.subscribers {
+		if !sub.dropped {
+			continue
+		}
+		sub.dropped = false
+		sub.resyncing = true
+		sub.held, sub.heldLost = nil, false
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// HasDropped reports whether any subscriber is waiting for a repaint.
+func (f *ClientFanout) HasDropped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.subscribers {
+		if sub.dropped {
+			return true
+		}
+	}
+	return false
+}
+
+// FinishRepaint ends a BeginRepaint claim. With a repaint (the capture succeeded) each claimed
+// subscriber's queued output, all of which pre-dates the capture, is replaced by it, and the
+// output held during the capture follows. With none (the capture failed) the queue is kept and
+// only the held output is appended. A subscriber that could not keep all held output, or had no
+// repaint, is re-flagged for another pass. It returns how many subscribers were repainted.
+func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, id := range ids {
+		sub, ok := f.subscribers[id]
+		if !ok {
+			continue
+		}
+		held := sub.held
+		complete := repaint != nil && !sub.heldLost
+		sub.resyncing, sub.held, sub.heldLost = false, nil, false
+		if repaint != nil {
+			// Under f.mu nothing else sends on sub.ch, and a consumer only makes room.
+			for drained := false; !drained; {
+				select {
+				case <-sub.ch:
+				default:
+					drained = true
+				}
+			}
+			if sub.stamps != nil {
+				for drained := false; !drained; {
+					select {
+					case <-sub.stamps:
+					default:
+						drained = true
+					}
+				}
+			}
+			held = append([][]byte{repaint}, held...)
+			n++
+		}
+		for _, d := range held {
+			if !sub.sendLocked(d) {
+				complete = false
 			}
 		}
-		sub.ch <- data
+		if !complete {
+			sub.dropped = true
+		}
 	}
+	return n
 }
 
 // count reports the current subscriber count — test-only introspection.

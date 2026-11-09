@@ -165,6 +165,9 @@ type tymuxGRPCSession struct {
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
 
+	// dropRepaintPending is true while a repaint for frames the fanout dropped is running.
+	dropRepaintPending atomic.Bool
+
 	// lastEventUnixNano is when the standing stream last delivered any
 	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
 	lastEventUnixNano atomic.Int64
@@ -260,7 +263,7 @@ const (
 // NewTymuxGRPCSession constructs a tymuxGRPCSession using the given rpcTransport,
 // returned as a TymuxManager since tymuxGRPCSession itself is unexported.
 func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
-	return &tymuxGRPCSession{
+	s := &tymuxGRPCSession{
 		transport:            transport,
 		bannerFilter:         tmux.NewBannerFilter(),
 		fanout:               NewClientFanout(),
@@ -272,6 +275,8 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 		sendLockWait:         defaultSendLockWait,
 		inputPayloadTimeout:  defaultInputPayloadTimeout,
 	}
+	s.fanout.SetOnDrop(s.scheduleDropRepaint)
+	return s
 }
 
 // --- Lifecycle ---

@@ -272,6 +272,14 @@ func TestTermLatencyFeedsRecorderAndRejectsServerStages(t *testing.T) {
 	assert.Equal(t, int64(2), rejected)
 }
 
+func TestTermLatencyRejectsThrottledTabValues(t *testing.T) {
+	cm, _ := newTestClientMetrics(t)
+	before := termTotal(termlat.StageTTFPFirstPaint, "tymux", "local")
+	cm.observe(context.Background(), Event{EventName: eventTermLatency, DurationMs: ms(maxTermLatencyMs + 1),
+		Labels: map[string]string{"stage": "ttfp_first_paint", "backend": "tymux", "listener": "local"}})
+	assert.Equal(t, before, termTotal(termlat.StageTTFPFirstPaint, "tymux", "local"))
+}
+
 func TestTermLatencyAcceptsTheBrowserDecompositionStages(t *testing.T) {
 	cm, _ := newTestClientMetrics(t)
 	for _, stage := range []string{termlat.StageInputQueue, termlat.StageEchoRender, termlat.StageWSBufferedKiB, termlat.StageEventLoopLag} {

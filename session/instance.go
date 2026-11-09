@@ -754,11 +754,15 @@ type Instance struct {
 	driverRunning atomic.Bool
 	// retryInFlight guards every restart path (automated backoff-expiry,
 	// restart-grace, manual RetryNow) against running concurrently for the
-	// same instance. Claimed exclusively inside restartForRetry via CAS — no
-	// other function CASes it directly, so every restart path is guarded by
-	// construction rather than by each caller remembering to. See
-	// session/retry_state.go's restartForRetry.
+	// same instance. Claimed inside restartForRetry via CAS; the only other
+	// claimant is HotRestoreIfLive, so it cannot interleave with a restart.
+	// See session/retry_state.go's restartForRetry.
 	retryInFlight atomic.Bool
+	// hotRestoreMu serializes HotRestoreIfLive for this instance.
+	hotRestoreMu deadlock.Mutex
+	// hotAttaching is set for the duration of a HotRestoreIfLive Start: the backing
+	// process pre-exists the attempt, so a failed Start must release it, never kill it.
+	hotAttaching atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -1693,6 +1697,11 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
+			// A hot attach only adopts a live process; never cold-launch a new one.
+			if i.hotAttaching.Load() {
+				setupErr = fmt.Errorf("hot attach: backing process is no longer alive")
+				return setupErr
+			}
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
 			hasClaudeSession := i.HasClaudeSession()
 			if hasClaudeSession {
@@ -2153,6 +2162,11 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	i.stopCDP()
 	// A session that ran before this attempt is released, not killed.
 	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	// A hot attach only ever adopts a live process (tmux included, which has no
+	// releaser); leave it running rather than kill-session it.
+	if i.hotAttaching.Load() {
 		return nil
 	}
 	return i.killSessionAttachedByThisAttempt()

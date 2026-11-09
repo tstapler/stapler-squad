@@ -110,6 +110,11 @@ type BatchWindow struct {
 	clock     Clock
 	seq       sequenceCounter
 
+	// deliverMu is taken (while mu is still held) before a flush's bytes leave the buffer's
+	// critical section and held through onFlush, so deliveries happen in the order the bytes
+	// were taken even when the ceiling timer and a TryFlush caller race.
+	deliverMu sync.Mutex
+
 	mu         sync.Mutex
 	buf        *[]byte
 	timer      Timer
@@ -216,11 +221,26 @@ func (b *BatchWindow) flushLocked(reason FlushReason) {
 	fresh := batchScratchPool.Get().(*[]byte)
 	*fresh = (*fresh)[:0]
 	b.buf = fresh
+	b.deliverMu.Lock()
+	defer b.deliverMu.Unlock()
 	b.mu.Unlock()
 
 	batchScratchPool.Put(scratch)
 	b.flushCount.Add(1)
 	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: reason, FramesCoalesced: frames})
+}
+
+// Discard drops any pending accumulated bytes without delivering them, for a caller about to
+// publish a snapshot that already contains them: flushing them after it would apply them twice.
+func (b *BatchWindow) Discard() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	*b.buf = (*b.buf)[:0]
+	b.frameCount = 0
 }
 
 // Bypass immediately delivers data as its own BroadcastUnit, stamped with
@@ -231,6 +251,8 @@ func (b *BatchWindow) flushLocked(reason FlushReason) {
 // already-pending batch still flushes later on its own normal schedule;
 // Bypass never cancels or folds into it.
 func (b *BatchWindow) Bypass(data []byte) {
+	b.deliverMu.Lock()
+	defer b.deliverMu.Unlock()
 	b.onFlush(BroadcastUnit{Seq: b.seq.next(), Data: data, Reason: FlushBypass, FramesCoalesced: 1})
 }
 

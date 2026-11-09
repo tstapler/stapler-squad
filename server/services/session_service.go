@@ -22,6 +22,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -332,6 +333,8 @@ type SessionService struct {
 	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
 	escapeEventsClient *ent.Client
+	// escapeAggregates reads escape summaries from rollups plus raw edges; nil means raw only.
+	escapeAggregates *escapedb.Reader
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
