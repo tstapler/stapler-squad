@@ -31,6 +31,11 @@ const (
 	ResolutionAutoVerified  Resolution = "auto_verified"
 	ResolutionHumanOverride Resolution = "human_override"
 	ResolutionArchived      Resolution = "archived"
+	// ResolutionAdvanced: the item's current status is past review (pr_pending
+	// or done) even though its last verdict is not a PASS. Status is read now,
+	// not at window end, so a past window can show an item as advanced that was
+	// still stalled then.
+	ResolutionAdvanced Resolution = "advanced"
 )
 
 // ItemReviewHistory is the deadlock input for one item. AgentClaimedDone is
@@ -290,8 +295,11 @@ func resolve(status domain.BacklogStatus, last Verdict) Resolution {
 			return ResolutionPassed
 		}
 	}
-	if status == domain.BacklogStatusArchived {
+	switch status {
+	case domain.BacklogStatusArchived:
 		return ResolutionArchived
+	case domain.BacklogStatusPRPending, domain.BacklogStatusDone:
+		return ResolutionAdvanced
 	}
 	return ResolutionOpen
 }

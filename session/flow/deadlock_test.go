@@ -248,3 +248,23 @@ func TestDeadlock_should_ResolveFixtureItems_When_LiveShapesLoaded(t *testing.T)
 	assert.NotContains(t, got, ItemID("same-diff"), "a shared hash alone does not make a run of 2 a candidate")
 	assert.NotContains(t, got, ItemID("nocommit-a"))
 }
+
+func TestDeadlock_should_ResolveAndNotStall_When_StatusMovedPastReview(t *testing.T) {
+	t.Parallel()
+	mk := func(id ItemID, st domain.BacklogStatus) ItemReviewHistory {
+		h := mkHistory(id, fail(3), fail(3), fail(3))
+		h.Status = st
+		return h
+	}
+	r := detect(mk("done", domain.BacklogStatusDone), mk("prp", domain.BacklogStatusPRPending), mk("stuck", domain.BacklogStatusReview))
+
+	got := map[ItemID]DeadlockCandidate{}
+	for _, c := range r.Candidates {
+		got[c.ItemID] = c
+	}
+	require.Len(t, got, 3)
+	assert.Equal(t, ResolutionAdvanced, got["done"].Resolution)
+	assert.Equal(t, ResolutionAdvanced, got["prp"].Resolution)
+	assert.Equal(t, ResolutionOpen, got["stuck"].Resolution)
+	assert.Equal(t, 1, r.StalledCount, "only the item still in review is stalled")
+}
