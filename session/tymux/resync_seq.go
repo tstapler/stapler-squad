@@ -297,7 +297,7 @@ func (s *tymuxGRPCSession) spliceResyncCtx(ctx context.Context, need uint64, sco
 		recordStreamResync(reason, resyncOutcomeFallback)
 		return nil
 	default:
-		n = s.fanout.RepaintDropped(snap.redraw)
+		s.fanout.FinishRepaint(s.fanout.BeginRepaint(), snap.redraw)
 		recordStreamResync(reason, resyncOutcomeFallback)
 		return nil
 	}
