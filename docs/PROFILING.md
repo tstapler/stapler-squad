@@ -163,7 +163,13 @@ make profile-goroutines
 
 ### Detect Leaks
 
-Goroutine leaks appear as a count that grows monotonically without bound. The server's `MonitorGoroutines` function (in `profiling/profiling.go`) logs goroutine counts every 30 seconds when `--profile` is active and warns when count exceeds 100.
+Goroutine leaks appear as a count that grows monotonically without bound. The server always runs a leak watch (`profiling.GoroutineWatch`, sampled every 30 seconds, no `--profile` needed). It compares the live goroutine count with a budget of about 100 + 25 per live session and:
+
+- logs a WARN when the count first exceeds 1.5x that budget ("elevated");
+- logs an ERROR, and `/actuator/health` reports `runtime` as `degraded`, once it has stayed above 1.5x the budget for 30 minutes ("sustained", likely a leak);
+- does the same immediately if the count exceeds a hard ceiling, 2000 or twice the budget, whichever is larger.
+
+A short spike above budget never degrades health. `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`. Steady state is about 20 goroutines per session (615 with ~30 sessions), so a fixed threshold either misses a small-fleet leak (BUG-034 was found at 310-320 goroutines) or fires permanently on a large one.
 
 To track manually:
 

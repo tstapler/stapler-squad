@@ -21,10 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
-// highGoroutineCountThreshold shares profiling.MonitorGoroutines' alert threshold, so "degraded"
-// in /actuator/health means the same thing an operator sees logged.
-const highGoroutineCountThreshold = profiling.HighGoroutineThreshold
-
 // registerActuatorRoutes wires a small actuator-style surface (inspired by
 // Spring Boot's /actuator/health, /actuator/metrics): a machine-checkable
 // health rollup and a flat metrics snapshot, always available on the main
@@ -162,20 +158,27 @@ type actuatorComponent struct {
 }
 
 func handleActuatorHealth(w http.ResponseWriter, _ *http.Request) {
-	writeActuatorHealth(w, tmux.ForkPressureSnapshot().Level, runtime.NumGoroutine())
+	writeActuatorHealth(w, tmux.ForkPressureSnapshot().Level, runtime.NumGoroutine(), profiling.DefaultGoroutineWatch.Last())
 }
 
 // writeActuatorHealth takes the process-global inputs as parameters so tests can
 // pin them instead of depending on package-wide goroutine count or fork pressure.
-func writeActuatorHealth(w http.ResponseWriter, forkLevel tmux.ForkPressureLevel, goroutines int) {
+func writeActuatorHealth(w http.ResponseWriter, forkLevel tmux.ForkPressureLevel, goroutines int, growth profiling.GoroutineVerdict) {
 	components := map[string]actuatorComponent{
 		"fork_pressure": {
 			Status: forkPressureHealthStatus(forkLevel),
 			Detail: forkLevel.String(),
 		},
 		"runtime": {
-			Status: goroutineHealthStatus(goroutines),
-			Detail: map[string]any{"goroutines": goroutines},
+			Status: goroutineHealthStatus(goroutines, growth),
+			Detail: map[string]any{
+				"goroutines":     goroutines,
+				"state":          string(growth.State),
+				"sessions":       growth.Sessions,
+				"expected":       growth.Expected,
+				"limit":          growth.Limit,
+				"elevated_for_s": int(growth.ElevatedFor.Seconds()),
+			},
 		},
 	}
 
@@ -212,8 +215,12 @@ func forkPressureHealthStatus(level tmux.ForkPressureLevel) string {
 	}
 }
 
-func goroutineHealthStatus(count int) string {
-	if count > highGoroutineCountThreshold {
+// goroutineHealthStatus is degraded only for a sustained anomaly (above the session-scaled budget
+// for 30 minutes, see profiling.GoroutineWatch) or a count over the hard ceiling right now. A short
+// spike above budget is logged by the watch but leaves health ok.
+func goroutineHealthStatus(count int, growth profiling.GoroutineVerdict) string {
+	ceiling := max(growth.Ceiling, profiling.HighGoroutineThreshold)
+	if growth.Degraded() || count > ceiling {
 		return "degraded"
 	}
 	return "ok"

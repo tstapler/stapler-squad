@@ -264,12 +264,6 @@ var (
 				}
 				defer cleanup()
 
-				// Monitor goroutines periodically
-				if profileFlag {
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					go profiling.MonitorGoroutines(ctx, 10*time.Second)
-				}
 			}
 
 			// Load user-defined detector plugins from the config dir's detectors/

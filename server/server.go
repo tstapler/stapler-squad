@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
+	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
@@ -207,6 +208,17 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
+// liveSessionCount reports the sessions the review-queue poller holds in memory, which is the
+// population goroutines scale with. Nil-safe: a server without the poller reports zero.
+func liveSessionCount(deps *ServerDependencies) func() int {
+	return func() int {
+		if deps.ReviewQueuePoller == nil {
+			return 0
+		}
+		return len(deps.ReviewQueuePoller.GetInstances())
+	}
+}
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -215,6 +227,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.hookIPC = newHookIPCState(deps)
 	srv.unfinishedScanner = deps.UnfinishedScanner
 	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
+
+	// Always-on goroutine leak watch; /actuator/health reads its verdict.
+	srv.goBackground(func() {
+		profiling.RunGoroutineWatch(serverCtx, profiling.DefaultGoroutineWatch, profiling.GoroutineSampleInterval, liveSessionCount(deps))
+	})
 
 	// Start background components
 	srv.goBackground(func() {
