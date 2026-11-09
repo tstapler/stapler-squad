@@ -27,6 +27,9 @@ const (
 // logs its own hub-scoped QuiescenceTimedOut WARN (Task 1.3.2f) instead of
 // leaving that to each caller.
 func waitForQuiescence(clock Clock, updates <-chan []byte, timeout, quietFor time.Duration, sessionName string) {
+	// Sampled before any timer arms: a clock advance racing a later sample would shorten the
+	// measured elapsed and lose the timeout WARN.
+	start := clock.Now()
 	deadline := make(chan struct{})
 	deadlineTimer := clock.AfterFunc(timeout, func() { close(deadline) })
 	defer deadlineTimer.Stop()
@@ -56,7 +59,6 @@ func waitForQuiescence(clock Clock, updates <-chan []byte, timeout, quietFor tim
 	}
 	quietTimer := arm()
 	defer func() { quietTimer.Stop() }()
-	start := clock.Now()
 	for {
 		select {
 		case _, ok := <-updates:
