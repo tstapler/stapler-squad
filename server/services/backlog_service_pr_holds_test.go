@@ -27,6 +27,7 @@ func holdKinds(item *sessionv1.BacklogItem) []sessionv1.PrHold_Kind {
 }
 
 func TestGetBacklogItem_ShouldFillPullRequestsAndHolds_OnlyWhenBacklogScopeOn(t *testing.T) {
+	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusPRPending)
 	h.link(session.ItemPROwner(h.itemID), 21, session.PRStateMerged)
 	h.link(session.ItemPROwner(h.itemID), 22, session.PRStateOpen)
@@ -44,6 +45,7 @@ func TestGetBacklogItem_ShouldFillPullRequestsAndHolds_OnlyWhenBacklogScopeOn(t 
 }
 
 func TestGetBacklogItem_ShouldNameSupersededRoundPR_AndLiveSession(t *testing.T) {
+	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusDone)
 	h.svc.cleanup.liveEnabled = func() bool { return true }
 	h.svc.SetLiveWorkProbe(&stubProbe{live: map[string]bool{"round-two": true}})
