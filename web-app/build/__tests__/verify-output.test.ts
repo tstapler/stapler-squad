@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { computeOutputStats, initialJsFiles } from "../stats";
-import { isAllowed, validateAllowlist, verifyOutput, type AllowlistEntry, type Budgets, type VerifyInput } from "../verify-output";
+import { isAllowed, packageOfSource, validateAllowlist, verifyOutput, type AllowlistEntry, type Budgets, type VerifyInput } from "../verify-output";
 
 const REPO = path.resolve(__dirname, "../../..");
 const THEME = '{"clean":"_c1","dark":"_d1"}';
@@ -10,6 +10,7 @@ const BUDGETS: Budgets = {
   totalJsBytes: { limit: 1000, source: "t" },
   initialJsBytes: { limit: 500, source: "t" },
   largestChunkBytes: { limit: 400, source: "t" },
+  lazyChunkBytes: { limit: 300, source: "t" },
   maxWallMs: { limit: 10000, source: "t" },
 };
 const ALLOW: AllowlistEntry[] = [{ path: "push-sw.js", reason: "worker" }];
@@ -111,6 +112,10 @@ describe("budgets and wall time", () => {
     expect(over({ largestChunkBytes: 401 })).toMatch(/Largest chunk is 401 B, over the 400 B limit/);
   });
 
+  it("caps a lazy chunk separately from the entry", () => {
+    expect(over({ largestLazyChunkBytes: 301 })).toMatch(/Largest lazy chunk is 301 B, over the 300 B limit/);
+  });
+
   it("fails the wall-time limit and passes below it", () => {
     expect(over({ totalDurationMs: 10001 })).toMatch(/wall time 10001 ms exceeds maxWallMs 10000 ms/);
     expect(over({ totalDurationMs: 9999 })).toBe("");
@@ -127,7 +132,40 @@ describe("budgets and wall time", () => {
   });
 });
 
+describe("heavy modules in the initial closure", () => {
+  const HEAVY = [{ package: "ghostty-web", reason: "renderer" }, { package: "@xterm/", reason: "xterm" }];
+  const withMap = (sources: string[]) => tree((o) => write(o, "_next/static/chunks/a.js.map", JSON.stringify({ version: 3, sources })));
+
+  it("flags a registered package bundled into an initial-closure file", () => {
+    const { input } = withMap(["../../src/app.ts", "../../node_modules/.bun/ghostty-web@0.4.0/node_modules/ghostty-web/dist/index.js"]);
+    expect(errorsOf({ ...input, heavyModules: HEAVY })).toEqual([expect.stringContaining("a.js is in the initial closure and bundles ghostty-web (renderer)")]);
+  });
+
+  it("matches a scope prefix and ignores unregistered packages", () => {
+    const { input } = withMap(["../../node_modules/@xterm/addon-fit/lib/x.js", "../../node_modules/react/index.js"]);
+    expect(errorsOf({ ...input, heavyModules: HEAVY })).toEqual([expect.stringContaining("@xterm/addon-fit")]);
+  });
+
+  it("ignores a heavy package that only lives in a lazy chunk", () => {
+    const { input } = tree((o) => {
+      write(o, "_next/static/chunks/lazy.js", "x");
+      write(o, "_next/static/chunks/lazy.js.map", JSON.stringify({ sources: ["../../node_modules/ghostty-web/dist/index.js"] }));
+    });
+    expect(errorsOf({ ...input, heavyModules: HEAVY })).toEqual([]);
+  });
+
+  it("resolves the innermost node_modules package", () => {
+    expect(packageOfSource("../../node_modules/.bun/a@1/node_modules/@scope/pkg/dist/x.js")).toBe("@scope/pkg");
+    expect(packageOfSource("../../src/lib/x.ts")).toBeUndefined();
+  });
+});
+
 describe("stats", () => {
+  it("reports the largest lazy chunk apart from the initial closure", () => {
+    const { out } = tree((o) => write(o, "_next/static/chunks/lazy.js", "0123456789"));
+    expect(computeOutputStats(out)).toMatchObject({ largestLazyChunkBytes: 10, largestChunkBytes: 52 });
+  });
+
   it("counts the static import closure of index.html as Initial JS and excludes dynamic imports", () => {
     const { out } = tree((o) => write(o, "_next/static/chunks/c.js", "lazy"));
     write(out, "_next/static/chunks/a.js", 'import "/_next/static/chunks/b.js";import("/_next/static/chunks/c.js");');

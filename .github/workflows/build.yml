@@ -153,6 +153,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: detect-changes
     timeout-minutes: 45
+    # actions: read lets the growth gate download main's stats artifact.
+    permissions:
+      contents: read
+      actions: read
     # always() for the same reason as `prepare` above (detect-changes is skipped off pull_request).
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     steps:
@@ -224,6 +228,25 @@ jobs:
         run: |
           bun build/build.ts --out .build/out-min --stats .build/stats-minified.json \
             || { echo "retrying once (host load)"; bun build/build.ts --out .build/out-min --stats .build/stats-minified.json; }
+
+      # Growth gate: fail only if this build is bigger than main's last measured build, so main
+      # drifting over an absolute cap never blocks an unrelated PR. No baseline (first run, expired
+      # artifact, push to main) skips the gate; the absolute ceilings in budgets.json still applied above.
+      - name: Download main's build stats (baseline)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --event push \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          [ -n "$run_id" ] && gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            --name web-build-bun-stats --dir web-app/.build/baseline
+
+      - name: Bundle growth vs main
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        working-directory: web-app
+        run: bun build/compare-stats-cli.ts .build/stats-minified.json .build/baseline
 
       - name: Write build stats to the step summary
         if: ${{ !cancelled() }}
