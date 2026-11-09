@@ -133,7 +133,10 @@ class PooledSocket extends EventTarget implements PooledSocketLike {
   readonly CLOSING = READY_CLOSING;
   readonly CLOSED = READY_CLOSED;
   binaryType = "arraybuffer";
-  readonly bufferedAmount = 0;
+  /** The shared mux socket's backlog: every stream's frames queue behind each other there. */
+  get bufferedAmount(): number {
+    return this.conn.bufferedAmount;
+  }
   private state = READY_CONNECTING;
   private opened = false;
   private partial: Uint8Array[] = [];
@@ -343,6 +346,10 @@ class MuxConn {
       default:
         break;
     }
+  }
+
+  get bufferedAmount(): number {
+    return this.ws.bufferedAmount ?? 0;
   }
 
   sendData(id: number, kind: number, bytes: Uint8Array): void {
