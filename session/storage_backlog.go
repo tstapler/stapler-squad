@@ -1306,6 +1306,27 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	return result, nil
 }
 
+// FindSnoozedStuckItemIDs returns the item IDs whose open row of reason is snoozed right
+// now. FindOpenStuckStates hides those rows, so a gate that must outlive a snooze reads
+// them here.
+func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason domain.StuckReason) ([]string, error) {
+	rows, err := r.client.BacklogStuckState.Query().
+		Where(
+			backlogstuckstate.ResolvedAtIsNil(),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.SnoozedUntilGT(time.Now()),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query snoozed stuck states: %w", err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ItemID.String())
+	}
+	return ids, nil
+}
+
 // StuckStateHistoryData is a single BacklogStuckState row for one item,
 // open or resolved — the full-history counterpart to OpenStuckStateData,
 // which deliberately filters to open-only. Used by
