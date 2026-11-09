@@ -627,6 +627,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
+	// Register BacklogFlowService handler (backlog flow observability).
+	if deps.BacklogFlowService != nil {
+		flowPath, flowHandler := sessionv1connect.NewBacklogFlowServiceHandler(deps.BacklogFlowService, ConnectOptions(deps.ErrorRegistry)...)
+		flowAPIPath := "/api" + flowPath
+		srv.RegisterConnectHandler(flowAPIPath, http.StripPrefix("/api", flowHandler))
+		log.Info("Registered BacklogFlowService handler", "path", flowAPIPath)
+	}
+
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
 	if deps.GitHubUserService != nil {
 		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)
@@ -1195,7 +1203,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck, flowMCPOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)

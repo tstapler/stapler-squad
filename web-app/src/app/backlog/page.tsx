@@ -8,7 +8,7 @@ import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css"
 import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { AppLink } from "@/components/ui/AppLink";
+import { BacklogViewTabs } from "@/components/backlog/BacklogViewTabs";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
 import { BacklogEmptyState, FilterZeroState, FooterNudge } from "@/components/backlog/BacklogEmptyState";
@@ -914,24 +914,7 @@ function BacklogPageInner() {
         </div>
       </div>
 
-      {/* Tab Bar */}
-      <nav className={styles.tabBar} aria-label="Backlog views">
-        <button
-          type="button"
-          className={`${styles.tab} ${styles.tabActive}`}
-          aria-current="page"
-          data-testid="backlog-tab-list"
-        >
-          List
-        </button>
-        <AppLink
-          href="/backlog/board"
-          className={styles.tab}
-          data-testid="backlog-tab-board"
-        >
-          Board
-        </AppLink>
-      </nav>
+      <BacklogViewTabs active="list" />
 
       {/* Filter Bar */}
       <BacklogFilterBar

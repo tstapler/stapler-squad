@@ -1,0 +1,16 @@
+{
+  "id": "GetFlowSummary",
+  "type": "backend",
+  "service": "BacklogFlowService",
+  "method": "GetFlowSummary",
+  "protoFile": "proto/session/v1/backlog_flow.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestBacklogFlowService_should_MapSummaryFieldsAndQuery_When_Days30",
+    "TestBacklogFlowService_should_MapAggregatorErrors",
+    "TestBacklogFlowService_should_MapWindowTooLargeToResourceExhaustedWithCounts",
+    "TestBuildDependencies_should_ServeGetFlowSummaryOverApi_When_FlowServiceWired"
+  ],
+  "lastModified": "2026-11-06T05:48:01.739746872-08:00"
+}

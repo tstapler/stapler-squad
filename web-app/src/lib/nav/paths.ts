@@ -32,6 +32,7 @@ export const routes = {
   settingsBackgroundModels: "/settings/background-models",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
+  backlogFlow: "/backlog/flow",
   sessionsImport: "/sessions/import",
   workflows: "/workflows",
   triggers: "/triggers",
@@ -46,6 +47,7 @@ export const routes = {
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  backlogItem: (itemId: string) => `/backlog?item=${encodeURIComponent(itemId)}`,
   unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
   unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
 } as const;
@@ -60,6 +62,7 @@ export const ROUTE_PATHS = [
   "/artifacts",
   "/backlog",
   "/backlog/board",
+  "/backlog/flow",
   "/changelog",
   "/config",
   "/debug/escape-codes",
