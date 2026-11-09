@@ -1,5 +1,7 @@
 name: Flush Bazel cache proxy
-description: Publishes the blobs this job produced to the GitHub Actions cache and prints counters. Run with `if: always()`.
+description: >-
+  Publishes the blobs this job produced to the GitHub Actions cache and prints counters.
+  Run it with always().
 runs:
   using: composite
   steps:
