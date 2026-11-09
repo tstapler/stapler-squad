@@ -104,7 +104,7 @@ func (f *scanFindings) addPRRecords(prURLs []string, call pendingCall, paired bo
 func commandRecord(call pendingCall, result string) CommandRecord {
 	return CommandRecord{
 		Type: call.cmd.Type, Command: call.cmd.Command, Detail: call.cmd.Detail,
-		Result: truncateBytes(strings.TrimSpace(result), MaxResultBytes), FirstSeenAt: call.seenAt,
+		Result: truncateBytes(Redact(strings.TrimSpace(result)), MaxResultBytes), FirstSeenAt: call.seenAt,
 	}
 }
 

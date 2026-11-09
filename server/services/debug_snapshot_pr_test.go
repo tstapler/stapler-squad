@@ -9,6 +9,7 @@ import (
 )
 
 func TestDebugSnapshot_ShouldDumpEveryPRRow_WhenSessionHasSeveral(t *testing.T) {
+	t.Parallel()
 	inst := multiPRInstance(t, "dbg", "",
 		prViewFor(t, 11, session.PRStateMerged, "success"),
 		prViewFor(t, 12, session.PRStateOpen, ciConclusionFailure))

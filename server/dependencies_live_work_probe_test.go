@@ -24,6 +24,7 @@ func newWiringFixtures(t *testing.T) (*session.BacklogLifecycleListener, *servic
 // The real dependency wiring seam shares ONE non-nil probe between the lifecycle
 // listener, BacklogService and its cleanup gate, and exports the gauge.
 func TestWireLiveWorkProbe_ShouldShareOneProbeAcrossListenerServiceAndGate(t *testing.T) {
+	t.Parallel()
 	listener, backlog, storage := newWiringFixtures(t)
 
 	require.NoError(t, wireLiveWorkProbe(listener, backlog, noLiveSessions{}, storage))
@@ -35,6 +36,7 @@ func TestWireLiveWorkProbe_ShouldShareOneProbeAcrossListenerServiceAndGate(t *te
 }
 
 func TestAssertLiveWorkProbeShared_ShouldFail_WhenAnyConsumerIsMissingOrDiffers(t *testing.T) {
+	t.Parallel()
 	listener, backlog, storage := newWiringFixtures(t)
 	require.Error(t, assertLiveWorkProbeShared(listener, backlog), "nothing wired: a missed site would silently revert to kill-at-done")
 

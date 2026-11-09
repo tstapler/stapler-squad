@@ -7,6 +7,7 @@ import (
 )
 
 func TestResolveMergeMethod(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		req  *sessionv1.MergePRRequest

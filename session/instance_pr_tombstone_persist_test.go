@@ -11,6 +11,7 @@ import (
 // A tombstoned attach is dropped from memory, which can zero the legacy scalars;
 // the stored columns must follow or the stale number reloads as the active PR.
 func TestPersistPRAttach_ShouldClearStoredLegacyNumber_WhenTombstonedAttachLeavesNoLinks(t *testing.T) {
+	t.Parallel()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
