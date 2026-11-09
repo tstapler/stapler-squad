@@ -1058,18 +1058,24 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
 			return
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		ownBudgetExpired := errors.Is(err, context.DeadlineExceeded) && callerCtx.Err() == nil
+		if !ownBudgetExpired && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
 			return
 		}
-		log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
-		h.handleControllerError(err)
-		return
+		if !ownBudgetExpired {
+			log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
+			h.handleControllerError(err)
+			return
+		}
+		// Output was suppressed for the whole attempt; fall through to capture whatever size the
+		// pane has now so subscribers are not left on the pre-resize screen.
+		log.Warn("streamhub: SetWindowSize exceeded its budget, capturing the pane as it is", "session", h.sessionName, "error", err)
+	} else {
+		subID, updates := h.controller.SubscribeControlModeUpdates()
+		waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
+		h.controller.UnsubscribeControlModeUpdates(subID)
 	}
-
-	subID, updates := h.controller.SubscribeControlModeUpdates()
-	waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
-	h.controller.UnsubscribeControlModeUpdates(subID)
 
 	if h.allAwaitingFirstPaint() {
 		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
@@ -1099,7 +1105,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 			return
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
+			log.Info("streamhub: resize capture skipped (caller gone or budget spent)", "session", h.sessionName, "error", err)
 			return
 		}
 		log.Error("streamhub: CapturePaneContentRaw failed after resize", "session", h.sessionName, "error", err)

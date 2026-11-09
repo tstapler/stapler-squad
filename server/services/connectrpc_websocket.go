@@ -2566,6 +2566,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				return
 			}
 			resizes.pushOrdered(slowLane, inputGate, cols, rows, func(cols, rows int, paneResized func()) {
+				// Re-check: the slow lane runs after the up-writer may have been closed.
+				if writer := upWriter.Writer(); writer == nil {
+					return
+				}
 				size, err := streamhub.NewTerminalSize(cols, rows)
 				if err != nil {
 					return
@@ -3121,6 +3125,18 @@ func (p inputReadLoopParams) runSlow(fn func() error) error {
 	return nil
 }
 
+// runSlowDroppable is runSlow for requests the lane may refuse when busy (scrollback): a
+// refused request is dropped and counted, so a flood cannot block the keystroke read loop.
+func (p inputReadLoopParams) runSlowDroppable(fn func() error) error {
+	if p.slowLane == nil {
+		return fn()
+	}
+	if !p.slowLane.submitDroppable(fn) {
+		log.Debug("[runInputReadLoop] slow lane busy, dropped scrollback request", "session", p.sessionID)
+	}
+	return nil
+}
+
 func (p inputReadLoopParams) activeWriter() TerminalWriter {
 	if p.currentWriter != nil {
 		return p.currentWriter()
@@ -3211,7 +3227,7 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 		}
 	}
 	if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
-		_ = p.runSlow(func() error {
+		_ = p.runSlowDroppable(func() error {
 			handleScrollbackRequest(p.stream, p.sessionID, scrollbackReq, p.onScrollbackRequest)
 			return nil
 		})

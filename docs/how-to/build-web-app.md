@@ -61,6 +61,12 @@ Source maps are emitted next to each chunk (`sourcemap: "linked"`). The stage th
 - `verify-output` and ESLint both refuse an import of `next`; `web-app/package.json` must not list it.
 - The vanilla-extract `eval` patch: `docs/how-to/patch-vanilla-extract-eval.md`.
 
+## Output trimming
+
+- `build/plugins/ghostty-wasm.ts` swaps ghostty-web's inlined base64 WASM for a hashed `_next/static/media/ghostty-vt-*.wasm` file, so the lazy ghostty chunk drops from 638 KB to 74 KB. It throws if a ghostty-web upgrade stops inlining the WASM; remove it then.
+- `build/stages/prune-css.ts` deletes emitted CSS that no HTML or JS names. Bun writes one per lazy page chunk, none loaded, and each is a subset of the entry CSS.
+- Import `fuse.js` statically: a `require("fuse.js")` pulled its CJS build in beside the ESM one.
+
 ## Rollback
 
 There is none to Next: PR 9 deleted it. A bad Bun build is fixed forward. The git tag `web-dual-build-last` marks the last commit that still had both builds; checking it out in a scratch worktree is an emergency measure, not a revert, because it discards every commit merged since. See `docs/how-to/rollback-web-build.md` for restoring the previously deployed build.

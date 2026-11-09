@@ -34,7 +34,8 @@ type inputBookkeeper struct {
 
 	mu        sync.Mutex
 	latest    string
-	scheduled bool
+	dirty     bool // a chunk is waiting in latest
+	scheduled bool // a flush is queued or running
 }
 
 func newInputBookkeeper(sink humanInputSink, latency *streamLatency) *inputBookkeeper {
@@ -52,6 +53,7 @@ func (b *inputBookkeeper) note(data []byte) {
 	if chunk := string(data); strings.TrimSpace(chunk) != "" || strings.TrimSpace(b.latest) == "" {
 		b.latest = chunk
 	}
+	b.dirty = true
 	schedule := !b.scheduled
 	b.scheduled = true
 	b.mu.Unlock()
@@ -60,16 +62,27 @@ func (b *inputBookkeeper) note(data []byte) {
 	}
 }
 
+// flush stays "scheduled" until the sink returns, so keystrokes typed while the sink waits on the
+// instance lock only update latest instead of each starting a timer; a chunk that arrives in that
+// time is flushed in a follow-up window.
 func (b *inputBookkeeper) flush() {
 	b.mu.Lock()
 	chunk := b.latest
-	b.scheduled = false
+	b.latest, b.dirty = "", false
 	b.mu.Unlock()
 
 	start := time.Now()
 	b.sink.UpdateTerminalTimestamps(chunk, true)
 	b.sink.MarkUserResponded()
 	termlat.Default.Record(termlat.StageBookkeepFlush, b.latency.labels(), time.Since(start))
+
+	b.mu.Lock()
+	again := b.dirty
+	b.scheduled = again
+	b.mu.Unlock()
+	if again {
+		b.after(b.delay, b.flush)
+	}
 }
 
 // slowRequestLane runs a stream's scrollback and resync requests on one worker, in order, so
@@ -82,11 +95,18 @@ type slowRequestLane struct {
 	stop    chan struct{}
 	stopped atomic.Bool
 	once    sync.Once
+	// droppedScrollback counts scrollback requests refused because the lane was busy.
+	droppedScrollback atomic.Int64
 }
 
 // slowLaneDepth bounds queued requests; when full, submit blocks the read loop, which is the
 // old inline behavior and the only backpressure a flooding client gets.
 const slowLaneDepth = 32
+
+// droppableLaneDepth is how much of the lane scrollback may occupy. Scrollback is the one
+// request a client can flood (a fast scroll), so past this it is dropped, never queued, which
+// keeps room for resync and resize and keeps submit from blocking the keystroke read loop.
+const droppableLaneDepth = slowLaneDepth / 2
 
 func newSlowRequestLane(errChan chan<- error, onFail func()) *slowRequestLane {
 	l := &slowRequestLane{jobs: make(chan func() error, slowLaneDepth), errChan: errChan, onFail: onFail, stop: make(chan struct{})}
@@ -127,6 +147,24 @@ func (l *slowRequestLane) submit(job func() error) {
 	select {
 	case l.jobs <- job:
 	case <-l.stop:
+	}
+}
+
+// submitDroppable queues job unless the lane is already busy enough that the job would crowd out
+// resync and resize work; it never blocks. It reports whether the job was queued.
+func (l *slowRequestLane) submitDroppable(job func() error) bool {
+	if len(l.jobs) >= droppableLaneDepth {
+		l.droppedScrollback.Add(1)
+		return false
+	}
+	select {
+	case l.jobs <- job:
+		return true
+	case <-l.stop:
+		return false
+	default:
+		l.droppedScrollback.Add(1)
+		return false
 	}
 }
 
