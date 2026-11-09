@@ -14,7 +14,7 @@ block() {
   echo "$begin"
   echo "**/BUILD.bazel linguist-generated"
   echo "/BUILD.bazel -linguist-generated"
-  sed 's/[[:space:]]*#.*$//' "$list" | awk 'NF' | sort -u | while read -r f; do
+  sed 's/[[:space:]]*#.*$//' "$list" | awk 'NF' | LC_ALL=C sort -u | while read -r f; do
     [ "$f" = "BUILD.bazel" ] || echo "/$f -linguist-generated"
   done
   echo "$end"

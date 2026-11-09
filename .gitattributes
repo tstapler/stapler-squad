@@ -29,8 +29,8 @@ MODULE.bazel.lock merge=bazel-lockfile-merge
 /tools/bzl/e2e/BUILD.bazel -linguist-generated
 /tools/bzl/ent/BUILD.bazel -linguist-generated
 /tools/bzl/flags/BUILD.bazel -linguist-generated
-/tools/bzl/forbidden_deps_test_data/bad/inner/BUILD.bazel -linguist-generated
 /tools/bzl/forbidden_deps_test_data/BUILD.bazel -linguist-generated
+/tools/bzl/forbidden_deps_test_data/bad/inner/BUILD.bazel -linguist-generated
 /tools/bzl/otel_overlay/BUILD.bazel -linguist-generated
 /tools/bzl/proto/BUILD.bazel -linguist-generated
 /tools/bzl/tmux/BUILD.bazel -linguist-generated
