@@ -335,6 +335,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | Build the web UI (Bun): `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
+| Rebuild ghostty-web's WASM with native DECSTR (unbuilt patch, Zig 0.15.2, rollback); ghostty-vs-xterm differential harness lives in `web-app/src/lib/terminal/__tests__/differential/` | `docs/how-to/rebuild-ghostty-web-wasm.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |

@@ -12,6 +12,8 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+
+	"github.com/tstapler/stapler-squad/session/git/ignorewalk"
 )
 
 // trackedFile holds the index metadata for a single tracked file needed by the
@@ -185,7 +187,7 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 	atomic.AddInt64(&g.gitignoreMatcherRebuilds, 1)
 	var m gitignore.Matcher
 	rec := &ignoreRecorder{Filesystem: osfs.New(worktreePath), root: worktreePath}
-	if patterns, ignErr := gitignore.ReadPatterns(rec, nil); ignErr == nil {
+	if patterns, ignErr := ignorewalk.ReadPatterns(rec); ignErr == nil {
 		m = gitignore.NewMatcher(patterns)
 	}
 	entry.untrackedMatcher = m

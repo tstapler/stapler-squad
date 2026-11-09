@@ -33,7 +33,7 @@ require (
 	github.com/gofrs/flock v0.12.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.20.3
 	github.com/linkdata/deadlock v0.5.5
 	github.com/mattn/go-sqlite3 v1.14.40
 	github.com/oklog/ulid/v2 v2.1.2
@@ -46,7 +46,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	github.com/tstapler/tymux/clients/go v0.1.1-0.20261105193631-ee1a8f8a839e
+	github.com/tstapler/tymux/clients/go v0.1.1-0.20261108220042-88be0a434cfc
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0
@@ -229,4 +229,4 @@ require (
 	pluginrpc.com/pluginrpc v0.5.0 // indirect
 )
 
-replace github.com/go-git/go-git/v5 => github.com/tstapler/go-git/v5 v5.19.3-ssq.4
+replace github.com/go-git/go-git/v5 => github.com/tstapler/go-git/v5 v5.19.3-ssq.5
