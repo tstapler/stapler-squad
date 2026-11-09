@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -351,4 +352,57 @@ func TestSectionStatus_should_RenderWireStrings_When_Stringified(t *testing.T) {
 		assert.Equal(t, s, st.String())
 	}
 	assert.Equal(t, "unknown", SectionStatus(99).String())
+}
+
+// ctxBlockingSrc blocks the first CountEvents call until its context ends, so a
+// test can cancel the singleflight leader mid-compute.
+type ctxBlockingSrc struct {
+	*fakeSrc
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *ctxBlockingSrc) CountEvents(ctx context.Context, rng EventRange) (int, error) {
+	first := false
+	c.once.Do(func() { first = true })
+	if first {
+		close(c.entered)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return c.fakeSrc.CountEvents(ctx, rng)
+}
+
+func TestAggregator_should_RetryFollower_When_CoalescedLeaderIsCancelled(t *testing.T) {
+	t.Parallel()
+	f := fixtureSrc(t)
+	blocking := &ctxBlockingSrc{fakeSrc: f, entered: make(chan struct{})}
+	agg := NewAggregator(Sources{Events: blocking, Verdicts: f, Stuck: f, Items: f}, fixtureClock)
+	q := FlowQuery{Window: WindowSpec{Days: 30}}
+
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := agg.Summary(leaderCtx, q)
+		leaderDone <- err
+	}()
+	<-blocking.entered
+
+	type result struct {
+		s   *FlowSummary
+		err error
+	}
+	followerDone := make(chan result, 1)
+	go func() {
+		s, err := agg.Summary(context.Background(), q)
+		followerDone <- result{s, err}
+	}()
+	// Cancel only once the follower has had time to attach to the flight.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	require.Error(t, <-leaderDone)
+	got := <-followerDone
+	require.NoError(t, got.err)
+	assert.Equal(t, SectionOK, got.s.Tiles.Meta.Status, "a live follower must retry, not inherit the cancelled leader's failed sections")
 }

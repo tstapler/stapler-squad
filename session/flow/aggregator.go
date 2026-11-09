@@ -170,8 +170,8 @@ func (a *Aggregator) cachedSummary(ctx context.Context, q FlowQuery, w FlowWindo
 func (rc RowCounts) total() int { return rc.Events + rc.Verdicts + rc.StuckIntervals + rc.Items }
 
 // computeSummary runs every selected section against window w, uncached.
-// It fails only when the window is too large to read (ErrWindowTooLarge); every
-// other source failure is reported per section.
+// It fails when the window is too large to read (ErrWindowTooLarge) or ctx ends;
+// every other source failure is reported per section.
 func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWindow, sel map[SectionName]bool) (*FlowSummary, error) {
 	started := a.clock.Now()
 	r := newRun(ctx, a, q, w)
@@ -181,6 +181,11 @@ func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWind
 		}
 	}
 	s := r.buildSections(sel)
+	// A cancelled compute is not a result: surfacing it as per-section failures
+	// would hand coalesced live followers a summary built from the leader's ctx.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("flow summary: %w", err)
+	}
 	s.Meta = r.meta(sel)
 	s.Meta.QueryMs = a.clock.Now().Sub(started).Milliseconds()
 	s.Meta.degraded = len(r.fails) > 0 || ctx.Err() != nil
