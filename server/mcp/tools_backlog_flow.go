@@ -200,7 +200,21 @@ func flowResult(msg proto.Message) *mcpgo.CallToolResult {
 	if cerr := json.Compact(&compact, raw); cerr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("compact flow response: %v", cerr), "")
 	}
-	return mcpgo.NewToolResultText(compact.String())
+	return mcpgo.NewToolResultText(withUntrustedMarker(compact.String(), flowUntrustedFields(msg)))
+}
+
+// withUntrustedMarker puts an untrusted_text object first in the JSON object
+// body, so the warning is read before any free text; fields empty means none.
+func withUntrustedMarker(body string, fields []string) string {
+	if len(fields) == 0 || !strings.HasPrefix(body, "{") {
+		return body
+	}
+	marker, _ := json.Marshal(map[string]any{"notice": flowUntrustedNotice, "fields": fields})
+	rest := body[1:]
+	if rest != "}" {
+		rest = "," + rest
+	}
+	return `{"untrusted_text":` + string(marker) + rest
 }
 
 func (h *flowHandlers) getFlowSummary(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

@@ -70,7 +70,7 @@ func listFlowDeadlockCandidatesTool() mcpgo.Tool {
 			"Top-N only (default 10, max 50, no offset): total_count/returned_count/has_more say whether more exist; page through the full set with list_flow_drilldown key review.deadlock. Use get_item_flow_timeline for one item's history. " +
 			`Example: {"window_days":30,"limit":10}`),
 	}, windowOptions()...)
-	return mcpgo.NewTool("list_flow_deadlock_candidates", append(opts, limitOption())...)
+	return withFlowDataWarning(mcpgo.NewTool("list_flow_deadlock_candidates", append(opts, limitOption())...))
 }
 
 func listFlowThrashEpisodesTool() mcpgo.Tool {
@@ -78,7 +78,7 @@ func listFlowThrashEpisodesTool() mcpgo.Tool {
 		mcpgo.WithDescription("List items that thrash between statuses (many rapid flips collapsed into episodes), worst first. Top-N only (default 10, max 50, no offset): total_count/returned_count/has_more so 10 rows are never mistaken for all of them; page through the full set with list_flow_drilldown key thrash.episode. " +
 			"Open one with get_item_flow_timeline. " + `Example: {"window_days":30,"limit":10}`),
 	}, windowOptions()...)
-	return mcpgo.NewTool("list_flow_thrash_episodes", append(opts, limitOption())...)
+	return withFlowDataWarning(mcpgo.NewTool("list_flow_thrash_episodes", append(opts, limitOption())...))
 }
 
 func getItemFlowTimelineTool() mcpgo.Tool {
@@ -87,5 +87,5 @@ func getItemFlowTimelineTool() mcpgo.Tool {
 			`Example: {"item_id":"<uuid from list_flow_thrash_episodes>","window_days":30}`),
 		mcpgo.WithString("item_id", mcpgo.Description("Backlog item UUID."), mcpgo.Required()),
 	}, windowOptions()...)
-	return mcpgo.NewTool("get_item_flow_timeline", opts...)
+	return withFlowDataWarning(mcpgo.NewTool("get_item_flow_timeline", opts...))
 }

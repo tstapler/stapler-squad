@@ -105,7 +105,8 @@ func TestFlowTools_should_EqualProtojsonOfRpc_When_SameFakeSummarizer(t *testing
 
 	_, got := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 
-	assert.Equal(t, rpcJSON(t, rpc.Msg), got, "clean titles: MCP JSON is the RPC protojson with no normalization step")
+	assert.Contains(t, got, "untrusted_text")
+	assert.Equal(t, rpcJSON(t, rpc.Msg), withoutUntrustedMarker(got), "clean titles: MCP JSON is the RPC protojson with no normalization step")
 }
 
 // expectedParityDiffs names every string leaf the unclean fixture makes differ
@@ -138,7 +139,7 @@ func TestFlowTools_should_DifferFromRpcOnlyInNamedSanitizedFields_When_TitlesAnd
 	assert.Equal(t, expectedParityDiffs, diffs)
 	sanitized := proto.Clone(rpc.Msg)
 	sanitizeFlowMessage(sanitized)
-	assert.Equal(t, rpcJSON(t, sanitized), got, "MCP JSON equals the RPC response after the reflection-walk sanitizer")
+	assert.Equal(t, rpcJSON(t, sanitized), withoutUntrustedMarker(got), "MCP JSON equals the RPC response after the reflection-walk sanitizer")
 }
 
 // diffPaths records the path of every leaf where a and b differ.
@@ -185,5 +186,18 @@ func TestFlowTools_should_ReportTruncationNotWholeSet_When_OverLimitFixture(t *t
 	}
 	rpc, err := svc.ListThrashEpisodes(context.Background(), connect.NewRequest(&sessionv1.ListThrashEpisodesRequest{WindowDays: 30}))
 	require.NoError(t, err)
-	assert.Equal(t, rpcJSON(t, rpc.Msg), thrash, "the RPC reports the same truncation")
+	assert.Contains(t, thrash, "untrusted_text", "only the MCP response carries the framing marker")
+	assert.Equal(t, rpcJSON(t, rpc.Msg), withoutUntrustedMarker(thrash), "the RPC reports the same truncation")
+}
+
+// withoutUntrustedMarker drops the MCP-only untrusted_text object so a tool
+// response can be compared with the RPC's protojson.
+func withoutUntrustedMarker(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if k != "untrusted_text" {
+			out[k] = v
+		}
+	}
+	return out
 }
