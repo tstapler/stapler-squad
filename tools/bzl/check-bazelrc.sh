@@ -101,6 +101,7 @@ help_file() { # help_file <build|startup_options>
   if [ ! -s "$cache" ]; then
     command -v bazel >/dev/null 2>&1 || return 1
     mkdir -p .cache
+    # shellcheck disable=SC2015  # intentional: any failure of help or mv removes the temp file
     bazel help "$cmd" --long > "$cache.tmp" 2>/dev/null && mv "$cache.tmp" "$cache" || { rm -f "$cache.tmp"; return 1; }
   fi
   echo "$cache"

@@ -31,7 +31,8 @@ rm -f "$scratch/src/session/ent/BUILD.bazel"
 cp -R "$bin/server/web/dist/." "$scratch/src/server/web/dist/"
 chmod -R u+w "$scratch/src"
 
-export PATH=$(dirname "$GO"):$scratch/bin:$PATH TMPDIR=$scratch/tmp GOTMPDIR=$scratch/tmp GOCACHE=$scratch/gocache \
+go_dir=$(dirname "$GO")
+export PATH=$go_dir:$scratch/bin:$PATH TMPDIR=$scratch/tmp GOTMPDIR=$scratch/tmp GOCACHE=$scratch/gocache \
   GOMODCACHE=$scratch/mc GOTOOLCHAIN=local GOBIN=$scratch/bin
 unset GOFLAGS GOROOT
 "$GO" install "go.opentelemetry.io/otelc/tool/cmd/otelc@$OTELC_VERSION"

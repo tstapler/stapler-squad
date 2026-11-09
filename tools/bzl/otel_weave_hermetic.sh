@@ -14,7 +14,7 @@ mode=$1 go_arg=$2 out_arg=$3
 shift 3
 exec_root=$PWD
 abs() { case "$1" in /*) echo "$1" ;; *) echo "$exec_root/$1" ;; esac; }
-overlay=() srcs=() gens=() ents=() webs=() stages=() tags=() modcache_arg= status= target=
+overlay=() srcs=() gens=() ents=() webs=() stages=() tags=() modcache_arg='' status='' target=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --overlay) overlay+=("$2") ;; --src) srcs+=("$2") ;; --gen) gens+=("$2") ;; --ent) ents+=("$2") ;;
@@ -47,8 +47,9 @@ if [ -w /tmp ] && [ -z "$(ls -A /tmp)" ]; then work=/tmp/ssq-otel-work; else wor
 rm -rf "$work"
 mkdir -p "$work/home" "$work/tmp" "$work/gocache"
 # No HOME state, no GOFLAGS, no host module cache, no network: a failure here means a missing declared input.
+go_dir=$(dirname "$go_bin")
 export HOME=$work/home TMPDIR=$work/tmp GOTMPDIR=$work/tmp GOCACHE=$work/gocache GOTOOLCHAIN=local \
-  GOPROXY=off GOSUMDB=off GOFLAGS= GOENV=off PATH="$(dirname "$go_bin"):/usr/bin:/bin"
+  GOPROXY=off GOSUMDB=off GOFLAGS='' GOENV=off PATH="$go_dir:/usr/bin:/bin"
 unset GOROOT
 
 if [ "$mode" = modcache ]; then

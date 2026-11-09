@@ -35,7 +35,7 @@ if [ "$mode" = ts ]; then
     grep -qxF "$p" <(grep -v '^#' "$allowed") || { echo "compare-proto(ts): unallowed delta: $p" >&2; bad=1; }
   done < <(grep '^[<>]' "$tmp/diff.txt" | awk '{print $3}' | sort -u)
   [ "$bad" = 0 ] && { echo "compare-proto(ts): only allow-listed deltas"; exit 0; }
-  head -${COMPARE_PROTO_HEAD:-40} "$tmp/diff.txt" >&2; exit 1
+  head -"${COMPARE_PROTO_HEAD:-40}" "$tmp/diff.txt" >&2; exit 1
 fi
 ref=${PROTO_REF_DIR:-}
 if [ -z "$ref" ]; then
@@ -59,5 +59,5 @@ if diff -r "$ref/gen/proto/go" "$tmp/bazel/gen/proto/go" > "$tmp/diff.txt" 2>&1;
   echo "compare-proto($mode): identical ($(find "$tmp/bazel" -name '*.go' | wc -l) files)"; exit 0
 fi
 echo "compare-proto($mode): DIFFERENT; $(grep -c '^Only in' "$tmp/diff.txt") only-in lines, $(grep -c '^diff ' "$tmp/diff.txt") differing files" >&2
-head -${COMPARE_PROTO_HEAD:-40} "$tmp/diff.txt" >&2
+head -"${COMPARE_PROTO_HEAD:-40}" "$tmp/diff.txt" >&2
 exit 1

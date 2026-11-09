@@ -31,6 +31,7 @@ while (($#)); do
 done
 
 # Seed globs -> one anchored alternation regex.
+# shellcheck disable=SC2016  # sed patterns, not shell expansions
 GLOBAL_RE="$(grep -vE '^\s*(#|$)' "$BZL_BASELINE_DIR/global-inputs.seed.txt" \
   | sed -e 's/[.+^$(){}|]/\\&/g' -e 's/\*\*/\x01/g' -e 's/\*/[^\/]*/g' -e 's/\x01/.*/g' \
   | paste -sd'|' -)"

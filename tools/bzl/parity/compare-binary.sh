@@ -61,7 +61,9 @@ fail() { echo "FAIL: $*"; rc=1; }
 
 "$bazel_bin" version > "$scratch/v.bazel"
 "$ref" version > "$scratch/v.make"
+# shellcheck disable=SC2015  # the `A && echo ok || fail` arm: echo cannot fail, so C runs only when A fails
 diff "$scratch/v.bazel" "$scratch/v.make" > /dev/null && echo "ok: version output equal" || { fail "version output differs"; diff "$scratch/v.bazel" "$scratch/v.make" || true; }
+# shellcheck disable=SC2015  # the `A && echo ok || fail` arm: echo cannot fail, so C runs only when A fails
 grep -Eq 'branch: [^ ]+ +commit: [0-9a-f]+' "$scratch/v.bazel" && echo "ok: branch and commit non-empty" || fail "version lacks branch/commit"
 
 # Module set and versions, minus allowed-binary-deltas.txt (which lists module paths with a reason each).
@@ -91,6 +93,7 @@ sys.exit(0 if open(sys.argv[2], 'rb').read().find(open(sys.argv[1], 'rb').read()
 PY
 }
 pin_tag=$(sed -n 's/^tag=//p' tools/bzl/tmux/PIN)
+# shellcheck disable=SC2015  # the `A && echo ok || fail` arm: echo cannot fail, so C runs only when A fails
 "$tmux_staged" -V | grep -qx "tmux $pin_tag" && echo "ok: staged tmux is $pin_tag" || fail "staged tmux is not $pin_tag"
 for pair in "tmux:$tmux_staged" "tymuxd:$tymuxd_staged"; do
   for b in "$bazel_bin" "$ref"; do
