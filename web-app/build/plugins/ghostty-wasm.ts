@@ -15,12 +15,14 @@ export function externalizeGhosttyWasm(source: string, wasmPath: string): string
   return `import __ghosttyVtWasmUrl from ${JSON.stringify(wasmPath)}; ${source.replace(EMBEDDED_WASM, url)}`;
 }
 
-/** Where scripts/build-ghostty-wasm.sh installs our wasm (gitignored; under build/ so the Makefile tracks it). Relative to web-app/, the build's cwd. */
-export const OWN_WASM_PATH = path.resolve("build", "ghostty-own", "ghostty-vt.wasm");
+/** Where scripts/build-ghostty-wasm.sh installs our wasm (gitignored; under build/ so the Makefile tracks it). */
+export const OWN_WASM_PATH = path.resolve(__dirname, "..", "ghostty-own", "ghostty-vt.wasm");
 
 /** Our build when present, else ghostty-web's stock wasm; either way it ships as one hashed asset. */
 export function chooseGhosttyWasm(stockWasm: string, ownWasm: string = OWN_WASM_PATH): string {
-  return existsSync(ownWasm) ? ownWasm : stockWasm;
+  const own = existsSync(ownWasm);
+  console.info(`ghostty-wasm plugin: shipping ${own ? "own build" : "stock"} wasm (${own ? ownWasm : stockWasm})`);
+  return own ? ownWasm : stockWasm;
 }
 
 export function ghosttyWasmPlugin(): BunPlugin {

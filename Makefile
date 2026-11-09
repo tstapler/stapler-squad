@@ -363,9 +363,9 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # ── Own ghostty-vt.wasm (see docs/explanation/own-ghostty-wasm-build.md) ─────
 # Bazel (//third_party/ghostty:ghostty_vt_wasm): pinned Ghostty fork + checksum-verified
 # Zig, all in MODULE.bazel. Opt-in: not part of `make build`, because Bazel downloads a Zig
-# toolchain. Output is gitignored; the web app falls back to ghostty-web's stock wasm when
-# web-app/public/ghostty-vt.json is absent.
-build-ghostty-wasm: ## Build ghostty-vt.wasm with Bazel into web-app/public
+# toolchain. Output is gitignored; the web build falls back to ghostty-web's stock wasm when
+# web-app/build/ghostty-own/ghostty-vt.wasm is absent.
+build-ghostty-wasm: ## Build ghostty-vt.wasm with Bazel into web-app/build/ghostty-own
 	@./scripts/build-ghostty-wasm.sh
 
 test-ghostty-wasm: ## Run the Zig unit tests for our Ghostty patches, then build

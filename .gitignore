@@ -108,7 +108,6 @@ build/
 
 # Own ghostty-vt.wasm build (scripts/build-ghostty-wasm.sh): toolchain cache and outputs
 /.cache/
-/build/ghostty-wasm/
 /web-app/build/ghostty-own/
 
 # Scanner build artifacts

@@ -16,9 +16,9 @@ Needs `bazel` (bazelisk; `.bazelversion` pins 9.3.2), and network (Bazel downloa
 
 Analysis-only check (downloads and verifies the inputs, runs no Zig): `bazel build --nobuild //third_party/ghostty:ghostty_vt_wasm //third_party/ghostty:softreset_test`.
 
-## First run: record the checksum
+## Record the checksum for a new pin
 
-The first build prints `! No recorded sha256 for key ...` and the exact line. Build twice (`bazel clean --expunge` between, so the second is not a cache hit), confirm both shas are identical, then add the line to `scripts/ghostty-wasm.sha256`. From then on CI passes `--verify`. Expect to fix compile errors in the unrun Zig first (the `softReset` test and patch 0003 have never been compiled).
+A build with an unrecorded key prints `! No recorded sha256 for key ...` and the exact line. Build twice (`bazel clean --expunge` between, so the second is not a cache hit), confirm both shas are identical, then add the line to `scripts/ghostty-wasm.sha256`. CI passes `--verify` once any record exists, and the script installs the wasm only after the record matches. A stale `web-app/build/ghostty-own/` from an older pin stays installed until you rebuild or run `--clean`, so rebuild after every pin bump.
 
 ## Use it in the web app
 

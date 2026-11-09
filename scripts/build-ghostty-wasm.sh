@@ -63,28 +63,21 @@ FLAGS=(${BAZEL_FLAGS:-})
 cd "$ROOT"
 if [[ "$RUN_TESTS" == 1 ]]; then
   log "bazel build $TEST_TARGET (zig build test-lib-vt -Dtest-filter=softReset)"
-  bazel build "${FLAGS[@]}" "$TEST_TARGET"
-  TEST_LOG="$(bazel cquery "${FLAGS[@]}" --output=files "$TEST_TARGET" 2>/dev/null | head -n1)"
+  bazel build ${FLAGS[@]+"${FLAGS[@]}"} "$TEST_TARGET"
+  TEST_LOG="$(bazel cquery ${FLAGS[@]+"${FLAGS[@]}"} --output=files "$TEST_TARGET" 2>/dev/null | head -n1)"
   [[ -f "$ROOT/$TEST_LOG" ]] || err "Bazel did not produce the test log"
   log "$(cat "$ROOT/$TEST_LOG")"
 fi
 
 log "bazel build $TARGET"
-bazel build "${FLAGS[@]}" "$TARGET"
-BUILT="$(bazel cquery "${FLAGS[@]}" --output=files "$TARGET" 2>/dev/null | head -n1)"
+bazel build ${FLAGS[@]+"${FLAGS[@]}"} "$TARGET"
+BUILT="$(bazel cquery ${FLAGS[@]+"${FLAGS[@]}"} --output=files "$TARGET" 2>/dev/null | head -n1)"
 [[ -f "$ROOT/$BUILT" ]] || err "Bazel did not produce the wasm (looked for '$BUILT')"
 
 WASM_SHA="$(sha256_of "$ROOT/$BUILT")"
 WASM_SIZE="$(wc -c < "$ROOT/$BUILT" | tr -d ' ')"
 RECORD_KEY="${GHOSTTY_REV:0:12}-zig${ZIG_VERSION}"
 log "ghostty-vt.wasm  sha256=$WASM_SHA  bytes=$WASM_SIZE  key=$RECORD_KEY"
-
-# ── install for the web build ──────────────────────────────────────────────
-
-mkdir -p "$OWN_DIR"
-cp "$ROOT/$BUILT" "$OWN_DIR/ghostty-vt.wasm"
-chmod 644 "$OWN_DIR/ghostty-vt.wasm"
-log "Installed web-app/build/ghostty-own/ghostty-vt.wasm (rebuild the web app to use it)"
 
 # ── reproducibility record ─────────────────────────────────────────────────
 
@@ -98,3 +91,10 @@ elif [[ "$RECORDED" != "$WASM_SHA" ]]; then
 else
   log "Matches recorded sha256 (reproducible)."
 fi
+
+# ── install for the web build (only after the reproducibility check passed) ──
+
+mkdir -p "$OWN_DIR"
+cp "$ROOT/$BUILT" "$OWN_DIR/ghostty-vt.wasm"
+chmod 644 "$OWN_DIR/ghostty-vt.wasm"
+log "Installed web-app/build/ghostty-own/ghostty-vt.wasm (rebuild the web app to use it)"
