@@ -33,6 +33,7 @@ import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cur
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { isTouchPrimary as isTouchPrimaryDevice } from "@/lib/terminal/mobileInput/platform";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -746,7 +747,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     // true once on mount — pointer:coarse means a touch-primary device. Hoisted here
     // (rather than only at its other use-site below) so the WebLinksAddon handler can
     // read it too.
-    const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+    const isTouchPrimary = isTouchPrimaryDevice();
 
     // Create and load addons
     const fitAddon = new FitAddon();

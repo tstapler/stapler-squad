@@ -19,6 +19,10 @@ const PERSISTED_WS_FLAGS = ["unary_over_ws", "unary_over_ws_remote", "terminal_w
 const KEEP_ALIVE_FLAG = "window_keep_alive";
 /** Renderer choice is read synchronously at terminal mount, so it needs a persisted pre-load value. */
 export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";
+/** Phone input layer kill switch; pre-loaded because the renderer choice needs it synchronously. */
+export const MOBILE_INPUT_LAYER_FLAG = "mobile_input_layer";
+/** Must equal `defaultValue` of `mobile_input_layer` in server/services/feature_flag_service.go (a test asserts it). */
+export const MOBILE_INPUT_LAYER_DEFAULT = true;
 
 // `etag` is the server validator for `flags`; empty when the server sent none or a local write made the body differ.
 let cached: { at: number; flags: FeatureFlag[]; etag: string } | null = null;
@@ -76,8 +80,25 @@ function persistFlags(flags: FeatureFlag[]): void {
     const ghostty = flags.find((f) => f.name === GHOSTTY_RENDERER_FLAG);
     if (ghostty?.enabled) ls.setItem(PERSIST_PREFIX + GHOSTTY_RENDERER_FLAG, "1");
     else ls.removeItem(PERSIST_PREFIX + GHOSTTY_RENDERER_FLAG);
+    // Kill switch: "0" must be stored (not removed) so the preload sees an off flag instead of the default.
+    const mobileLayer = flags.find((f) => f.name === MOBILE_INPUT_LAYER_FLAG);
+    if (mobileLayer) ls.setItem(PERSIST_PREFIX + MOBILE_INPUT_LAYER_FLAG, mobileLayer.enabled ? "1" : "0");
+    else ls.removeItem(PERSIST_PREFIX + MOBILE_INPUT_LAYER_FLAG);
   } catch {
     // Quota or privacy-mode failures only cost the pre-load hint.
+  }
+}
+
+/** `?mobile_input=0|1` applies in this load and is saved for this origin; anything else is ignored. */
+function mobileInputQueryOverride(): boolean | undefined {
+  try {
+    if (typeof window === "undefined") return undefined;
+    const v = new URLSearchParams(window.location.search).get("mobile_input");
+    if (v !== "0" && v !== "1") return undefined;
+    storage()?.setItem(PERSIST_PREFIX + MOBILE_INPUT_LAYER_FLAG, v);
+    return v === "1";
+  } catch {
+    return undefined;
   }
 }
 
@@ -87,6 +108,18 @@ function persistFlags(flags: FeatureFlag[]): void {
  */
 export function preloadFlagValue(name: string): boolean | undefined {
   if (name === "request_coalescing") return REQUEST_COALESCING_PRELOAD;
+  if (name === MOBILE_INPUT_LAYER_FLAG) {
+    const override = mobileInputQueryOverride();
+    if (override !== undefined) return override;
+    try {
+      const persisted = storage()?.getItem(PERSIST_PREFIX + name);
+      if (persisted === "1") return true;
+      if (persisted === "0") return false;
+    } catch {
+      // fall through to the default
+    }
+    return MOBILE_INPUT_LAYER_DEFAULT;
+  }
   if (name === GHOSTTY_RENDERER_FLAG) {
     try {
       return storage()?.getItem(PERSIST_PREFIX + name) === "1";

@@ -74,7 +74,9 @@ import type {
   XtermTerminalProps,
 } from "@/components/sessions/XtermTerminal";
 import type { ScrollMode } from "@/lib/terminal/scrollRouting";
-import { GHOSTTY_RENDERER_FLAG, preloadFlagValue } from "@/lib/features/flagStore";
+import { GHOSTTY_RENDERER_FLAG, MOBILE_INPUT_LAYER_FLAG, preloadFlagValue } from "@/lib/features/flagStore";
+import { resolveRenderer } from "@/lib/terminal/rendererPolicy";
+import { shouldAttachMobileInput } from "@/lib/terminal/mobileInput/platform";
 import * as styles from "./TerminalPool.css";
 
 type TerminalRenderer = React.ForwardRefExoticComponent<XtermTerminalProps & React.RefAttributes<XtermTerminalHandle>>;
@@ -356,7 +358,13 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
   // Renderer is fixed for the page's lifetime (flag flips apply on the next load, not mid-session,
   // since swapping would discard every pooled terminal's scrollback).
   const [Renderer] = useState<TerminalRenderer>(() =>
-    preloadFlagValue(GHOSTTY_RENDERER_FLAG) ? GhosttyTerminal : XtermTerminal,
+    resolveRenderer({
+      ghosttyFlag: preloadFlagValue(GHOSTTY_RENDERER_FLAG) === true,
+      mobileLayerFlag: preloadFlagValue(MOBILE_INPUT_LAYER_FLAG) === true,
+      attachable: shouldAttachMobileInput(),
+    }) === "ghostty"
+      ? GhosttyTerminal
+      : XtermTerminal,
   );
 
   // Preload the chosen renderer eagerly (mirrors TerminalOutput.tsx's prior per-mount
