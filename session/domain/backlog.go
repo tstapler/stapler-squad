@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -416,6 +418,37 @@ func (t QuestionType) IsValid() bool {
 // OwnerActionQuestionPrefix marks a GuidanceRequest raised by request_owner_action; the UI
 // keys its "waiting for your decision" treatment off it.
 const OwnerActionQuestionPrefix = "[Owner action] "
+
+// OwnerActionWaiveResponse is the allowed response that, when the owner picks it on a
+// request_owner_action raised with waive_criterion_index, waives that criterion.
+const OwnerActionWaiveResponse = "Waive criterion"
+
+var ownerActionWaiverMarker = regexp.MustCompile(`^\[waive AC (\d+)\] `)
+
+// FormatOwnerActionWaiver is the marker a waiver-bearing owner-action question carries
+// after OwnerActionQuestionPrefix, so the target criterion survives in the existing row
+// and is visible to the owner.
+func FormatOwnerActionWaiver(criterionIndex int) string {
+	return fmt.Sprintf("[waive AC %d] ", criterionIndex)
+}
+
+// ParseOwnerActionWaiver returns the criterion a request_owner_action question asks to
+// waive, or ok=false when questionText is not a waiver-bearing owner-action question.
+func ParseOwnerActionWaiver(questionText string) (criterionIndex int, ok bool) {
+	rest, found := strings.CutPrefix(questionText, OwnerActionQuestionPrefix)
+	if !found {
+		return 0, false
+	}
+	m := ownerActionWaiverMarker.FindStringSubmatch(rest)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
 
 // AcStatus represents the status of a single acceptance criterion.
 type AcStatus string

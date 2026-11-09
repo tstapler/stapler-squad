@@ -295,3 +295,23 @@ func TestTransitionGuard_should_RejectQueuedToInProgress_When_PlanArtifactsPathI
 		})
 	}
 }
+
+func TestParseOwnerActionWaiver_should_RoundTripOnlyMarkedOwnerActionQuestions(t *testing.T) {
+	t.Parallel()
+	q := OwnerActionQuestionPrefix + FormatOwnerActionWaiver(4) + "AC4 hostage to unrelated flake"
+	idx, ok := ParseOwnerActionWaiver(q)
+	if !ok || idx != 4 {
+		t.Fatalf("ParseOwnerActionWaiver(%q) = %d, %v; want 4, true", q, idx, ok)
+	}
+
+	for name, text := range map[string]string{
+		"no prefix":       FormatOwnerActionWaiver(4) + "x",
+		"no marker":       OwnerActionQuestionPrefix + "plain question",
+		"marker mid-text": OwnerActionQuestionPrefix + "see [waive AC 4] later",
+		"non-numeric":     OwnerActionQuestionPrefix + "[waive AC x] y",
+	} {
+		if _, ok := ParseOwnerActionWaiver(text); ok {
+			t.Errorf("%s: parsed %q as a waiver", name, text)
+		}
+	}
+}

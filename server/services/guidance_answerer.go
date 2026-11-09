@@ -74,6 +74,7 @@ func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string
 	}
 	if applied {
 		s.saveForLaterIfSessionEnded(ctx, data)
+		s.applyOwnerActionWaiver(ctx, data)
 		s.notifyAnswered(data)
 		s.resumeTriageIfHalted(data)
 		s.notifyAnswerListener(ctx, data.ID)
@@ -115,4 +116,29 @@ func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID,
 		return s.storage.AnswerGuidanceRequestOnBehalf(ctx, id, answer)
 	}
 	return s.storage.AnswerGuidanceRequest(ctx, id, answer)
+}
+
+// applyOwnerActionWaiver waives the criterion a request_owner_action asked about when the
+// owner picked OwnerActionWaiveResponse. It runs before the answer wake fires so the woken
+// worker already sees the criterion waived. Only a human can answer such a request
+// (Answerer.authorize), and the waiver is audited with the request id as its reason.
+// Best-effort: a refused waiver (criterion already done, item archived) is logged and noted
+// on the item rather than failing the already-durable answer.
+func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, data *session.GuidanceRequestData) {
+	idx, ok := domain.ParseOwnerActionWaiver(data.QuestionText)
+	if !ok || data.Answer != domain.OwnerActionWaiveResponse || data.ItemID == nil {
+		return
+	}
+	itemID := data.ItemID.String()
+	actor := session.AcActor{Class: session.AcActorSystem, Source: "owner_action_answer"}
+	reason := fmt.Sprintf("owner chose %q on owner-action request %s: %s", data.Answer, data.ID, data.QuestionText)
+	err := s.storage.WaiveAcCriterion(session.WithAcActor(ctx, actor), itemID, idx, reason)
+	note := fmt.Sprintf("Owner waived acceptance criterion %d via owner-action request %s", idx, data.ID)
+	if err != nil {
+		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver item=%s criterion=%d: %v", itemID, idx, err)
+		note = fmt.Sprintf("Owner chose to waive criterion %d (request %s) but the waiver was not applied: %v", idx, data.ID, err)
+	}
+	if noteErr := s.storage.AppendActivityNote(ctx, itemID, "", "Owner Action", note); noteErr != nil {
+		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver: AppendActivityNote item=%s: %v", itemID, noteErr)
+	}
 }
