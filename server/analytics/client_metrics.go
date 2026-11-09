@@ -38,6 +38,9 @@ const (
 	eventWsLifecycle       = "cm.ws"
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
+	eventInput             = "cm.input"
+	eventImeAnomaly        = "cm.ime_anomaly"
+	maxInputCount          = 1000
 	maxClientDurationMs    = 10 * 60 * 1000
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
@@ -57,9 +60,15 @@ var (
 		"not-eligible": true, "flag-off": true, "flags-not-loaded": true, "remote-flag-off": true, "session-parked": true}
 	// routineFallbacks are counted per HTTP call that never tried the socket, not true fallbacks.
 	routineFallbacks = map[string]bool{"not-eligible": true, "flag-off": true, "flags-not-loaded": true, "remote-flag-off": true, "session-parked": true}
-	batchReason      = map[string]bool{"request-failed": true, "server-declined": true}
-	vitalNames       = map[string]bool{"lcp": true, "inp": true, "cls": true, "fcp": true, "ttfb": true}
-	vitalRating      = map[string]bool{"good": true, "needs-improvement": true, "poor": true}
+	// Phone input layer (mobile-input-layer ADR-005): class/enum labels only, never typed content.
+	inputEvents = map[string]bool{"emitted": true, "queued": true, "dropped_disconnected": true}
+	renderers   = map[string]bool{"xterm": true, "ghostty": true}
+	// imeAnomalyKinds mirrors the ImeAnomaly union in web-app/src/lib/terminal/mobileInput/types.ts.
+	imeAnomalyKinds = map[string]bool{"orphaned_input": true, "rewrite_bound_exceeded": true, "unrecognized_sequence": true,
+		"stuck_composition": true, "selection_in_region": true, "duplicate_suppressed": true}
+	batchReason = map[string]bool{"request-failed": true, "server-declined": true}
+	vitalNames  = map[string]bool{"lcp": true, "inp": true, "cls": true, "fcp": true, "ttfb": true}
+	vitalRating = map[string]bool{"good": true, "needs-improvement": true, "poor": true}
 	// connectCodes mirrors Connect's canonical code names; the client sends them
 	// snake_case ("deadline_exceeded") and anything else becomes "unknown".
 	connectCodes = map[string]bool{
@@ -142,6 +151,8 @@ type clientMetrics struct {
 	batchFallback  metric.Int64Counter
 	webVital       metric.Float64Histogram
 	longTask       metric.Float64Histogram
+	input          metric.Int64Counter
+	imeAnomaly     metric.Int64Counter
 	rejectedEvents metric.Int64Counter
 }
 
@@ -193,6 +204,8 @@ func newClientMetrics(m metric.Meter) *clientMetrics {
 	cm.batchFallback = counter("client.batch.fallback", "Batch members re-run individually, by reason")
 	cm.webVital = hist("client.web_vital", "Core Web Vitals (LCP/INP/FCP/TTFB in ms, CLS unitless), by vital, rating and page", "", []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 100, 200, 500, 1000, 2000, 2500, 4000, 6000, 10000})
 	cm.longTask = hist("client.long_task.duration", "Main-thread tasks over 50ms, by page", "ms", []float64{50, 75, 100, 150, 250, 500, 1000, 2500, 5000})
+	cm.input = counter("client.input", "Phone input-layer events by event class and renderer (content-free; emitted counts units handed to the terminal)")
+	cm.imeAnomaly = counter("client.ime_anomaly", "Phone input-layer composition anomalies by kind and renderer (content-free)")
 	cm.rejectedEvents = counter("client.metrics.rejected", "Browser metric events dropped by server validation, by reason")
 	if err != nil {
 		log.Error("analytics: failed to register client metrics", "error", err)
@@ -254,6 +267,10 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 		} else {
 			c.longTask.Record(ctx, clampMs(*ev.DurationMs), attrs(attribute.String("page", boundPage(ev.Page))))
 		}
+	case name == eventInput:
+		c.observeInput(ctx, ev)
+	case name == eventImeAnomaly:
+		c.observeImeAnomaly(ctx, ev)
 	case consumed:
 		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "unknown_event")))
 	}
@@ -275,6 +292,30 @@ func outcomeClass(code string) string {
 
 func (c *clientMetrics) reject(ctx context.Context, reason string) {
 	c.rejectedEvents.Add(ctx, 1, attrs(attribute.String(reasonKey, reason)))
+}
+
+// observeInput counts a (possibly sender-aggregated) batch of input events. An unknown event or
+// renderer rejects the whole event rather than creating a series from untrusted text.
+func (c *clientMetrics) observeInput(ctx context.Context, ev Event) {
+	event, renderer := ev.Labels["event"], ev.Labels["renderer"]
+	if !inputEvents[event] || !renderers[renderer] {
+		c.reject(ctx, "bad_input_label")
+		return
+	}
+	n := boundedInt(ev.Labels["count"], maxInputCount)
+	if n == 0 {
+		n = 1
+	}
+	c.input.Add(ctx, n, attrs(attribute.String("event", event), attribute.String("renderer", renderer)))
+}
+
+func (c *clientMetrics) observeImeAnomaly(ctx context.Context, ev Event) {
+	kind, renderer := ev.Labels["kind"], ev.Labels["renderer"]
+	if !imeAnomalyKinds[kind] || !renderers[renderer] {
+		c.reject(ctx, "bad_ime_anomaly_label")
+		return
+	}
+	c.imeAnomaly.Add(ctx, 1, attrs(attribute.String("kind", kind), attribute.String("renderer", renderer)))
 }
 
 func (c *clientMetrics) observeRPC(ctx context.Context, ev Event) {

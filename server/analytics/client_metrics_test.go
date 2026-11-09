@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -238,4 +239,65 @@ func TestObserve_should_AggregateAndConsumeRoutineFallbacks_ButStoreRealOnes(t *
 
 	real := Event{EventName: eventWsUnaryFallback, Labels: map[string]string{"reason": "ws-call-timeout"}}
 	assert.False(t, cm.observe(ctx, real), "true fallbacks keep being stored")
+}
+
+func attrString(t *testing.T, p metricdata.DataPoint[int64], key string) string {
+	t.Helper()
+	v, ok := p.Attributes.Value(attribute.Key(key))
+	require.True(t, ok, key)
+	return v.AsString()
+}
+
+func TestClientMetrics_ShouldAcceptCmInputAndImeAnomaly_When_FixedEnumValues(t *testing.T) {
+	t.Parallel()
+	cm, r := newTestClientMetrics(t)
+	ctx := context.Background()
+	assert.True(t, cm.observe(ctx, Event{EventName: eventInput, Labels: map[string]string{"event": "emitted", "renderer": "xterm", "count": "7"}}))
+	assert.True(t, cm.observe(ctx, Event{EventName: eventInput, Labels: map[string]string{"event": "dropped_disconnected", "renderer": "ghostty"}}))
+	for _, kind := range []string{"orphaned_input", "rewrite_bound_exceeded", "unrecognized_sequence", "stuck_composition", "selection_in_region", "duplicate_suppressed"} {
+		assert.True(t, cm.observe(ctx, Event{EventName: eventImeAnomaly, Labels: map[string]string{"kind": kind, "renderer": "xterm"}}), kind)
+	}
+	got := collect(t, r)
+	in := sumPoints(got["client.input"])
+	require.Len(t, in, 2)
+	byEvent := map[string]int64{}
+	for _, p := range in {
+		byEvent[attrString(t, p, "event")] = p.Value
+	}
+	assert.Equal(t, map[string]int64{"emitted": 7, "dropped_disconnected": 1}, byEvent, "count weights the increment, default 1")
+	assert.Len(t, sumPoints(got["client.ime_anomaly"]), 6)
+	assert.NotContains(t, got, "client.metrics.rejected")
+}
+
+func TestClientMetrics_ShouldRejectEvent_When_RendererFooOrKindNotInImeAnomalyEnum(t *testing.T) {
+	t.Parallel()
+	cm, r := newTestClientMetrics(t)
+	ctx := context.Background()
+	for _, ev := range []Event{
+		{EventName: eventInput, Labels: map[string]string{"event": "emitted", "renderer": "foo"}},
+		{EventName: eventInput, Labels: map[string]string{"event": "typed-secret", "renderer": "xterm"}},
+		{EventName: eventImeAnomaly, Labels: map[string]string{"kind": "not_a_kind", "renderer": "xterm"}},
+		{EventName: eventImeAnomaly, Labels: map[string]string{"kind": "orphaned_input", "renderer": "foo"}},
+		{EventName: eventImeAnomaly, Labels: map[string]string{"kind": "orphaned_input", "renderer": "xterm", "text": "hunter2"}},
+	} {
+		assert.True(t, cm.observe(ctx, ev), "rejected cm.* events are still consumed, never stored")
+	}
+	got := collect(t, r)
+	assert.NotContains(t, got, "client.input", "no series is created from an unknown label value")
+	pts := sumPoints(got["client.ime_anomaly"])
+	require.Len(t, pts, 1, "only the event with valid enums, whose stray label key is ignored, is counted")
+	assert.Equal(t, 2, pts[0].Attributes.Len(), "exported attributes are exactly kind and renderer")
+	rej := sumPoints(got["client.metrics.rejected"])
+	var total int64
+	for _, p := range rej {
+		total += p.Value
+	}
+	assert.Equal(t, int64(4), total, "four bad values rejected; extra unknown label keys are ignored, not exported")
+}
+
+func TestClientMetrics_ShouldCapInputCount_When_SenderClaimsHugeBatch(t *testing.T) {
+	t.Parallel()
+	cm, r := newTestClientMetrics(t)
+	cm.observe(context.Background(), Event{EventName: eventInput, Labels: map[string]string{"event": "emitted", "renderer": "xterm", "count": "999999999"}})
+	assert.Equal(t, int64(maxInputCount), sumPoints(collect(t, r)["client.input"])[0].Value)
 }

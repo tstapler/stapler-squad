@@ -394,3 +394,4 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
 | Filesystem watchers: FSEvents-backed `internal/dirwatch`, `STAPLER_SQUAD_DIRWATCH=fsnotify` rollback, `fs.watches`/`fs.streams` gauges, stream cap, decision record | `docs/how-to/tune-fs-watchers.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
+| Phone keyboard input layer: seam contract, flags, `?mobile_input=0\|1`, input-site table, `cm.input`/`cm.ime_anomaly` metrics, `/actuator/terminal-input` (debug procedure in `docs/how-to/debug-phone-typing.md`) | `docs/reference/mobile-input-layer.md` |
