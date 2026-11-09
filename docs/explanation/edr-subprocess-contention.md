@@ -89,20 +89,20 @@ the per-exec cost of `sh -c` matches `/usr/bin/true` within noise. Sustained fil
 
 Each workload ran 8 s, interleaved with an 8 s quiet baseline, 5 times (alternating order). Delta = Falcon CPU% in the workload window minus the preceding
 baseline window, mean ± standard error of the 5 pairs. The baseline itself was 120% ± 26 (sd, 65 windows, range 61-182%), so only deltas
-above about 2 standard errors mean anything. Falcon CPU is cumulative `ps cputime` divided by wall time, not a point sample. "ms/op" = Falcon CPU-ms per operation = delta / rate.
+above about 2 standard errors mean anything. The 4 KB `pwrite` rows ran in a quieter spell (baseline 62 ± 18, 10 windows), so compare them to that, not to 120. Falcon CPU is cumulative `ps cputime` divided by wall time, not a point sample. "ms/op" = Falcon CPU-ms per operation = delta / rate.
 
 | Workload | Rate/s | Falcon delta (pts) | Falcon CPU-ms/op | Added latency p50 / p95 (ms) | Reading |
 |---|---|---|---|---|---|
 | getpid + clock_gettime loop (no ES event) | 6.6 M (round 1) | +3 (R1, 2 pairs) | 0 | 0 | nothing |
 | `pread` on an already-open fd (no ES event) | 1.2 M (R1) | -8 (R1) | 0 | 0 | nothing |
-| `lstat` over 50k paths (ES has NOTIFY_STAT) | 988 k | +1 ± 12 | 0 | 0 | nothing |
+| `lstat` over 50k paths (ES lists NOTIFY_STAT per a third-party binding of the enum, not checked against Apple's header) | 988 k | +1 ± 12 | 0 | 0 | nothing |
 | loopback TCP ping-pong | 21 k | -9 ± 4 | 0 | 0.04 / 0.08 | nothing |
 | open+read+close of existing files | 5000 | -5 ± 8 | 0 | 0.03 / 0.07 | nothing |
 | sqlite-like 4 KB `pwrite` into an existing 256 MB file, fsync / 256 | 2000 (7.8 MB/s) | +5 ± 10 | 0 | 0.03 / 0.06 | nothing |
 | same, 4x the volume | 7990 (31 MB/s) | -10 ± 9 | 0 | 0.004 / 0.02 | nothing |
 | create+write+close small files | 3000 | +41 ± 16 | 0.14 | 0.09 / 0.21 | small (2.5 se), 0.4 core at 3000 files/s |
 | `/usr/bin/true` fork+exec | 182 | **+58 ± 8** | **3.2** | 4.3 / 10.7 | clear |
-| `/bin/sh -c true` | 98 | +36 ± 8 | 3.7 | 8.5 / 16.7 | same cost as `true` |
+| `/bin/sh -c true` | 98 | +36 ± 8 | 3.7 | 8.5 / 16.7 | same CPU per exec as `true`; latency 2x |
 | shebang script, cached | 100 | +30 ± 11 | 3.0 | 8.2 / 13.6 | same |
 | `/bin/zsh -l -c true` (login shell, profile sourced) | 20 | +4 ± 15 | 2.0 ± 7 | 19.6 / 51.7 | below noise |
 | `python3 -c pass` | 33 | +30 ± 5 | 9.1 | 27.1 / 46.2 | 3x `true`; more opens/mmaps (INFERRED) |
@@ -111,16 +111,16 @@ above about 2 standard errors mean anything. Falcon CPU is cumulative `ps cputim
 | Apple-signed `true` copied to a new path, exec | 10 | 0 ± 10 | n/a | 76 / 176 (includes the copy) | `syspolicyd` +11.7 pts |
 | write the fresh script, never exec it (control) | 15 | +15 ± 19 | n/a | 0.26 / 0.49 | writes alone are cheap |
 
-Round 1 (one pair per workload, 20 s windows, noisier) agreed: bash/zsh/sh -c at 20/s +/-40 pts with the sign changing between rounds, `zsh -i -c true`
+Round 1 (one pair per workload, 20 s windows, noisier) agreed in direction: `sh -c` +41 and +39 pts in the two rounds, `zsh -l -c` +63 and +45 (the main experiment's +4 ± 15 for `zsh -l` is the outlier), `bash` flipped sign, `zsh -i -c true`
 218 ms p50, `node -e 0` 34 ms, `bun -e 0` 28 ms, 210 MB binary copied then exec'd 1.84 s p50 versus 29 ms cached (includes the 210 MB copy).
 `posix_spawn` of `/usr/bin/true` at 20/s ran (`pspawn.c`) but Falcon CPU was not recorded for it.
 
 What this supports:
 
-- **Process creation is the dominant charged event.** Dose-response: 182 exec/s costs +58 pts, 98 exec/s +36, 33 python/s +30. Roughly 3 ms of Falcon CPU per exec, 9 ms for a python start.
-- **Plain syscalls and writes to existing files are free to Falcon here**, even ones that have an ES event class (`stat`, `open`+`read`). The dumb-syscall hypothesis is refuted by workloads 1-8.
-- **Shells are not a special class.** `sh -c true` 3.7 ms/op against `true` 3.2 ms/op (standard errors about 0.5-0.8). A login shell's cost is its extra processes and file opens, not the shell itself. This does not change the earlier advice not to ask for shell exclusions.
-- **First exec of a new file is a latency tax, not (visibly) a CPU tax.** 205 ms for a 16-byte script, 76 ms for a copied signed binary. We cannot separate Falcon's AUTH_EXEC from Gatekeeper/XProtect in `syspolicyd` without root. `syspolicyd` CPU rose only for the binary copy.
+- **Process creation is the dominant charged event.** The per-exec cost is consistent across workloads (182 `true`/s +58 pts, 98 `sh`/s +36, 100 cached scripts/s +30, 33 `python3`/s +30), roughly 3 ms of Falcon CPU per exec and 9 ms for a python start. There was no rate sweep within one workload.
+- **Plain syscalls and writes to existing files show no effect above about 15-25 pts**, even the ones with an ES event class (`stat`, `open`+`read`): seven of the eight non-exec workloads are null. Creating small files is the exception (+41 pts at 3000/s, 0.14 ms each). That refutes the dumb-syscall hypothesis for the syscalls tested.
+- **Shells are not a special class.** `sh -c true` 3.7 ms/op against `true` 3.2 ms/op (standard errors about 0.4 and 0.8; CPU only, since `sh` takes twice the latency). That a login shell's extra cost comes from its extra processes and file opens, not the shell itself, is INFERRED. This does not change the earlier advice not to ask for shell exclusions.
+- **First exec of a new file is a latency tax, not (visibly) a CPU tax.** 205 ms for a 16-byte script, 76 ms for a copied signed binary (that figure includes the copy). Rewriting the same path with identical bytes cost 14 ms against 8 ms cached and writing without exec 0.26 ms, so the write is not the cost; a new inode and a new path were not separated. We cannot separate Falcon's AUTH_EXEC from Gatekeeper/XProtect in `syspolicyd` without root. `syspolicyd` CPU rose only for the binary copy.
 - **Falcon's baseline is unexplained by anything in this experiment.** 120% CPU with all test load stopped, on a host with 18 cores at load 150-190 running bazel, rustc, go test and ~38 Claude sessions. Spawn cost accounts for part of it (below), not all.
 
 Limits: noisy shared host (the baseline varied 61-182% minute to minute); 5 pairs per workload; Falcon CPU is measured per workload window, so a delayed
@@ -128,10 +128,10 @@ analysis (cloud lookups, XPC `FileAnalysisService`) would land in a later window
 
 ### What the load on this host actually is (VERIFIED, 661 s, 1 s `ps` polling, `scripts/edr-experiment/measure.py`)
 
-New processes seen: **30,373 in 661 s = 46/s host-wide** (lower bound: anything shorter than 1 s can be missed, and the sampler adds about 1 exec/s itself),
-of which 29/s are descendants of the squad service. At about 3-9 ms of Falcon CPU each, 46 spawns/s is 0.14-0.4 of a core, so 12-33% of Falcon's average 1.2 cores (INFERRED: the per-exec cost comes from `true`/python, not from the real mix).
+New processes seen: **30,373 in 661 s = 46/s host-wide** (6,990 of these are fork-before-exec `(name)` entries and 1,150 `<defunct>`, so this counts forks, not execs; lower bound for short-lived processes, since anything shorter than 1 s can be missed, and the sampler adds about 1 exec/s itself),
+of which 29/s are descendants of the squad service. At about 3-9 ms of Falcon CPU each, 46 spawns/s is 0.14-0.4 of a core, roughly 12-35% of Falcon's 1.1-1.2 cores (INFERRED: the per-exec cost comes from `true`/python, not from the real mix).
 
-| Origin | Processes/s | Shells/s | Owner |
+| Origin (children inherit their parent's category one level deep, so rows sum to about 43/s of 46) | Processes/s | Shells/s | Owner |
 |---|---|---|---|
 | `check-role-images.sh` and its `grep`/`sed` children, an agent's `make gate` loop in `/tmp/ci-as` and `/tmp/ci-nodes` | about 18 | 6.9 | agent workload, not squad |
 | Everything unattributed (`sleep 5`/`10` loops at 1.5/s, `(bash)`, zombies, `ps`, `env`, `awk`, `tr`) | about 17 | 2.5 | agents and plugins |
@@ -143,10 +143,10 @@ of which 29/s are descendants of the squad service. At about 3-9 ms of Falcon CP
 | `ssq-hooks` / `hookmetrics` | 0.35 | 0.13 | this repo |
 
 Shell spawns total 13.0/s (8621 in 661 s), 53% of them from the one gate script. Squad's direct children (`ppid` = service pid): `tmux list-sessions` 0.14/s, `git rev-parse` 0.07/s,
-`tmux list-panes` 0.06/s, `ps` 0.02/s, `tmux capture-pane` 0.02/s. Cross-check with squad's own counters over 706 s (`/actuator/metrics`, `/actuator/git-backend`): 110 git CLI spawns (0.16/s: `RepoRoot` 57, `GitDir` 38, `Log` 6, `Status` 4), down from 0.29/s on 2026-11-08.
+`tmux list-panes` 0.06/s, `ps` 0.02/s, `tmux capture-pane` 0.02/s. Cross-check with squad's own counters (`/actuator/git-backend` snapshots 665 s apart; `/actuator/metrics` 706 s): 110 git CLI spawns (0.17/s: `RepoRoot` 57, `GitDir` 38, `Log` 6, `Status` 4), down from 0.29/s on 2026-11-08.
 `fork_pressure.total_spawns` rose 40 in 706 s (0.06/s); it counts only some spawn sites. The `tmux_exec_total` counter has no local endpoint and VictoriaMetrics at :8428 was not answering, so per-caller tmux counts were not available: the 0.14/s `list-sessions` caller is unattributed.
 
-So squad's own contribution to spawn load is about 1% of the host's. Cutting squad's spawns further cannot move Falcon; the leverage is in the agent workloads and the hook plugins (every origin above 1/s is outside this repo).
+Squad's own direct children are about 1.2% of the host's spawns (0.54 of 46/s); the agents it hosts are the other descendants (29/s under the service pid in total). Cutting squad's own spawns further is unlikely to move Falcon (INFERRED from the 3 ms/exec price); the leverage is in the agent workloads and the hook plugins (every origin above 1/s is outside this repo).
 
 ### Disk writes (VERIFIED where noted)
 
@@ -157,7 +157,7 @@ Attribution is INFERRED, not measured (no `fs_usage` without root). The escape-e
 
 - `escape_events.db` holds 1.0 M rows at the per-session cap (118 sessions x 10,000), so every insert is paired with an eviction delete; net row growth runs 25-150 rows/s in 10 s windows and bursts to 45,000 rows/min (750/s) when agents print.
 - The table has a random 64-bit text primary key plus three secondary indexes ([ID generator](https://github.com/tstapler/stapler-squad/blob/8bc2576cde486772e98d6f9116d89acfcfd63d6c/server/analytics/escapedb/escape_event_batch_writer.go#L259)), so each row dirties about 4-5 scattered pages.
-- A synthetic at-cap replica with the production schema (`scripts/edr-experiment/idbench.py`, 118 sessions, 20k inserted rows, WAL, `synchronous=normal`) wrote **57 KB per inserted row with random IDs and 25 KB with time-ordered IDs** (`proc_pid_rusage`, two runs each within 1%). At 140-300 rows/s that is the observed 8 MB/s order of magnitude.
+- A synthetic at-cap replica with the production schema (`scripts/edr-experiment/idbench.py`, 118 sessions, 20k inserted rows, WAL, `synchronous=normal`) wrote **57 KB per inserted row with random IDs and 25 KB with time-ordered IDs** (`proc_pid_rusage`, two runs each within 1%). Over the 25-750 rows/s range seen that implies 1.4-43 MB/s; the observed 8 MB/s sits inside it.
 - 6 goroutine instances across 20 dumps (`/debug/pprof/goroutine?debug=2`, 0.5 s apart) were inside `escapedb.insertEvents`'s SQLite call.
 - Falcon does not see this volume anyway: the `pwrite` workload above shows 8-31 MB/s of writes to an existing file adds no Falcon CPU. The reason to cut it is SSD wear and SQLite lock waits (the `escape-events` pool showed 710 s of connection wait in 706 s), not EDR.
 
@@ -181,6 +181,10 @@ File-level rates over the same 661 s (5 s `stat` sampling, so mtime changes unde
 | `sessions.db` WAL commits | a touch every ~10 s | ent repositories | needed |
 | `staplersquad.log` | 0.95 KB/s | `log/` | needed |
 
+### Shell-spawn cuts (from the origin table)
+
+Shells cost the same per exec as any binary, so these cut exec count, not shell-ness: (1) fix or throttle the gate script that starts 6.9 shells/s and about 18 processes/s (replace the per-line `grep`/`sed` loops with one `awk`, or run it once per commit instead of every `make gate`); (2) in `claude-code-detailed-metrics`, replace 12+ `jq` calls and `date`/`timeout` per PostToolUse with one `jq` or a call into `ssq-hooks`; (3) route the scm/sourcegraph `run_handler.sh` wrappers (bash that execs python) straight to their handler; (4) squad's own shell uses are few (`sh -c` in `approval_handler.go:1294,1314` and `remote_worktree.go:216` for remote hosts only, `tymux/launch.go` and `tmux/shell_handle.go` once per session start), so there is nothing to cut in squad itself; (5) avoid login/interactive shells for non-interactive work (`zsh -i -c true` took 218 ms p50 against 8 ms for `sh -c true`); (6) each Claude Bash tool call is `zsh -c source ~/.claude/shell-snapshots/...`: 0.38 shells/s here, so trimming the snapshot saves startup time more than exec events.
+
 ## How to measure the EDR's share
 
 1. Spawn rate: `scripts/spawn-sampler.sh 60 0.5` (no sudo).
@@ -203,11 +207,11 @@ Code and config we control:
 
 Ask the security team, in priority order (what the 2026-11-09 experiment says matters is exec events, so scope exclusions to the executables and build directories that create them, not to syscall classes or shells):
 
-1. SVE (not ML/IOA) for the directories where freshly created executables run: the Go build cache and `GOTMPDIR`, `~/.stapler-squad/worktrees/**`, `~/.stapler-squad/manual-builds/**`, `/tmp/*/` test-binary dirs. A new file's first exec cost 76-205 ms in the experiment against 8 ms cached.
+1. SVE (not ML/IOA) for the directories where freshly created executables run: the Go build cache and `GOTMPDIR`, `~/.stapler-squad/worktrees/**`, `~/.stapler-squad/manual-builds/**`, `/tmp/*/` test-binary dirs. A new script's first exec cost 205 ms in the experiment (a copied signed binary 76 ms including the copy) against 8 ms for a cached script.
 2. SVE for specific high-rate, low-risk executables by full path (`/usr/bin/true`-class helpers cannot be the ask; the candidates are `jq`, `grep`, `sed`, `awk`, `git`, `tmux`, the squad binary and `ssq-hooks`). The experiment priced an exec at about 3 ms of Falcon CPU, and this host does 46+/s.
 3. Confirm whether an SVE matches the executing image, the touched file, or both, and whether `apply_to_descendant_processes` is on. This decides whether item 2 covers children of an agent shell.
 4. Ask for the subscribed ES event list and the sensor version (we could not measure either without root), whether a second ES client is installed, and what `FileAnalysisService` and `FXPredictService` do.
-5. Not needed: exclusions for file reads, writes, `stat` or loopback traffic (no measurable cost at 31 MB/s, 5000 opens/s, 988 k `lstat`/s, 21 k loopback round trips/s) and none for shells or interpreters as a class (a shell exec costs what any exec costs; CrowdStrike advises against excluding bash, python, java; a narrower alternative is to exclude the specific signed helper binaries in item 2).
+5. Not needed: exclusions for file reads, writes, `stat` or loopback traffic (no measurable cost at 31 MB/s, 5000 opens/s, 988 k `lstat`/s, 21 k loopback round trips/s) and none for shells or interpreters as a class (a shell exec costs what any exec costs; CrowdStrike's published guidance, per the SonicWall copy cited above, is to avoid excluding bash, python, java; a narrower alternative is to exclude the specific signed helper binaries in item 2).
 
 Offer the tables above and `scripts/edr-experiment/` so they can repeat the measurement with root.
 
