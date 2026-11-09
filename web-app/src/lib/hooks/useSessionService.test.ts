@@ -240,11 +240,11 @@ describe("useSessionService visibility/online handler", () => {
   it("handleVisibilityOrOnline_should_registerListeners_When_featureFlagIsTrue", async () => {
     const store = makeTestStore();
     renderHook(
-      () => useSessionService({ autoWatch: false, enabled: true }),
+      () => useSessionService({ autoWatch: true, enabled: true }),
       { wrapper: makeWrapper(store) }
     );
 
-    // Wait for the listener registration effect to fire (listSessions not called for autoWatch:false)
+    // Wait for the listener registration effect to fire (only the autoWatch owner registers)
     await waitFor(() => expect(capturedDocHandler).not.toBeNull());
 
     // Both listeners must have been registered

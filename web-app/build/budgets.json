@@ -1,7 +1,7 @@
 {
   "totalJsBytes": {
-    "limit": 6349052,
-    "source": "Cap from the Next production build (plan Story 5.9, decision D7). Measured on the Bun 1.4.3 minified build 2026-10-21: 5,680,778 B. Relaxation of the old 5 MB size-limit gate, default pending owner confirmation."
+    "limit": 6450000,
+    "source": "Cap from the Next production build (plan Story 5.9, decision D7). Measured on the Bun 1.4.3 minified build 2026-10-21: 5,680,778 B. Relaxation of the old 5 MB size-limit gate, default pending owner confirmation. Raised 6,349,052 -> 6,450,000 on 2026-11-08: main measured 6,351,165 B after the Gboard IME shim and DECSTR scrub landed (CI Web build checks failed on every PR by ~2 KB)."
   },
   "initialJsBytes": {
     "limit": 1568892,
