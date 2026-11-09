@@ -35,6 +35,16 @@ const (
 	// dequeueSystemicItems is how many distinct items must fail with no success in
 	// between before the failures are attributed to the spawn path, not the items.
 	dequeueSystemicItems = 3
+	// dequeueStreakWindow is how long a failure counts toward the streak. Without decay,
+	// unrelated items failing days apart would add up to a phantom outage.
+	dequeueStreakWindow = time.Hour
+	// dequeueSystemicMaxHolds bounds how often one item is excused as an outage victim. A
+	// real outage ends within a few holds; an item still failing after that is broken
+	// itself, and must climb the durable ladder so it parks and the operator is told.
+	dequeueSystemicMaxHolds = 2
+	// dequeueRefusalEscalateAfter is how many consecutive refusals (about an hour at the
+	// 10-minute hold) mean the cause is persistent, so the item takes the durable path.
+	dequeueRefusalEscalateAfter = 6
 )
 
 type spawnFailureKind int
@@ -67,8 +77,17 @@ type dequeueSpawnGuard struct {
 	mu      sync.Mutex
 	now     func() time.Time
 	holds   map[string]time.Time
-	streak  map[string]struct{} // items with a real failure since the last success
+	streak  map[string]time.Time // items with a real failure inside the window, since the last success
 	alerted bool
+	// sysHolds counts systemic holds per item; deliberately survives other items' successes.
+	sysHolds map[string]sysHoldEntry
+	// refusals counts consecutive refusals per item.
+	refusals map[string]int
+}
+
+type sysHoldEntry struct {
+	n    int
+	last time.Time
 }
 
 func (g *dequeueSpawnGuard) clock() time.Time {
@@ -99,35 +118,80 @@ func (g *dequeueSpawnGuard) hold(itemID string, d time.Duration) {
 }
 
 // noteRealFailure adds itemID to the failure streak. systemic reports that enough distinct
-// items are failing together; firstAlert is true once per streak so the operator is told once.
+// items are failing together and this item is still excused from the durable budget;
+// firstAlert is true once per streak so the operator is told once.
 func (g *dequeueSpawnGuard) noteRealFailure(itemID string) (systemic, firstAlert bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	now := g.clock()
 	if g.streak == nil {
-		g.streak = map[string]struct{}{}
+		g.streak = map[string]time.Time{}
 	}
-	g.streak[itemID] = struct{}{}
-	systemic = len(g.streak) >= dequeueSystemicItems
-	if systemic && !g.alerted {
+	for id, at := range g.streak {
+		if now.Sub(at) > dequeueStreakWindow {
+			delete(g.streak, id)
+		}
+	}
+	g.streak[itemID] = now
+	if len(g.streak) < dequeueSystemicItems {
+		return false, false
+	}
+	if !g.excuseSystemicLocked(itemID, now) {
+		return false, false
+	}
+	if !g.alerted {
 		g.alerted, firstAlert = true, true
 	}
-	return systemic, firstAlert
+	return true, firstAlert
+}
+
+// excuseSystemicLocked spends one of itemID's bounded systemic holds; false when exhausted.
+func (g *dequeueSpawnGuard) excuseSystemicLocked(itemID string, now time.Time) bool {
+	if g.sysHolds == nil {
+		g.sysHolds = map[string]sysHoldEntry{}
+	}
+	e := g.sysHolds[itemID]
+	if now.Sub(e.last) > dequeueStreakWindow {
+		e.n = 0
+	}
+	if e.n >= dequeueSystemicMaxHolds {
+		return false
+	}
+	g.sysHolds[itemID] = sysHoldEntry{n: e.n + 1, last: now}
+	return true
+}
+
+// noteRefusal counts a consecutive refusal and reports whether it has persisted long
+// enough to be charged durably.
+func (g *dequeueSpawnGuard) noteRefusal(itemID string) (escalate bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.refusals == nil {
+		g.refusals = map[string]int{}
+	}
+	g.refusals[itemID]++
+	return g.refusals[itemID] >= dequeueRefusalEscalateAfter
 }
 
 // noteSuccess ends the streak: the spawn path works, so failures are the items' own again.
+// The succeeding item's own counters are cleared; other items keep their exemption debt.
 func (g *dequeueSpawnGuard) noteSuccess(itemID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.streak, g.alerted = nil, false
 	delete(g.holds, itemID)
+	delete(g.sysHolds, itemID)
+	delete(g.refusals, itemID)
 }
 
-// forget drops itemID's hold and streak entry (the operator changed the item).
+// forget drops all of itemID's in-memory state (the operator changed the item).
 func (g *dequeueSpawnGuard) forget(itemID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.holds, itemID)
 	delete(g.streak, itemID)
+	delete(g.sysHolds, itemID)
+	delete(g.refusals, itemID)
 }
 
 // dequeueBlockedSet reads, once per sweep, which items an earlier spawn failure's backoff
@@ -164,6 +228,10 @@ func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item ses
 		return
 	case spawnFailureRefusal:
 		s.spawnGuard.hold(item.ID, dequeueRefusalHold)
+		if s.spawnGuard.noteRefusal(item.ID) {
+			// Persistent refusal: the durable ladder parks the item and notifies.
+			s.chargeDequeueSpawnFailure(ctx, item, fromStatus, spawnErr)
+		}
 		return
 	}
 	if systemic, firstAlert := s.spawnGuard.noteRealFailure(item.ID); systemic {
@@ -173,6 +241,11 @@ func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item ses
 		}
 		return
 	}
+	s.chargeDequeueSpawnFailure(ctx, item, fromStatus, spawnErr)
+}
+
+// chargeDequeueSpawnFailure opens or refreshes the durable spawn_failed row and spends an attempt.
+func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
 	msg := fmt.Sprintf("%scould not spawn a work session (%v); retrying with backoff", domain.DequeueSpawnFailedContextPrefix, spawnErr)
 	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, fromStatus, msg)
 	if err != nil {

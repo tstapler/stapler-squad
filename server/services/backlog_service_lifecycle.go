@@ -473,12 +473,11 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
 	}
 
-	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
 	if update.RepoPath != nil && *update.RepoPath != existing.RepoPath {
 		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // the likely cause was just fixed
 	}
 
-
+	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
 	if associatePR {
 		prAssociation = prAssociationOutcome(updated, prNumber)
 		// Routed through the shared primary-write path — not a hand-rolled

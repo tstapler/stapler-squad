@@ -416,3 +416,104 @@ func TestRecordDequeueSpawnFailure_UnappliedMarkStuckOpensNoRowAndNoHold(t *test
 	defer svc.spawnGuard.mu.Unlock()
 	assert.NotContains(t, svc.spawnGuard.holds, itemID)
 }
+
+// Streak membership decays: failures spread over more than the window are not "together".
+func TestDequeueSpawnGuard_StreakEntriesExpire(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_000, 0)
+	g := &dequeueSpawnGuard{now: func() time.Time { return now }}
+	g.noteRealFailure("a")
+	g.noteRealFailure("b")
+	now = now.Add(dequeueStreakWindow + time.Second)
+	systemic, _ := g.noteRealFailure("c")
+	assert.False(t, systemic, "stale failures must not combine with a new one into an outage")
+}
+
+// An item inside a streak is exempted from the durable budget only a bounded number of times.
+func TestDequeueSpawnGuard_SystemicExemptionIsBoundedPerItem(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_000, 0)
+	g := &dequeueSpawnGuard{now: func() time.Time { return now }}
+	g.noteRealFailure("b")
+	g.noteRealFailure("c")
+	for range dequeueSystemicMaxHolds {
+		systemic, _ := g.noteRealFailure("a")
+		assert.True(t, systemic)
+		now = now.Add(dequeueSystemicHold + time.Second)
+	}
+	systemic, _ := g.noteRealFailure("a")
+	assert.False(t, systemic, "after the bounded exemptions the failure is charged to the item")
+	g.noteSuccess("zzz")
+	systemic, _ = g.noteRealFailure("a")
+	assert.False(t, systemic, "another item's success does not refund a's exemptions")
+}
+
+// Regression: three persistently broken items used to sit in the systemic streak forever,
+// each re-claimed every 30m with no durable attempt, never parked, never notified.
+func TestDequeueNextQueuedItems_PersistentlyFailingItemsStillPark(t *testing.T) {
+	t.Parallel()
+	svc, storage, _ := newServiceWithFailingCreator(t)
+	bus := events.NewEventBus(100)
+	svc.SetEventBus(bus)
+	ch, _ := bus.Subscribe(t.Context())
+	now := time.Unix(1_700_000_000, 0)
+	svc.spawnGuard.now = func() time.Time { return now }
+	ids := make([]string, dequeueSystemicItems)
+	for i := range ids {
+		ids[i] = newReadyItemWithRepo(t, svc, "broken")
+	}
+
+	titles := make([]string, 0, 8)
+	for range 40 {
+		require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+		titles = append(titles, drainNotificationTitles(ch)...)
+		for _, id := range ids {
+			if _, ok := openSpawnFailedRow(t, storage, id); ok {
+				expireBackoff(t, storage, id)
+			}
+		}
+		now = now.Add(dequeueSystemicHold + time.Second)
+	}
+
+	assert.Contains(t, titles, "Backlog spawn keeps failing")
+	for _, id := range ids {
+		row, ok := openSpawnFailedRow(t, storage, id)
+		require.True(t, ok)
+		assert.Greater(t, row.RemediationAttempts, int32(2), "item %s advanced up the ladder", id)
+	}
+}
+
+// A genuine brief outage (several items fail once, then a spawn succeeds) charges nothing
+// to the item whose failure revealed it and leaves no exemption debt behind.
+func TestDequeueSpawnGuard_BriefOutageChargesNothingAndResets(t *testing.T) {
+	t.Parallel()
+	var g dequeueSpawnGuard
+	g.noteRealFailure("a")
+	g.noteRealFailure("b")
+	systemic, _ := g.noteRealFailure("c")
+	assert.True(t, systemic)
+	g.noteSuccess("a")
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	assert.Empty(t, g.streak)
+}
+
+// A refusal that never resolves must not flip ready<->in_progress forever in silence: after
+// dequeueRefusalEscalateAfter consecutive refusals it takes the durable path.
+func TestDequeueNextQueuedItems_PersistentRefusalEscalatesToDurableRow(t *testing.T) {
+	t.Parallel()
+	svc, storage, itemID := newReadyItemThatCannotSpawn(t)
+	now := time.Unix(1_700_000_000, 0)
+	svc.spawnGuard.now = func() time.Time { return now }
+
+	for i := 1; i < dequeueRefusalEscalateAfter; i++ {
+		require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+		_, ok := openSpawnFailedRow(t, storage, itemID)
+		assert.False(t, ok, "refusal %d is only held in memory", i)
+		now = now.Add(dequeueRefusalHold + time.Second)
+	}
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+	row, ok := openSpawnFailedRow(t, storage, itemID)
+	require.True(t, ok, "the persistent refusal opens a durable row")
+	assert.Equal(t, int32(1), row.RemediationAttempts)
+}
