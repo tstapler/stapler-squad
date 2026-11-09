@@ -18,8 +18,12 @@ type paneActivityTransport interface {
 	SetPaneActivity(context.Context, *connect.Request[v1.SetPaneActivityRequest]) (*connect.Response[v1.SetPaneActivityResponse], error)
 }
 
-// The production transport must carry the RPC, else the hint is silently never sent.
-var _ paneActivityTransport = (*selecting.Client)(nil)
+// The production transports (NewRealTransport's *splitTransport, and the quiet probe's bare
+// selector) must carry the RPC, else the hint is silently never sent.
+var (
+	_ paneActivityTransport = (*splitTransport)(nil)
+	_ paneActivityTransport = (*selecting.Client)(nil)
+)
 
 type connectActivitySender struct{ t paneActivityTransport }
 
