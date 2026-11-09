@@ -137,7 +137,7 @@ func (d *fakeDaemon) emitLost(lost, later [][]byte) {
 		seq uint64
 		b   []byte
 	}
-	var q []queued
+	q := make([]queued, 0, len(later))
 	for _, b := range later {
 		d.seq++
 		d.model.Write(b)
@@ -235,12 +235,12 @@ func (h *harness) converge() {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if h.c.term.Screen() == h.d.screen() {
-			time.Sleep(60 * time.Millisecond)
+			time.Sleep(60 * time.Millisecond) //nolint:notimesleeptest quiet-period check against real reader goroutines; no injectable clock
 			if h.c.term.Screen() == h.d.screen() {
 				return
 			}
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond) //nolint:notimesleeptest poll interval for convergence against real reader goroutines
 	}
 	assert.Equal(h.t, h.d.screen(), h.c.term.Screen(), "client screen diverged from the authoritative pane")
 	h.t.FailNow()
@@ -310,7 +310,7 @@ func TestStreamConsistency_UnsequencedStreamStillDoubleAppliesQueuedOutput(t *te
 	rng := rand.New(rand.NewSource(3))
 	h.emitAll(frames(rng, 20, 0))
 	h.d.emitLost(frames(rng, 5, 100), [][]byte{[]byte("dup-a\r\ndup-b\r\ndup-c\r\n")})
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond) //nolint:notimesleeptest absence check: lets the real reader goroutines drain before asserting divergence
 	assert.NotEqual(t, h.d.screen(), h.c.term.Screen(),
 		"harness failed to expose the legacy double-apply race; it cannot prove the sequenced fix")
 }

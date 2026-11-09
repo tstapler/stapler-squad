@@ -65,7 +65,7 @@ func resizeThroughHub(t *testing.T, c *inStreamController) string {
 	require.NoError(t, err)
 	hub.RequestResize(context.Background(), id, size)
 	hub.TryFlush()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) //nolint:notimesleeptest resize runs on the hub's own goroutine; settle window is real time, no clock hook
 
 	var got bytes.Buffer
 	for _, f := range tr.ReceivedFrames()[attached:] {
