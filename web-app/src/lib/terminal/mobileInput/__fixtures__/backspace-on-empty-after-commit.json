@@ -1,0 +1,92 @@
+{
+  "id": "backspace-on-empty-after-commit",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Pre-mortem P1-3: a word is committed and the textarea reset, then Backspace arrives in each shape (beforeinput only, keydown+beforeinput, keydown-229 only). One DEL each. Spike: project_plans/mobile-input-layer/implementation/spike-0.1.1-0.1.2.md",
+  "events": [
+    {
+      "kind": "compositionstart",
+      "t": 10
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "hello",
+      "t": 20
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "hello",
+      "value": "hello",
+      "selStart": 5,
+      "selEnd": 5,
+      "t": 30
+    },
+    {
+      "kind": "input",
+      "value": "hello",
+      "selStart": 5,
+      "selEnd": 5,
+      "t": 40
+    },
+    {
+      "kind": "compositionend",
+      "data": "hello",
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 70
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "keydown",
+      "key": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "t": 90
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 100
+    },
+    {
+      "kind": "keydown",
+      "key": "Backspace",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 110
+    }
+  ],
+  "expectedBytes": "hello",
+  "finalText": "he",
+  "expectedAnomalies": [
+    "duplicate_suppressed"
+  ],
+  "policy": {
+    "backspaceStrategy": "keydown8"
+  }
+}
