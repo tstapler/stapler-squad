@@ -77,6 +77,18 @@ export const tableHidden = style({
   clipPath: "inset(50%)",
   whiteSpace: "nowrap",
   borderWidth: 0,
+  selectors: {
+    // A drill button inside must be visible when it has keyboard focus (WCAG 2.4.7).
+    "&:focus-within": {
+      position: "static",
+      width: "auto",
+      height: "auto",
+      margin: 0,
+      overflow: "visible",
+      clipPath: "none",
+      whiteSpace: "normal",
+    },
+  },
 });
 
 export const table = style({

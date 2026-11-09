@@ -39,10 +39,13 @@ type CacheOptions struct {
 // result type; a hit returns the stored V unchanged, so its QueryMs and AsOf
 // are those of the original compute. Safe for concurrent use.
 type Cache[V any] struct {
-	clock Clock
-	opts  CacheOptions
-	group singleflight.Group
-	slot  chan struct{}
+	// storable, when set, vetoes caching a computed value (a degraded result
+	// must not be served from cache for a whole TTL).
+	storable func(V) bool
+	clock    Clock
+	opts     CacheOptions
+	group    singleflight.Group
+	slot     chan struct{}
 
 	mu      sync.Mutex
 	entries map[string]*list.Element
@@ -152,7 +155,7 @@ func (c *Cache[V]) fill(ctx context.Context, storeKey string, compute func(conte
 	if err != nil {
 		return nil, err
 	}
-	if storeKey != "" {
+	if storeKey != "" && (c.storable == nil || c.storable(v)) {
 		c.put(storeKey, v)
 	}
 	return v, nil

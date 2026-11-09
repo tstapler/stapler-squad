@@ -3,6 +3,7 @@ package mcp
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,4 +177,15 @@ func TestGetFlowSummary_should_ExplainEveryEstimatedCode_When_FixtureHasHeuristi
 	for _, c := range codes {
 		assert.NotEmptyf(t, legend[c.(string)], "estimated code %v has no legend entry", c)
 	}
+}
+
+func TestSanitizeFlowLeaf_should_ReturnValidUTF8_When_ByteCutLandsInsideMultibyteRune(t *testing.T) {
+	t.Parallel()
+	title := "x" + strings.Repeat("あ", 150) // byte 300 falls inside a 3-byte rune
+
+	got := sanitizeFlowLeaf(title)
+
+	assert.True(t, utf8.ValidString(got))
+	assert.True(t, strings.HasSuffix(got, "[truncated]"))
+	assert.True(t, utf8.ValidString(sanitizeFlowKeyEcho(strings.Repeat("あ", 200)+"x")))
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"strings"
 )
 
 const (
@@ -35,12 +36,16 @@ var flowSafeStringFields = map[protoreflect.FullName]bool{
 // inject a line break or a long payload into the agent's context.
 func sanitizeFlowLeaf(s string) string {
 	flat := services.SanitizeFlowText(s, int(^uint(0)>>1))
-	return session.SanitizeForAgentContext(flat, flowLeafMaxLen)
+	return cutAtRuneBoundary(session.SanitizeForAgentContext(flat, flowLeafMaxLen))
 }
+
+// cutAtRuneBoundary drops the partial rune that SanitizeForAgentContext's byte
+// truncation can leave, which proto marshalling rejects as invalid UTF-8.
+func cutAtRuneBoundary(s string) string { return strings.ToValidUTF8(s, "") }
 
 func sanitizeFlowKeyEcho(s string) string {
 	flat := services.SanitizeFlowText(s, int(^uint(0)>>1))
-	return session.SanitizeForAgentContext(flat, flowKeyEchoMaxLen)
+	return cutAtRuneBoundary(session.SanitizeForAgentContext(flat, flowKeyEchoMaxLen))
 }
 
 // sanitizeFlowMessage walks m by reflection and sanitizes every string leaf

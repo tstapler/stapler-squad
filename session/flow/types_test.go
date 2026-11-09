@@ -218,3 +218,13 @@ func TestFlowImports_should_ExcludeEntSessionServerProto_When_GoListDepsScanned(
 		}
 	}
 }
+
+func TestWeekStarts_should_ReturnOnlyLastWeek_When_AllTimeWindowHasNoData(t *testing.T) {
+	t.Parallel()
+	w, err := NewAllTimeWindow(FixedClock{T: time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)})
+	require.NoError(t, err)
+
+	got := weekStarts(w, time.Time{})
+
+	assert.Equal(t, []time.Time{time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)}, got)
+}

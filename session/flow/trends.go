@@ -20,11 +20,16 @@ func maxTime(a, b time.Time) time.Time {
 
 // weekStarts lists the ISO week starts (Monday 00:00 UTC) from the week of the
 // window start to the week of its last instant. A window starting over a year
-// before the earliest datum (all-time) starts at that datum instead.
+// before the earliest datum (all-time) starts at that datum instead; with no
+// datum at all it starts at the window's last instant.
 func weekStarts(w FlowWindow, earliest time.Time) []time.Time {
 	first := w.Start()
-	if !earliest.IsZero() && earliest.Sub(first) > allTimeSpan {
-		first = earliest
+	datum := earliest
+	if datum.IsZero() {
+		datum = w.End().Add(-time.Nanosecond) // no data: an all-time window shows only its last week, not ~1,400 empty ones
+	}
+	if datum.Sub(first) > allTimeSpan {
+		first = datum
 	}
 	var weeks []time.Time
 	for ws, last := isoWeekStart(first), isoWeekStart(w.End().Add(-time.Nanosecond)); !ws.After(last); ws = ws.AddDate(0, 0, 7) {

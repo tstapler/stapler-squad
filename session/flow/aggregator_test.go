@@ -96,6 +96,26 @@ func TestAggregator_should_MarkReviewPartial_When_StuckSourceErrors(t *testing.T
 	assert.Equal(t, SectionOK, s.Tiles.Meta.Status)
 }
 
+func TestAggregator_should_RecomputeInsteadOfServingCache_When_PreviousSummaryHadFailedSection(t *testing.T) {
+	t.Parallel()
+	f := fixtureSrc(t)
+	f.eventsErr = errors.New("db down")
+	agg := NewAggregator(f.sources(), fixtureClock)
+	q := FlowQuery{Window: WindowSpec{Days: 30}}
+
+	first, err := agg.Summary(context.Background(), q)
+	require.NoError(t, err)
+	require.Equal(t, SectionFailed, first.Tiles.Meta.Status)
+	f.eventsErr = nil
+	second, err := agg.Summary(context.Background(), q)
+
+	require.NoError(t, err)
+	assert.Equal(t, SectionOK, second.Tiles.Meta.Status, "a degraded result must not be served from cache")
+	third, err := agg.Summary(context.Background(), q)
+	require.NoError(t, err)
+	assert.Same(t, second, third, "a healthy result is still cached")
+}
+
 func TestAggregator_should_FailEventSections_When_EventSourceErrors(t *testing.T) {
 	t.Parallel()
 	f := fixtureSrc(t)

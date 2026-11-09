@@ -86,6 +86,7 @@ func NewAggregator(src Sources, clock Clock, opts ...AggregatorOption) *Aggregat
 	a.cacheOpts.DefaultConfig = DefaultConfig()
 	a.cacheOpts.slot = make(chan struct{}, 1)
 	a.cache = NewCache[*FlowSummary](clock, a.cacheOpts)
+	a.cache.storable = func(s *FlowSummary) bool { return !s.Meta.degraded }
 	a.drillCache = NewCache[*DrilldownPage](clock, a.cacheOpts)
 	a.timelineCache = NewCache[*ItemTimeline](clock, a.cacheOpts)
 	return a
@@ -182,6 +183,7 @@ func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWind
 	s := r.buildSections(sel)
 	s.Meta = r.meta(sel)
 	s.Meta.QueryMs = a.clock.Now().Sub(started).Milliseconds()
+	s.Meta.degraded = len(r.fails) > 0 || ctx.Err() != nil
 	stats := ComputeStats{Window: q.Window, Rows: s.Meta.RowCounts.total(), QueryMs: s.Meta.QueryMs, Cache: "miss", Failures: r.fails}
 	a.logger.Debug("flow summary computed", "cache", stats.Cache, "rows", stats.Rows, "query_ms", stats.QueryMs)
 	for _, f := range r.fails {

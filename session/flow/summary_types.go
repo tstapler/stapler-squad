@@ -63,7 +63,9 @@ type FlowMeta struct {
 	Estimated    []string
 	SlowPath     bool
 	CaptureSince time.Time
-	Clamps       []string
+	// degraded marks a result with a failed section or a cancelled compute; it is never cached.
+	degraded bool
+	Clamps   []string
 }
 
 // ListPage is the shape of every top-N list. HasMore is TotalCount >
