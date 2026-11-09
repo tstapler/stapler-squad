@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -100,8 +101,10 @@ func TestRealHTTP2Stream_should_WakeReceiveOnCloseResponseAfterHeaders(t *testin
 	require.NoError(t, err)
 
 	done := make(chan error, 1)
-	go func() { _, rerr := st.Receive(); done <- rerr }()
-	time.Sleep(50 * time.Millisecond)
+	started := make(chan struct{})
+	go func() { close(started); _, rerr := st.Receive(); done <- rerr }()
+	<-started
+	runtime.Gosched() // best effort: let Receive block before the close
 	require.NoError(t, st.CloseResponse())
 
 	select {
