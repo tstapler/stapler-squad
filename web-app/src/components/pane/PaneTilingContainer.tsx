@@ -21,6 +21,7 @@ import {
   mobilePickerSheet,
   mobilePickerSheetTitle,
   mobilePickerPaneItem,
+  mobilePickerPaneList,
   mobilePickerPaneLabel,
   mobilePickerCancelButton,
 } from "@/styles/pane/panePickerOverlay.css";
@@ -386,22 +387,26 @@ export function PaneTilingContainer({
               </span>
               Temporary modal
             </button>
-            {mobilePickerPanes.map((p) => (
-              <button
-                key={p.id}
-                className={mobilePickerPaneItem}
-                onClick={() => {
-                  dispatch({ type: "ASSIGN_SESSION", paneId: p.id, sessionId: mobilePickerSession.id });
-                  dispatch({ type: "ASSIGN_TAB", paneId: p.id, tab: "terminal" });
-                  dispatch({ type: "FOCUS_PANE", paneId: p.id });
-                  cancelPicker();
-                }}
-              >
-                {/* analytics-exempt */}
-                <span className={mobilePickerPaneLabel}>{p.letter}</span>
-                {p.label}
-              </button>
-            ))}
+            {mobilePickerPanes.length > 0 && (
+              <div className={mobilePickerPaneList} data-testid="mobile-picker-pane-list">
+                {mobilePickerPanes.map((p) => (
+                  <button
+                    key={p.id}
+                    className={mobilePickerPaneItem}
+                    onClick={() => {
+                      dispatch({ type: "ASSIGN_SESSION", paneId: p.id, sessionId: mobilePickerSession.id });
+                      dispatch({ type: "ASSIGN_TAB", paneId: p.id, tab: "terminal" });
+                      dispatch({ type: "FOCUS_PANE", paneId: p.id });
+                      cancelPicker();
+                    }}
+                  >
+                    {/* analytics-exempt */}
+                    <span className={mobilePickerPaneLabel}>{p.letter}</span>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <button className={mobilePickerCancelButton} onClick={cancelPicker}>
               {/* analytics-exempt */}
               Cancel

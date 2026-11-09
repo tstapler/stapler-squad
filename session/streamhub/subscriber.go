@@ -1,10 +1,21 @@
 package streamhub
 
 import (
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/internal/termlat"
 )
+
+// noProgressCheck is a droppedAtSent sentinel: the writer has already shown progress, so the
+// next repaint need not wait for more.
+const noProgressCheck = ^uint64(0)
+
+// latencyLabeler is implemented by a Transport that knows which backend and listener its
+// observations belong to; others are recorded under "unknown".
+type latencyLabeler interface{ LatencyLabels() termlat.Labels }
 
 // subscriber is the hub-side handle for one attached Transport: a bounded
 // outbound queue drained by a dedicated writer goroutine, plus the
@@ -37,10 +48,11 @@ type subscriber struct {
 	pending         [][]byte
 	pendingBytes    int
 	overflow        bool
-	// replaySent counts frames the writer has sent from a held batch. The slow-subscriber timer
-	// compares it across the grace, so a client that is slow but moving through one long batch
-	// is not mistaken for a stalled one (pending only shrinks at batch boundaries).
-	replaySent atomic.Uint64
+	// sentFrames counts frames the writer has delivered to the transport. The slow-subscriber timer
+	// compares it across the grace, so a client that is slow but moving (e.g. through one long
+	// replay batch, where pending only shrinks at batch boundaries) is not mistaken for a stalled
+	// one; it also gates repaints, which a writer that has not drained since the drop cannot use.
+	sentFrames atomic.Uint64
 	// paintDone is set when the paint returned. From then on, pending growing past drainLimit (one
 	// queue's worth beyond what the writer has yet to take) counts as the queue being full: frames
 	// are still held, none is lost, but the slow-subscriber grace starts, so a transport that
@@ -60,6 +72,14 @@ type subscriber struct {
 	// dropped is set when a frame was discarded because outbound was full: the client's byte
 	// stream now has a hole, so the hub repaints it (see StreamHub.runResync).
 	dropped bool
+	// droppedAtSent is sentFrames when dropped was first set (or noProgressCheck).
+	droppedAtSent uint64
+	// resyncing is true from beginResync until finishResync: a repaint capture is in flight, so
+	// frames are held (bounded by cap(outbound)-1) instead of queued, and queue only what the
+	// capture does not contain once the repaint is placed ahead of them.
+	resyncing bool
+	held      [][]byte
+	heldLost  bool // a frame arrived while held was full
 
 	// resizeMu guards hasVoted/lastVote — this subscriber's last ResizeVote
 	// (Story 1.3.1). Kept separate from mu (the send-path lock) so a
@@ -95,19 +115,31 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 // the channel itself.
 func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 	s.writerOnce.Do(func() {
-		go func() {
+		go proflabel.Do("streamhub_writer", func() {
 			defer close(s.done)
 			if !s.drainPending(onSendError) {
 				return
 			}
+			labels := s.latencyLabels()
 			for data := range s.outbound {
-				if err := s.transport.Send(data); err != nil {
+				sendStart := time.Now()
+				err := s.transport.Send(data)
+				termlat.Default.Record(termlat.StageOutputSend, labels, time.Since(sendStart))
+				if err != nil {
 					onSendError(s.id, err)
 					return
 				}
+				s.sentFrames.Add(1)
 			}
-		}()
+		})
 	})
+}
+
+func (s *subscriber) latencyLabels() termlat.Labels {
+	if l, ok := s.transport.(latencyLabeler); ok {
+		return l.LatencyLabels()
+	}
+	return termlat.Labels{}
 }
 
 // trySend attempts a non-blocking enqueue of data onto the subscriber's
@@ -118,16 +150,26 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 // stalled is true when the frame was accepted into the replay backlog but the backlog is past
 // drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
 func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
+	delivered, stalled, queueDepth := s.enqueueLocked(data)
+	if queueDepth >= 0 {
+		// Recorded after s.mu is released: telemetry must not extend the hub's per-frame lock hold.
+		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(queueDepth))
+	}
+	return delivered, stalled
+}
+
+// enqueueLocked does trySend's work under s.mu; queueDepth is -1 unless a frame went onto outbound.
+func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueDepth int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false, false
+		return false, false, -1
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true, false
+		return true, false, -1
 	}
 	if s.painting {
 		stalled = s.paintDone && len(s.pending) >= s.drainLimit
@@ -137,25 +179,51 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 			s.pending = append(s.pending, data)
 			s.pendingBytes += len(data)
 		}
-		return true, stalled
+		return true, stalled, -1
+	}
+	if s.resyncing {
+		if len(s.held) < cap(s.outbound)-1 {
+			s.held = append(s.held, data)
+		} else {
+			s.heldLost = true
+		}
+		return true, false, -1
 	}
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
-		return true, false
+		return true, false, len(s.outbound)
 	default:
+		if !s.dropped {
+			s.droppedAtSent = s.sentFrames.Load()
+		}
 		s.dropped = true
-		return false, false
+		return false, false, -1
 	}
 }
 
-// takeDropped reports whether a frame was dropped since the last call, and clears the flag.
-func (s *subscriber) takeDropped() bool {
+// beginResync claims this subscriber's pending repaint and starts holding new frames until
+// finishResync, so every frame left in the queue pre-dates the capture the caller is about to take.
+//
+// ok is false when nothing was dropped, or when the writer has not delivered a single frame since
+// the drop (a repaint would only queue behind a stalled transport and hide the stall from the
+// slow-subscriber eviction). The flag is then left set for a later pass.
+func (s *subscriber) beginResync() (ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d := s.dropped
+	if s.closed || !s.dropped || s.sentFrames.Load() == s.droppedAtSent {
+		return false
+	}
 	s.dropped = false
-	return d
+	s.resyncing = true
+	s.held, s.heldLost = nil, false
+	return true
+}
+
+// redropLocked re-flags the subscriber for another repaint pass.
+func (s *subscriber) redropLocked() {
+	s.dropped = true
+	s.droppedAtSent = noProgressCheck
 }
 
 // hasDropped reports whether a dropped frame is waiting to be repainted.
@@ -165,27 +233,49 @@ func (s *subscriber) hasDropped() bool {
 	return s.dropped
 }
 
-// supersede replaces everything queued but not yet sent with data, a full-screen repaint that
-// already contains it. A subscriber still waiting for its first paint or replaying one keeps its
-// own ordering rules and is left alone.
-func (s *subscriber) supersede(data []byte) {
+// finishResync ends a claim from beginResync. With a repaint (the capture succeeded) it replaces
+// the queued frames, all of which pre-date the capture, and queues the repaint followed by the
+// frames held meanwhile. With none (the capture failed) the queue is kept and only the held
+// frames are appended. Either way, if held frames could not all be kept, or there was no repaint,
+// the subscriber is re-flagged for another pass.
+//
+// A subscriber still waiting for its first paint or replaying one keeps its own ordering rules.
+func (s *subscriber) finishResync(repaint []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.painting || s.awaitingFirstPaint.Load() {
+	held := s.held
+	s.resyncing, s.held = false, nil
+	if s.closed {
 		return
 	}
-drain:
-	for {
+	if s.painting {
+		s.pending = append(s.pending, held...)
+		return
+	}
+	if s.awaitingFirstPaint.Load() {
+		return
+	}
+	complete := repaint != nil && !s.heldLost
+	if repaint != nil {
+	drain:
+		for {
+			select {
+			case <-s.outbound:
+			default:
+				break drain
+			}
+		}
+		held = append([][]byte{repaint}, held...)
+	}
+	for _, data := range held {
 		select {
-		case <-s.outbound:
+		case s.outbound <- data:
 		default:
-			break drain
+			complete = false
 		}
 	}
-	select {
-	case s.outbound <- data:
-		s.slowSince = time.Time{}
-	default:
+	if !complete {
+		s.redropLocked()
 	}
 }
 
@@ -354,7 +444,7 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 				onSendError(s.id, err)
 				return false
 			}
-			s.replaySent.Add(1)
+			s.sentFrames.Add(1)
 		}
 	}
 }

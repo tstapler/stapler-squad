@@ -82,13 +82,14 @@ var pinnedLifecycleCallers = map[string]callerRow{
 // pinnedAccessCallers: the only units that may call AccessForUnary: the Story
 // 5.2 unary handlers and their access-decision helpers, never a stream site.
 var pinnedAccessCallers = map[string]callerRow{
-	"server/services:SessionService.RestartSession":     {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.RestartShell":       {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.SpawnShell":         {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.decideSteerAccess":  {kind: kindUI, reason: "steer access decision: the guards-off bypass of a non-qualifying hidden target"},
-	"server/services:SessionService.decideUpdateAccess": {kind: kindUI, reason: "UpdateSession access-decision block"},
-	"server/services:SessionService.runSteer":           {kind: kindUI, reason: "UpdateSession steer dispatch"},
-	"server/services:TerminalService.WriteToSession":    {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:WorkspaceService.CheckWriteAccess": {kind: kindUI, reason: "WriteFile access decision: the hidden-session guard of a file save"},
-	"server/services:WorkspaceService.SwitchWorkspace":  {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.clearTerminalStatusOne": {kind: kindUI, reason: "ClearTerminalStatusIfLive hot-attach: the RestartSession hidden-session guard"},
+	"server/services:SessionService.RestartSession":         {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.RestartShell":           {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.SpawnShell":             {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.decideSteerAccess":      {kind: kindUI, reason: "steer access decision: the guards-off bypass of a non-qualifying hidden target"},
+	"server/services:SessionService.decideUpdateAccess":     {kind: kindUI, reason: "UpdateSession access-decision block"},
+	"server/services:SessionService.runSteer":               {kind: kindUI, reason: "UpdateSession steer dispatch"},
+	"server/services:TerminalService.WriteToSession":        {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:WorkspaceService.CheckWriteAccess":     {kind: kindUI, reason: "WriteFile access decision: the hidden-session guard of a file save"},
+	"server/services:WorkspaceService.SwitchWorkspace":      {kind: kindUI, reason: "Story 5.2 unary handler"},
 }

@@ -141,3 +141,13 @@ func TestSessionPullRequests_ShouldFlagVerifyExhausted_WhenFiveFailuresSpanThirt
 	assert.True(t, got[0].VerifyExhausted)
 	assert.EqualValues(t, session.VerifyAttemptLimit, got[0].VerifyAttempts)
 }
+
+func TestSessionPullRequestsForList_ShouldCarryNormalizedHostAndOmitURL(t *testing.T) {
+	ghe, err := session.NewPRRef("https://GHE.Example.net/", "acme", "app", 5)
+	require.NoError(t, err)
+	got := SessionPullRequestsForList([]session.PRView{prView(t, 4, session.PRStateOpen, false), {Ref: ghe, URL: "https://ghe.example.net/acme/app/pull/5"}}, "")
+	require.Len(t, got, 2)
+	assert.Equal(t, "github.com", got[0].Host)
+	assert.Equal(t, "ghe.example.net", got[1].Host)
+	assert.Empty(t, got[1].Url, "list form omits url; the client derives it from host/owner/repo/number")
+}

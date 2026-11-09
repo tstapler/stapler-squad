@@ -158,3 +158,20 @@ func TestGuardsFlag_ShouldBeAnInjectedInterfaceNotABoolAndFailClosed_WhenConfigU
 	flag.SetEnabled(true)
 	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, flag))
 }
+
+// ClearTerminalStatusIfLive guard row (same guard as RestartSession, T-RO-13).
+func TestClearTerminalStatusIfLive_ShouldRefuseHiddenAndReviveVisible(t *testing.T) {
+	t.Parallel()
+	hidden := session.NewHotRestorableInstanceForTest(t, "clear-hidden", session.Failed)
+	session.SetHiddenForTest(t, hidden, true)
+	visible := session.NewHotRestorableInstanceForTest(t, "clear-visible", session.Failed)
+	svc := newClearTerminalService(hidden, visible)
+
+	_, err := svc.ClearTerminalStatusIfLive(context.Background(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{SessionIds: []string{"clear-hidden"}}))
+	requireReadOnlyRefusal(t, err, "ClearTerminalStatusIfLive")
+	assert.Equal(t, session.Failed, hidden.GetLifecycleStatus())
+
+	_, err = svc.ClearTerminalStatusIfLive(context.Background(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{SessionIds: []string{"clear-visible"}}))
+	require.NoError(t, err)
+	assert.Equal(t, session.Active, visible.GetLifecycleStatus())
+}

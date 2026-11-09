@@ -107,7 +107,7 @@ var notTerminalWriteRPCs = map[string][]string{
 	"SessionService": {
 		"AcknowledgeError", "AcknowledgeSession", "ArchiveSession", "ArchiveWorkflowSessions",
 		"AssignSessionsToProject", "BatchCreateSessions", "BulkUpsertRules", "CancelSessionCreation",
-		"ClearConversationState", "ClearNotificationHistory", "ClosePR", "CompleteStreamHubRollbackRehearsal",
+		"ClearConversationState", "ClearNotificationHistory", "ClearTerminalStatusIfLive", "ClosePR", "CompleteStreamHubRollbackRehearsal",
 		"ConfirmEgressConsent", "ContinueTCCEnrichment", "GetTCCEnrichmentStatus", "CreateCheckpoint", "CreateDebugSnapshot", "CreateProject", "CreatePullRequest",
 		"CreateSession", "CreateWorkflow", "DeleteAlias", "DeleteApprovalRule", "DeleteDirectoryRule",
 		"DeleteProfile", "DeleteProgramConfig", "DeleteProject", "DeletePromptHistory", "DeleteSession",

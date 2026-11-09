@@ -67,8 +67,8 @@ var blobCacheTotalTargetFraction int64 = 8 // 1/8th of the repoCache budget
 // cache lives inside one cachedRepo, whose total cost that constant already
 // budgets for.
 const (
-	blobCacheMaxBytesFloor   = 2 * 1024 * 1024              // 2MB: room for a handful of typical changed files
-	blobCacheMaxBytesCeiling = approxBytesPerCachedRepo / 4 // 24MB
+	blobCacheMaxBytesFloor   = 2 * 1024 * 1024  // 2MB: room for a handful of typical changed files
+	blobCacheMaxBytesCeiling = 24 * 1024 * 1024 // independent of approxBytesPerCachedRepo (blob caches are the one per-entry cost that is not ~150 B/file)
 )
 
 // effectiveBlobCacheMaxBytes returns the current per-repo blobCache cap,
@@ -216,36 +216,35 @@ type reachableSetEntry struct {
 // misconfigured or miscalculated budget can never regress past this number —
 // the real day-to-day cap is effectiveCacheBudgetBytes()/approxBytesPerCachedRepo,
 // which is normally far smaller than this.
-const repoCacheMaxEntries = 100
+//
+// 512 because the scanner visits every worktree each cycle (200+ on the
+// development host): an LRU smaller than that population evicts every entry
+// just before its next use, so each scan cold-opened ~80 repos (config parse,
+// index decode, HEAD tree walk) -- measured 12,024 cold opens / 11,992
+// evictions at 152 scan cycles with the cache pinned at 32 entries.
+const repoCacheMaxEntries = 512
 
 // repoCacheTTL is the duration after which an unaccessed repo entry is evicted.
 // 30 minutes covers the scanner's poll cycle comfortably while bounding memory.
 const repoCacheTTL = 30 * time.Minute
 
-// approxBytesPerCachedRepo estimates the memory cost of one open *cachedRepo,
-// dominated by go-git's internal packfile index + object LRU cache. Measured
-// empirically (see ClearCache's doc comment / prior profiling sessions) at
-// ~96 MB per repo. This is an estimate, not a measurement of any single repo —
-// it drives a budget-based eviction policy, not exact accounting.
-const approxBytesPerCachedRepo = 96 * 1024 * 1024
+// approxBytesPerCachedRepo estimates the memory cost of one open *cachedRepo.
+// Measured 2026-11-08 by forcing GC around HasUncommitted+DiffShortstat on a
+// fresh reader: 0.3 MB + ~150 B per tracked file (1k files 0.4 MB, 10k 1.7 MB,
+// 50k 7.1 MB); 25 real worktrees of this repo averaged 2.4 MB. The shared
+// object cache and pack index live in gogitstore, not in the entry, so the
+// old 96 MB figure (a per-worktree PlainOpen cost) overstated it 13-200x and
+// capped the cache at 32 entries. 8 MB covers a 50k-file repo; larger
+// monorepo entries are still bounded by the heap-pressure tiers below.
+const approxBytesPerCachedRepo = 8 * 1024 * 1024
 
 // repoCacheMemoryBudgetBytes is the default byte budget for repoCache under
-// normal (non-pressured) conditions. Deliberately far below the
-// repoCacheMaxEntries*approxBytesPerCachedRepo ceiling (~9.6 GB): this process
-// runs alongside many other memory-hungry tools on a single host, and a
-// scanner cache has no business claiming multiple GB of that budget on its
-// own.
-//
-// 3 GB covers roughly 32 simultaneously "hot" repos at the ~96 MB estimate --
-// doubled from an original 1.5 GB/16-repo budget after live /debug/blob-cache
-// stats on a host running dozens of concurrent sessions showed a 0.07% hit
-// rate (77 hits / 117330 misses): with more actively-scanned repos than the
-// cache had room for, every poll cycle evicted and reopened a cold repo,
-// wiping its per-repo blobCache before the next poll could ever hit it. This
-// is a size trade-off, not a fix for unbounded growth -- the
-// high/severeMemoryPressureThreshold tiers below still shrink this budget
-// under real process memory pressure, so a host that can't afford the extra
-// headroom degrades gracefully rather than OOMing.
+// normal (non-pressured) conditions: 3 GB / approxBytesPerCachedRepo = 384
+// entries, enough for every scanned worktree on a busy host. Earlier history:
+// the budget was doubled 1.5 GB -> 3 GB (16 -> 32 repos) to fight a 0.07%
+// blob-cache hit rate, but the cause was the 96 MB per-entry overestimate, not
+// the budget. The high/severe pressure tiers below still shrink it against the
+// process's real heap.
 const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 
 // highMemoryPressureThreshold/severeMemoryPressureThreshold gate

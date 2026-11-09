@@ -211,6 +211,14 @@ func (f *ClientFanout) deliverLocked(data []byte, seq uint64) (dropped bool) {
 		if seq != 0 && seq <= sub.skipThrough {
 			continue
 		}
+		if sub.resyncing {
+			if len(sub.held) < cap(sub.ch)-1 {
+				sub.held = append(sub.held, data)
+			} else {
+				sub.heldLost = true
+			}
+			continue
+		}
 		select {
 		case sub.ch <- data:
 		default:

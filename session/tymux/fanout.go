@@ -15,6 +15,12 @@ const subscriberBufferSize = 64
 type fanoutSubscriber struct {
 	ch      chan []byte
 	dropped bool
+	// resyncing is true between BeginRepaint and FinishRepaint: a repaint capture is in flight, so
+	// Broadcast holds frames here (at most cap(ch)-1) instead of queueing them. heldLost records
+	// that one did not fit. Guarded by ClientFanout.mu.
+	resyncing bool
+	held      [][]byte
+	heldLost  bool
 	// skipThrough discards sequenced frames with seq <= it: a resync already delivered them
 	// inside its redraw (see fanout_seq.go).
 	skipThrough uint64
@@ -91,27 +97,76 @@ func (f *ClientFanout) Broadcast(data []byte) {
 	}
 }
 
-// RepaintDropped replaces the queued, stale output of every subscriber that has lost a frame
-// with repaint (a full-screen redraw that already contains it), clears their dropped flag, and
-// returns how many it repainted. Subscribers that lost nothing are untouched.
-func (f *ClientFanout) RepaintDropped(repaint []byte) int {
+// BeginRepaint claims every subscriber that has lost a frame and returns their ids. Until
+// FinishRepaint their new output is held, so everything still queued pre-dates the capture the
+// caller takes next.
+func (f *ClientFanout) BeginRepaint() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n := 0
-	for _, sub := range f.subscribers {
+	var ids []string
+	for id, sub := range f.subscribers {
 		if !sub.dropped {
 			continue
 		}
 		sub.dropped = false
-		for drained := false; !drained; {
+		sub.resyncing = true
+		sub.held, sub.heldLost = nil, false
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// HasDropped reports whether any subscriber is waiting for a repaint.
+func (f *ClientFanout) HasDropped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.subscribers {
+		if sub.dropped {
+			return true
+		}
+	}
+	return false
+}
+
+// FinishRepaint ends a BeginRepaint claim. With a repaint (the capture succeeded) each claimed
+// subscriber's queued output, all of which pre-dates the capture, is replaced by it, and the
+// output held during the capture follows. With none (the capture failed) the queue is kept and
+// only the held output is appended. A subscriber that could not keep all held output, or had no
+// repaint, is re-flagged for another pass. It returns how many subscribers were repainted.
+func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, id := range ids {
+		sub, ok := f.subscribers[id]
+		if !ok {
+			continue
+		}
+		held := sub.held
+		complete := repaint != nil && !sub.heldLost
+		sub.resyncing, sub.held, sub.heldLost = false, nil, false
+		if repaint != nil {
+			// Under f.mu nothing else sends on sub.ch, and a consumer only makes room.
+			for drained := false; !drained; {
+				select {
+				case <-sub.ch:
+				default:
+					drained = true
+				}
+			}
+			held = append([][]byte{repaint}, held...)
+			n++
+		}
+		for _, d := range held {
 			select {
-			case <-sub.ch:
+			case sub.ch <- d:
 			default:
-				drained = true
+				complete = false
 			}
 		}
-		sub.ch <- repaint // the channel was just emptied under f.mu, so this cannot block
-		n++
+		if !complete {
+			sub.dropped = true
+		}
 	}
 	return n
 }
