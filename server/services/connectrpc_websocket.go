@@ -2172,9 +2172,12 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Contex
 	}
 	log.Info("[streamViaHub] session not alive, restoring before control mode", "session", sessionID)
 	workDir := instance.ActiveDir()
+	restoreStart := time.Now()
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
+	// The multi-second tail of attach_open is this restore, so name it in the log.
+	log.Info("[streamViaHub] restored session before control mode", "session", sessionID, "restore_ms", time.Since(restoreStart).Milliseconds())
 	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
