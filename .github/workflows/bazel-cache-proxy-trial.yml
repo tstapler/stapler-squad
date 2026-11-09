@@ -43,7 +43,7 @@ jobs:
           start=$(date +%s)
           ./scripts/build-ghostty-wasm.sh --test 2>&1 | tee "$RUNNER_TEMP/build.log"
           elapsed=$(( $(date +%s) - start ))
-          hits=$(grep -Eo '[0-9]+ remote cache hit' "$RUNNER_TEMP/build.log" | awk '{s+=$1} END {print s+0}')
+          hits=$( (grep -Eo '[0-9]+ remote cache hit' "$RUNNER_TEMP/build.log" || true) | awk '{s+=$1} END {print s+0}')
           {
             echo "### $PHASE: Bazel build + softreset test"
             echo "- wall time: ${elapsed}s"
