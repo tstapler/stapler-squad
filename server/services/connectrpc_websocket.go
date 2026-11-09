@@ -966,7 +966,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	creation.Mark(stageUpgrade)
 
 	log.Info("ConnectRPC WebSocket connection established")
-	h.serveTimedTerminalStream(conn, r.URL.Path, creation)
+	h.serveTimedTerminalStream(conn, r.URL.Path, requestListener(r), creation)
 }
 
 // serveTerminalStream runs one StreamTerminal call over a virtual mux stream (ADR-033). There is
@@ -974,18 +974,19 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 func (h *ConnectRPCWebSocketHandler) serveTerminalStream(conn streamConn, methodPath string) {
 	creation := beginTerminalCreation()
 	defer creation.End(false)
-	h.serveTimedTerminalStream(conn, methodPath, creation)
+	h.serveTimedTerminalStream(conn, methodPath, "", creation)
 }
 
 // serveTimedTerminalStream runs one StreamTerminal call over conn, a real WebSocket or a mux
 // stream, recording creation stages on creation.
-func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath string, creation *terminalCreation) {
+func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath, listener string, creation *terminalCreation) {
 	stream, ok := negotiateConnectStream(conn, methodPath)
 	if !ok {
 		return
 	}
 	creation.Mark(stageHandshake)
 	stream.creation = creation
+	stream.listener = listener
 
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
@@ -1105,6 +1106,12 @@ type connectWebSocketStream struct {
 	serverClosing atomic.Bool
 	// creation times this stream's setup; nil for streams built outside HandleWebSocket.
 	creation *terminalCreation
+	// listener is the server listener (local|remote) that accepted the connection; empty
+	// means derive it from conn (a mux stream knows its socket's listener).
+	listener string
+	// inputOnce guards input, the stream's lazily built input observability source.
+	inputOnce sync.Once
+	input     *inputSource
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
@@ -1650,14 +1657,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		doneChan:  doneChan,
 		errChan:   errChan,
 		sessionID: sessionID,
-		onInput: func(data []byte) {
+		onInput: func(data []byte) bool {
 			if writer == nil {
-				return
+				return false
 			}
 			// Check send permission
 			if !instance.Permissions.CanSendCommand {
 				log.Warn("[streamViaControlMode] send permission denied", "session", sessionID)
-				return
+				return false
 			}
 
 			// Update timestamps for user interaction
@@ -1677,6 +1684,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				Data:        data,
 			})
 			sendCancel()
+			return true
 		},
 		onResize: func(cols, rows int) {
 			if writer == nil {
@@ -2486,14 +2494,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		doneChan:        doneChan,
 		errChan:         errChan,
 		sessionID:       sessionID,
-		onInput: func(data []byte) {
+		onInput: func(data []byte) bool {
 			writer := upWriter.Writer()
 			if writer == nil {
-				return
+				return false
 			}
 			if !instance.Permissions.CanSendCommand {
 				log.Warn("[streamViaHub] send permission denied", "session", sessionID)
-				return
+				return false
 			}
 			instance.UpdateTerminalTimestamps(string(data), true)
 			instance.MarkUserResponded()
@@ -2507,6 +2515,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				Data:        data,
 			})
 			sendCancel()
+			return true
 		},
 		onResize: func(cols, rows int) {
 			writer := upWriter.Writer()
@@ -3039,8 +3048,9 @@ type inputReadLoopParams struct {
 	doneChan        chan struct{}
 	errChan         chan error
 	sessionID       string
-	// onInput forwards one input frame's raw bytes to tmux (CM path + subprocess fallback).
-	onInput func(data []byte)
+	// onInput forwards one input frame's raw bytes to tmux (CM path + subprocess fallback)
+	// and reports whether it was issued (false: no writer or permission denied).
+	onInput func(data []byte) (forwarded bool)
 	// onResize pushes a mid-stream resize request to the coalescing worker.
 	onResize func(cols, rows int)
 	// onScrollbackRequest performs the tmux capture (or, when AppScrollGate
@@ -3127,11 +3137,7 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.TerminalData) error {
 	writer := p.activeWriter()
 	if input := incomingData.GetInput(); input != nil {
-		if writer != nil {
-			p.onInput(input.Data)
-		} else {
-			log.Debug("[runInputReadLoop] read-only attach: input frame dropped", "session", p.sessionID, "bytes", len(input.Data))
-		}
+		handleReadLoopInput(p, writer, input.Data)
 	}
 	if resize := incomingData.GetResize(); resize != nil {
 		if writer != nil {
@@ -3858,16 +3864,27 @@ func readOneCapturePaneFrame(p capturePaneStreamParams) bool {
 	return false
 }
 
-// handleCapturePaneInput sends one input frame to tmux via send-keys.
+// handleCapturePaneInput counts one capture-pane input frame (path "capture") and forwards
+// it; forwarded is recorded only when the gates passed and the send-keys was issued.
 func handleCapturePaneInput(p capturePaneStreamParams, data []byte) {
+	src := p.stream.inputSource(PathCapture, p.cpt.sessionID)
+	recordTerminalInput(src, data, StageReceived)
+	if forwardCapturePaneInput(p, data) {
+		recordTerminalInput(src, data, StageForwarded)
+	}
+}
+
+// forwardCapturePaneInput sends one input frame to tmux via send-keys. It reports whether
+// the send was issued (false: read-only attach or permission denied).
+func forwardCapturePaneInput(p capturePaneStreamParams, data []byte) bool {
 	if p.writer == nil {
 		log.Debug("[streamViaTmuxCapture] read-only attach: input frame dropped", "session", p.cpt.sessionID, "bytes", len(data))
-		return
+		return false
 	}
 	// Check send permission (snap captured at stream start; Permissions is immutable).
 	if !p.snap.Permissions.CanSendCommand {
 		log.Warn("[streamViaTmuxCapture] send permission denied", "session", p.cpt.sessionID)
-		return
+		return false
 	}
 	p.instance.UpdateTerminalTimestamps(string(data), true)
 
@@ -3877,6 +3894,7 @@ func handleCapturePaneInput(p capturePaneStreamParams, data []byte) {
 	if err := p.writer.Sender().SendInput(p.snap.TmuxServerSocket, p.cpt.tmuxSessionName, data); err != nil {
 		log.Warn("[streamViaTmuxCapture] error sending input to tmux after retries", "tmux_session", p.cpt.tmuxSessionName, "err", err)
 	}
+	return true
 }
 
 // handleCapturePaneResize resizes the pane using the method appropriate to
