@@ -51,6 +51,14 @@ type RedrawCapturer interface {
 	CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error)
 }
 
+// InStreamResyncer repairs every raw-output subscriber's stream by sequence number: a capture is
+// spliced into the stream as a redraw followed by exactly the output after it. Only backends
+// whose output carries sequence numbers (tymux, against a daemon that reports them) have it.
+type InStreamResyncer interface {
+	SupportsInStreamResync() bool
+	ResyncInStream(ctx context.Context) error
+}
+
 // DaemonReadiness confirms a backend's supervised daemon is reachable (tymuxd). Instance asks
 // before a backend migration tears down the old session, so an unreachable daemon cannot make
 // termination unconfirmable.

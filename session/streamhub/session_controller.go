@@ -117,3 +117,15 @@ type FullStateSnapshot struct {
 type FullStateSnapshotter interface {
 	CapturePaneRedraw(ctx context.Context) (snap FullStateSnapshot, ok bool, err error)
 }
+
+// InStreamResyncer is implemented by controllers whose raw output is numbered, so a capture can
+// be spliced into every subscriber's stream exactly: a redraw followed by precisely the output
+// after it. applyNegotiatedSize prefers it to drop-during-resize plus a separate snapshot, which
+// loses the output that arrives between the capture and the end of the resize.
+type InStreamResyncer interface {
+	// SupportsInStreamResync reports whether ResyncInStream can be exact right now.
+	SupportsInStreamResync() bool
+	// ResyncInStream splices the resync into the raw-output stream SubscribeControlModeUpdates
+	// hands out. On error nothing was changed.
+	ResyncInStream(ctx context.Context) error
+}

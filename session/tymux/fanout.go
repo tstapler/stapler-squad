@@ -3,6 +3,7 @@ package tymux
 import (
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
@@ -24,6 +25,9 @@ type fanoutSubscriber struct {
 	resyncing bool
 	held      [][]byte
 	heldLost  bool
+	// skipThrough discards sequenced frames with seq <= it: a resync already delivered them
+	// inside its redraw (see fanout_seq.go).
+	skipThrough uint64
 	// stamps holds the enqueue time of each queued frame (same order) for a timed subscriber, so
 	// Dequeued can report the queue wait without changing the frame channel's type. nil if untimed.
 	stamps chan time.Time
@@ -46,7 +50,10 @@ type ClientFanout struct {
 	subscribers map[string]*fanoutSubscriber
 	nextID      uint64
 	onDrop      func()
-	rec         *termlat.Recorder
+	seq         seqState // guarded by mu; see fanout_seq.go
+	// seqOn mirrors seq.valid so DisableSeq, run per legacy frame, can skip the lock.
+	seqOn atomic.Bool
+	rec   *termlat.Recorder
 	// stamps maps a timed subscriber's id to its stamp queue so Dequeued, called once per frame,
 	// never takes f.mu.
 	stamps sync.Map
@@ -66,6 +73,27 @@ func (s *fanoutSubscriber) sendLocked(data []byte) bool {
 	}
 	s.ch <- data
 	return true
+}
+
+// drainLocked empties the frame queue and its stamps. Only call under ClientFanout.mu (nothing
+// else sends; a consumer only makes room).
+func (s *fanoutSubscriber) drainLocked() {
+	for drained := false; !drained; {
+		select {
+		case <-s.ch:
+		default:
+			drained = true
+		}
+	}
+	if s.stamps != nil {
+		for drained := false; !drained; {
+			select {
+			case <-s.stamps:
+			default:
+				drained = true
+			}
+		}
+	}
 }
 
 var tymuxLabels = termlat.Labels{Backend: "tymux"}
@@ -141,35 +169,12 @@ func (f *ClientFanout) Unsubscribe(id string) {
 // rather than blocking the caller (the standing stream's reader
 // goroutine).
 func (f *ClientFanout) Broadcast(data []byte) {
+	var tel fanoutTelemetry
 	f.mu.Lock()
-	dropped := false
-	// Telemetry is recorded after Unlock so it never extends the per-frame lock hold.
-	var depths [8]float64
-	depthSamples, drops := depths[:0], 0
-	for _, sub := range f.subscribers {
-		if sub.resyncing {
-			if len(sub.held) < cap(sub.ch)-1 {
-				sub.held = append(sub.held, data)
-			} else {
-				sub.heldLost = true
-			}
-			continue
-		}
-		depthSamples = append(depthSamples, float64(len(sub.ch)))
-		if !sub.sendLocked(data) {
-			drops++
-			sub.dropped = true
-			dropped = true
-		}
-	}
+	dropped := f.deliverLocked(data, 0, &tel)
 	onDrop := f.onDrop
 	f.mu.Unlock()
-	for _, d := range depthSamples {
-		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, d)
-	}
-	for range drops {
-		f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
-	}
+	f.recordTelemetry(&tel)
 	if dropped && onDrop != nil {
 		onDrop()
 	}
@@ -219,6 +224,9 @@ func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
 		sub, ok := f.subscribers[id]
 		if !ok {
 			continue
+		}
+		if !sub.resyncing {
+			continue // a sequenced ResyncAt already replaced this claim
 		}
 		held := sub.held
 		complete := repaint != nil && !sub.heldLost

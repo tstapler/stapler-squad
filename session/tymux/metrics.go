@@ -26,6 +26,8 @@ var (
 		metric.WithDescription("Wall time of one tymuxd control RPC from squad, by method"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries(0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000))
+	streamResyncCounter = mustInt64Counter("tymux_stream_resync_total",
+		metric.WithDescription("Pane resyncs by reason (output_gap, seq_gap, drop, request) and outcome (ok, coalesced, fresh, retry, gave_up, fallback)"))
 	attachEventCounter = mustInt64Counter("tymux_attach_events_total",
 		metric.WithDescription("Notable AttachEvent handling, by kind (output_gap, gap_exceeded, snapshot_redraw)"))
 )
@@ -219,6 +221,12 @@ func observeCaptureRender(start time.Time) {
 // recordReconnect increments tymux_attach_stream_reconnects_total{cause}.
 func recordReconnect(cause string) {
 	reconnectCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("cause", cause)))
+}
+
+// recordStreamResync increments tymux_stream_resync_total{reason,outcome}.
+func recordStreamResync(reason, outcome string) {
+	streamResyncCounter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("reason", reason), attribute.String("outcome", outcome)))
 }
 
 // recordAttachEvent increments tymux_attach_events_total{kind}.
