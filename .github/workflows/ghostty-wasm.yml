@@ -55,8 +55,8 @@ jobs:
           path: |
             ~/.cache/bazel-disk
             ~/.cache/bazel-repo
-          # Includes the pin and patches: an exact hit is never re-saved, so a key that ignored them kept
-          # restoring a disk cache without the new actions and rebuilt Zig from scratch on every run.
+          # Also hashes the BUILD/bzl files: an exact hit is never re-saved, so editing them kept
+          # restoring a stale disk cache and rebuilt Zig cold on every run.
           key: ghostty-wasm-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', 'third_party/ghostty/**') }}
           restore-keys: |
             ghostty-wasm-
