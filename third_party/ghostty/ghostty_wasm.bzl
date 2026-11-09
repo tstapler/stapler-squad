@@ -1,7 +1,7 @@
 """Rule that runs Ghostty's own `zig build` with the pinned Zig toolchain.
 
 Ghostty's build.zig is the real build graph, so Bazel wraps it instead of re-describing it with
-rules_zig. Inputs (source archive, patches, Zig tarball) are all sha256-pinned in MODULE.bazel,
+rules_zig. Inputs (source archive, Zig tarball) are all sha256-pinned in MODULE.bazel,
 which makes the action cacheable by Bazel's local and remote caches.
 
 Not fully hermetic: `zig build` fetches Ghostty's own Zig dependencies (build.zig.zon, content

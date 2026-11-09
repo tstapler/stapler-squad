@@ -5,12 +5,14 @@ import "github.com/linkdata/deadlock"
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -307,7 +309,7 @@ func (rqp *ReviewQueuePoller) Start(ctx context.Context) {
 	rqp.checkSessions()
 
 	rqp.wg.Add(1)
-	go rqp.pollLoop()
+	go proflabel.Do("review_queue_poller", rqp.pollLoop)
 
 	log.Info("ReviewQueuePoller started", "poll_interval", rqp.config.PollInterval)
 }
@@ -401,6 +403,10 @@ func (rqp *ReviewQueuePoller) pollLoop() {
 			}
 
 		case <-timer.C:
+			if qos.Default.Defer("review_queue_poller", qos.BackgroundMaxDeferral) {
+				timer.Reset(interval)
+				continue
+			}
 			rqp.tickCount.Add(1)
 
 			if err := rqp.checkSessionsSafe(); err != nil {

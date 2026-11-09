@@ -140,7 +140,9 @@ func TestFlagCache_ShouldKeepLastGoodValue_WhenReloadFails(t *testing.T) {
 
 // T-FT-02: the ticker goroutine is joined by Stop and leaks nothing.
 func TestBackgroundWorkers_ShouldJoinOnStopAndLeakNoGoroutines_WhenTheFlagCacheTickerRunsOnAFakeClockAndIsStopped(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	// Baseline: other tests in this package spawn session.Instance goroutines
+	// (claude version check, exec waits) that outlive them; only leaks from this test count.
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	lg, _ := newRecLogger()
 	c := NewFlagCache((&staticFlags{}).load, lg)
 	c.Start(context.Background(), make(chan time.Time))

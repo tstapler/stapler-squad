@@ -344,6 +344,11 @@ func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data InstanceData) er
 	for _, v := range data.PRs {
 		link := PRLink{Role: v.Role, Source: v.AttachSource, Initial: prInitialOf(v), AttachedAt: v.AttachedAt}
 		if _, err := upsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
+			if isDeterministicPRImportError(err) {
+				// A bad link must not roll back the rest of the session save.
+				log.Warn("save pr link skipped", "pr", v.Ref.String(), "err", err)
+				continue
+			}
 			return fmt.Errorf("save pr link %s: %w", v.Ref, err)
 		}
 	}

@@ -64,6 +64,11 @@ var notTerminalWriteRPCs = map[string][]string{
 		"UnarchiveBacklogItem", "UpdateBacklogItem", "UpdateItemSource", "UpdateLivenessDefinition",
 		"UpdatePipelineMode", "UpdateStage", "UpdateStageTransition", "UpdateTransitionGate", "WaiveAcceptanceCriterion", "WatchBacklogItems",
 	},
+	"BacklogFlowService": {
+		// Read-only analytics over backlog events; type into no pane and write no state.
+		"CompareFlowWindows", "GetFlowSummary", "GetItemFlowTimeline", "ListDeadlockCandidates",
+		"ListFlowDrilldown", "ListThrashEpisodes",
+	},
 	"DiagnosticService": {
 		"AssembleDiagnosticBundle", "DispatchDiagnose",
 	},
@@ -107,7 +112,7 @@ var notTerminalWriteRPCs = map[string][]string{
 	"SessionService": {
 		"AcknowledgeError", "AcknowledgeSession", "ArchiveSession", "ArchiveWorkflowSessions",
 		"AssignSessionsToProject", "BatchCreateSessions", "BulkUpsertRules", "CancelSessionCreation",
-		"ClearConversationState", "ClearNotificationHistory", "ClosePR", "CompleteStreamHubRollbackRehearsal",
+		"ClearConversationState", "ClearNotificationHistory", "ClearTerminalStatusIfLive", "ClosePR", "CompleteStreamHubRollbackRehearsal",
 		"ConfirmEgressConsent", "ContinueTCCEnrichment", "GetTCCEnrichmentStatus", "CreateCheckpoint", "CreateDebugSnapshot", "CreateProject", "CreatePullRequest",
 		"CreateSession", "CreateWorkflow", "DeleteAlias", "DeleteApprovalRule", "DeleteDirectoryRule",
 		"DeleteProfile", "DeleteProgramConfig", "DeleteProject", "DeletePromptHistory", "DeleteSession",

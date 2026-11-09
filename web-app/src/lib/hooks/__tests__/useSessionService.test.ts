@@ -23,7 +23,7 @@ import remotesReducer, {
   remoteHealthChanged,
   selectRemoteConnectionState,
 } from "@/lib/store/remotesSlice";
-import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
+import { type Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
 import { RemoteConnectionState } from "@/gen/session/v1/remote_pb";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -389,6 +389,67 @@ describe("useSessionService — initial load gating", () => {
 
     expect(mockListSessions).not.toHaveBeenCalled();
     unmount();
+  });
+});
+
+// Root cause of the "Insufficient resources" WebSocket exhaustion: every
+// useSessionService() caller (useSessionActions on each card/row/pane) used to
+// start its own WatchSessions stream on the first tab refocus/online event.
+describe("useSessionService — one WatchSessions stream per tab", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+    }));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  async function refocusTab() {
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("online"));
+      await jest.advanceTimersByTimeAsync(500);
+    });
+  }
+
+  it("opens no WatchSessions streams for 50 non-autoWatch instances after a tab refocus", async () => {
+    const store = makeTestStore();
+    const hooks = Array.from({ length: 50 }, () =>
+      renderHook(() => useSessionService(), { wrapper: makeWrapper(store) })
+    );
+
+    await refocusTab();
+
+    expect(mockWatchSessions).not.toHaveBeenCalled();
+    hooks.forEach((h) => h.unmount());
+  });
+
+  it("adds at most the owner's own reconnect with 50 non-autoWatch instances alongside", async () => {
+    const store = makeTestStore();
+    const owner = renderHook(() => useSessionService({ autoWatch: true }), {
+      wrapper: makeWrapper(store),
+    });
+    const others = Array.from({ length: 50 }, () =>
+      renderHook(() => useSessionService(), { wrapper: makeWrapper(store) })
+    );
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(50);
+    });
+    const afterMount = mockWatchSessions.mock.calls.length;
+    expect(afterMount).toBe(1);
+
+    await refocusTab();
+
+    // The never-live owner may reconnect once; the 50 others must add nothing.
+    expect(mockWatchSessions.mock.calls.length - afterMount).toBeLessThanOrEqual(1);
+    others.forEach((h) => h.unmount());
+    owner.unmount();
   });
 });
 

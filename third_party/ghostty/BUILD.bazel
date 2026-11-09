@@ -52,7 +52,7 @@ ghostty_zig(
     zig_lib = ":zig_lib",
 )
 
-# Zig unit test for DECSTR (patch 0002). Build it to run it: a failing test fails the build.
+# Zig unit test for DECSTR (commit ffd0420 on the fork). Build it to run it: a failing test fails the build.
 ghostty_zig(
     name = "softreset_test",
     build_zig = "@ghostty_src//:build.zig",

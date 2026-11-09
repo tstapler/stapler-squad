@@ -1,27 +1,16 @@
 # Maintain the tstapler/ghostty fork
 
-Decision: we carry Ghostty patches in a fork (`github.com/tstapler/ghostty`, from `ghostty-org/ghostty`), test them in stapler-squad, then upstream them. Until `ssq/main` is pushed the Bazel build applies `third_party/ghostty-patches/` to an upstream archive; this document is the switch-over and the steady-state flow. Context: `docs/adr/ADR-039-own-ghostty-wasm-build.md`.
+Decision: we carry Ghostty patches in a fork (`github.com/tstapler/ghostty`, from `ghostty-org/ghostty`), test them in stapler-squad, then upstream them. `MODULE.bazel` pins a commit of the fork's `ssq/main`. Context: `docs/adr/ADR-039-own-ghostty-wasm-build.md`.
 
-## Status (2026-11-08)
+## Status (2026-11-09)
 
-- The fork exists (`gh repo view tstapler/ghostty` reports `isFork: true`).
-- `ssq/main` is prepared in a local clone at `~/code/github.com/tstapler/ghostty-ssq-staging`: upstream `5714ed07a1012573261b7b7e3ed2add9c1504496` plus four commits (the three patches in `third_party/ghostty-patches/`, then `README-SSQ.md`), tagged `ssq.1`, tip `38c7055f6ae361919d6f86c8521a0b9546783c25` (0002 was compile-fixed after the first draft). It is **not pushed**: the push was denied twice by the sandbox's permission classifier, so the owner must run the push below. Until then the fork's `ssq/main` does not exist and `MODULE.bazel` still points at upstream.
+`ssq/main` is pushed. Tag `ssq.1` is `38c7055f6ae361919d6f86c8521a0b9546783c25`: upstream `5714ed07a1012573261b7b7e3ed2add9c1504496` plus four commits (wasm API, DECSTR, zero freed pages, `README-SSQ.md`). `MODULE.bazel` pins it with no patch step.
 
-## Push the prepared branch (owner)
-
-```bash
-cd ~/code/github.com/tstapler/ghostty-ssq-staging
-git push origin ssq/main ssq.1          # origin = https://github.com/tstapler/ghostty.git
-```
-
-The patch commits carry `Upstream-PR:` trailers; each topic is one commit.
-
-## Switch stapler-squad to the fork
+## Bump the fork pin
 
 1. Get the archive hash: `curl -sSL https://github.com/tstapler/ghostty/archive/<ssq/main sha>.tar.gz | shasum -a 256`.
-2. In `MODULE.bazel` set `GHOSTTY_ORG = "tstapler"`, `GHOSTTY_REV = "<sha>"`, `GHOSTTY_SHA256 = "<hash>"`, and `GHOSTTY_PATCHES = []`.
-3. Delete `third_party/ghostty-patches/*.patch` and its `BUILD.bazel` (keep `README-SSQ.md` as a pointer; the patch-set id in the recorded key becomes `none`).
-4. `make test-ghostty-wasm`, record the new sha256 line, run the differential harness.
+2. In `MODULE.bazel` set `GHOSTTY_REV` and `GHOSTTY_SHA256`.
+3. `make test-ghostty-wasm`, record the new sha256 line, run the differential harness.
 
 No `third_party/ghostty` submodule: Bazel fetches the pinned fork commit as an archive and that directory is the Bazel package. To edit the fork in place, check it out anywhere, copy `third_party/ghostty/ghostty_src.BUILD` to `BUILD.bazel` in the checkout, and build with `--override_repository=ghostty_src=<checkout>`.
 
@@ -29,7 +18,7 @@ No `third_party/ghostty` submodule: Bazel fetches the pinned fork commit as an a
 
 - It is upstream at a chosen commit plus our patches as commits. One topic per commit, each with a Zig test and an `Upstream-PR: <url | none | not yet proposed>` trailer. Branch `ssq/main`, tags `ssq.N` (the go-git fork's convention; its `README-SSQ.md` could not be found when this was written, `gh api repos/tstapler/go-git/contents/README-SSQ.md` returned 404, so the fork's own `README-SSQ.md` is the index).
 - The pin in stapler-squad is a commit SHA on `ssq/main`, never a branch name.
-- Rollback: point `MODULE.bazel` back at upstream plus the patch files (restore them from git history), or delete the build output to fall back to stock ghostty-web.
+- Rollback: pin an earlier fork commit, or delete the build output to fall back to stock ghostty-web.
 
 ## Sync with upstream
 

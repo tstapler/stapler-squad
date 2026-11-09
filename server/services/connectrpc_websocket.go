@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
@@ -966,7 +967,11 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	creation.Mark(stageUpgrade)
 
 	log.Info("ConnectRPC WebSocket connection established")
-	h.serveTimedTerminalStream(conn, r.URL.Path, creation)
+	listener := ""
+	if rec, ok := RequestRecordFrom(r.Context()); ok {
+		listener = rec.Listener
+	}
+	h.serveTimedTerminalStream(conn, r.URL.Path, creation, listener)
 }
 
 // serveTerminalStream runs one StreamTerminal call over a virtual mux stream (ADR-033). There is
@@ -974,18 +979,23 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 func (h *ConnectRPCWebSocketHandler) serveTerminalStream(conn streamConn, methodPath string) {
 	creation := beginTerminalCreation()
 	defer creation.End(false)
-	h.serveTimedTerminalStream(conn, methodPath, creation)
+	listener := ""
+	if mux, ok := conn.(*muxStreamConn); ok {
+		listener = mux.sock.listener
+	}
+	h.serveTimedTerminalStream(conn, methodPath, creation, listener)
 }
 
 // serveTimedTerminalStream runs one StreamTerminal call over conn, a real WebSocket or a mux
 // stream, recording creation stages on creation.
-func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath string, creation *terminalCreation) {
+func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath string, creation *terminalCreation, listener string) {
 	stream, ok := negotiateConnectStream(conn, methodPath)
 	if !ok {
 		return
 	}
 	creation.Mark(stageHandshake)
 	stream.creation = creation
+	stream.latency.setListener(listener)
 
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
@@ -1105,13 +1115,24 @@ type connectWebSocketStream struct {
 	serverClosing atomic.Bool
 	// creation times this stream's setup; nil for streams built outside HandleWebSocket.
 	creation *terminalCreation
+	// latency labels the stream's latency observations (backend and listener); see terminal_latency.go.
+	latency streamLatency
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
 func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) error {
+	waitStart := time.Now()
 	s.writeMutex.Lock()
-	defer s.writeMutex.Unlock()
-	return s.conn.WriteMessage(messageType, data)
+	writeStart := time.Now()
+	err := s.conn.WriteMessage(messageType, data)
+	end := time.Now()
+	s.writeMutex.Unlock()
+	// Record after unlock: telemetry must not extend the per-stream write critical section.
+	labels := s.latency.labels()
+	termlat.Default.Record(termlat.StageWSWriteWait, labels, writeStart.Sub(waitStart))
+	termlat.Default.Record(termlat.StageWSWrite, labels, end.Sub(writeStart))
+	s.latency.noteOutputWritten(end)
+	return err
 }
 
 // firstPaintWriteTimeout bounds a first-paint socket write: the hub holds its resize lock across
@@ -1325,6 +1346,12 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 		workDir := instance.ActiveDir()
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
+		}
+		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
+		if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
+			log.Warn("[streamViaControlMode] restored session but PTY attach failed, not marking started", "session", sessionID, "err", ptyErr)
+		} else {
+			instance.MarkStartedIfTmuxAlive() // a lazily-restored instance is not started; input is refused until it is
 		}
 	}
 	if err := streamer.StartControlMode(); err != nil {
@@ -1547,6 +1574,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 	// Update LastViewed timestamp - user is viewing this session
 	instance.MarkViewed()
+	stream.latency.setBackend(instance.Snapshot().Backend)
 
 	// Client sends dimensions in the handshake's first message (no empty
 	// handshake), so tmux can be resized and captured immediately.
@@ -1644,7 +1672,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	})
 
 	// Goroutine 2: Read from WebSocket and handle input/commands
+	bookkeeper := newInputBookkeeper(instance, &stream.latency)
+	slowLane := newSlowRequestLane(errChan, nil)
+	defer slowLane.close()
 	go runInputReadLoop(inputReadLoopParams{
+		slowLane:  slowLane,
 		writer:    writer,
 		stream:    stream,
 		doneChan:  doneChan,
@@ -1660,23 +1692,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				return
 			}
 
-			// Update timestamps for user interaction
-			instance.UpdateTerminalTimestamps(string(data), true)
-			instance.MarkUserResponded()
-
-			// Try CM path first (low-latency, no subprocess). Falls back to
-			// subprocess send-keys if CM queue is backed up or not running.
-			// Errors are non-fatal — keystrokes may be lost under load but
-			// the stream stays alive (sending TerminalError kills the stream).
-			sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = writer.SendInput(sendCtx, PaneInput{
-				ControlMode: instance,
-				TmuxSocket:  instance.Snapshot().TmuxServerSocket,
-				TmuxSession: tmuxSessionName,
-				LogPrefix:   "[streamViaControlMode]",
-				Data:        data,
-			})
-			sendCancel()
+			keystrokeDelivery{
+				instance:    instance,
+				latency:     &stream.latency,
+				bookkeeper:  bookkeeper,
+				logPrefix:   "[streamViaControlMode]",
+				tmuxSession: tmuxSessionName,
+				tmuxSocket:  instance.Snapshot().TmuxServerSocket,
+			}.deliver(writer, data)
 		},
 		onResize: func(cols, rows int) {
 			if writer == nil {
@@ -2135,7 +2158,13 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
 func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
-	if handled, err := instance.PrepareRetainedTerminalView(context.Background()); handled {
+	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID)
+}
+
+// ensureHubBackendAliveCtx is ensureHubBackendAlive bounded by the connection: a client that
+// disconnects mid-attach stops waiting on the daemon and frees its attach slot.
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string) (processAlive bool, err error) {
+	if handled, err := instance.PrepareRetainedTerminalView(ctx); handled {
 		return false, err // Render readiness does not imply process/input readiness.
 	}
 	if instance.IsBackendProcessAlive() {
@@ -2146,10 +2175,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Ins
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
-	if _, ptyErr := instance.GetPTYReader(); ptyErr != nil {
+	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
 	}
+	instance.MarkStartedIfTmuxAlive()
 	return true, nil
 }
 
@@ -2404,6 +2434,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName, "backend", snap.Backend)
 
 	instance.MarkViewed()
+	stream.latency.setBackend(snap.Backend)
 	stream.creation.Mark(stageResolve)
 
 	currentPaneReq, err := parseControlModeHandshake(stream)
@@ -2411,7 +2442,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return err
 	}
 
-	processAlive, err := h.ensureHubBackendAlive(instance, sessionID)
+	processAlive, err := gatedAttach(connCtx, attachLimiter, stream.latency.labels(), tmuxSessionName, func() (bool, error) {
+		return h.ensureHubBackendAliveCtx(connCtx, instance, sessionID)
+	})
 	if err != nil {
 		return err
 	}
@@ -2455,7 +2488,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	stream.creation.End(true)
 
 	doneChan := make(chan struct{})
-	errChan := make(chan error, 1)
+	errChan := make(chan error, 2) // the read loop's exit and, at most, one slow-lane failure
 	var resizeSettling atomic.Bool
 
 	// Epic 4.2, Story 4.2.1: push hub.SubscriberCount() to this connection
@@ -2479,7 +2512,33 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// goroutine to race here (unlike streamViaControlMode) because the hub's
 	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
 	// already owns delivering output to this connection via transport.Send.
+	bookkeeper := newInputBookkeeper(instance, &stream.latency)
+	// A failed slow request must end the stream as it did inline: flag a server-side close and
+	// interrupt the blocked read so the loop below returns.
+	slowLane := newSlowRequestLane(errChan, func() {
+		stream.serverClosing.Store(true)
+		_ = stream.conn.SetReadDeadline(time.Now())
+	})
+	defer slowLane.close()
+	var resizes latestResize
+	// Resizes run on the slow lane, so a keystroke typed after one must be ordered behind the
+	// pane resize (not behind its repaint capture) by the gate.
+	inputGate := newInputOrderGate(func(data []byte) {
+		writer := upWriter.Writer()
+		if writer == nil {
+			return
+		}
+		keystrokeDelivery{
+			instance:    instance,
+			latency:     &stream.latency,
+			bookkeeper:  bookkeeper,
+			logPrefix:   "[streamViaHub]",
+			tmuxSession: tmuxSessionName,
+			tmuxSocket:  snap.TmuxServerSocket,
+		}.deliver(writer, data)
+	})
 	runInputReadLoop(inputReadLoopParams{
+		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
 		onDroppedResize: upWriter.NoteDroppedResize,
 		stream:          stream,
@@ -2487,38 +2546,36 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		errChan:         errChan,
 		sessionID:       sessionID,
 		onInput: func(data []byte) {
-			writer := upWriter.Writer()
-			if writer == nil {
+			if upWriter.Writer() == nil {
 				return
 			}
 			if !instance.Permissions.CanSendCommand {
 				log.Warn("[streamViaHub] send permission denied", "session", sessionID)
 				return
 			}
-			instance.UpdateTerminalTimestamps(string(data), true)
-			instance.MarkUserResponded()
-
-			sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = writer.SendInput(sendCtx, PaneInput{
-				ControlMode: instance,
-				TmuxSocket:  snap.TmuxServerSocket,
-				TmuxSession: tmuxSessionName,
-				LogPrefix:   "[streamViaHub]",
-				Data:        data,
-			})
-			sendCancel()
+			hub.NoteInteractive(subscriberID)
+			inputGate.input(data)
 		},
 		onResize: func(cols, rows int) {
 			writer := upWriter.Writer()
 			if writer == nil {
 				return
 			}
-			size, sizeErr := streamhub.NewTerminalSize(cols, rows)
-			if sizeErr != nil {
+			if _, sizeErr := streamhub.NewTerminalSize(cols, rows); sizeErr != nil {
 				log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
 				return
 			}
-			hub.RequestResize(connCtx, subscriberID, size)
+			resizes.pushOrdered(slowLane, inputGate, cols, rows, func(cols, rows int, paneResized func()) {
+				// Re-check: the slow lane runs after the up-writer may have been closed.
+				if writer := upWriter.Writer(); writer == nil {
+					return
+				}
+				size, err := streamhub.NewTerminalSize(cols, rows)
+				if err != nil {
+					return
+				}
+				hub.RequestResizeNotify(connCtx, subscriberID, size, paneResized)
+			})
 		},
 		onScrollbackRequest: func(startLine, endLine string) (ScrollbackResult, error) {
 			return scrollbackResultForRequest(scrollbackRequestParams{
@@ -3053,6 +3110,31 @@ type inputReadLoopParams struct {
 	// loop starts) — see handleCurrentPaneRequestFrame.
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error)
 	resizeSettling       *atomic.Bool
+	// slowLane, when set, runs scrollback and resync requests off this loop so keystrokes keep
+	// being read while a capture-pane is in flight; nil runs them inline (tests).
+	slowLane *slowRequestLane
+}
+
+// runSlow runs fn on the slow lane, or inline when there is none. A lane run reports its error
+// on the stream's error channel rather than returning it.
+func (p inputReadLoopParams) runSlow(fn func() error) error {
+	if p.slowLane == nil {
+		return fn()
+	}
+	p.slowLane.submit(fn)
+	return nil
+}
+
+// runSlowDroppable is runSlow for requests the lane may refuse when busy (scrollback): a
+// refused request is dropped and counted, so a flood cannot block the keystroke read loop.
+func (p inputReadLoopParams) runSlowDroppable(fn func() error) error {
+	if p.slowLane == nil {
+		return fn()
+	}
+	if !p.slowLane.submitDroppable(fn) {
+		log.Debug("[runInputReadLoop] slow lane busy, dropped scrollback request", "session", p.sessionID)
+	}
+	return nil
 }
 
 func (p inputReadLoopParams) activeWriter() TerminalWriter {
@@ -3145,7 +3227,10 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 		}
 	}
 	if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
-		handleScrollbackRequest(p.stream, p.sessionID, scrollbackReq, p.onScrollbackRequest)
+		_ = p.runSlowDroppable(func() error {
+			handleScrollbackRequest(p.stream, p.sessionID, scrollbackReq, p.onScrollbackRequest)
+			return nil
+		})
 	}
 	// CurrentPaneRequest arrives mid-stream (as opposed to the initial
 	// handshake, which streamViaControlMode parses and answers separately
@@ -3153,7 +3238,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// (carrying a resync_id to correlate the reply) is answered without a full
 	// reconnect.
 	if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
-		if err := handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling); err != nil {
+		if err := p.runSlow(func() error {
+			return handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling)
+		}); err != nil {
 			return err
 		}
 	}
@@ -3164,7 +3251,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// handleBatchedCurrentPaneRequestFrame's doc comment for why each reply is
 	// still written as its own individually-resync_id-tagged frame).
 	if batchReq := incomingData.GetBatchedCurrentPaneRequest(); batchReq != nil {
-		return handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
+		return p.runSlow(func() error {
+			return handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
+		})
 	}
 	return nil
 }
@@ -3362,6 +3451,7 @@ func handleCurrentPaneRequestFrame(
 	defer span.End()
 
 	log.Debug("[runInputReadLoop] received mid-stream currentPaneRequest frame", "session", sessionID, "resync_id", paneReq.GetResyncId())
+	countServerResync(stream, paneReq)
 
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
@@ -3555,6 +3645,9 @@ func handleBatchedCurrentPaneRequestFrame(
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) error {
+	for _, req := range batchReq.GetRequests() {
+		countServerResync(stream, req)
+	}
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
 	outputs, endErr := handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest)

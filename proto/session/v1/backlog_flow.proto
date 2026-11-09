@@ -1,0 +1,574 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// BacklogFlowService serves the backlog flow-observability aggregates. The
+// messages mirror session/flow/summary_types.go field for field; a change to
+// those Go types is a change to this file in the same PR. JSON consumers marshal
+// with protojson UseProtoNames so field names stay snake_case.
+//
+// Window rules shared by every request with window_days/all_time: all_time=true
+// means all-time and window_days is ignored; window_days=0 with all_time=false
+// is InvalidArgument ("use all_time=true for all-time"). All time ranges are
+// half-open [start, end): the end instant is exclusive.
+service BacklogFlowService {
+  // GetFlowSummary returns the sectioned flow summary for one window.
+  rpc GetFlowSummary(GetFlowSummaryRequest) returns (GetFlowSummaryResponse) {}
+
+  // ListDeadlockCandidates returns the heuristic ranked review-fail streak list.
+  rpc ListDeadlockCandidates(ListDeadlockCandidatesRequest) returns (ListDeadlockCandidatesResponse) {}
+
+  // ListThrashEpisodes returns the items that thrash between statuses.
+  rpc ListThrashEpisodes(ListThrashEpisodesRequest) returns (ListThrashEpisodesResponse) {}
+
+  // GetItemFlowTimeline returns one item's transitions with thrash collapsed.
+  rpc GetItemFlowTimeline(GetItemFlowTimelineRequest) returns (GetItemFlowTimelineResponse) {}
+
+  // CompareFlowWindows compares two windows metric by metric (no all-time).
+  rpc CompareFlowWindows(CompareFlowWindowsRequest) returns (CompareFlowWindowsResponse) {}
+
+  // ListFlowDrilldown lists the items behind one drill key.
+  rpc ListFlowDrilldown(ListFlowDrilldownRequest) returns (ListFlowDrilldownResponse) {}
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
+message GetFlowSummaryRequest {
+  // Last N days ending now (1..365 by convention). Ignored when all_time is set.
+  int32 window_days = 1;
+  // All-time window; takes precedence over window_days.
+  bool all_time = 2;
+  // Section names to compute: tiles, funnel, causes, review, pr, stuck,
+  // anomalies, trends, notes. Empty means all; the rest report status "skipped".
+  repeated string sections = 3;
+  // Compact omits trend buckets and limits every top-N list to 3.
+  bool compact = 4;
+  // Requested top-N list size (0 = default 10, max 50).
+  int32 list_limit = 5;
+}
+
+message ListDeadlockCandidatesRequest {
+  int32 window_days = 1;
+  bool all_time = 2;
+  // Requested list size (0 = default 10, max 50).
+  int32 limit = 3;
+}
+
+message ListThrashEpisodesRequest {
+  int32 window_days = 1;
+  bool all_time = 2;
+  // Requested list size (0 = default 10, max 50).
+  int32 limit = 3;
+}
+
+message GetItemFlowTimelineRequest {
+  string item_id = 1;
+  int32 window_days = 2;
+  bool all_time = 3;
+}
+
+// CompareFlowWindowsRequest selects two bounded windows, either by day offsets
+// or by explicit bounds; supplying both forms is InvalidArgument. There is no
+// all_time field: compare needs bounded windows.
+message CompareFlowWindowsRequest {
+  // Offset form: B is the last b_days days ending b_offset_days before now,
+  // and A is the a_days days ending where B starts.
+  int32 a_days = 1;
+  int32 b_days = 2;
+  int32 b_offset_days = 3;
+  // Explicit form: each pair is read as half-open [start, end); end is
+  // exclusive, so an event exactly at a_end belongs to B, not A.
+  google.protobuf.Timestamp a_start = 4;
+  // End is exclusive.
+  google.protobuf.Timestamp a_end = 5;
+  google.protobuf.Timestamp b_start = 6;
+  // End is exclusive; clamped to now when in the future (see FlowMeta.clamps).
+  google.protobuf.Timestamp b_end = 7;
+}
+
+message ListFlowDrilldownRequest {
+  // A drill key as carried in drill_key beside a number.
+  string key = 1;
+  int32 window_days = 2;
+  bool all_time = 3;
+  // Requested page size (0 = default 10, max 50).
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Shared building blocks
+// ---------------------------------------------------------------------------
+
+message FlowRowCounts {
+  int32 events = 1;
+  int32 verdicts = 2;
+  int32 stuck_intervals = 3;
+  int32 items = 4;
+}
+
+// FlowMeta describes how a response was computed.
+message FlowMeta {
+  // Cache age: when the numbers were computed.
+  google.protobuf.Timestamp as_of = 1;
+  // Inclusive start of the window.
+  google.protobuf.Timestamp window_start = 2;
+  // Exclusive end of the window.
+  google.protobuf.Timestamp window_end = 3;
+  FlowRowCounts row_counts = 4;
+  int64 query_ms = 5;
+  // Codes of heuristic metrics present in the response; each has an
+  // estimated_legend entry.
+  repeated string estimated = 6;
+  bool slow_path = 7;
+  // Earliest trigger capture; unset when no capture exists yet.
+  google.protobuf.Timestamp capture_since = 8;
+  // Requested values the aggregator adjusted.
+  repeated string clamps = 9;
+  // Code to one-line meaning for every code in estimated.
+  map<string, string> estimated_legend = 10;
+}
+
+// FlowSectionStatus is the status header every section carries.
+message FlowSectionStatus {
+  // One of ok, partial, failed, skipped, empty.
+  string status = 1;
+  // Set when status is failed or partial.
+  string error = 2;
+  // Heuristic metric codes in this section (subset of FlowMeta.estimated).
+  repeated string estimated = 3;
+}
+
+message FlowCountMetric {
+  int32 value = 1;
+  // Names the item set behind value; pass to ListFlowDrilldown.
+  string drill_key = 2;
+}
+
+// FlowRatioMetric is num/den, always shown with its denominator.
+message FlowRatioMetric {
+  int32 num = 1;
+  int32 den = 2;
+  // 0 when den is 0.
+  double ratio = 3;
+  bool low_sample = 4;
+  string drill_key = 5;
+}
+
+// FlowDurationMetric is a nearest-rank duration summary.
+message FlowDurationMetric {
+  // Sample size behind the percentiles.
+  int32 n = 1;
+  int64 p50_ms = 2;
+  int64 p90_ms = 3;
+  int64 max_ms = 4;
+  bool low_sample = 5;
+  string drill_key = 6;
+}
+
+// FlowNamedCount is one labelled count. drill_key is empty when no item set
+// exists for the label.
+message FlowNamedCount {
+  string name = 1;
+  int32 count = 2;
+  string drill_key = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
+
+message FlowTilesSection {
+  FlowSectionStatus meta = 1;
+  FlowCountMetric merged = 2;
+  FlowDurationMetric lead_time = 3;
+  FlowRatioMetric first_pass_yield = 4;
+  FlowCountMetric thrash_affected = 5;
+  // Merged items with no in_progress start.
+  int32 lead_time_excluded = 6;
+  int32 median_bounces = 7;
+}
+
+message FlowFunnelStageRow {
+  string status = 1;
+  FlowCountMetric entered = 2;
+  int32 advanced = 3;
+  // back_edges is the total number of transitions back to an earlier stage.
+  // It is a transition count (not distinct items), so it carries no drill key;
+  // open back_edge_targets for item sets.
+  int32 back_edges = 4;
+  FlowDurationMetric dwell = 5;
+  // back_edge_targets splits back_edges by the earlier stage it returned to.
+  repeated FlowBackEdge back_edge_targets = 6;
+  // Names the distinct items that left this stage forward (the advanced count).
+  string advanced_drill_key = 7;
+}
+
+// FlowBackEdge is the back-edge transitions from one stage to one earlier
+// stage. count is transitions; drill_key lists the distinct items behind it.
+message FlowBackEdge {
+  string to_stage = 1;
+  int32 count = 2;
+  string drill_key = 3;
+}
+
+message FlowFunnelSection {
+  FlowSectionStatus meta = 1;
+  repeated FlowFunnelStageRow stages = 2;
+  int32 other = 3;
+  int32 archived = 4;
+  FlowDurationMetric thrash = 5;
+}
+
+message FlowCauseRow {
+  string cause = 1;
+  // count is events; items_affected is the distinct items behind them (the
+  // size of count.drill_key's item set).
+  FlowCountMetric count = 2;
+  int32 items_affected = 3;
+}
+
+// FlowTriggerRow is one PR-fix trigger count. trigger is one of ci, conflict,
+// mixed, review, feedback, unknown.
+message FlowTriggerRow {
+  string trigger = 1;
+  int32 count = 2;
+  string drill_key = 3;
+}
+
+message FlowCausesSection {
+  FlowSectionStatus meta = 1;
+  repeated FlowCauseRow rework = 2;
+  repeated FlowTriggerRow pr_fix_triggers = 3;
+  // bounce_buckets[n] is merged items with n pre-merge review reopens; the
+  // last bucket holds ten or more.
+  repeated int32 bounce_buckets = 4;
+  int32 zero_bounce = 5;
+  // merged_count equals tiles.merged and median_bounces is a statistic over
+  // that cohort, so neither carries its own drill key; zero_bounce_drill_key
+  // names the zero-bounce items.
+  int32 merged_count = 6;
+  repeated FlowNamedCount notes = 7;
+  int32 unclassified = 8;
+  string zero_bounce_drill_key = 9;
+}
+
+message FlowVerdictClassRow {
+  string class = 1;
+  FlowCountMetric total = 2;
+  int32 non_pass = 3;
+  // Names the items with a non-PASS verdict of this class.
+  string non_pass_drill_key = 4;
+}
+
+// FlowDeadlockRow is one deadlock candidate (a heuristic). title is sanitized.
+message FlowDeadlockRow {
+  string item_id = 1;
+  string title = 2;
+  string resolution = 3;
+  string sequence = 4;
+  int32 run_length = 5;
+  int32 repeated_criterion = 6;
+  bool has_repeated_criterion = 7;
+  int32 diff_unchanged_pairs = 8;
+  bool agent_claimed_done = 9;
+  bool cap_exhausted = 10;
+  bool in_flight = 11;
+  google.protobuf.Timestamp last_verdict_at = 12;
+}
+
+message FlowStreakRow {
+  string item_id = 1;
+  string title = 2;
+  int32 length = 3;
+  google.protobuf.Timestamp last_verdict_at = 4;
+}
+
+// FlowDeadlockPage is a top-N list. has_more means total_count exceeds
+// returned_count; truncated means the server clamped the requested limit.
+message FlowDeadlockPage {
+  repeated FlowDeadlockRow items = 1;
+  int32 total_count = 2;
+  int32 returned_count = 3;
+  bool has_more = 4;
+  bool truncated = 5;
+}
+
+message FlowStreakPage {
+  repeated FlowStreakRow items = 1;
+  int32 total_count = 2;
+  int32 returned_count = 3;
+  bool has_more = 4;
+  bool truncated = 5;
+}
+
+message FlowReviewSection {
+  FlowSectionStatus meta = 1;
+  FlowCountMetric total = 2;
+  repeated FlowVerdictClassRow classes = 3;
+  FlowRatioMetric raw_fail = 4;
+  FlowRatioMetric adjusted_fail = 5;
+  FlowRatioMetric override = 6;
+  int32 unrecognized = 7;
+  FlowDeadlockPage deadlocks = 8;
+  FlowStreakPage reviewer_streaks = 9;
+  int32 stalled_count = 10;
+  string weak_filter = 11;
+  // unverifiable is the raw UNVERIFIABLE verdict count over the raw total.
+  FlowRatioMetric unverifiable = 12;
+  // Names the open deadlock candidates with no verdict inside the stall window.
+  string stalled_drill_key = 13;
+}
+
+message FlowPRSection {
+  FlowSectionStatus meta = 1;
+  FlowDurationMetric fix_dwell = 2;
+  FlowCountMetric cycles = 3;
+  int32 open_count = 4;
+  repeated string notes = 5;
+  // outcomes counts PR-fix nudge outcomes recorded since capture.
+  FlowPROutcomes outcomes = 6;
+  // trigger_dwell splits dwell by joined trigger for cycles after capture.
+  repeated FlowTriggerDwellRow trigger_dwell = 7;
+  // Names the items with a PR-fix cycle still open (the open_count).
+  string open_drill_key = 8;
+}
+
+// FlowPROutcomes counts PR-fix outcomes in the window. When recording is false
+// no outcome has ever been captured and the counts must not be shown as zeros.
+message FlowPROutcomes {
+  bool recording = 1;
+  int32 steered = 2;
+  int32 respawned = 3;
+  int32 skipped_active = 4;
+  // resolved_within_24h counts outcomes followed by a merge within 24 hours.
+  int32 resolved_within_24h = 5;
+}
+
+// FlowTriggerDwellRow is the PR-fix dwell of cycles joined to one trigger.
+message FlowTriggerDwellRow {
+  string trigger = 1;
+  FlowCountMetric cycles = 2;
+  FlowDurationMetric dwell = 3;
+}
+
+message FlowStuckReasonRow {
+  string reason = 1;
+  FlowCountMetric distinct_items = 2;
+  int32 open = 3;
+  FlowDurationMetric duration = 4;
+  bool lower_bound = 5;
+}
+
+message FlowStuckSection {
+  FlowSectionStatus meta = 1;
+  int32 open = 2;
+  repeated FlowStuckReasonRow reasons = 3;
+  repeated string notes = 4;
+}
+
+// FlowThrashItemRow is one thrashing item keyed by item.
+message FlowThrashItemRow {
+  string item_id = 1;
+  string title = 2;
+  int32 episodes = 3;
+  int32 events = 4;
+  google.protobuf.Timestamp first_at = 5;
+  google.protobuf.Timestamp last_at = 6;
+  string pair = 7;
+  string cause = 8;
+  // archived is true when the item's current status is archived.
+  bool archived = 9;
+}
+
+message FlowThrashItemPage {
+  repeated FlowThrashItemRow items = 1;
+  int32 total_count = 2;
+  int32 returned_count = 3;
+  bool has_more = 4;
+  bool truncated = 5;
+}
+
+message FlowAnomaliesSection {
+  FlowSectionStatus meta = 1;
+  FlowCountMetric thrash_items = 2;
+  FlowThrashItemPage items = 3;
+  // archived_items counts the thrashing items (all, not just this page) whose
+  // current status is archived.
+  int32 archived_items = 4;
+}
+
+// FlowThroughputBucket is merged items in one ISO week. drill_key is
+// "<key>@<week_start RFC3339>" and opens that week's items; it is empty only
+// when the bucket was computed without an item set.
+message FlowThroughputBucket {
+  google.protobuf.Timestamp week_start = 1;
+  int32 n = 2;
+  string drill_key = 3;
+}
+
+message FlowTrendCell {
+  string name = 1;
+  int32 n = 2;
+  string drill_key = 3;
+}
+
+message FlowVerdictMixCell {
+  string class = 1;
+  string outcome = 2;
+  int32 n = 3;
+}
+
+message FlowVerdictMixBucket {
+  google.protobuf.Timestamp week_start = 1;
+  int32 n = 2;
+  repeated FlowVerdictMixCell cells = 3;
+  string drill_key = 4;
+}
+
+message FlowReworkBucket {
+  google.protobuf.Timestamp week_start = 1;
+  int32 n = 2;
+  repeated FlowTrendCell by_cause = 3;
+  string drill_key = 4;
+}
+
+// FlowTrendsSection feeds the charts. Totals are kept when compact omits buckets.
+message FlowTrendsSection {
+  FlowSectionStatus meta = 1;
+  repeated FlowThroughputBucket throughput = 2;
+  int32 throughput_total = 3;
+  repeated FlowVerdictMixBucket verdict_mix = 4;
+  int32 verdict_mix_total = 5;
+  repeated FlowReworkBucket rework = 6;
+  int32 rework_total = 7;
+}
+
+message FlowDataQuality {
+  int32 self_loops = 1;
+  int32 unparseable = 2;
+  int32 negative_gaps = 3;
+  int32 unknown_spans = 4;
+}
+
+message FlowNotesSection {
+  FlowSectionStatus meta = 1;
+  int32 raw_events = 2;
+  int32 real_spans = 3;
+  int32 collapsed_events = 4;
+  FlowDataQuality quality = 5;
+  repeated string notes = 6;
+}
+
+// FlowSummary is the sectioned summary; an unselected section has status skipped.
+message FlowSummary {
+  FlowMeta meta = 1;
+  FlowTilesSection tiles = 2;
+  FlowFunnelSection funnel = 3;
+  FlowCausesSection causes = 4;
+  FlowReviewSection review = 5;
+  FlowPRSection pr = 6;
+  FlowStuckSection stuck = 7;
+  FlowAnomaliesSection anomalies = 8;
+  FlowTrendsSection trends = 9;
+  FlowNotesSection notes = 10;
+}
+
+// ---------------------------------------------------------------------------
+// Responses
+// ---------------------------------------------------------------------------
+
+message GetFlowSummaryResponse {
+  FlowSummary summary = 1;
+}
+
+message ListDeadlockCandidatesResponse {
+  FlowMeta meta = 1;
+  FlowSectionStatus status = 2;
+  FlowDeadlockPage deadlocks = 3;
+  // Same banner as FlowReviewSection.weak_filter: candidates are a heuristic
+  // ranking of review-fail streaks, not confirmed deadlocks.
+  string weak_filter = 4;
+}
+
+message ListThrashEpisodesResponse {
+  FlowMeta meta = 1;
+  FlowSectionStatus status = 2;
+  FlowThrashItemPage items = 3;
+}
+
+message FlowTimelineEntry {
+  // "transition" or "thrash_episode".
+  string kind = 1;
+  string from = 2;
+  string to = 3;
+  google.protobuf.Timestamp at = 4;
+  google.protobuf.Timestamp last = 5;
+  // Events in a thrash episode, 1 for a transition.
+  int32 events = 6;
+  string cause = 7;
+  // Sanitized note.
+  string note = 8;
+}
+
+message GetItemFlowTimelineResponse {
+  FlowMeta meta = 1;
+  string item_id = 2;
+  string title = 3;
+  string status = 4;
+  repeated FlowTimelineEntry entries = 5;
+  int32 total_entries = 6;
+  bool truncated = 7;
+  int32 thrash_episodes = 8;
+}
+
+// FlowCompareMetric is one metric over two windows. a and b are raw values;
+// delta is b minus a and unset when a is empty or the metric is incomparable.
+// No significance test is computed.
+message FlowCompareMetric {
+  string name = 1;
+  string unit = 2;
+  // "ok" or "incomparable".
+  string state = 3;
+  string reason = 4;
+  double a = 5;
+  double b = 6;
+  optional double delta = 7;
+  int32 n_a = 8;
+  int32 n_b = 9;
+  string drill_key = 10;
+}
+
+message CompareFlowWindowsResponse {
+  FlowMeta meta = 1;
+  FlowSummary a = 2;
+  FlowSummary b = 3;
+  repeated FlowCompareMetric metrics = 4;
+}
+
+message FlowDrillItem {
+  string item_id = 1;
+  string title = 2;
+  string status = 3;
+  string reason = 4;
+  // Zero when the metric has no per-item duration.
+  int64 duration_ms = 5;
+}
+
+message FlowDrillItemPage {
+  repeated FlowDrillItem items = 1;
+  int32 total_count = 2;
+  int32 returned_count = 3;
+  bool has_more = 4;
+  bool truncated = 5;
+}
+
+message ListFlowDrilldownResponse {
+  string key = 1;
+  FlowMeta meta = 2;
+  FlowDrillItemPage items = 3;
+}

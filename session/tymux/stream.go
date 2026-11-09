@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/lifecycle"
 )
@@ -53,7 +54,7 @@ func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, pan
 	ctx, cancel := context.WithCancel(context.Background())
 	stopCancel := context.AfterFunc(parent, cancel)
 	defer stopCancel()
-	timer := time.AfterFunc(lifecycleRPCTimeout, cancel)
+	timer := time.AfterFunc(s.viewRPCTimeout(), cancel)
 	defer timer.Stop()
 	stream := s.transport.Attach(ctx)
 	if stream == nil {
@@ -61,7 +62,8 @@ func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, pan
 		return fmt.Errorf("tymux: Attach: transport returned a nil stream")
 	}
 	if err := stream.Send(&v1.AttachRequest{
-		Payload: &v1.AttachRequest_PaneId{PaneId: paneID},
+		Payload:       &v1.AttachRequest_PaneId{PaneId: paneID},
+		WantOutputSeq: true,
 	}); err != nil {
 		cancel()
 		return classifyRPCError("Attach", err)
@@ -203,8 +205,21 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		s.liveness = p.Snapshot.GetLiveness()
 		s.restartIsPending = false
 		s.mu.Unlock()
+		s.seedSequence(p.Snapshot)
 	case *v1.AttachEvent_Output:
+		// Legacy output has no seq, so the stream can no longer be spliced exactly.
+		s.fanout.DisableSeq()
+		handleStart := time.Now()
 		s.fanout.Broadcast(p.Output)
+		termlat.Default.Record(termlat.StageFrameHandle, tymuxLabels, time.Since(handleStart))
+	case *v1.AttachEvent_OutputChunk:
+		handleStart := time.Now()
+		gap := s.fanout.BroadcastSeq(p.OutputChunk.GetSeq(), p.OutputChunk.GetData())
+		termlat.Default.Record(termlat.StageFrameHandle, tymuxLabels, time.Since(handleStart))
+		if gap {
+			log.Warn("tymux: output sequence jumped without an output_gap, resyncing", "session_id", s.GetSessionIdentifier())
+			s.requestStreamResync(resyncReasonSeqGap, ScopeAll)
+		}
 	case *v1.AttachEvent_Exited:
 		s.mu.Lock()
 		s.liveness = v1.Liveness_LIVENESS_DEAD
@@ -229,6 +244,11 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		recordAttachEvent(attachEventOutputGap)
 		count := s.outputGapCount.Add(1)
 		log.Warn("tymux: output_gap received, resyncing via CapturePane", "session_id", s.GetSessionIdentifier(), "count", count)
+		s.fanout.NoteGapSignaled()
+		if s.fanout.SeqValid() {
+			s.requestStreamResync(resyncReasonOutputGap, ScopeAll)
+			return
+		}
 		ctx, cancel := s.interruptibleContext()
 		_ = s.resyncViaCapturePane(ctx)
 		cancel()
@@ -334,7 +354,8 @@ func (s *tymuxGRPCSession) dialAttach(ctx context.Context, paneID string) (attac
 		return nil, nil, fmt.Errorf("tymux: Attach: transport returned a nil stream")
 	}
 	if err := stream.Send(&v1.AttachRequest{
-		Payload: &v1.AttachRequest_PaneId{PaneId: paneID},
+		Payload:       &v1.AttachRequest_PaneId{PaneId: paneID},
+		WantOutputSeq: true,
 	}); err != nil {
 		return nil, nil, classifyRPCError("Attach", err)
 	}

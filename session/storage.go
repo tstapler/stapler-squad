@@ -2071,6 +2071,15 @@ func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind Flow
 	s.repo.RecordFlowMarker(ctx, itemID, kind, value, prNumber)
 }
 
+// RecordFlowMarkerForItemPR passes through to EntRepository.RecordFlowMarkerForItemPR
+// (limiter first, then a pr_number-only read). A nil Storage or repo is a no-op.
+func (s *Storage) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	s.repo.RecordFlowMarkerForItemPR(ctx, itemID, kind, value)
+}
+
 // ListFlowMarkersForItem passes through to EntRepository.ListFlowMarkersForItem.
 func (s *Storage) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
 	return s.repo.ListFlowMarkersForItem(ctx, itemID, kind, since, until)

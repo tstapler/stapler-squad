@@ -29,7 +29,7 @@ func TestCaptureTap_should_WriteNothingAndAllocateNothing_When_TapDisabled(t *te
 	}
 
 	hub := NewStreamHub("corp-compute-nop-pr-534", nil, WithCaptureTap(handle.As(TapSourceHub)))
-	hub.resizing = true // drop path never touches the BatchWindow, so only tap cost is measured
+	hub.resizing, hub.suppressOutput = true, true // drop path never touches the BatchWindow, so only tap cost is measured
 	data := []byte("\x1b[2Kfoo")
 	if allocs := testing.AllocsPerRun(100, func() { hub.OnRawOutput(data) }); allocs != 0 {
 		t.Fatalf("OnRawOutput allocs with tap disabled = %v, want 0", allocs)
@@ -39,7 +39,7 @@ func TestCaptureTap_should_WriteNothingAndAllocateNothing_When_TapDisabled(t *te
 func TestCaptureTap_should_RecordDropWithCause_When_ResizingDropsFrame(t *testing.T) {
 	var buf bytes.Buffer
 	hub := NewStreamHub("s", nil, WithCaptureTap(steppedTap(&buf)))
-	hub.resizing = true
+	hub.resizing, hub.suppressOutput = true, true
 
 	hub.OnRawOutput([]byte("\x1b[2Kfoo"))
 

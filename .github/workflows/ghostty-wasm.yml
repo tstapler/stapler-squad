@@ -1,8 +1,8 @@
 name: Ghostty WASM
 
 # Builds our own ghostty-vt.wasm with Bazel (//third_party/ghostty:ghostty_vt_wasm) and runs the Zig
-# unit test for our Ghostty patches. Workflow-level `paths:` (not a job `if:`) so a PR that does not
-# touch the pin, patches or Bazel files creates no check at all (docs/reference/ci-job-budget.md).
+# unit test for our Ghostty fork patches. Workflow-level `paths:` (not a job `if:`) so a PR that does not
+# touch the pin or Bazel files creates no check at all (docs/reference/ci-job-budget.md).
 # One job, no matrix: Linux x86_64 is the reference build; the recorded sha256 is for that host.
 
 on:
@@ -14,7 +14,6 @@ on:
       - '.bazelrc'
       - '.bazelversion'
       - 'third_party/ghostty/**'
-      - 'third_party/ghostty-patches/**'
       - 'scripts/build-ghostty-wasm.sh'
       - 'scripts/ghostty-wasm.sha256'
       - '.github/workflows/ghostty-wasm.yml'
@@ -26,7 +25,6 @@ on:
       - '.bazelrc'
       - '.bazelversion'
       - 'third_party/ghostty/**'
-      - 'third_party/ghostty-patches/**'
       - 'scripts/build-ghostty-wasm.sh'
       - 'scripts/ghostty-wasm.sha256'
       - '.github/workflows/ghostty-wasm.yml'
@@ -81,6 +79,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ghostty-vt-wasm
-          path: web-app/public/ghostty-vt.*.wasm
+          path: web-app/build/ghostty-own/ghostty-vt.wasm
           if-no-files-found: error
           retention-days: 14

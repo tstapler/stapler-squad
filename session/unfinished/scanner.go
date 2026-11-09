@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/internal/dirwatch"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -333,9 +335,9 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
-		s.wg.Go(func() { s.worker(ctx) })
+		s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.worker(ctx) }) })
 	}
-	s.wg.Go(func() { s.coordinator(ctx) })
+	s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.coordinator(ctx) }) })
 	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
 	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
@@ -525,6 +527,9 @@ func (s *Scanner) coordinator(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			if qos.Default.Defer("unfinished_scanner", qos.BackgroundMaxDeferral) {
+				continue
+			}
 			s.enqueueAll(false)
 		case <-s.triggerCh:
 			s.enqueueAll(true)

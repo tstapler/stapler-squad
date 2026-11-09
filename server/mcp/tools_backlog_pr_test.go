@@ -30,6 +30,7 @@ func reportPRArgs(itemID string, extra map[string]interface{}) map[string]interf
 }
 
 func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testing.T) {
+	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	item, linkedUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	handler := &backlogHandlers{storage: storage}
@@ -84,6 +85,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 }
 
 func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNumber(t *testing.T) {
+	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	n := 21
@@ -134,6 +136,7 @@ func additiveHandler(storage *session.Storage, scopeOn bool) *backlogHandlers {
 }
 
 func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber(t *testing.T) {
+	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
@@ -161,6 +164,7 @@ func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber
 }
 
 func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumberGiven(t *testing.T) {
+	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)

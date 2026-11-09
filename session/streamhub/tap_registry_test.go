@@ -540,7 +540,7 @@ func TestTapRegistry_should_HoldSameHandleAcrossToggles_When_StreamKeepsIt(t *te
 func TestCaptureTap_should_RecordViaLiveHub_When_EnabledAfterHubStarted(t *testing.T) {
 	reg, _, dir := newTestRegistry(t)
 	hub := NewStreamHub("wired", nil, WithCaptureTap(reg.Handle("wired").As(TapSourceHub)))
-	hub.resizing = true
+	hub.resizing, hub.suppressOutput = true, true
 	hub.OnRawOutput([]byte("early"))
 
 	if _, err := reg.Set(true, []string{"wired"}, 0); err != nil {

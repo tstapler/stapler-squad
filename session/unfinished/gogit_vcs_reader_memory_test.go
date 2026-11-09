@@ -81,7 +81,7 @@ func TestEffectiveCacheMaxEntries_should_shrink_When_PressureIncreases(t *testin
 	}
 }
 
-// TestEffectiveCacheMaxEntries_should_coverAtLeast32Repos_When_NoPressure is
+// TestEffectiveCacheMaxEntries_should_coverScannedWorktreePopulation_When_NoPressure is
 // the enforcement gate for PerfFix-2: repoCacheMemoryBudgetBytes was doubled
 // (16 -> 32 repos) after live /debug/blob-cache stats showed a 0.07% hit
 // rate caused by cache thrashing -- more actively-scanned repos than the old
@@ -89,11 +89,43 @@ func TestEffectiveCacheMaxEntries_should_shrink_When_PressureIncreases(t *testin
 // before its blobCache could ever be reused. A regression back toward the
 // old budget would silently reintroduce that thrashing, so pin the floor
 // here rather than relying on the doc comment alone.
-func TestEffectiveCacheMaxEntries_should_coverAtLeast32Repos_When_NoPressure(t *testing.T) {
+func TestEffectiveCacheMaxEntries_should_coverScannedWorktreePopulation_When_NoPressure(t *testing.T) {
 	withHeapInUse(t, 1*1024*1024*1024) // 1 GB — below highMemoryPressureThreshold
 	got := effectiveCacheMaxEntries()
-	if got < 32 {
-		t.Errorf("effectiveCacheMaxEntries() = %d, want >= 32 (repoCacheMemoryBudgetBytes must cover at least 32 concurrently-hot repos)", got)
+	if got < scannedWorktreePopulation {
+		t.Errorf("effectiveCacheMaxEntries() = %d, want >= %d (a cache smaller than the scanned worktree population evicts every entry just before its next use)", got, scannedWorktreePopulation)
+	}
+}
+
+// scannedWorktreePopulation is the worktree count the scanner cycles through on
+// the development host (89 worktrees of this repo alone, 200+ overall).
+const scannedWorktreePopulation = 256
+
+// TestOpenRepoEntry_should_notColdOpenOnSecondCycle_When_PopulationExceedsOldCap
+// replays the scanner's access pattern: visit every worktree once per cycle. With
+// the cache capped at 32 entries (96 MB/entry estimate) a cyclic pass over 40
+// repos evicted each entry before reuse, so cycle two cold-opened all 40 again.
+func TestOpenRepoEntry_should_notColdOpenOnSecondCycle_When_PopulationExceedsOldCap(t *testing.T) {
+	withHeapInUse(t, 1*1024*1024*1024)
+	const population = 40 // > the old 32-entry cap
+	dirs := make([]string, population)
+	for i := range dirs {
+		dirs[i] = initRepoInternal(t)
+	}
+	g := &GoGitVCSReader{}
+	t.Cleanup(g.ClearCache)
+	cycle := func() {
+		for _, d := range dirs {
+			if _, err := g.openRepoEntry(d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	cycle()
+	cold := g.RepoCacheStats().ColdOpens
+	cycle()
+	if got := g.RepoCacheStats().ColdOpens; got != cold {
+		t.Errorf("second cycle cold-opened %d repos, want 0 (cache thrashing)", got-cold)
 	}
 }
 

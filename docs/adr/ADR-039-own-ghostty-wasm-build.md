@@ -1,6 +1,6 @@
-# ADR-039: Build our own ghostty-vt.wasm with Bazel from a pinned Ghostty and our patch series
+# ADR-039: Build our own ghostty-vt.wasm with Bazel from our pinned Ghostty fork
 
-- Status: Accepted (Stage A implemented; analysis verified, build not yet executed; see Verification status)
+- Status: Accepted (Stage A implemented; see Verification status)
 - Design: `docs/explanation/own-ghostty-wasm-build.md`
 - Runbooks: `docs/how-to/build-own-ghostty-wasm.md`, `docs/how-to/ghostty-fork-workflow.md`
 
@@ -10,13 +10,13 @@ The `ghostty_renderer` terminal runs on `ghostty-web` 0.4.0 (npm, `coder/ghostty
 
 ## Decision
 
-1. **Build the wasm ourselves** from a pinned Ghostty commit plus an ordered patch series, with a checksum-pinned Zig toolchain. `ghostty-web`'s JavaScript stays for now and loads our wasm through its `Ghostty.load(path)` / `Terminal({ ghostty })` hooks (Stage A). Replacing the JS with our own thin wrapper is Stage B, a separate PR series.
+1. **Build the wasm ourselves** from a pinned commit of the `tstapler/ghostty` fork (upstream plus our patches as commits), with a checksum-pinned Zig toolchain. `ghostty-web`'s JavaScript stays for now and ships our wasm in place of its embedded one through the Bun build's ghostty plugin (Stage A). Replacing the JS with our own thin wrapper is Stage B, a separate PR series.
 2. **Build system: Bazel (bzlmod).** The owner's direction is that the repo is moving to Bazel, so this artifact is built with it from the start. The change is additive: only `//third_party/ghostty:ghostty_vt_wasm` and `:softreset_test` exist; the Go and web builds are untouched, `make build-ghostty-wasm` wraps `bazel build`, and Bazel is pinned by `.bazelversion` (bazelisk).
-3. **Pins** live in `MODULE.bazel`: the Ghostty commit archive (`http_archive`, sha256), the patch series, and four Zig 0.15.2 tarballs (sha256 from `ziglang.org/download/index.json`). Bazel verifies every digest before use, so the toolchain and source are hermetic by content.
+3. **Pins** live in `MODULE.bazel`: the Ghostty fork commit archive (`http_archive`, sha256) and four Zig 0.15.2 tarballs (sha256 from `ziglang.org/download/index.json`). Bazel verifies every digest before use, so the toolchain and source are hermetic by content.
 4. **Bazel wraps `zig build`; it does not replace it with rules_zig.** Ghostty's `build.zig` is the real build graph (wasm API exports, `lib-vt` step, dependency pins in `build.zig.zon`). Re-describing it in rules_zig would fork the build definition we want to track upstream.
-5. **Fork:** `github.com/tstapler/ghostty` exists. `ssq/main` (upstream `5714ed07` + the three patches as commits + `README-SSQ.md`) is prepared locally but not yet pushed (the push was denied by the sandbox's permission classifier; command in `docs/how-to/ghostty-fork-workflow.md`). After the push, `MODULE.bazel` switches `GHOSTTY_ORG`/`GHOSTTY_REV`/`GHOSTTY_SHA256` to the fork commit and `GHOSTTY_PATCHES` to `[]`. A `third_party/ghostty` git submodule is not used: Bazel fetches the fork commit as an archive (nothing else reads the tree), and the directory holds the Bazel package. For hacking on the fork in place use `--override_repository=ghostty_src=<checkout>` with a `BUILD.bazel` copied from `third_party/ghostty/ghostty_src.BUILD`.
-6. **Do not commit the wasm.** It is built by `make build-ghostty-wasm` and in CI, served from `web-app/public/` under a content-addressed name, and its sha256 is recorded in `scripts/ghostty-wasm.sha256`. The web app falls back to ghostty-web's embedded stock wasm whenever the build output is absent.
-7. **Rollback** is deleting the build output (or the loader call): behavior reverts to stock ghostty-web 0.4.0 plus the adapter shims. Removing Bazel from the repo again is deleting `MODULE.bazel*`, `.bazel*`, `third_party/ghostty/`.
+5. **Fork:** `github.com/tstapler/ghostty`, `ssq/main` at tag `ssq.1` (`38c7055`): upstream `5714ed07` plus the three patches as commits. `MODULE.bazel` pins that commit and its archive sha256. A `third_party/ghostty` submodule is not used: Bazel fetches the fork commit as an archive. For hacking on the fork in place use `--override_repository=ghostty_src=<checkout>` with a `BUILD.bazel` copied from `third_party/ghostty/ghostty_src.BUILD`.
+6. **Do not commit the wasm.** It is built by `make build-ghostty-wasm` and in CI, externalized as a hashed asset by the Bun build's ghostty plugin (the #1511 path), and its sha256 is recorded in `scripts/ghostty-wasm.sha256`. The build falls back to ghostty-web's stock wasm whenever the build output is absent.
+7. **Rollback** is deleting the build output and rebuilding the web app: behavior reverts to stock ghostty-web 0.4.0 plus the adapter shims. Removing Bazel from the repo again is deleting `MODULE.bazel*`, `.bazel*`, `third_party/ghostty/`.
 
 ## Prior Bazel in this repo
 
@@ -27,8 +27,7 @@ Not on `origin/main` (85a168b72): `git ls-files | grep -iE '(^|/)(BUILD|BUILD.ba
 - Upgrades are a pin bump plus a rebase in the fork, on our timeline, gated by the Zig test and the differential harness (#1489).
 - Bazel (via bazelisk) is needed to build; the target is opt-in, not part of `make build`.
 - The build action is not network-free: `zig build` fetches Ghostty's own Zig dependencies (hash-pinned in `build.zig.zon`), so the action declares `requires-network`. Mirroring those as Bazel repos would make it fully hermetic and is a follow-up; the action is still cacheable (local, disk and remote caches) because every declared input is pinned.
-- Bazel's built-in patcher fails on patch 0002 (`CONTENT_DOES_NOT_MATCH_TARGET`, reproduced), so `MODULE.bazel` sets `patch_tool = "patch"`. This needs system `patch`, present on macOS and the GitHub Ubuntu runners.
-- Patch 0001 (coder's wasm API) only applies to commits near `5714ed07`; Ghostty `main` and `v1.4.0` ship their own C API (`src/terminal/c/`) and require Zig 0.17.0 (`build.zig.zon`). A newer pin means porting the wrapper to that API, which is Stage B.
+- The fork's wasm API commit (coder's) only applies to commits near `5714ed07`; Ghostty `main` and `v1.4.0` ship their own C API (`src/terminal/c/`) and require Zig 0.17.0 (`build.zig.zon`). A newer pin means porting the wrapper to that API, which is Stage B.
 
 ## Alternatives rejected
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -626,6 +628,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
+	// Register BacklogFlowService handler (backlog flow observability).
+	if deps.BacklogFlowService != nil {
+		flowPath, flowHandler := sessionv1connect.NewBacklogFlowServiceHandler(deps.BacklogFlowService, ConnectOptions(deps.ErrorRegistry)...)
+		flowAPIPath := "/api" + flowPath
+		srv.RegisterConnectHandler(flowAPIPath, http.StripPrefix("/api", flowHandler))
+		log.Info("Registered BacklogFlowService handler", "path", flowAPIPath)
+	}
+
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
 	if deps.GitHubUserService != nil {
 		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)
@@ -1194,7 +1204,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck, flowMCPOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
@@ -1291,9 +1301,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
 	// Escape events have their own database and retention.
+	var escapeDriver dialect.Driver // nil keeps escape analytics on raw rows only (tests wire a client without the DB handle)
+	if deps.EscapeEventsDB != nil {
+		escapeDriver = deps.EscapeEventsDB.Driver()
+	}
 	if deps.EscapeEventsClient != nil {
-		escapedb.StartRetentionEnforcer(serverCtx, deps.EscapeEventsClient,
-			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+		escapedb.NewRetention(deps.EscapeEventsClient, escapeDriver, escapedb.RetentionConfig{
+			RawRetentionDays:  cfg.EscapeAnalyticsRetentionDays,
+			MaxRowsPerSession: cfg.EscapeAnalyticsMaxRowsPerSession,
+		}).Start(serverCtx, &srv.backgroundTasksWG)
 		srv.closeAfterJoin = append(srv.closeAfterJoin, func() {
 			if err := deps.EscapeEventsClient.Close(); err != nil {
 				log.Warn("escape events DB close failed", "err", err)
@@ -1306,8 +1322,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
-	if deps.EscapeEventsClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
-		escapeWriter := escapedb.NewEscapeEventBatchWriter(deps.EscapeEventsClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+	if escapeDriver != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := escapedb.NewEscapeEventBatchWriter(escapeDriver)
 		srv.goBackground(func() { escapeWriter.Start(serverCtx) })
 		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
 		log.Info("Escape analytics batch writer started",
@@ -1321,6 +1337,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
 	if deps.EscapeEventsClient != nil {
 		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
+		deps.SessionService.SetEscapeAggregateReader(escapedb.NewReader(deps.EscapeEventsClient, escapeDriver, escapedb.RollupTiers{RawDays: cfg.EscapeAnalyticsRetentionDays}, nil))
 		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 
@@ -1754,6 +1771,13 @@ func (s *Server) Shutdown() error {
 	if s.finalStatsFlush != nil {
 		defer s.finalStatsFlush()
 	}
+	// Return every pane the QoS hints boosted or demoted to Normal: tymuxd keeps hints until it
+	// restarts, so a stopped squad must not leave one behind.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tymux.ResetPaneActivities(ctx)
+	}()
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.

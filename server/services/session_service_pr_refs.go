@@ -91,6 +91,10 @@ func prSetError(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, session.ErrPRPersisterUnavailable), errors.Is(err, session.ErrNoSessionUUID):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, session.ErrSessionPRLinkCap):
+		return connect.NewError(connect.CodeResourceExhausted, err)
+	case errors.Is(err, session.ErrZeroPRRef):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }
@@ -193,7 +197,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	if err := inst.AttachPRManual(ctx, ref, prInitialFromInfo(info)); err != nil {
 		return nil, prSetError(err)
 	}
-	log.Info("session PR attached by user", "session", inst.Title, "pr", ref.String())
+	log.Info("session PR attached by user", "session", inst.Snapshot().Title, "pr", ref.String())
 	return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
 		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: prRefToProto(ref),
 	}), nil
@@ -232,7 +236,7 @@ func (s *SessionService) RefreshSessionPullRequests(
 			continue
 		}
 		if err := s.prRefs.refresh(ctx, inst, v.Ref); err != nil {
-			log.Warn("session PR refresh failed", "session", inst.Title, "pr", v.Ref.String(), "err", err)
+			log.Warn("session PR refresh failed", "session", inst.Snapshot().Title, "pr", v.Ref.String(), "err", err)
 		}
 	}
 	return connect.NewResponse(&sessionv1.RefreshSessionPullRequestsResponse{PullRequests: currentPRList(inst)}), nil
@@ -367,13 +371,13 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target se
 	steer, steerErr := s.SteerInstanceGuarded(ctx, live, nudgeSignature(key, reasons), prompt)
 	no, detail, ok := nudgeFromSteer(steer)
 	if !ok {
-		log.Warn("ask_to_fix_steer_failed", "session", live.Title, "pr", target.String(), "outcome", steer.String(), "err", fmt.Sprint(steerErr))
+		log.Warn("ask_to_fix_steer_failed", "session", live.Snapshot().Title, "pr", target.String(), "outcome", steer.String(), "err", fmt.Sprint(steerErr))
 		if steer == SteerFailed {
 			return nil, steerFailedError(ctx, steerErr)
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected steer outcome %s", steer))
 	}
-	log.Info("ask_to_fix_outcome", "session", live.Title, "pr", target.String(), "outcome", no.String(), "reasons", nudgeReasonNames(reasons))
+	log.Info("ask_to_fix_outcome", "session", live.Snapshot().Title, "pr", target.String(), "outcome", no.String(), "reasons", nudgeReasonNames(reasons))
 	out.Reasons = reasons
 	return &askFixStop{outcome: no, detail: detail}, nil
 }

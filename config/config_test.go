@@ -1147,9 +1147,9 @@ func TestEscapeAnalyticsDefaults(t *testing.T) {
 		assert.Equal(t, 10000, cfg.EscapeAnalyticsMaxRowsPerSession)
 	})
 
-	t.Run("default RetentionDays is 7 when zero", func(t *testing.T) {
+	t.Run("default RetentionDays is 2 when zero", func(t *testing.T) {
 		cfg := writeAndLoad(t, `{}`)
-		assert.Equal(t, 7, cfg.EscapeAnalyticsRetentionDays)
+		assert.Equal(t, 2, cfg.EscapeAnalyticsRetentionDays)
 	})
 
 	t.Run("explicit values are preserved", func(t *testing.T) {

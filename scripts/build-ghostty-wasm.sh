@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build our own ghostty-vt.wasm with Bazel (//third_party/ghostty:ghostty_vt_wasm), install it
-# for the web build, and compare its sha256 with the recorded one. The pins (Ghostty commit,
-# patches, Zig tarballs + sha256) live in MODULE.bazel; this script only drives Bazel and
+# for the web build, and compare its sha256 with the recorded one. The pins (Ghostty fork commit,
+# Zig tarballs + sha256) live in MODULE.bazel; this script only drives Bazel and
 # post-processes the output.
 #
-# Output (all gitignored; see docs/explanation/own-ghostty-wasm-build.md):
-#   web-app/public/ghostty-vt.<sha12>.wasm   content-addressed copy the web build serves
-#   web-app/public/ghostty-vt.json           {"file","sha256","rev","patches","zig"} manifest
+# Output (gitignored): web-app/build/ghostty-own/ghostty-vt.wasm. The Bun build's ghostty plugin
+# (web-app/build/plugins/ghostty-wasm.ts) picks it over ghostty-web's stock wasm and ships it as
+# a hashed asset, the same path as the stock one. See docs/explanation/own-ghostty-wasm-build.md.
 #
 # Usage:
 #   scripts/build-ghostty-wasm.sh            build and install
@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODULE_FILE="$ROOT/MODULE.bazel"
 RECORD_FILE="$SCRIPT_DIR/ghostty-wasm.sha256"
-PUBLIC_DIR="$ROOT/web-app/public"
+OWN_DIR="$ROOT/web-app/build/ghostty-own"
 TARGET="//third_party/ghostty:ghostty_vt_wasm"
 TEST_TARGET="//third_party/ghostty:softreset_test"
 
@@ -36,7 +36,7 @@ for arg in "$@"; do
     --test) RUN_TESTS=1 ;;
     --verify) VERIFY=1 ;;
     --clean)
-      rm -f "$PUBLIC_DIR"/ghostty-vt.*.wasm "$PUBLIC_DIR/ghostty-vt.json"
+      rm -rf "$OWN_DIR"
       log "Removed installed outputs (Bazel's own cache is untouched: bazel clean)."
       exit 0
       ;;
@@ -57,10 +57,6 @@ ZIG_VERSION="$(pin ZIG_VERSION)"
 [[ "$GHOSTTY_REV" =~ ^[0-9a-f]{40}$ ]] || err "could not read GHOSTTY_REV from MODULE.bazel"
 [[ -n "$ZIG_VERSION" ]] || err "could not read ZIG_VERSION from MODULE.bazel"
 
-# Identifies the patch series by content, so editing a patch invalidates the recorded sha.
-PATCHSET_ID="$(cat "$ROOT"/third_party/ghostty-patches/[0-9][0-9][0-9][0-9]-*.patch 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12)"
-[[ -n "$PATCHSET_ID" ]] || PATCHSET_ID="none"
-
 # shellcheck disable=SC2206  # BAZEL_FLAGS is intentionally word-split
 FLAGS=(${BAZEL_FLAGS:-})
 
@@ -80,19 +76,15 @@ BUILT="$(bazel cquery "${FLAGS[@]}" --output=files "$TARGET" 2>/dev/null | head 
 
 WASM_SHA="$(sha256_of "$ROOT/$BUILT")"
 WASM_SIZE="$(wc -c < "$ROOT/$BUILT" | tr -d ' ')"
-RECORD_KEY="${GHOSTTY_REV:0:12}-${PATCHSET_ID}-zig${ZIG_VERSION}"
+RECORD_KEY="${GHOSTTY_REV:0:12}-zig${ZIG_VERSION}"
 log "ghostty-vt.wasm  sha256=$WASM_SHA  bytes=$WASM_SIZE  key=$RECORD_KEY"
 
-# ── install for the web build (content-addressed name; manifest is the stable URL) ──
+# ── install for the web build ──────────────────────────────────────────────
 
-mkdir -p "$PUBLIC_DIR"
-rm -f "$PUBLIC_DIR"/ghostty-vt.*.wasm
-HASHED="ghostty-vt.${WASM_SHA:0:12}.wasm"
-cp "$ROOT/$BUILT" "$PUBLIC_DIR/$HASHED"
-chmod 644 "$PUBLIC_DIR/$HASHED"
-printf '{"file":"%s","sha256":"%s","rev":"%s","patches":"%s","zig":"%s"}\n' \
-  "$HASHED" "$WASM_SHA" "$GHOSTTY_REV" "$PATCHSET_ID" "$ZIG_VERSION" > "$PUBLIC_DIR/ghostty-vt.json"
-log "Installed web-app/public/$HASHED and ghostty-vt.json"
+mkdir -p "$OWN_DIR"
+cp "$ROOT/$BUILT" "$OWN_DIR/ghostty-vt.wasm"
+chmod 644 "$OWN_DIR/ghostty-vt.wasm"
+log "Installed web-app/build/ghostty-own/ghostty-vt.wasm (rebuild the web app to use it)"
 
 # ── reproducibility record ─────────────────────────────────────────────────
 
@@ -100,7 +92,7 @@ RECORDED="$(awk -v k="$RECORD_KEY" '$1 == k { print $2 }' "$RECORD_FILE" 2>/dev/
 if [[ -z "$RECORDED" ]]; then
   echo "! No recorded sha256 for key $RECORD_KEY. After reviewing the build, add to $RECORD_FILE:"
   echo "    $RECORD_KEY $WASM_SHA"
-  [[ "$VERIFY" == 1 ]] && err "--verify needs a recorded sha256 for this pin + patch set"
+  [[ "$VERIFY" == 1 ]] && err "--verify needs a recorded sha256 for this pin"
 elif [[ "$RECORDED" != "$WASM_SHA" ]]; then
   err "Non-reproducible or changed output: recorded $RECORDED, built $WASM_SHA (key $RECORD_KEY)"
 else

@@ -20,14 +20,6 @@
     "reason": "Brand logo; not referenced by /login or any source file, served from public/ for authenticated use"
   },
   {
-    "path": "ghostty-vt.json",
-    "reason": "Manifest of our own ghostty-vt.wasm build (scripts/build-ghostty-wasm.sh); fetched by the authenticated terminal pane, absent when the wasm was not built"
-  },
-  {
-    "path": "ghostty-vt.*.wasm",
-    "reason": "Content-addressed ghostty-vt.wasm named by ghostty-vt.json; fetched by the authenticated terminal pane"
-  },
-  {
     "path": "docs/*.md",
     "reason": "Help documents public/docs/*.md, fetched by the authenticated in-app docs viewer"
   }

@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -19,6 +20,14 @@ import (
 var (
 	reconnectCounter = mustInt64Counter("tymux_attach_stream_reconnects_total",
 		metric.WithDescription("Standing Attach stream reconnects, by cause (error = transport drop, output_gap = in-stream resync)"))
+	// Pure gRPC round trip of one control RPC. session_backend_operation_duration_ms{operation=capture_pane}
+	// minus this is squad-side time (queueing before the call, grid-to-SGR render).
+	rpcDurationMS = mustFloat64Histogram("tymux_rpc_duration_ms",
+		metric.WithDescription("Wall time of one tymuxd control RPC from squad, by method"),
+		metric.WithUnit("ms"),
+		metric.WithExplicitBucketBoundaries(0.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000))
+	streamResyncCounter = mustInt64Counter("tymux_stream_resync_total",
+		metric.WithDescription("Pane resyncs by reason (output_gap, seq_gap, drop, request) and outcome (ok, coalesced, fresh, retry, gave_up, fallback)"))
 	attachEventCounter = mustInt64Counter("tymux_attach_events_total",
 		metric.WithDescription("Notable AttachEvent handling, by kind (output_gap, gap_exceeded, snapshot_redraw)"))
 )
@@ -197,9 +206,27 @@ func mustInt64Counter(name string, opts ...metric.Int64CounterOption) metric.Int
 	return c
 }
 
+var capturePaneRPCAttrs = metric.WithAttributeSet(attribute.NewSet(attribute.String("method", "capture_pane")))
+
+// observeCapturePaneRPC records one CapturePane round trip started at start.
+func observeCapturePaneRPC(start time.Time) {
+	rpcDurationMS.Record(context.Background(), float64(time.Since(start).Microseconds())/1000, capturePaneRPCAttrs)
+}
+
+// observeCaptureRender records the squad-side grid-to-escape-sequence render of one capture.
+func observeCaptureRender(start time.Time) {
+	termlat.Default.Record(termlat.StageCaptureRender, tymuxLabels, time.Since(start))
+}
+
 // recordReconnect increments tymux_attach_stream_reconnects_total{cause}.
 func recordReconnect(cause string) {
 	reconnectCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("cause", cause)))
+}
+
+// recordStreamResync increments tymux_stream_resync_total{reason,outcome}.
+func recordStreamResync(reason, outcome string) {
+	streamResyncCounter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("reason", reason), attribute.String("outcome", outcome)))
 }
 
 // recordAttachEvent increments tymux_attach_events_total{kind}.

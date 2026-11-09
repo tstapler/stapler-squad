@@ -361,7 +361,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 	@echo "✅ session/tmux/embed/tmux ready ($(shell $(BIN_TMUX) -V 2>/dev/null || echo unknown))"
 
 # ── Own ghostty-vt.wasm (see docs/explanation/own-ghostty-wasm-build.md) ─────
-# Bazel (//third_party/ghostty:ghostty_vt_wasm): pinned Ghostty + patches + checksum-verified
+# Bazel (//third_party/ghostty:ghostty_vt_wasm): pinned Ghostty fork + checksum-verified
 # Zig, all in MODULE.bazel. Opt-in: not part of `make build`, because Bazel downloads a Zig
 # toolchain. Output is gitignored; the web app falls back to ghostty-web's stock wasm when
 # web-app/public/ghostty-vt.json is absent.
@@ -390,7 +390,7 @@ verify-ghostty-wasm: ## Build and fail unless the wasm sha256 matches scripts/gh
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.14.0
+TYMUX_VERSION ?= v1.17.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 

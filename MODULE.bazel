@@ -11,30 +11,17 @@ bazel_dep(name = "platforms", version = "1.0.0")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# ── Ghostty source: a commit archive pinned by sha256 ────────────────────────
-# Today: upstream at the newest commit coder/ghostty-web's wasm API patch applies to, plus
-# the series in third_party/ghostty-patches. After the tstapler/ghostty fork's ssq/main is
-# pushed: set GHOSTTY_ORG = "tstapler", GHOSTTY_REV = <ssq/main sha>, GHOSTTY_SHA256 = new
-# archive hash, and empty GHOSTTY_PATCHES (docs/how-to/ghostty-fork-workflow.md).
-GHOSTTY_ORG = "ghostty-org"
-GHOSTTY_REV = "5714ed07a1012573261b7b7e3ed2add9c1504496"
-GHOSTTY_SHA256 = "55cee28558945de6e984bc183cd51f28eefdbf805544da2e70d4635476178790"
-GHOSTTY_PATCHES = [
-    "//third_party/ghostty-patches:0001-wasm-api.patch",
-    "//third_party/ghostty-patches:0002-decstr-soft-reset.patch",
-    "//third_party/ghostty-patches:0003-scrub-freed-pages-on-wasm.patch",
-]
+# ── Ghostty source: a commit of the tstapler/ghostty fork, pinned by sha256 ───
+# Upstream plus our patches as commits on ssq/main (tag ssq.1); see docs/how-to/ghostty-fork-workflow.md.
+GHOSTTY_ORG = "tstapler"
+GHOSTTY_REV = "38c7055f6ae361919d6f86c8521a0b9546783c25"
+GHOSTTY_SHA256 = "3fb42e5528eb1c461d0b16e61ed51d394e80d830fa5b0b5890438bd6866500fb"
 
 http_archive(
     name = "ghostty_src",
     urls = ["https://github.com/%s/ghostty/archive/%s.tar.gz" % (GHOSTTY_ORG, GHOSTTY_REV)],
     sha256 = GHOSTTY_SHA256,
     strip_prefix = "ghostty-%s" % GHOSTTY_REV,
-    patches = GHOSTTY_PATCHES,
-    # Bazel's built-in Java patcher mis-parses 0002 (CONTENT_DOES_NOT_MATCH_TARGET on a clean
-    # tree); the system `patch` applies the same series cleanly.
-    patch_tool = "patch",
-    patch_args = ["-p1"],
     build_file = "//third_party/ghostty:ghostty_src.BUILD",
 )
 

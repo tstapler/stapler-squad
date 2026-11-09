@@ -2,10 +2,12 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -149,26 +151,36 @@ func (b *TymuxBackend) GetCurrentWorkingDirectory() (string, error) {
 
 func (b *TymuxBackend) GetPTY() (*os.File, error) { return b.mgr.GetPTY() }
 func (b *TymuxBackend) SendKeys(keys string) (int, error) {
-	return timeBackendOp(tymuxIOOps.sendKeys, func() (int, error) { return b.mgr.SendKeys(keys) })
+	return timeBackendOp(tymuxIOOps.sendKeys.with(b.mgr), func() (int, error) { return b.mgr.SendKeys(keys) })
 }
 func (b *TymuxBackend) TapEnter() error                    { return b.mgr.TapEnter() }
 func (b *TymuxBackend) SendPromptWithEnter(p string) error { return b.mgr.SendPromptWithEnter(p) }
 func (b *TymuxBackend) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	return timeBackendOpErr(tymuxIOOps.writeStdin, func() error { return b.mgr.SendInputViaControlMode(ctx, data) })
+	return timeBackendOpErrCtx(ctx, tymuxIOOps.writeStdin.with(b.mgr), func() error { return b.mgr.SendInputViaControlMode(ctx, data) })
 }
 
 // --- Terminal state ---
 
 func (b *TymuxBackend) CapturePaneContent() (string, error) {
-	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContent)
+	return timeBackendOp(tymuxIOOps.capturePane.with(b.mgr), b.mgr.CapturePaneContent)
 }
 func (b *TymuxBackend) CapturePaneContentRaw() (string, error) {
-	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContentRaw)
+	return timeBackendOp(tymuxIOOps.capturePane.with(b.mgr), b.mgr.CapturePaneContentRaw)
 }
 func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string, error) {
-	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) {
+	return timeBackendOp(tymuxIOOps.capturePane.with(b.mgr), func() (string, error) {
 		return b.mgr.CapturePaneContentWithOptions(start, end)
 	})
+}
+
+// SetPaneActivity makes TymuxBackend a PaneActivityHinter. It no-ops when the manager cannot send
+// the hint (older daemon or client), so callers never branch on backend or version.
+func (b *TymuxBackend) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
+	h, ok := b.mgr.(PaneActivityHinter)
+	if !ok {
+		return nil
+	}
+	return h.SetPaneActivity(ctx, activity)
 }
 
 // CapturePaneRedraw makes TymuxBackend a RedrawCapturer: the daemon's emulator holds the pane's
@@ -178,14 +190,30 @@ func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (data string, altS
 		data          string
 		altScreen, ok bool
 	}
-	r, err := timeBackendOp(tymuxIOOps.capturePane, func() (redraw, error) {
+	r, err := timeBackendOpCtx(ctx, tymuxIOOps.capturePane.with(b.mgr), func() (redraw, error) {
 		data, altScreen, ok, err := b.mgr.CapturePaneRedraw(ctx)
 		return redraw{data, altScreen, ok}, err
 	})
 	return r.data, r.altScreen, r.ok, err
 }
+
+// SupportsInStreamResync and ResyncInStream make TymuxBackend an InStreamResyncer when its
+// session manager can splice by sequence number (the real session; test fakes cannot).
+func (b *TymuxBackend) SupportsInStreamResync() bool {
+	r, ok := b.mgr.(InStreamResyncer)
+	return ok && r.SupportsInStreamResync()
+}
+
+func (b *TymuxBackend) ResyncInStream(ctx context.Context) error {
+	r, ok := b.mgr.(InStreamResyncer)
+	if !ok {
+		return errors.New("tymux backend: session manager cannot resync in-stream")
+	}
+	return timeBackendOpErr(tymuxIOOps.capturePane, func() error { return r.ResyncInStream(ctx) })
+}
+
 func (b *TymuxBackend) CaptureViewport(lines int) (string, error) {
-	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })
+	return timeBackendOp(tymuxIOOps.capturePane.with(b.mgr), func() (string, error) { return b.mgr.CaptureViewport(lines) })
 }
 func (b *TymuxBackend) GetCursorPosition() (x, y int, err error) {
 	return b.mgr.GetCursorPosition()
@@ -194,10 +222,10 @@ func (b *TymuxBackend) GetPaneDimensions() (width, height int, err error) {
 	return b.mgr.GetPaneDimensions()
 }
 func (b *TymuxBackend) SetWindowSize(cols, rows int) error {
-	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetWindowSize(cols, rows) })
+	return timeBackendOpErr(tymuxIOOps.resize.with(b.mgr), func() error { return b.mgr.SetWindowSize(cols, rows) })
 }
 func (b *TymuxBackend) SetDetachedSize(w, h int, title string) error {
-	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetDetachedSize(w, h, title) })
+	return timeBackendOpErr(tymuxIOOps.resize.with(b.mgr), func() error { return b.mgr.SetDetachedSize(w, h, title) })
 }
 func (b *TymuxBackend) RefreshClient() error { return b.mgr.RefreshClient() }
 
