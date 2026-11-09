@@ -112,6 +112,12 @@ jobs:
           bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false //:stapler-squad
           mkdir -p out
           cp -L bazel-bin/stapler-squad_/stapler-squad out/stapler-squad 2>/dev/null || cp -L "$(bazel cquery --config=ci --output=files //:stapler-squad)" out/stapler-squad
+      # The seed tools are plain `go build`s: they need the gitignored proto and ent output that Bazel does not use.
+      - name: Generate protos and ent for the seed tools
+        uses: ./.github/actions/prepare-stub
+
+      - name: Build the seed tools
+        run: |
           go build -o out/seed-demo ./tests/demo/seed
           go build -o out/seed-hidden ./tests/e2e/seed-hidden
 
