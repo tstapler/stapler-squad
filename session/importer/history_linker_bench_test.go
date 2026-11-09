@@ -39,7 +39,7 @@ func BenchmarkHistoryLinker_CorrelateParallel(b *testing.B) {
 	insts := make([]*session.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "bench-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &session.Instance{Title: title, Path: b.TempDir(), Status: session.Running}
+		inst := &session.Instance{Title: title, Path: b.TempDir(), Status: session.Active}
 		inst.SetProcessManagerForTest(slowPanePM{delay: 200 * time.Microsecond, calls: &calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)

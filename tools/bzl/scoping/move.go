@@ -390,7 +390,7 @@ func gitMv(root, from, to string) error {
 		return os.Rename(from, to) // an untracked staging file (a fresh relocate target) has nothing to `git mv`
 	}
 	//nolint:norawexec dev-time codemod, short-lived and waited on
-	cmd := exec.Command("git", "mv", from, to) //nolint:norawgitcli // dev-time codemod, not product code
+	cmd := exec.Command("git", "mv", from, to)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git mv: %w: %s", err, bytes.TrimSpace(out))

@@ -14,7 +14,7 @@ import (
 // path_completion_service_test.go, discards it).
 func RunGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...) //nolint:norawgitcli // test fixture helper, not product code
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",

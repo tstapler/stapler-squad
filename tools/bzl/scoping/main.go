@@ -52,7 +52,7 @@ type Report struct {
 
 func git(root string, args ...string) (string, error) {
 	//nolint:norawexec dev-time measurement tool, short-lived and waited on
-	cmd := exec.Command("git", args...) //nolint:norawgitcli // dev-time measurement tool, not product code
+	cmd := exec.Command("git", args...)
 	cmd.Dir = root
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

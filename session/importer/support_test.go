@@ -21,7 +21,7 @@ import (
 )
 
 func makeTestInstance(title string) *session.Instance {
-	return &session.Instance{Title: title, Status: session.Running}
+	return &session.Instance{Title: title, Status: session.Active}
 }
 
 // newTestGitWorktree builds a GitWorktree value without touching the filesystem or running git.

@@ -22,7 +22,7 @@ func newOwnerAndUnlinked(t *testing.T, ownerStatus session.Status, archived bool
 		owner.ArchivedAt = &at
 	}
 	owner.SetHistoryInfo("conv-u", "/projects/p/conv-u.jsonl")
-	waiting := &session.Instance{Title: "waiting", Path: t.TempDir(), Status: session.Running, Program: "claude"}
+	waiting := &session.Instance{Title: "waiting", Path: t.TempDir(), Status: session.Active, Program: "claude"}
 	waiting.SetProcessManagerForTest(panePIDCountingPM{calls: calls})
 	linker.SetInstances([]*session.Instance{owner, waiting})
 	return linker, waiting
@@ -41,7 +41,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_ClaimingOwnerIsNotLiveAndASe
 		{"paused", session.Paused, false},
 		{"stopped", session.Stopped, false},
 		{"hibernated", session.Hibernated, false},
-		{"archived", session.Running, true},
+		{"archived", session.Active, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,7 +74,7 @@ func TestHistoryLinker_FileEvent_should_UnparkSession_When_OwnerNotLive(t *testi
 func TestHistoryLinker_FileEvent_should_UnparkWaitingSession_When_OwnerIsLive(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker, waiting := newOwnerAndUnlinked(t, session.Running, false, &calls)
+	linker, waiting := newOwnerAndUnlinked(t, session.Active, false, &calls)
 	linker.backoffs[waiting.Title] = &sessionBackoff{parked: true}
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
@@ -89,7 +89,7 @@ func TestHistoryLinker_FileEvent_should_UnparkWaitingSession_When_OwnerIsLive(t 
 func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedSessionIsNotLive(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker, waiting := newOwnerAndUnlinked(t, session.Running, false, &calls)
+	linker, waiting := newOwnerAndUnlinked(t, session.Active, false, &calls)
 	waiting.Status = session.Paused
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
@@ -102,7 +102,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedSessionIsNot
 func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedLiveSessionIsNotClaude(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker, waiting := newOwnerAndUnlinked(t, session.Running, false, &calls)
+	linker, waiting := newOwnerAndUnlinked(t, session.Active, false, &calls)
 	waiting.Program = "aider --model x"
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
@@ -115,7 +115,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedLiveSessionI
 func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedSessionIsArchived(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker, waiting := newOwnerAndUnlinked(t, session.Running, false, &calls)
+	linker, waiting := newOwnerAndUnlinked(t, session.Active, false, &calls)
 	at := time.Now()
 	waiting.ArchivedAt = &at
 
@@ -128,7 +128,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedSessionIsArc
 func TestHistoryLinker_FileEvent_should_UnparkParkedClaudeSession_When_OwnerIsLive(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker, waiting := newOwnerAndUnlinked(t, session.Running, false, &calls)
+	linker, waiting := newOwnerAndUnlinked(t, session.Active, false, &calls)
 	linker.backoffs[waiting.Title] = &sessionBackoff{parked: true, consecutiveMisses: historyLinkerParkThreshold}
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
@@ -145,7 +145,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_ArchivedActiveOwnerAndNoSess
 	var calls atomic.Int64
 	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	at := time.Now()
-	owner := &session.Instance{Title: "owner", Path: t.TempDir(), Status: session.Running, ArchivedAt: &at}
+	owner := &session.Instance{Title: "owner", Path: t.TempDir(), Status: session.Active, ArchivedAt: &at}
 	owner.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	owner.SetHistoryInfo("conv-u", "/projects/p/conv-u.jsonl")
 	linker.SetInstances([]*session.Instance{owner})
@@ -165,7 +165,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_FleetIsLinkedClaudePlusO
 	for _, inst := range insts {
 		inst.Program = "claude"
 	}
-	aider := &session.Instance{Title: "aider", Path: t.TempDir(), Status: session.Running, Program: "aider"}
+	aider := &session.Instance{Title: "aider", Path: t.TempDir(), Status: session.Active, Program: "aider"}
 	aider.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	linker.SetInstances(append(insts, aider))
 
@@ -197,7 +197,7 @@ func TestHistoryLinker_Watcher_should_SkipForLiveOwnerAndScanForNewFile(t *testi
 	var calls atomic.Int64
 	dir := t.TempDir()
 	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
-	owner := &session.Instance{Title: "owner", Path: t.TempDir(), Status: session.Running}
+	owner := &session.Instance{Title: "owner", Path: t.TempDir(), Status: session.Active}
 	owner.SetProcessManagerForTest(panePIDCountingPM{calls: &calls})
 	owner.SetHistoryInfo("conv-u", filepath.Join(dir, "conv-u.jsonl"))
 	linker.SetInstances([]*session.Instance{owner})

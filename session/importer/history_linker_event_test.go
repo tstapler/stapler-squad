@@ -27,7 +27,7 @@ func newLinkedInstances(t *testing.T, n int, calls *atomic.Int64) []*session.Ins
 	insts := make([]*session.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "linked-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &session.Instance{Title: title, Path: t.TempDir(), Status: session.Running}
+		inst := &session.Instance{Title: title, Path: t.TempDir(), Status: session.Active}
 		inst.SetProcessManagerForTest(panePIDCountingPM{calls: calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)

@@ -320,7 +320,7 @@ linters:
       forbid:
         - pattern: ^fmt\.Print(f|ln)?$
           msg: "use the log package instead of fmt.Print* in production code"
-        - pattern: '(?m)exec\.Command$'
+        - pattern: '(?m)\bexec\.Command$'
           msg: "use exec.CommandContext with context.WithTimeout; raw exec.Command can hang indefinitely"
         - pattern: 'log\.(InfoLog|WarningLog|ErrorLog|DebugLog)\.Printf'
           msg: "use slog.InfoContext(ctx, ...) in new code; legacy log.XxxLog.Printf is being migrated"
