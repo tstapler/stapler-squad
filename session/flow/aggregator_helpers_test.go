@@ -164,6 +164,17 @@ func (f *fakeSrc) Items(_ context.Context, ids []ItemID) ([]ItemMeta, error) {
 	return out, nil
 }
 
+func (f *fakeSrc) OpenItemIDs(context.Context) ([]ItemID, error) {
+	f.record("OpenItemIDs")
+	var out []ItemID
+	for _, it := range f.items {
+		if it.Status != domain.BacklogStatusDone && it.Status != domain.BacklogStatusArchived {
+			out = append(out, it.ID)
+		}
+	}
+	return out, f.itemsErr
+}
+
 func (f *fakeSrc) Stages(context.Context) ([]domain.BacklogStatus, error) {
 	f.record("Stages")
 	return f.stages, f.itemsErr

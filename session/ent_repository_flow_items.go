@@ -36,6 +36,21 @@ func (r *EntFlowReader) Items(ctx context.Context, ids []flow.ItemID) ([]flow.It
 	return out, nil
 }
 
+// OpenItemIDs returns every item whose status is not terminal (done, archived).
+func (r *EntFlowReader) OpenItemIDs(ctx context.Context) ([]flow.ItemID, error) {
+	uids, err := r.client.BacklogItem.Query().
+		Where(backlogitem.StatusNotIn(string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived))).
+		IDs(ctx)
+	if err != nil {
+		return nil, flowReadErr("open_items", err)
+	}
+	out := make([]flow.ItemID, len(uids))
+	for i, id := range uids {
+		out[i] = flow.ItemID(id.String())
+	}
+	return out, nil
+}
+
 // Stages returns the pipeline's statuses in pipeline order (see PipelineStages).
 func (r *EntFlowReader) Stages(context.Context) ([]domain.BacklogStatus, error) {
 	engine := r.engine

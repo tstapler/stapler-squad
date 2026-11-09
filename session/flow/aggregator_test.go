@@ -423,3 +423,28 @@ func TestAggregator_should_CacheSummary_When_SectionIsStablyPartial(t *testing.T
 	require.NoError(t, err)
 	assert.Same(t, first, second, "a stable Partial section must not force a recompute on every poll")
 }
+
+func inProgressDwell(t *testing.T, s *FlowSummary) Percentiles {
+	t.Helper()
+	for _, st := range s.Funnel.Stages {
+		if st.Status == string(domain.BacklogStatusInProgress) {
+			return st.Dwell.Stats
+		}
+	}
+	require.Fail(t, "in_progress stage missing")
+	return Percentiles{}
+}
+
+func TestAggregator_should_IncludeParkedItemInDwell_When_ItHasNoEventsInWindow(t *testing.T) {
+	t.Parallel()
+	base := inProgressDwell(t, summarize30(t, fixtureSrc(t)))
+
+	f := fixtureSrc(t)
+	parked := ItemID("00000000-0000-0000-0000-0000000000aa")
+	f.events = append(f.events, Event{ItemID: parked, From: domain.BacklogStatusQueued, To: domain.BacklogStatusInProgress, At: fixtureClock.T.Add(-110 * 24 * time.Hour), Seq: 1})
+	f.items = append(f.items, ItemMeta{ID: parked, Title: "parked", Status: domain.BacklogStatusInProgress})
+	got := inProgressDwell(t, summarize30(t, f))
+
+	assert.Equal(t, base.N+1, got.N, "a parked item contributes one open in_progress sample")
+	assert.Equal(t, 30*24*time.Hour, got.Max, "parked for the whole 30-day window")
+}

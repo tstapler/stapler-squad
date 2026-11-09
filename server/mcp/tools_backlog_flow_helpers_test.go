@@ -104,6 +104,8 @@ func (m *memFlowSources) Items(_ context.Context, ids []flow.ItemID) ([]flow.Ite
 	return out, nil
 }
 
+func (m *memFlowSources) OpenItemIDs(context.Context) ([]flow.ItemID, error) { return nil, nil }
+
 func (m *memFlowSources) Stages(context.Context) ([]domain.BacklogStatus, error) {
 	return []domain.BacklogStatus{
 		domain.BacklogStatusIdea, domain.BacklogStatusInProgress, domain.BacklogStatusReview,

@@ -14,6 +14,8 @@ const (
 	maxListLimit     = 50
 	compactListLimit = 3
 	itemMetaChunk    = 500
+	// seedChunk keeps each LastEventsBefore IN list well under SQLite's bound-variable limit.
+	seedChunk = 4000
 )
 
 // listLimitFor resolves a requested top-N size: 0 means the default, Compact
@@ -203,21 +205,43 @@ func (r *run) loadDwell() (DwellResult, error) {
 		if err != nil {
 			return DwellResult{}, err
 		}
-		seeds, err := r.seeds.get(func() ([]Event, error) {
-			if len(ev.ids) == 0 {
-				return nil, nil
-			}
-			s, err := r.a.src.Events.LastEventsBefore(r.ctx, r.w.Start(), ev.ids)
-			if err != nil {
-				return nil, fmt.Errorf("read window-start seeds: %w", err)
-			}
-			return s, nil
-		})
+		seeds, err := r.seeds.get(func() ([]Event, error) { return r.loadSeeds(ev.ids) })
 		if err != nil {
 			return DwellResult{}, err
 		}
 		return Dwell(DwellInput{Spans: ev.spans, Seeds: seeds, Window: r.w, AsOf: r.asOf}), nil
 	})
+}
+
+// loadSeeds reads each item's status at window start for the items with events
+// in the window plus every currently non-terminal item, so an item parked in a
+// stage for the whole window still contributes a dwell sample. For a past
+// window an item that is terminal now but was parked through it is not seeded.
+func (r *run) loadSeeds(eventIDs []ItemID) ([]Event, error) {
+	open, err := r.a.src.Items.OpenItemIDs(r.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read open items: %w", err)
+	}
+	ids := sortedItems(idSet(eventIDs, open))
+	var out []Event
+	for chunk := range slices.Chunk(ids, seedChunk) {
+		s, err := r.a.src.Events.LastEventsBefore(r.ctx, r.w.Start(), chunk)
+		if err != nil {
+			return nil, fmt.Errorf("read window-start seeds: %w", err)
+		}
+		out = append(out, s...)
+	}
+	return out, nil
+}
+
+func idSet(lists ...[]ItemID) map[ItemID]struct{} {
+	set := map[ItemID]struct{}{}
+	for _, l := range lists {
+		for _, id := range l {
+			set[id] = struct{}{}
+		}
+	}
+	return set
 }
 
 // reworkResult, leadResult and prfixResult derive from the spans once.

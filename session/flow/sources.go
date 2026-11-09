@@ -62,6 +62,9 @@ type ItemMeta struct {
 type ItemSource interface {
 	Items(ctx context.Context, ids []ItemID) ([]ItemMeta, error)
 	Stages(ctx context.Context) ([]domain.BacklogStatus, error)
+	// OpenItemIDs lists every item not in a terminal status (done, archived),
+	// so dwell can seed items parked in a stage with no events in the window.
+	OpenItemIDs(ctx context.Context) ([]ItemID, error)
 }
 
 // Sources groups the role interfaces so a section fails independently of the others.

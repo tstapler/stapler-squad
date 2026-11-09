@@ -110,6 +110,23 @@ func TestEntFlowReader_should_ReturnLatestPreRangeEvent_When_LastEventsBefore(t 
 	require.Equal(t, map[flow.ItemID]string{flow.ItemID(a.String()): "a2", flow.ItemID(b.String()): "b1"}, notes)
 }
 
+func TestEntFlowReader_should_ListOnlyNonTerminalItems_When_OpenItemIDs(t *testing.T) {
+	t.Parallel()
+	repo := newFlowTestRepo(t)
+	c := repo.GetEntClient()
+	open := seedFlowItem(t, c, "open")
+	for _, st := range []string{"done", "archived"} {
+		it := seedFlowItem(t, c, st)
+		_, err := c.BacklogItem.UpdateOneID(it).SetStatus(st).Save(context.Background())
+		require.NoError(t, err)
+	}
+
+	got, err := NewEntFlowReader(c).OpenItemIDs(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, []flow.ItemID{flow.ItemID(open.String())}, got)
+}
+
 func TestEntFlowReader_should_ReturnTypedError_When_ContextCancelled(t *testing.T) {
 	t.Parallel()
 	repo := newFlowTestRepo(t)
@@ -144,6 +161,7 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 		"AgentDoneClaims":  func() error { _, err := r.AgentDoneClaims(ctx, win); return err },
 		"StuckIntervals":   func() error { _, err := r.StuckIntervals(ctx); return err },
 		"Items":            func() error { _, err := r.Items(ctx, ids); return err },
+		"OpenItemIDs":      func() error { _, err := r.OpenItemIDs(ctx); return err },
 	}
 	for name, call := range calls {
 		beforeR, beforeW := poolQueries("ent-read"), poolQueries("ent")
