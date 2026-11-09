@@ -61,21 +61,27 @@ ZIG_VERSION="$(pin ZIG_VERSION)"
 FLAGS=(${BAZEL_FLAGS:-})
 
 cd "$ROOT"
+# cquery --output=files prints paths relative to Bazel's execution root; resolve them there rather
+# than through the workspace's bazel-out/bazel-bin symlinks, which --symlink_prefix or a read-only
+# checkout can remove or rename.
+EXEC_ROOT="$(bazel info ${FLAGS[@]+"${FLAGS[@]}"} execution_root)"
+[[ -d "$EXEC_ROOT" ]] || err "could not resolve Bazel's execution_root"
+
 if [[ "$RUN_TESTS" == 1 ]]; then
   log "bazel build $TEST_TARGET (zig build test-lib-vt -Dtest-filter=softReset)"
   bazel build ${FLAGS[@]+"${FLAGS[@]}"} "$TEST_TARGET"
   TEST_LOG="$(bazel cquery ${FLAGS[@]+"${FLAGS[@]}"} --output=files "$TEST_TARGET" 2>/dev/null | head -n1)"
-  [[ -f "$ROOT/$TEST_LOG" ]] || err "Bazel did not produce the test log"
-  log "$(cat "$ROOT/$TEST_LOG")"
+  [[ -f "$EXEC_ROOT/$TEST_LOG" ]] || err "Bazel did not produce the test log"
+  log "$(cat "$EXEC_ROOT/$TEST_LOG")"
 fi
 
 log "bazel build $TARGET"
 bazel build ${FLAGS[@]+"${FLAGS[@]}"} "$TARGET"
 BUILT="$(bazel cquery ${FLAGS[@]+"${FLAGS[@]}"} --output=files "$TARGET" 2>/dev/null | head -n1)"
-[[ -f "$ROOT/$BUILT" ]] || err "Bazel did not produce the wasm (looked for '$BUILT')"
+[[ -f "$EXEC_ROOT/$BUILT" ]] || err "Bazel did not produce the wasm (looked for '$BUILT')"
 
-WASM_SHA="$(sha256_of "$ROOT/$BUILT")"
-WASM_SIZE="$(wc -c < "$ROOT/$BUILT" | tr -d ' ')"
+WASM_SHA="$(sha256_of "$EXEC_ROOT/$BUILT")"
+WASM_SIZE="$(wc -c < "$EXEC_ROOT/$BUILT" | tr -d ' ')"
 RECORD_KEY="${GHOSTTY_REV:0:12}-zig${ZIG_VERSION}"
 log "ghostty-vt.wasm  sha256=$WASM_SHA  bytes=$WASM_SIZE  key=$RECORD_KEY"
 
@@ -95,6 +101,6 @@ fi
 # ── install for the web build (only after the reproducibility check passed) ──
 
 mkdir -p "$OWN_DIR"
-cp "$ROOT/$BUILT" "$OWN_DIR/ghostty-vt.wasm"
+cp "$EXEC_ROOT/$BUILT" "$OWN_DIR/ghostty-vt.wasm"
 chmod 644 "$OWN_DIR/ghostty-vt.wasm"
 log "Installed web-app/build/ghostty-own/ghostty-vt.wasm (rebuild the web app to use it)"
