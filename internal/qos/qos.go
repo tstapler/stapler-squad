@@ -57,7 +57,7 @@ func (a Activity) String() string {
 }
 
 // Default is the tracker the hub and the background pollers share.
-var Default = NewTracker(time.Now, InteractiveWindow) //nolint:gochecknoglobals one process-wide tracker, shared by the hub and the pollers
+var Default = NewTracker(time.Now, InteractiveWindow) //nolint:gochecknoglobals // one process-wide tracker shared by the hub and the pollers
 
 // NewTracker builds a tracker with an injectable clock for deterministic tests.
 func NewTracker(now func() time.Time, window time.Duration) *Tracker {
