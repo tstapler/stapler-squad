@@ -13,6 +13,7 @@ export const routes = {
   errors: "/errors",
   config: "/config",
   notifications: "/notifications",
+  ownerInbox: "/owner-inbox",
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
   help: "/help",
@@ -39,6 +40,7 @@ export const routes = {
   account: "/account",
   escapeAnalytics: "/analytics/escape",
   files: "/files",
+  artifacts: "/artifacts",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });
@@ -57,6 +59,7 @@ export const ROUTE_PATHS = [
   "/",
   "/account",
   "/analytics/escape",
+  "/artifacts",
   "/backlog",
   "/backlog/board",
   "/backlog/flow",
@@ -73,6 +76,7 @@ export const ROUTE_PATHS = [
   "/login",
   "/logs",
   "/notifications",
+  "/owner-inbox",
   "/resolve",
   "/review-queue",
   "/rules",

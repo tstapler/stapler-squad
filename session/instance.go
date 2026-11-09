@@ -387,6 +387,25 @@ type Instance struct {
 	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
+	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
+	// siblings. Written only by the PR setters (instance_pr_set.go) and load
+	// hydration; never serialized from here (links live in their own table).
+	PRs                   []PRView `json:"-"`
+	LegacyPRUnrepresented bool     `json:"-"`
+	HasPRLinks            bool     `json:"-"`
+	// prPersistMu serializes this session's PR persists; prPersister is the
+	// storage seam (nil until injected); prPersistPending marks a PR set change
+	// the next full save must write. See instance_pr_set.go.
+	prPersistMu sync.Mutex
+	prPersister prSetPersister
+	// prActions is the GitHub client the PR actions use; nil means the real one.
+	prActions        prActionClient
+	prPersistPending atomic.Bool
+	// prLegacyPathLogged limits the "no uuid, legacy scalar only" line to once.
+	prLegacyPathLogged atomic.Bool
+	// terminalClearPending marks a failed immediate clear of the stored terminal
+	// flag; the next full save writes false (guarded by prPersistMu).
+	terminalClearPending atomic.Bool
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
@@ -735,11 +754,15 @@ type Instance struct {
 	driverRunning atomic.Bool
 	// retryInFlight guards every restart path (automated backoff-expiry,
 	// restart-grace, manual RetryNow) against running concurrently for the
-	// same instance. Claimed exclusively inside restartForRetry via CAS — no
-	// other function CASes it directly, so every restart path is guarded by
-	// construction rather than by each caller remembering to. See
-	// session/retry_state.go's restartForRetry.
+	// same instance. Claimed inside restartForRetry via CAS; the only other
+	// claimant is HotRestoreIfLive, so it cannot interleave with a restart.
+	// See session/retry_state.go's restartForRetry.
 	retryInFlight atomic.Bool
+	// hotRestoreMu serializes HotRestoreIfLive for this instance.
+	hotRestoreMu deadlock.Mutex
+	// hotAttaching is set for the duration of a HotRestoreIfLive Start: the backing
+	// process pre-exists the attempt, so a failed Start must release it, never kill it.
+	hotAttaching atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -1219,8 +1242,6 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},
 		// GitHub integration fields
-		GitHubPRNumber:  opts.GitHubPRNumber,
-		GitHubPRURL:     opts.GitHubPRURL,
 		GitHubOwner:     opts.GitHubOwner,
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubHost:      opts.GitHubHost,
@@ -1299,6 +1320,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance.initCDPManager(cfg)
 
 	finishInstanceConstruction(instance)
+	if opts.GitHubPRNumber > 0 {
+		// Created from a PR URL: the PR joins the set (its write is deferred to the
+		// first full save, see persistPRAttach).
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+	}
 	return instance, nil
 }
 
@@ -1671,6 +1697,11 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
+			// A hot attach only adopts a live process; never cold-launch a new one.
+			if i.hotAttaching.Load() {
+				setupErr = fmt.Errorf("hot attach: backing process is no longer alive")
+				return setupErr
+			}
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
 			hasClaudeSession := i.HasClaudeSession()
 			if hasClaudeSession {
@@ -2131,6 +2162,11 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	i.stopCDP()
 	// A session that ran before this attempt is released, not killed.
 	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	// A hot attach only ever adopts a live process (tmux included, which has no
+	// releaser); leave it running rather than kill-session it.
+	if i.hotAttaching.Load() {
 		return nil
 	}
 	return i.killSessionAttachedByThisAttempt()

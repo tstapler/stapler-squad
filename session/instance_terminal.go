@@ -451,6 +451,7 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		inst.GitHubReviewFeedback = update.Reviews
 		inst.GitHubMergeable = update.Mergeable
 		inst.LastPRStatusCheck = time.Now()
+		applyLegacyUpdateToActivePR(inst, update)
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)

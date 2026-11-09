@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -187,7 +188,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingWithoutPRItems(ctx context.
 	}
 
 	for _, item := range items {
-		if item.PrNumber != 0 {
+		if l.itemHasPRReference(ctx, er, item) {
 			continue
 		}
 
@@ -224,6 +225,22 @@ func (l *BacklogLifecycleListener) reconcilePRPendingWithoutPRItems(ctx context.
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
 	// reason once the item leaves 'pr_pending' (successfully reopened for a
 	// fresh attempt, or manually recovered).
+}
+
+// itemHasPRReference reports whether the pr_pending item has any PR. Flag off it
+// is the stored number; with reader:backlog the condition is the derived set being
+// empty, and a failed read counts as "has one" so a transient error never raises
+// a false stuck alert.
+func (l *BacklogLifecycleListener) itemHasPRReference(ctx context.Context, er *EntRepository, item BacklogItemData) bool {
+	if !l.backlogReaderEnabled() {
+		return item.PrNumber != 0
+	}
+	prs, err := er.ItemPRsByID(ctx, item.ID)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] reconcilePRPendingWithoutPRItems ItemPRs item=%s: %v", item.ID, err)
+		return true
+	}
+	return len(prs) > 0
 }
 
 // reconcileOrphanedAgentPRs is the Epic 3.2 reconciliation backstop from "PR
@@ -335,7 +352,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
 		TransitionRequest{Caller: CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: TriggeredBySystem},
-		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary})
+		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: AttachSourcePRCreationService})
 }
 
 // mostRecentWorkCommitShippedToMain finds itemID's most recent work session
@@ -490,7 +507,7 @@ func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin, prRemoteU
 		sb.WriteString("\n## Test plan\n")
 		for _, c := range criteria {
 			box := "[ ]"
-			if c.Status == domain.AcStatusDone {
+			if c.Status.IsSatisfied() {
 				box = "[x]"
 			}
 			fmt.Fprintf(&sb, "- %s %s\n", box, sanitizeField(c.Text, 300))
@@ -597,11 +614,7 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
 		return
 	}
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
 			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
 		return
@@ -669,7 +682,12 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// Create (or locate existing) PR.
 	var prURL string
 	var prNumber int
-	if item.PrNumber > 0 && item.PrURL != "" {
+	reuse, reuseErr := l.canReuseTrackedPR(ctx, item, wt)
+	if reuseErr != nil {
+		l.stayInReviewAndNotify(ctx, item.ID, item.Title, "could not verify the tracked PR", reuseErr)
+		return
+	}
+	if reuse {
 		// PR already exists from a previous attempt — just use it.
 		prURL = item.PrURL
 		prNumber = item.PrNumber
@@ -736,12 +754,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		// a push/PR-creation failure: stay in review so a human (or the next
 		// TriggerReReview) can retry, rather than silently entering that dead
 		// end.
-		prURLCopy := prURL
-		prNumCopy := prNumber
-		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-			PrURL:    &prURLCopy,
-			PrNumber: &prNumCopy,
-		}, nil); updateErr != nil {
+		// The item-direct link and state row go in the same transaction as the fields
+		// (BUG-058 narrowed), so the refresher polls the PR and the gate sees it.
+		if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
@@ -792,6 +807,24 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+// canReuseTrackedPR reports whether pushAndCreatePR may reuse the item's recorded PR.
+// With reader:backlog on it must still be open on this item's branch (a closed or
+// foreign PR is replaced by a fresh one); a lookup failure is returned so the caller
+// retries instead of opening a duplicate. Scope off: any recorded PR is reused, as before.
+func (l *BacklogLifecycleListener) canReuseTrackedPR(ctx context.Context, item *BacklogItemData, wt GitWorktreeData) (bool, error) {
+	if item.PrNumber <= 0 || item.PrURL == "" {
+		return false, nil
+	}
+	if !l.backlogReaderEnabled() {
+		return true, nil
+	}
+	info, err := l.getPRByNumberFinder()(ctx, wt.RepoPath, item.PrNumber)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(info.State, "open") && info.HeadRef == wt.BranchName, nil
 }
 
 const (
@@ -1359,11 +1392,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 		return
 	}
 
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, AttachSourcePRCreationService); updateErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand store PR fields item=%s: %v", item.ID, updateErr)
 	}
 
@@ -1747,6 +1776,10 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			return
 		}
 
+		if l.holdMergedPRPendingItem(ctx, er, item) {
+			return
+		}
+
 		if capErr := CaptureShipSnapshot(ctx, l.storage, &itemData, snapshotPRStatus, lastWork, wt); capErr != nil {
 			// CaptureShipSnapshot always returns nil today; this branch
 			// exists defensively in case that contract ever changes, and
@@ -2010,6 +2043,27 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	}
 }
 
+// holdMergedPRPendingItem is the reader:backlog verdict-and-hold consumer for a
+// pr_pending item whose tracked PR IsPRMerged says is merged: the verdict must be
+// Done from the state rows (another open or unknown PR keeps the item pending), and a
+// live current-round work session holds it until idle, ended or LiveWorkMaxHold.
+// True means leave the item as it is this pass. Flag off: false (today's path).
+func (l *BacklogLifecycleListener) holdMergedPRPendingItem(ctx context.Context, er *EntRepository, item *ent.BacklogItem) bool {
+	if !l.backlogReaderEnabled() {
+		return false
+	}
+	verdict, err := l.itemVerdictAfterMerge(ctx, er, item.ID.String(), item.PrURL, item.PrNumber)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s verdict unreadable, holding: %v", item.ID, err)
+		return true
+	}
+	if verdict != ItemVerdictDone {
+		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: tracked PR #%d merged but the item PR set verdict is %v — staying pr_pending", item.ID, item.PrNumber, verdict)
+		return true
+	}
+	return l.holdMergedItemForLiveWork(ctx, er, item.ID.String(), item.Title)
+}
+
 // ReconcilePRPending polls items in pr_pending status. It transitions to done
 // when the PR is merged, and spawns a fix session when CI fails or reviewers
 // request changes.
@@ -2021,6 +2075,28 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 	}
 	for _, item := range items {
 		l.reconcilePRPendingItem(ctx, er, item)
+		l.syncItemPRMirror(ctx, er, item.ID.String())
+	}
+}
+
+// backlogReaderEnabled reports whether the reader:backlog scope is effective;
+// tests install backlogReaderOverride instead of writing config.
+func (l *BacklogLifecycleListener) backlogReaderEnabled() bool {
+	if l.backlogReaderOverride != nil {
+		return l.backlogReaderOverride()
+	}
+	return config.SessionMultiPR(config.SessionMultiPRScopeBacklog)
+}
+
+// syncItemPRMirror ends each ReconcilePRPending pass for an item by letting
+// pr_number/pr_url follow the derived PR set, so a session-link change (such as
+// discovery on the current round) lands within one tick. Off with reader:backlog.
+func (l *BacklogLifecycleListener) syncItemPRMirror(ctx context.Context, er *EntRepository, itemID string) {
+	if !l.backlogReaderEnabled() {
+		return
+	}
+	if _, err := er.RecomputeItemPRMirror(ctx, itemID); err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s mirror recompute: %v", itemID, err)
 	}
 }
 

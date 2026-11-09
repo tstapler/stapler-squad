@@ -58,7 +58,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryError_NotMisreadAsNoPR(t *testing.T) {
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
+	_, backoffArmed := p.noPRPollAfter[pollKey(inst.Snapshot())]
 	p.mu.RUnlock()
 	if backoffArmed {
 		t.Fatal("401 discovery error must not arm the no-PR backoff")
@@ -87,7 +87,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryRateLimited_NotMisreadAsNoPR(t *testing
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
+	_, backoffArmed := p.noPRPollAfter[pollKey(inst.Snapshot())]
 	p.mu.RUnlock()
 	if backoffArmed {
 		t.Fatal("429 discovery error must not arm the no-PR backoff")
@@ -110,7 +110,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryParseFailure_NotMisreadAsNoPR(t *testin
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
+	_, backoffArmed := p.noPRPollAfter[pollKey(inst.Snapshot())]
 	p.mu.RUnlock()
 	if backoffArmed {
 		t.Fatal("a body-parse failure must not arm the no-PR backoff")
@@ -135,7 +135,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryTrue304_ArmsBackoff(t *testing.T) {
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
+	_, backoffArmed := p.noPRPollAfter[pollKey(inst.Snapshot())]
 	p.mu.RUnlock()
 	if !backoffArmed {
 		t.Fatal("a true 304 (unchanged, no error) must still re-arm the no-PR backoff")
@@ -161,7 +161,7 @@ func TestFetchAndUpdatePRStatus_DiscoveryErrNoPR_AppliesNoPR(t *testing.T) {
 	p.fetchAndUpdatePRStatus(context.Background(), inst)
 
 	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
+	_, backoffArmed := p.noPRPollAfter[pollKey(inst.Snapshot())]
 	p.mu.RUnlock()
 	if !backoffArmed {
 		t.Fatal("ErrNoPR (empty PR list) must still arm the no-PR backoff via applyNoPR")

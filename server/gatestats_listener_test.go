@@ -50,3 +50,42 @@ func TestUpdateFeatureFlag_ShouldBeInTheLocalWriteGuardSetWithRebindingProfile(t
 	require.True(t, ok, "UpdateFeatureFlag flips protections and must be guarded on the unauthenticated listener")
 	assert.Equal(t, middleware.ProfileRebinding, prof)
 }
+
+func TestSessionPRLinkWrites_ShouldBeInTheLocalWriteGuardSetWithRebindingProfile(t *testing.T) {
+	t.Parallel()
+	for _, procedure := range []string{
+		sessionv1connect.SessionServiceAttachSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceDetachSessionPullRequestProcedure,
+		sessionv1connect.SessionServicePinSessionPullRequestProcedure,
+		sessionv1connect.SessionServiceRefreshSessionPullRequestsProcedure,
+		sessionv1connect.SessionServiceDetachItemPullRequestProcedure,
+	} {
+		prof, ok := guardedProcedures["/api"+procedure]
+		require.True(t, ok, "%s writes link state and must be guarded on the unauthenticated listener", procedure)
+		assert.Equal(t, middleware.ProfileRebinding, prof, procedure)
+	}
+}
+
+func TestAttachSessionPullRequest_ShouldPassBrowserPostAndRejectForeignOriginAndGet(t *testing.T) {
+	t.Parallel()
+	srv, _ := newServerBase("localhost:8543")
+	t.Cleanup(srv.connCtxCancel)
+	path, h := sessionv1connect.NewSessionServiceHandler(sessionv1connect.UnimplementedSessionServiceHandler{}, ConnectOptions(nil)...)
+	srv.RegisterConnectHandler("/api"+path, http.StripPrefix("/api", h))
+	chain := srv.localChain()
+
+	call := func(method, origin string) int {
+		r := httptest.NewRequest(method, "/api"+sessionv1connect.SessionServiceAttachSessionPullRequestProcedure, strings.NewReader("{}"))
+		r.Host = "localhost:8543"
+		r.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		chain.ServeHTTP(w, r)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusForbidden, call(http.MethodPost, "https://evil.example"), "foreign Origin is refused")
+	assert.Equal(t, http.StatusMethodNotAllowed, call(http.MethodGet, ""), "GET is refused")
+	assert.NotContains(t, []int{http.StatusForbidden, http.StatusMethodNotAllowed}, call(http.MethodPost, "http://localhost:8543"), "same-origin browser POST reaches the handler")
+}

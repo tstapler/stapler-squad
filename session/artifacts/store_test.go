@@ -125,18 +125,17 @@ func TestScanFile_IncrementalOffset(t *testing.T) {
 	}
 }
 
-// C-2: TestScanFile_SkipsAgentFiles checks the queue directly rather than
-// relying on a worker running. An agent- file must never be enqueued.
-func TestScanFile_SkipsAgentFiles(t *testing.T) {
+// Subagent transcripts are enqueued like any other; scanFile maps them to the parent session.
+func TestOnHistoryFileChanged_EnqueuesAgentFiles(t *testing.T) {
 	t.Parallel()
 	ae := NewArtifactExtractor(
-		func(title, blob string) error { t.Error("storeFn must not be called for agent- files"); return nil },
+		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },
 		func(filePath string) (string, bool) { return "test", true },
 	)
-	ae.OnHistoryFileChanged("/home/user/.claude/projects/foo/agent-abc123.jsonl")
-	if n := ae.queue.Pending(); n != 0 {
-		t.Fatalf("agent- file must not be enqueued, %d pending", n)
+	ae.OnHistoryFileChanged("/home/user/.claude/projects/foo/uuid/subagents/agent-abc123.jsonl")
+	if n := ae.queue.Pending(); n != 1 {
+		t.Fatalf("agent- file must be enqueued once, %d pending", n)
 	}
 }
 
@@ -257,7 +256,7 @@ func TestMergeAndPersist_ExternalURLCapAt50(t *testing.T) {
 	for i := range newURLs {
 		newURLs[i] = fmt.Sprintf("https://new.com/%d", i)
 	}
-	blob := ae.mergeAndPersist("s", 999, nil, nil, newURLs, nil)
+	blob := ae.mergeAndPersist("s", 999, &scanFindings{externalURLs: newURLs}, false)
 	if len(blob.ExternalURLs) != maxExternalURLs {
 		t.Fatalf("expected %d external URLs after cap, got %d", maxExternalURLs, len(blob.ExternalURLs))
 	}
@@ -281,9 +280,9 @@ func TestScanFile_AdvancesOffsetWhenNoArtifactsFound(t *testing.T) {
 	)
 	ae.scanFile(path)
 
-	// No artifacts found → storeFn should NOT be called (nothing to persist).
-	if storeCalled {
-		t.Error("storeFn should not be called when no artifacts found")
+	// An empty first scan is persisted as none_found (see scan_test.go).
+	if !storeCalled {
+		t.Error("storeFn should be called to record the empty scan")
 	}
 
 	// But the offset must be advanced past the processed line so we don't re-scan.
@@ -354,4 +353,136 @@ func TestEnqueue_BurstCoalescesByPathAndNeverDrops(t *testing.T) {
 	if st := ae.QueueStats(); st.Coalesced != 2*distinct {
 		t.Fatalf("coalesced = %d, want %d", st.Coalesced, 2*distinct)
 	}
+}
+
+func TestMerge_ShouldKeepLastFifty_WhenSixtyURLs(t *testing.T) {
+	t.Parallel()
+	urls := make([]string, 60)
+	for i := range urls {
+		urls[i] = fmt.Sprintf("https://example.com/%d", i)
+	}
+	ae := NewArtifactExtractor(
+		func(string, string) error { return nil },
+		func(string) (string, error) { return "", nil },
+		func(string) (string, bool) { return "s", true },
+	)
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{externalURLs: urls}, false)
+	if len(blob.ExternalURLs) != maxExternalURLs {
+		t.Fatalf("got %d urls, want %d", len(blob.ExternalURLs), maxExternalURLs)
+	}
+	if blob.ExternalURLs[0] != "https://example.com/10" || blob.ExternalURLs[49] != "https://example.com/59" {
+		t.Fatalf("stored urls are not the last 50: first=%s last=%s", blob.ExternalURLs[0], blob.ExternalURLs[49])
+	}
+}
+
+func TestMerge_ShouldKeepNewestCommands_WhenOverMaxCommands(t *testing.T) {
+	t.Parallel()
+	cmds := make([]CommandArtifact, maxCommands+5)
+	for i := range cmds {
+		cmds[i] = CommandArtifact{Type: "git_commit", Detail: fmt.Sprintf("c%d", i)}
+	}
+	ae := NewArtifactExtractor(
+		func(string, string) error { return nil },
+		func(string) (string, error) { return "", nil },
+		func(string) (string, bool) { return "s", true },
+	)
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: cmds}, false)
+	if len(blob.Commands) != maxCommands {
+		t.Fatalf("got %d commands, want %d", len(blob.Commands), maxCommands)
+	}
+	if got := blob.Commands[len(blob.Commands)-1].Detail; got != fmt.Sprintf("c%d", maxCommands+4) {
+		t.Fatalf("newest command dropped, last=%s", got)
+	}
+}
+
+func writeToolUseAndResult(t *testing.T, path, cmd, result string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	use := map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+		{"type": "tool_use", "name": "Bash", "input": map[string]any{"command": cmd}},
+	}}}
+	line, _ := json.Marshal(use)
+	fmt.Fprintf(f, "%s\n", line)
+	if err := writeJSONLLine(f, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScan_ShouldRecordSubagentPRCreate_WhenAgentJsonlMapsToParent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "conv-1.jsonl")
+	if err := os.WriteFile(parent, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(dir, "conv-1", "subagents")
+	if err := os.MkdirAll(subDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(subDir, "agent-abc.jsonl")
+	writeToolUseAndResult(t, agent, `gh pr create --title "Refactor auth"`, "https://github.com/acme/app/pull/12")
+
+	var stored string
+	ae := NewArtifactExtractor(
+		func(_, blob string) error { stored = blob; return nil },
+		func(string) (string, error) { return stored, nil },
+		func(p string) (string, bool) { return "refactor-auth", p == parent },
+	)
+	// An earlier parent scan left a stored offset that the subagent scan must not replace.
+	stored = `{"scan_offset_bytes":777}`
+	ae.scanFile(agent)
+
+	var blob SessionArtifactsBlob
+	if err := json.Unmarshal([]byte(stored), &blob); err != nil {
+		t.Fatal(err)
+	}
+	if len(blob.PRURLs) != 1 || blob.PRURLs[0] != "https://github.com/acme/app/pull/12" {
+		t.Fatalf("PR from subagent not recorded on parent: %+v", blob.PRURLs)
+	}
+	if len(blob.Commands) != 1 || blob.Commands[0].Type != "gh_pr_create" {
+		t.Fatalf("gh pr create command not recorded: %+v", blob.Commands)
+	}
+	if blob.ScanOffsetBytes != 777 {
+		t.Fatalf("subagent scan replaced the parent's stored offset: %d", blob.ScanOffsetBytes)
+	}
+}
+
+func TestScan_ShouldMapFlatAgentFile_WhenFirstEntryNamesParentSession(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "conv-9.jsonl")
+	agent := filepath.Join(dir, "agent-flat.jsonl")
+	if err := os.WriteFile(agent, []byte(`{"sessionId":"conv-9","type":"summary"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeToolUseAndResult(t, agent, "echo hi", "see https://github.com/acme/app/pull/3")
+	var stored string
+	ae := NewArtifactExtractor(
+		func(_, blob string) error { stored = blob; return nil },
+		func(string) (string, error) { return stored, nil },
+		func(p string) (string, bool) { return "owner", p == parent },
+	)
+	ae.scanFile(agent)
+	if stored == "" {
+		t.Fatal("flat agent file was not attributed to its parent session")
+	}
+}
+
+func TestScan_ShouldIgnoreAgentFile_WhenParentUnowned(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "conv-2", "subagents")
+	_ = os.MkdirAll(subDir, 0o700)
+	agent := filepath.Join(subDir, "agent-x.jsonl")
+	writeToolUseAndResult(t, agent, "echo", "https://github.com/acme/app/pull/1")
+	ae := NewArtifactExtractor(
+		func(string, string) error { t.Error("storeFn must not run for an unowned parent"); return nil },
+		func(string) (string, error) { return "", nil },
+		func(string) (string, bool) { return "", false },
+	)
+	ae.scanFile(agent)
 }

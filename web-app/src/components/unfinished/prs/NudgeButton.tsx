@@ -3,19 +3,18 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "@/lib/nav";
+import { useAnalytics } from "@/lib/analytics";
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { prAttention } from "@/lib/unfinished/prAttention";
 import { emitTabEvent } from "@/lib/unfinished/tabStats";
 import { useNudgePR, type NudgeClient, type NudgeState } from "@/lib/hooks/useNudgePR";
+import { NOT_RUNNING_TEXT, PAUSED_TEXT, outcomeMessage, type NudgeMessage as Message } from "@/lib/pr/nudgeOutcomeCopy";
 import * as styles from "./NudgeButton.css";
 
 export const NUDGE_HINT =
   "Sends this session a message listing the failing checks, unresolved review threads and merge conflict for this PR, as links. Comment text is not included.";
-const PAUSED_TEXT = "Session paused. Open it to resume";
-const NOT_RUNNING_TEXT = "Session is not running or was deleted. Open it to restart it.";
 const NOT_IDLE_TEXT = "Session isn't idle, so it can't take a request. Open it to continue.";
-const BUSY_FALLBACK_TEXT = "Session can't take a request right now. Open it to continue.";
 export const NOT_IDLE_HINT =
   "None of this PR's sessions are confirmed idle, so a request could interrupt them. Open the session to continue.";
 export const SLOW_SEND_MS = 3_000;
@@ -47,50 +46,11 @@ function sessionSignature(s: NudgeSession): string {
   return `${s.status}|${s.steerReady}`;
 }
 
-interface Message {
-  text: string;
-  role: "status" | "alert";
-  openSessionId?: string;
-}
-
 /** Why a session cannot take a request, or undefined when it can. */
 function blockedReason(status: LinkedSessionStatus): string | undefined {
   if (status === LinkedSessionStatus.PAUSED) return PAUSED_TEXT;
   if (status === LinkedSessionStatus.STOPPED) return "Session stopped. Open it to restart it.";
   return undefined;
-}
-
-/** Copy for each outcome; the `never` default fails the build when the proto gains an outcome. */
-export function outcomeMessage(outcome: NudgeOutcome, detail: string, sessionId: string): Message {
-  const status = (text: string, withLink = false): Message => ({
-    text,
-    role: "status",
-    openSessionId: withLink ? sessionId : undefined,
-  });
-  switch (outcome) {
-    case NudgeOutcome.DELIVERED:
-      return status(`Request sent to ${sessionId}`, true);
-    case NudgeOutcome.BUSY:
-      return status(detail || BUSY_FALLBACK_TEXT, true);
-    case NudgeOutcome.PAUSED:
-      return status(detail || PAUSED_TEXT, true);
-    case NudgeOutcome.NOT_RUNNING:
-      return status(detail || NOT_RUNNING_TEXT, true);
-    case NudgeOutcome.DUPLICATE:
-      return status("Already requested in the last minute", true);
-    case NudgeOutcome.NOTHING_TO_FIX:
-      return status("Nothing to fix right now");
-    case NudgeOutcome.SESSION_NOT_LINKED:
-      return status("Session no longer linked");
-    case NudgeOutcome.PR_NOT_FOUND:
-      return status("PR not found (closed or moved?)");
-    case NudgeOutcome.UNSPECIFIED:
-      return status("Unexpected response. Try again.");
-    default: {
-      const unhandled: never = outcome;
-      return status(`Unexpected response (${String(unhandled)})`);
-    }
-  }
 }
 
 export function stateMessage(state: NudgeState): Message | undefined {
@@ -109,6 +69,7 @@ function fixNoun(pr: UserPR): string {
 }
 
 export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }: NudgeButtonProps) {
+  const { track } = useAnalytics();
   const { state, nudge, dismiss } = useNudgePR({ client });
   const [selected, setSelected] = useState<string | undefined>();
   const [blockedIds, setBlockedIds] = useState<ReadonlyMap<string, BlockedEntry>>(new Map());
@@ -199,6 +160,7 @@ export function NudgeButton({ pr, sessions, nudgeable, client, onNothingToFix }:
 
   const onClick = async () => {
     if (disabled || !target) return;
+    track({ name: "unfinished_pr_nudge_clicked", category: "user_action", component: "NudgeButton" });
     const result = await nudge(pr, target.sessionId);
     if (result.status === "error" && result.kind === "failed_precondition") {
       block(result.sessionId, result.message);

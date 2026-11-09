@@ -28,6 +28,7 @@ var pinnedCallers = map[string]callerRow{
 	"server/services:BacklogService.steerWorkSessionWithVerdict":     {kind: kindChain, reason: "verdict steer of the item's live work session; refuses a hidden target (Task 5.1d-d, T-RO-39)"},
 	"server/services:BacklogSteerWriter.Steer":                       {kind: kindChain, reason: "the O7 typed writer; only obtainable with a BacklogReviewLink"},
 	"server/services:defaultStallNudger.NudgeStalledSession":         {kind: kindChain, reason: "adapter over session.NudgeStalledAutonomousSession; reached only from the work-stall plan, behind diagnose_nudge_enabled AND autonomous_stall_nudge_enabled"},
+	"server/services:SessionService.askFixDeliver":                   {kind: kindChain, reason: "AskSessionToFixPullRequest delivery through SteerInstanceGuarded; refuses a hidden target in askFixTarget"},
 	"server/services:GitHubUserService.deliver":                      {kind: kindChain, reason: "NudgeSessionForPR delivery through SteerInstanceGuarded; refuses a hidden target in resolveSession"},
 	"server/services:NewCapacityMonitor.func1":                       {kind: kindAcquirer, reason: "default compactor: takes the lease once for the /compact write"},
 	"server/services:SessionService.SteerActiveSession":              {kind: kindChain, reason: "internal steer of a live session by UUID; callers are the pinned backlog steers"},
@@ -81,13 +82,14 @@ var pinnedLifecycleCallers = map[string]callerRow{
 // pinnedAccessCallers: the only units that may call AccessForUnary: the Story
 // 5.2 unary handlers and their access-decision helpers, never a stream site.
 var pinnedAccessCallers = map[string]callerRow{
-	"server/services:SessionService.RestartSession":     {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.RestartShell":       {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.SpawnShell":         {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:SessionService.decideSteerAccess":  {kind: kindUI, reason: "steer access decision: the guards-off bypass of a non-qualifying hidden target"},
-	"server/services:SessionService.decideUpdateAccess": {kind: kindUI, reason: "UpdateSession access-decision block"},
-	"server/services:SessionService.runSteer":           {kind: kindUI, reason: "UpdateSession steer dispatch"},
-	"server/services:TerminalService.WriteToSession":    {kind: kindUI, reason: "Story 5.2 unary handler"},
-	"server/services:WorkspaceService.CheckWriteAccess": {kind: kindUI, reason: "WriteFile access decision: the hidden-session guard of a file save"},
-	"server/services:WorkspaceService.SwitchWorkspace":  {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.clearTerminalStatusOne": {kind: kindUI, reason: "ClearTerminalStatusIfLive hot-attach: the RestartSession hidden-session guard"},
+	"server/services:SessionService.RestartSession":         {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.RestartShell":           {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.SpawnShell":             {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:SessionService.decideSteerAccess":      {kind: kindUI, reason: "steer access decision: the guards-off bypass of a non-qualifying hidden target"},
+	"server/services:SessionService.decideUpdateAccess":     {kind: kindUI, reason: "UpdateSession access-decision block"},
+	"server/services:SessionService.runSteer":               {kind: kindUI, reason: "UpdateSession steer dispatch"},
+	"server/services:TerminalService.WriteToSession":        {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:WorkspaceService.CheckWriteAccess":     {kind: kindUI, reason: "WriteFile access decision: the hidden-session guard of a file save"},
+	"server/services:WorkspaceService.SwitchWorkspace":      {kind: kindUI, reason: "Story 5.2 unary handler"},
 }

@@ -1330,7 +1330,12 @@ export function useSessionService(
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    // Only the autoWatch owner (GlobalSessionServiceProvider) may start/refresh a
+    // WatchSessions stream on refocus. Every other useSessionService() caller
+    // (useSessionActions on each card/row/pane) used to register this handler
+    // too and each opened its own socket on the first tab refocus -- hundreds
+    // of WebSockets, past Chrome's per-process limit ("Insufficient resources").
+    if (!enabled || !autoWatch) return;
     document.addEventListener("visibilitychange", handleVisibilityOrOnline);
     window.addEventListener("online", handleVisibilityOrOnline);
     return () => {
@@ -1338,7 +1343,7 @@ export function useSessionService(
       document.removeEventListener("visibilitychange", handleVisibilityOrOnline);
       window.removeEventListener("online", handleVisibilityOrOnline);
     };
-  }, [enabled, handleVisibilityOrOnline]);
+  }, [enabled, autoWatch, handleVisibilityOrOnline]);
 
   // Initial load — only for the watching instance (autoWatch: true).
   // Non-watching callers (useSessionActions, OmnibarContext, etc.) should read

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	_ "github.com/tstapler/stapler-squad/gen/proto/go/session/v1" // registers the RPC descriptors knownRPCMethods reads
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -38,7 +40,9 @@ const (
 	eventWsLifecycle       = "cm.ws"
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
+	eventTermLatency       = "cm.term_latency"
 	maxClientDurationMs    = 10 * 60 * 1000
+	maxTermLatencyMs       = 10 * 1000 // a longer keystroke/paint sample is a throttled tab, not latency
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
 	maxFallbackCount       = 100000
@@ -254,6 +258,8 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 		} else {
 			c.longTask.Record(ctx, clampMs(*ev.DurationMs), attrs(attribute.String("page", boundPage(ev.Page))))
 		}
+	case name == eventTermLatency:
+		c.observeTermLatency(ctx, ev)
 	case consumed:
 		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "unknown_event")))
 	}
@@ -365,4 +371,23 @@ func closeCodeLabel(s string) string {
 		return s
 	}
 	return otherLabel
+}
+
+// clientTermStages are the terminal stages a browser may report; anything else is rejected so a
+// client cannot write server-side stages (input_total etc.) into the shared rolling windows.
+var clientTermStages = map[string]bool{
+	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true,
+	termlat.StageTTFPConnect: true, termlat.StageTTFPFirstData: true, termlat.StageTTFPFirstPaint: true,
+}
+
+// observeTermLatency feeds a browser-measured terminal stage (keystroke echo, time to first
+// paint) into the same recorder the server-side stages use, so one actuator shows both.
+func (c *clientMetrics) observeTermLatency(ctx context.Context, ev Event) {
+	stage := ev.Labels["stage"]
+	if ev.DurationMs == nil || !clientTermStages[stage] || *ev.DurationMs > maxTermLatencyMs {
+		c.reject(ctx, "bad_term_latency")
+		return
+	}
+	termlat.Default.Record(stage, termlat.Labels{Backend: ev.Labels["backend"], Listener: ev.Labels["listener"]},
+		time.Duration(clampMs(*ev.DurationMs)*float64(time.Millisecond)))
 }

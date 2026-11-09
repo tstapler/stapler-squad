@@ -43,6 +43,31 @@ beforeEach(() => {
 });
 
 describe("GuidanceRequestPanel", () => {
+  it("labels a pending request_owner_action request 'Waiting for your decision' and strips the marker", () => {
+    mockRequests = [row({ questionText: "[Owner action] macOS proof waived?", questionType: "multiple-choice", options: ["record waiver"] })];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.getByTestId("guidance-request-status")).toHaveTextContent("Waiting for your decision");
+    expect(screen.getByText("macOS proof waived?")).toBeInTheDocument();
+    expect(screen.queryByText(/\[Owner action\]/)).not.toBeInTheDocument();
+  });
+
+  it("drops the 'Waiting for your decision' badge once the owner request is answered", () => {
+    const pending = row({ questionText: "[Owner action] macOS proof waived?", questionType: "multiple-choice", options: ["record waiver"] });
+    mockRequests = [pending];
+    const { rerender } = render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.getByText("Waiting for your decision")).toBeInTheDocument();
+    mockRequests = [{ ...pending, status: "answered", answer: "record waiver" }];
+    rerender(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.queryByText("Waiting for your decision")).not.toBeInTheDocument();
+    expect(screen.getByTestId("guidance-request-status")).toHaveTextContent("Answered");
+  });
+
+  it("keeps the plain 'Pending' label for an ordinary guidance request", () => {
+    mockRequests = [row({})];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.getByTestId("guidance-request-status")).toHaveTextContent("Pending");
+  });
+
   it("renders nothing when there are no requests for the scope", () => {
     const { container } = render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
     expect(container).toBeEmptyDOMElement();

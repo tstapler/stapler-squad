@@ -5,6 +5,7 @@ import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { FailingCheckSchema, UserPRSchema, type UserPR } from "@/gen/session/v1/types_pb";
 import { PRGroupedList } from "./PRGroupedList";
 
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 jest.mock("./PRCard.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 jest.mock("./PRGroupedList.css", () => new Proxy({}, { get: (_t, prop) => (typeof prop === "string" ? prop : "") }));
 
@@ -30,7 +31,7 @@ function makePR(number: number, over: MessageInitShape<typeof UserPRSchema> = {}
   });
 }
 
-const titles = () => screen.getAllByTestId("github-pr-card").map((c) => c.getAttribute("data-pr-key")!.split("#")[1]);
+const titles = () => screen.getAllByTestId("github-pr-card").map((c) => (c.getAttribute("data-pr-key") ?? "").split("#")[1]);
 
 describe("PRGroupedList", () => {
   it("prGroupedList_should_RenderFailingBeforeGreen_When_SameRepoGroup", () => {
@@ -65,7 +66,8 @@ describe("PRGroupedList", () => {
     rerender(<PRGroupedList prs={[aFailing, b, c]} sortBy="attention-first" stateKey="s" fallbackFocusRef={fallback} />);
 
     expect(titles()).toEqual(["2", "1"]); // order and membership frozen
-    const card1 = screen.getAllByTestId("github-pr-card").find((c) => c.dataset.prKey?.endsWith("#1"))!;
+    const card1 = screen.getAllByTestId("github-pr-card").find((c) => c.dataset.prKey?.endsWith("#1"));
+    if (!card1) throw new Error("card #1 missing");
     expect(within(card1).getByText("CI: 1 failing")).toBeInTheDocument(); // content updated in place
     expect(screen.getByRole("status")).toHaveTextContent("3 PRs changed.");
 

@@ -335,6 +335,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | Build the web UI (Bun): `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
+| Rebuild ghostty-web's WASM with native DECSTR (unbuilt patch, Zig 0.15.2, rollback); ghostty-vs-xterm differential harness lives in `web-app/src/lib/terminal/__tests__/differential/` | `docs/how-to/rebuild-ghostty-web-wasm.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
@@ -360,6 +361,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
+| Graceful tymuxd handoff: upgrade/downgrade the daemon without killing panes (D1-D6, compat matrix, rollback, squad vs daemon) | `docs/explanation/graceful-tymuxd-handoff.md` |
 | Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
@@ -373,9 +375,12 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
+| Escape events: batched writes, short raw window, hourly/daily rollups, backfill, range-edge rules | `docs/explanation/escape-events-rollups.md` |
+| Operate escape-event rollups: check state, metrics, backup, rollback | `docs/how-to/operate-escape-event-rollups.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
+| `session/git` policy: complete git parity, fix the go-git fork instead of working around it, how to verify against the git CLI and ship a fork change | `session/git/AGENTS.md` |
 | Unfinished-scanner caches: `/actuator/unfinished-scanner` counters, shadow verify, per-flag rollback | `docs/how-to/tune-unfinished-scanner-caches.md` |
 | Start a git backend cohort shadow soak (`git_backend_cohorts`), read counters (`/actuator/git-backend`, `make git-soak-status`), flip criteria, revert | `docs/how-to/flip-git-backend-cohort.md` |
 | Up Next PR tab, "Ask to fix" button, `STAPLER_SQUAD_PR_POLL_DEGRADED`, nudge/funnel log lines | `docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md` |
@@ -385,6 +390,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
+| Terminal input/output latency per stage, backend and listener: `/actuator/terminal-latency`, `terminal_latency.stage_duration`, echo p95 alert | `docs/reference/terminal-latency-telemetry.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |
@@ -394,3 +400,5 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
 | Filesystem watchers: FSEvents-backed `internal/dirwatch`, `STAPLER_SQUAD_DIRWATCH=fsnotify` rollback, `fs.watches`/`fs.streams` gauges, stream cap, decision record | `docs/how-to/tune-fs-watchers.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
+| Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
+| Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |

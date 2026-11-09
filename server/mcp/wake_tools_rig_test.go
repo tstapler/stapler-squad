@@ -137,7 +137,9 @@ func newToolRig(t *testing.T) *toolRig {
 	deps := func() *WakeToolDeps { return r.deps }
 	r.server = mcpserver.NewMCPServer("test", "0.0.0")
 	registerWakeTools(r.server, &wakeHandlers{gate: gate, flags: flags, deps: deps, now: func() time.Time { return wakeToolsNow }})
-	registerPeerHelpTools(r.server, &peerHelpHandlers{gate: gate, flags: flags, deps: deps, storage: storage, now: func() time.Time { return wakeToolsNow }})
+	peerHelp := &peerHelpHandlers{gate: gate, flags: flags, deps: deps, storage: storage, now: func() time.Time { return wakeToolsNow }}
+	registerPeerHelpTools(r.server, peerHelp)
+	registerOwnerActionTools(r.server, peerHelp)
 	return r
 }
 

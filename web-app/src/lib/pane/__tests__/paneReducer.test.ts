@@ -1,5 +1,5 @@
 import { paneReducer, getAllLeaves, getAdjacentLeaf } from "../paneReducer";
-import { PaneState, PaneNode, LeafPane, SplitPane } from "../paneTypes";
+import type { PaneState, PaneNode, LeafPane, SplitPane } from "../paneTypes";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,12 @@ function split(
   ratio = 0.5
 ): SplitPane {
   return { type: "split", id, direction, ratio, first, second };
+}
+
+function mustFind<T>(items: T[], pred: (item: T) => boolean): T {
+  const found = items.find(pred);
+  if (!found) throw new Error("expected item not found");
+  return found;
 }
 
 function stateOf(root: PaneNode, focusedPaneId: string): PaneState {
@@ -182,6 +188,13 @@ describe("ASSIGN_SESSION", () => {
     expect((next.root as LeafPane).activeTab).toBe("terminal");
   });
 
+  it("paneReducer_should_openTheNamedTabInTheNewDetailPane_When_aSessionListAutoSplits", () => {
+    const list = { ...leaf("list", null), viewKind: "session-list" as const };
+    const next = paneReducer(stateOf(list, "list"), { type: "ASSIGN_SESSION", paneId: "list", sessionId: "session-A", tab: "info" });
+    const detail = getAllLeaves(next.root).find((l) => l.viewKind === "session-detail");
+    expect([detail?.sessionId, detail?.activeTab]).toEqual(["session-A", "info"]);
+  });
+
   it("paneReducer_should_moveSessionAndClearSource_When_sessionAlreadyPresentInAnotherPane", () => {
     const leaf1 = leaf("pane-1", "session-A");
     const leaf2 = leaf("pane-2", null);
@@ -190,8 +203,8 @@ describe("ASSIGN_SESSION", () => {
     const next = paneReducer(state, { type: "ASSIGN_SESSION", paneId: "pane-2", sessionId: "session-A" });
 
     const leaves = getAllLeaves(next.root);
-    const pane1 = leaves.find((l) => l.id === "pane-1")!;
-    const pane2 = leaves.find((l) => l.id === "pane-2")!;
+    const pane1 = mustFind(leaves, (l) => l.id === "pane-1");
+    const pane2 = mustFind(leaves, (l) => l.id === "pane-2");
 
     // Session moved to pane-2
     expect(pane2.sessionId).toBe("session-A");
@@ -212,9 +225,9 @@ describe("ASSIGN_SESSION", () => {
     const next = paneReducer(state, { type: "ASSIGN_SESSION", paneId: "pane-3", sessionId: "session-A" });
 
     const leaves = getAllLeaves(next.root);
-    const p1 = leaves.find((l) => l.id === "pane-1")!;
-    const p2 = leaves.find((l) => l.id === "pane-2")!;
-    const p3 = leaves.find((l) => l.id === "pane-3")!;
+    const p1 = mustFind(leaves, (l) => l.id === "pane-1");
+    const p2 = mustFind(leaves, (l) => l.id === "pane-2");
+    const p3 = mustFind(leaves, (l) => l.id === "pane-3");
 
     expect(p3.sessionId).toBe("session-A");
     expect(p1.sessionId).toBeNull();
@@ -271,8 +284,8 @@ describe("SPLIT_AND_ASSIGN_SESSION", () => {
 
     // Tree now has 3 leaves: pane-1 (cleared), pane-2 (original), new leaf (session-A)
     const leaves = getAllLeaves(next.root);
-    const p1 = leaves.find((l) => l.id === "pane-1")!;
-    const newLeaf = leaves.find((l) => l.sessionId === "session-A")!;
+    const p1 = mustFind(leaves, (l) => l.id === "pane-1");
+    const newLeaf = mustFind(leaves, (l) => l.sessionId === "session-A");
 
     expect(p1.sessionId).toBeNull();
     expect(newLeaf.sessionId).toBe("session-A");
@@ -295,7 +308,7 @@ describe("SPLIT_AND_ASSIGN_SESSION", () => {
     });
 
     // Tree structure unchanged; deep-leaf now has the session
-    const deepLeaf = getAllLeaves(next.root).find((l) => l.id === "deep-leaf")!;
+    const deepLeaf = mustFind(getAllLeaves(next.root), (l) => l.id === "deep-leaf");
     expect(deepLeaf.sessionId).toBe("session-X");
     // No new leaves were added
     expect(getAllLeaves(next.root).length).toBe(getAllLeaves(state.root).length);
@@ -456,8 +469,8 @@ describe("state invariants after any action", () => {
     const next = paneReducer(state, { type: "ASSIGN_SESSION", paneId: "pane-1", sessionId: "session-B" });
 
     const leaves = getAllLeaves(next.root);
-    const nextPane1 = leaves.find((l) => l.id === "pane-1")!;
-    const nextPane2 = leaves.find((l) => l.id === "pane-2")!;
+    const nextPane1 = mustFind(leaves, (l) => l.id === "pane-1");
+    const nextPane2 = mustFind(leaves, (l) => l.id === "pane-2");
     // session-B moved to pane-1
     expect(nextPane1.sessionId).toBe("session-B");
     // pane-2 cleared (move-and-clear semantics)

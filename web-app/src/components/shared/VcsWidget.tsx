@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { RefreshCw } from "lucide-react";
 import { MergeabilityPill } from "./vcs-widget/MergeabilityPill";
 import { VcsWidgetBlockingReasons } from "./vcs-widget/VcsWidgetBlockingReasons";
@@ -9,9 +9,11 @@ import { VcsWidgetFileList } from "./vcs-widget/VcsWidgetFileList";
 import { VcsWidgetCommitList } from "./vcs-widget/VcsWidgetCommitList";
 import { VcsWidgetGithubRow } from "./vcs-widget/VcsWidgetGithubRow";
 import { VcsWidgetCheckList } from "./vcs-widget/VcsWidgetCheckList";
+import { VcsWidgetPrSwitcher, type VcsWidgetPrSwitcherProps } from "./vcs-widget/VcsWidgetPrSwitcher";
 import { VcsWidgetReviewFeedback } from "./vcs-widget/VcsWidgetReviewFeedback";
 import { VcsWidgetComments } from "./vcs-widget/VcsWidgetComments";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
+import { useSessionMultiPR } from "@/lib/features/sessionMultiPr";
 import { deriveMergeabilityState, deriveBlockingReasons } from "@/lib/vcs/mergeability";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import type { VcsWidgetData, VcsWidgetMode } from "@/lib/vcs/types";
@@ -59,8 +61,36 @@ interface VcsWidgetProps {
   sessionId?: string;
 }
 
+/**
+ * Which PR the widget shows. The multi-PR switcher appears only with the flag on and more than one open
+ * PR; the choice is local and falls back to the active PR (with a notice) when the chosen one stops being open.
+ */
+function usePrSelection(data: VcsWidgetData) {
+  const enabled = useSessionMultiPR();
+  const [picked, setPicked] = useState<number | null>(null);
+  const entries = enabled ? data.githubPrs : undefined;
+  const open = entries?.map((e, index) => ({ e, index })).filter(({ e }) => e.isOpen) ?? [];
+  if (!entries || open.length < 2) return { data, switcher: null as VcsWidgetPrSwitcherProps | null };
+
+  const activeIndex = Math.max(0, entries.findIndex((e) => e.isActive));
+  const pickedEntry = picked === null ? undefined : entries[picked];
+  const fellBack = pickedEntry !== undefined && !pickedEntry.isOpen;
+  const selected = pickedEntry && pickedEntry.isOpen ? (picked as number) : activeIndex;
+  const chosen = entries[selected].summary;
+  return {
+    data: { ...data, github: chosen },
+    switcher: {
+      options: open.map(({ e, index }) => ({ index, number: e.summary.prNumber, label: `${e.summary.owner}/${e.summary.repo}`, isActive: e.isActive })),
+      selected,
+      target: `#${chosen.prNumber} ${chosen.owner}/${chosen.repo}`,
+      notice: fellBack ? `#${pickedEntry.summary.prNumber} is now ${pickedEntry.summary.prState}; showing #${chosen.prNumber}` : undefined,
+      onSelect: setPicked,
+    },
+  };
+}
+
 export function VcsWidget({
-  data,
+  data: sourceData,
   mode,
   onNavigateToFile,
   onViewFileDiff,
@@ -72,6 +102,7 @@ export function VcsWidget({
   showPrLink = true,
   sessionId,
 }: VcsWidgetProps) {
+  const { data, switcher } = usePrSelection(sourceData);
   const mergeabilityState = deriveMergeabilityState(data);
   const showRefresh = data.kind === "live" && !!onRefresh;
   const snapshotAt = data.kind === "historical" ? data.snapshotAt : null;
@@ -120,7 +151,7 @@ export function VcsWidget({
             className={styles.viewDiffButton}
             onClick={onViewDiff}
             data-testid="vcs-widget-view-diff"
-          >
+          >{/* analytics-exempt */}
             View Diff ↗
           </button>
         )}
@@ -131,7 +162,7 @@ export function VcsWidget({
             aria-label="Refresh VCS status"
             className={styles.refreshButton}
             onClick={onRefresh}
-          >
+          >{/* analytics-exempt */}
             <RefreshCw aria-hidden="true" size={14} />
           </button>
         )}
@@ -144,6 +175,8 @@ export function VcsWidget({
         activeSessionCount={activeSessionCount}
         onBrowseFiles={mode === "full" ? onBrowseFiles : undefined}
       />
+
+      {mode === "full" && switcher && <VcsWidgetPrSwitcher {...switcher} />}
 
       {mode === "full" && (
         <div role="status" aria-live="polite" className={styles.liveRegion}>

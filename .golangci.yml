@@ -141,6 +141,7 @@ linters:
             - github.com/tstapler/stapler-squad/telemetry
             - github.com/tstapler/stapler-squad/session/git/redact
             - github.com/tstapler/stapler-squad/session/git/native
+            - github.com/tstapler/stapler-squad/session/git/ignorewalk
         # gogit is the in-process backend: it implements backend.Backend with go-git, opens
         # repositories only through native.OpenRepo, and starts no process. gcfg is go-git's own
         # config parser.
@@ -316,6 +317,8 @@ linters:
           msg: "LoadInstances() re-hydrates all sessions from disk and spawns PTY/tmux subprocesses — use FindLiveInstance fast path instead (see PerfFix-1)"
         - pattern: 'ent\.IsNotFound'
           msg: "use errors.Is(err, session.ErrNotFound) in server/services — wrap ent errors at the storage layer"
+        - pattern: 'gitignore\.ReadPatterns'
+          msg: "use ignorewalk.ReadPatterns: go-git's version lists every ignored subtree (node_modules) — ~260x slower and 35% of idle CPU in profiles"
       exclude-godoc-examples: true
   exclusions:
     paths:
@@ -400,6 +403,9 @@ linters:
       # LoadInstances: allow in the storage implementation itself, in bulk-startup wiring,
       # and in the fallback path of findInstanceFast (workspace_service.go) which is
       # intentionally guarded by the live-finder fast path.
+      - path: "(_test\\.go|session/git/ignorewalk/)"
+        linters: [forbidigo]
+        text: "ignorewalk.ReadPatterns"
       - path: "session/storage\\.go"
         linters: [forbidigo]
         text: "LoadInstances"

@@ -100,8 +100,21 @@ export const mobilePickerSheet = style({
   background: vars.color.background,
   borderTop: `1px solid ${vars.color.borderColor}`,
   borderRadius: `${vars.radii.lg} ${vars.radii.lg} 0 0`,
-  padding: `${vars.space["4"]} 0`,
+  padding: `${vars.space["4"]} 0 0`,
   animation: `${slideUp} 180ms ease`,
+  // Bounded height so only the pane list scrolls. 60vh is the fallback for browsers without dvh;
+  // dvh follows the browser toolbar, not necessarily the on-screen keyboard (unverified on device).
+  display: "flex",
+  flexDirection: "column",
+  maxHeight: ["60vh", "60dvh"],
+});
+
+export const mobilePickerPaneList = style({
+  overflowY: "auto",
+  flex: "1 1 auto",
+  minHeight: 0,
+  overscrollBehavior: "contain",
+  borderTop: `1px solid ${vars.color.borderColor}`,
 });
 
 export const mobilePickerSheetTitle = style({

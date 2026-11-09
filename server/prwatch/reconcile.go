@@ -26,7 +26,7 @@ type Reconciler struct {
 	settings  Settings
 
 	subs        map[string]*trackedSub // by watchKey
-	owners      map[string]string      // session UUID -> watchKey, from the last good tick
+	owners      ownerSet               // session UUID -> watchKeys it holds, from the last good tick
 	firstSeen   map[string]time.Time   // watchKey -> first tick that saw the PR
 	closed      map[string]bool        // PRs retired by a closed event, until no session lists them
 	listed      bool                   // a subscription listing has succeeded
@@ -47,7 +47,7 @@ func NewReconciler(in Inbox, sessions Sessions, coverage *Coverage, coalescer Co
 	return &Reconciler{
 		in: in, sessions: sessions, coverage: coverage, coalescer: coalescer,
 		clock: clock, log: log, settings: settings,
-		subs: map[string]*trackedSub{}, owners: map[string]string{}, firstSeen: map[string]time.Time{}, closed: map[string]bool{},
+		subs: map[string]*trackedSub{}, owners: ownerSet{}, firstSeen: map[string]time.Time{}, closed: map[string]bool{},
 	}
 }
 
@@ -70,8 +70,10 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	}
 	desired, owners := retainedSet(refs)
 	held := lookupFailedKeys(refs)
-	for uuid, key := range lookupFailedOwners(refs) {
-		owners[uuid] = key
+	for _, s := range refs {
+		if key, ok := lookupFailedKey(s); ok {
+			owners.add(s.UUID, key)
+		}
 	}
 	r.dropClosed(desired, held)
 	now := r.clock.Now()
@@ -209,26 +211,40 @@ func (r *Reconciler) unsubscribeUndesired(ctx context.Context, desired map[strin
 	}
 }
 
+// ownerSet maps a session UUID to every watchKey it holds (a session can hold
+// several PRs).
+type ownerSet map[string]map[string]bool
+
+func (o ownerSet) add(uuid, key string) {
+	if o[uuid] == nil {
+		o[uuid] = map[string]bool{}
+	}
+	o[uuid][key] = true
+}
+
 // evictChangedOwners drops coalescer state for sessions that left the
-// retained set or moved to a different PR, including when the subscription
-// stays because another session shares the PR.
-func (r *Reconciler) evictChangedOwners(owners map[string]string) {
+// retained set or lost a PR they held, including when the subscription
+// stays because another session shares the PR. Gaining a PR evicts nothing.
+func (r *Reconciler) evictChangedOwners(owners ownerSet) {
 	if r.coalescer == nil {
 		return
 	}
 	for uuid, prev := range r.owners {
-		if cur, ok := owners[uuid]; !ok || cur != prev {
-			r.coalescer.Evict(uuid)
+		for key := range prev {
+			if !owners[uuid][key] {
+				r.coalescer.Evict(uuid)
+				break
+			}
 		}
 	}
 }
 
 // retainedSet returns the wanted subscriptions, keyed by watchKey (value is
 // the key with the session's original repo casing for the wire call), and
-// the session -> key map. Skipped and gone sessions are not retained.
-func retainedSet(refs []SessionRef) (desired, owners map[string]string) {
+// the session -> keys map. Skipped and gone sessions are not retained.
+func retainedSet(refs []SessionRef) (desired map[string]string, owners ownerSet) {
 	desired = map[string]string{}
-	owners = map[string]string{}
+	owners = ownerSet{}
 	for _, s := range refs {
 		if s.SkipReason != "" || s.State == StateGone || s.Repo == "" || s.PR <= 0 {
 			continue
@@ -237,7 +253,7 @@ func retainedSet(refs []SessionRef) (desired, owners map[string]string) {
 		if _, ok := desired[key]; !ok {
 			desired[key] = s.Repo + "#" + strconv.Itoa(s.PR)
 		}
-		owners[s.UUID] = key
+		owners.add(s.UUID, key)
 	}
 	return desired, owners
 }
@@ -256,20 +272,19 @@ func sortedKeys(m map[string]string) []string {
 // failure must not discard pending items); new ones are not made.
 func lookupFailedKeys(refs []SessionRef) map[string]bool {
 	keys := map[string]bool{}
-	for _, key := range lookupFailedOwners(refs) {
-		keys[key] = true
+	for _, s := range refs {
+		if key, ok := lookupFailedKey(s); ok {
+			keys[key] = true
+		}
 	}
 	return keys
 }
 
-func lookupFailedOwners(refs []SessionRef) map[string]string {
-	owners := map[string]string{}
-	for _, s := range refs {
-		if s.SkipReason == SkipBacklogLookupFailed && s.State != StateGone && s.Repo != "" && s.PR > 0 {
-			owners[s.UUID] = watchKey(s.Repo, s.PR)
-		}
+func lookupFailedKey(s SessionRef) (string, bool) {
+	if s.SkipReason == SkipBacklogLookupFailed && s.State != StateGone && s.Repo != "" && s.PR > 0 {
+		return watchKey(s.Repo, s.PR), true
 	}
-	return owners
+	return "", false
 }
 
 // dropClosed removes PRs retired by a closed event from desired, and forgets
