@@ -54,9 +54,15 @@ const (
 	// promptly instead of waiting out this ceiling.
 	captureTimeout = 5 * time.Second
 
+	// defaultResizeApplyTimeout bounds each phase of one resize (SetWindowSize, then the capture)
+	// separately, so a slow resize cannot starve the capture of its budget. Live output is
+	// suppressed while a resize applies (h.resizing), including the echo of what the user is
+	// typing, so it is far shorter than captureTimeout.
+	defaultResizeApplyTimeout = 2 * time.Second
+
 	// captureRetryTimeout bounds the single post-resize capture retry; the resize
 	// apply lock is held across it, so it is shorter than the first attempt.
-	captureRetryTimeout = 2 * time.Second
+	captureRetryTimeout = 1 * time.Second
 )
 
 // HubOption configures a StreamHub at construction time. Tests use these to
@@ -81,6 +87,12 @@ func WithSlowSubscriberGrace(d time.Duration) HubOption {
 // subscriber detaches before tearing down.
 func WithTeardownGrace(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.teardownGrace = d }
+}
+
+// WithResizeApplyTimeout overrides the budget for each of one resize's SetWindowSize and capture
+// phases (default 2s); tests shrink it to exercise the timeout path in milliseconds.
+func WithResizeApplyTimeout(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.resizeApplyTimeout = d }
 }
 
 // WithQuiescenceTimeout overrides the hard deadline a resize's
@@ -133,6 +145,7 @@ type StreamHub struct {
 	clock                 Clock
 	interactive           interactivity // see qos.go
 	quiescenceTimeout     time.Duration
+	resizeApplyTimeout    time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 	outputObserver        func([]byte)
@@ -200,6 +213,9 @@ type StreamHub struct {
 	// applyNegotiatedSize concurrently, violating its "exactly once per
 	// call" contract.
 	resizeApplyMu sync.Mutex
+
+	// rearmPending is set while a post-timeout capture is scheduled, so repeated skips queue one.
+	rearmPending atomic.Bool
 
 	// slowSubscriberDropsTotal counts slow-subscriber evictions (never
 	// individual dropped frames — Story 1.4.2's AC is explicit that this must
@@ -283,6 +299,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		teardownGrace:         DefaultHubTeardownGrace,
 		clock:                 realClock{},
 		quiescenceTimeout:     defaultQuiescenceTimeout,
+		resizeApplyTimeout:    defaultResizeApplyTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
 		batchMaxWindow:        MaxBatchWindow,
 		state:                 HubStarting,
@@ -997,8 +1014,8 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// stops this pipeline immediately instead of waiting out a fixed
 	// ceiling neither call could otherwise be told about.
 	callerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
-	defer cancel()
+	setCtx, setCancel := context.WithTimeout(callerCtx, h.resizeApplyTimeout)
+	defer setCancel()
 
 	h.resizeMu.Lock()
 	h.resizing, h.suppressOutput = true, true
@@ -1021,24 +1038,33 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// streamShellViaControlMode use, consolidated so every tmux-resizing
 	// call site gets the fix instead of hand-rolling it separately.
 	if err := resize.WithForcedRedraw(func(cols, rows int) error {
-		return h.controller.SetWindowSizeContext(ctx, cols, rows)
+		return h.controller.SetWindowSizeContext(setCtx, cols, rows)
 	}, size.cols, size.rows); err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
 			return
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		ownBudgetExpired := errors.Is(err, context.DeadlineExceeded) && callerCtx.Err() == nil
+		if !ownBudgetExpired && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
 			return
 		}
-		log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
-		h.handleControllerError(err)
-		return
+		if !ownBudgetExpired {
+			log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
+			h.handleControllerError(err)
+			return
+		}
+		// Output was suppressed for the whole attempt; fall through to capture whatever size the
+		// pane has now so subscribers are not left on the pre-resize screen.
+		log.Warn("streamhub: SetWindowSize exceeded its budget, capturing the pane as it is", "session", h.sessionName, "error", err)
+	} else {
+		subID, updates := h.controller.SubscribeControlModeUpdates()
+		waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
+		h.controller.UnsubscribeControlModeUpdates(subID)
 	}
 
-	subID, updates := h.controller.SubscribeControlModeUpdates()
-	waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
-	h.controller.UnsubscribeControlModeUpdates(subID)
+	ctx, cancel := context.WithTimeout(callerCtx, h.resizeApplyTimeout)
+	defer cancel()
 
 	if h.allAwaitingFirstPaint() {
 		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
@@ -1059,7 +1085,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		// Our own budget ran out while the caller is still connected. Dropping the
 		// capture would leave subscribers on the pre-resize screen (output was
 		// suppressed during the resize and nothing re-arms a capture), so retry once.
-		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureRetryTimeout)
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, min(captureRetryTimeout, h.resizeApplyTimeout))
 		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
 		retryCancel()
 	}
@@ -1069,7 +1095,10 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 			return
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
+			log.Info("streamhub: resize capture skipped (caller gone or budget spent)", "session", h.sessionName, "error", err)
+			if callerCtx.Err() == nil {
+				h.rearmCapture()
+			}
 			return
 		}
 		log.Error("streamhub: CapturePaneContentRaw failed after resize", "session", h.sessionName, "error", err)
@@ -1083,6 +1112,10 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
+	h.publishCapturedContent(content)
+}
+
+func (h *StreamHub) publishCapturedContent(content RawPaneContent) {
 	prepared := []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
@@ -1112,6 +1145,36 @@ func (h *StreamHub) resyncInStream(ctx context.Context) bool {
 		return false
 	}
 	return true
+}
+
+// rearmCapture schedules one more capture after a resize gave up on its own, since output was
+// suppressed during it and nothing else would refresh subscribers' screens. It is skipped when
+// another resize is running (that one captures itself) and is not retried again.
+func (h *StreamHub) rearmCapture() {
+	if !h.rearmPending.CompareAndSwap(false, true) {
+		return
+	}
+	h.clock.AfterFunc(min(captureRetryTimeout, h.resizeApplyTimeout), func() {
+		defer h.rearmPending.Store(false)
+		if !h.resizeApplyMu.TryLock() {
+			return
+		}
+		defer h.resizeApplyMu.Unlock()
+		h.mu.Lock()
+		live := h.state != HubTornDown && !h.teardownInFlight && len(h.subscribers) > 0
+		h.mu.Unlock()
+		if !live || h.allAwaitingFirstPaint() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+		defer cancel()
+		content, err := h.controller.CapturePaneContentRawContext(ctx)
+		if err != nil {
+			log.Info("streamhub: re-armed capture failed", "session", h.sessionName, "error", err)
+			return
+		}
+		h.publishCapturedContent(content)
+	})
 }
 
 // publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not
