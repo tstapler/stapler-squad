@@ -259,3 +259,26 @@ func TestHub_should_StopRetryingAFinalNormal_AfterABoundedNumberOfAttempts(t *te
 	rig.clock.Advance(time.Minute)
 	rig.none(t)
 }
+
+func TestHub_should_StillRetryTheFinalNormal_After_ManyFailuresWhileOpen(t *testing.T) {
+	t.Parallel()
+	rig := newActivityRig()
+	hub := rig.startedHub(t, "a")
+	base := rig.clock.Pending()
+	hub.NoteInteractive("viewer")
+	require.Equal(t, qos.ActivityInteractive, rig.next(t))
+	rig.fails.Store(1000)
+
+	rig.clock.Advance(qos.InteractiveWindow) // typing stops; every Normal send now fails
+	require.Equal(t, qos.ActivityNormal, rig.next(t))
+	for i := 0; i < 8; i++ { // well past the closed-hub cap
+		rig.pendingTimers(t, base+1)
+		rig.clock.Advance(2 * time.Second)
+		require.Equal(t, qos.ActivityNormal, rig.next(t))
+	}
+
+	rig.pendingTimers(t, base+1) // the pump is idle again, so teardown's kick is not coalesced away
+	rig.fails.Store(0)
+	hub.ForceTeardown()
+	assert.Equal(t, qos.ActivityNormal, rig.next(t), "failures before close must not consume the final Normal's retries")
+}

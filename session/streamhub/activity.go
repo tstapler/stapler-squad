@@ -57,12 +57,14 @@ func WithActivitySink(fn func(qos.Activity) error) HubOption {
 type activityState struct {
 	desired atomic.Int32 // qos.Activity the hub should be in
 	pending atomic.Bool  // a pump goroutine owns lastSent
-	// lastSent, confirmed and failures are touched only by the pump goroutine holding pending.
+	// lastSent, confirmed and closedFailures are touched only by the pump goroutine holding pending.
 	// lastSent is the last value the sink confirmed; a fresh hub is unconfirmed so it sends an
 	// initial hint unconditionally instead of assuming the daemon already holds Normal.
 	lastSent  qos.Activity
 	confirmed bool
-	failures  int
+	// closedFailures counts undelivered sends since the hub closed, so failures while it was open
+	// do not eat the retry budget of the final Normal.
+	closedFailures int
 
 	unwatch  func()
 	expiryMu sync.Mutex
@@ -159,7 +161,7 @@ func (h *StreamHub) refreshActivity() {
 
 // armActivityRefresh schedules the next send after one attempt: a retry soon if it was not
 // confirmed, else a periodic refresh of a non-Normal hint, else nothing.
-func (h *StreamHub) armActivityRefresh(sent qos.Activity, confirmed bool, failures int) {
+func (h *StreamHub) armActivityRefresh(sent qos.Activity, confirmed bool) {
 	h.activity.expiryMu.Lock()
 	defer h.activity.expiryMu.Unlock()
 	if h.activity.refresh != nil {
@@ -169,7 +171,7 @@ func (h *StreamHub) armActivityRefresh(sent qos.Activity, confirmed bool, failur
 	closed := h.activity.closed.Load()
 	var delay time.Duration
 	switch {
-	case !confirmed && (!closed || failures < activityMaxClosedRetries):
+	case !confirmed && (!closed || h.activity.closedFailures < activityMaxClosedRetries):
 		delay = activityRetryInterval
 	case confirmed && sent != qos.ActivityNormal && !closed:
 		delay = activityRefreshInterval
@@ -196,16 +198,20 @@ func (h *StreamHub) pumpActivity() {
 		a := &h.activity
 		if !a.confirmed || want != a.lastSent || (refresh && want != qos.ActivityNormal) {
 			if err := h.activitySink(want); err == nil {
-				a.lastSent, a.confirmed, a.failures = want, true, 0
+				a.lastSent, a.confirmed, a.closedFailures = want, true, 0
 			} else {
 				a.confirmed = false
-				a.failures++
+				if a.closed.Load() {
+					a.closedFailures++
+				}
 			}
-			h.armActivityRefresh(want, a.confirmed, a.failures)
+			h.armActivityRefresh(want, a.confirmed)
 		}
 		// Retrying a failure is the timer's job; looping on it here would spin.
-		a.pending.Store(false) // releases ownership of lastSent/confirmed/failures
-		if qos.Activity(a.desired.Load()) == want || !a.pending.CompareAndSwap(false, true) {
+		a.pending.Store(false) // releases ownership of lastSent/confirmed/closedFailures
+		// A timer that fired while we still owned the pump found it busy and left force set.
+		rearm := a.force.Load()
+		if (qos.Activity(a.desired.Load()) == want && !rearm) || !a.pending.CompareAndSwap(false, true) {
 			return
 		}
 	}
