@@ -107,3 +107,37 @@ func TestRecord_should_BeSafeConcurrently(t *testing.T) {
 	wg.Wait()
 	assert.EqualValues(t, 16000, r.Report()[0].Total)
 }
+
+func TestAlerting_should_ClearWhenKeyStopsReceivingSamples(t *testing.T) {
+	t.Parallel()
+	r, c := newTest()
+	l := Labels{"tymux", "local"}
+	for i := 0; i < alertMinN; i++ {
+		r.Record(StageEchoPaint, l, 400*time.Millisecond)
+	}
+	c.advance(alertCheckGap + time.Second)
+	r.Record(StageEchoPaint, l, 400*time.Millisecond)
+	require.Len(t, r.Alerting(), 1)
+
+	c.advance(sampleTTL + time.Second)
+	assert.Empty(t, r.Alerting(), "stale samples must not keep the alert active")
+}
+
+func TestObserve_should_GateChecksPerKey(t *testing.T) {
+	t.Parallel()
+	r, c := newTest()
+	a, b := Labels{"tymux", "local"}, Labels{"tmux", "local"}
+	ka := key{StageEchoPaint, "tymux", "local"}
+	kb := key{StageEchoPaint, "tmux", "local"}
+	r.Record(StageEchoPaint, a, time.Millisecond)
+	first := r.window(ka).lastCheck.Load()
+	require.NotZero(t, first)
+
+	c.advance(time.Second) // inside alertCheckGap: key a is not rechecked...
+	r.Record(StageEchoPaint, a, time.Millisecond)
+	assert.Equal(t, first, r.window(ka).lastCheck.Load())
+
+	// ...but a different key is checked immediately rather than waiting on a's gate.
+	r.Record(StageEchoPaint, b, time.Millisecond)
+	assert.NotZero(t, r.window(kb).lastCheck.Load())
+}

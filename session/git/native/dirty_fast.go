@@ -16,6 +16,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/tstapler/stapler-squad/session/git/ignorewalk"
 )
 
 // HeadTreeHashes walks repo's HEAD tree and returns a path -> blob hash map, without
@@ -255,7 +257,7 @@ func IsDirtyFast(path string, cache *GitignoreFSCache, headCache *HeadTreeHashCa
 // .gitignore rather than failing the whole dirty check over it.
 func worktreeUntrackedMatcher(path string, cache *GitignoreFSCache) gitignore.Matcher {
 	fs := NewCachedFilesystem(osfs.New(path), cache)
-	patterns, err := gitignore.ReadPatterns(fs, nil)
+	patterns, err := ignorewalk.ReadPatterns(fs)
 	if err != nil {
 		return nil
 	}

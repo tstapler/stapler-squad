@@ -91,6 +91,12 @@ func (h *StreamHub) RequestResizeNotify(ctx context.Context, id SubscriberID, si
 	defer func() { h.paneResized = nil }()
 
 	sub.recordResizeVote(size)
+	h.renegotiateLocked(ctx)
+}
+
+// renegotiateLocked recomputes the negotiated size from current votes and applies it if it
+// changed. The caller must hold resizeApplyMu.
+func (h *StreamHub) renegotiateLocked(ctx context.Context) {
 	votes := h.preferInteractive(h.collectResizeVotes())
 	negotiated := negotiateSize(votes)
 

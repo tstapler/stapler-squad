@@ -1123,10 +1123,11 @@ type connectWebSocketStream struct {
 func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) error {
 	waitStart := time.Now()
 	s.writeMutex.Lock()
-	defer s.writeMutex.Unlock()
 	writeStart := time.Now()
 	err := s.conn.WriteMessage(messageType, data)
 	end := time.Now()
+	s.writeMutex.Unlock()
+	// Record after unlock: telemetry must not extend the per-stream write critical section.
 	labels := s.latency.labels()
 	termlat.Default.Record(termlat.StageWSWriteWait, labels, writeStart.Sub(waitStart))
 	termlat.Default.Record(termlat.StageWSWrite, labels, end.Sub(writeStart))
@@ -1345,6 +1346,12 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 		workDir := instance.ActiveDir()
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
+		}
+		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
+		if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
+			log.Warn("[streamViaControlMode] restored session but PTY attach failed, not marking started", "session", sessionID, "err", ptyErr)
+		} else {
+			instance.MarkStartedIfTmuxAlive() // a lazily-restored instance is not started; input is refused until it is
 		}
 	}
 	if err := streamer.StartControlMode(); err != nil {
@@ -2168,10 +2175,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Contex
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
-	if _, ptyErr := instance.GetPTYReader(); ptyErr != nil {
+	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
 	}
+	instance.MarkStartedIfTmuxAlive()
 	return true, nil
 }
 

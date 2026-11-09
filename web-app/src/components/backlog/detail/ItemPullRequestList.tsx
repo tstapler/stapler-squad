@@ -8,7 +8,7 @@ import * as shared from "@/components/shared/PullRequestList.css";
 import { PullRequestUndoToast } from "@/components/shared/PullRequestUndoToast";
 import type { ItemPullRequestActions } from "@/lib/hooks/useItemPullRequestActions";
 import { canStopTracking, itemPrSummary } from "@/lib/pr/itemPullRequests";
-import { holdsFor, prKey, prRowState, prTarget, sortPullRequests, toRef } from "@/lib/pr/pullRequests";
+import { holdsFor, prKey, prRowState, prTarget, prUrl, sortPullRequests, toRef } from "@/lib/pr/pullRequests";
 import { holdLine, isWarningHold, pollErrorText, stateText, unverifiedLine } from "@/lib/pr/rowCopy";
 import * as s from "./ItemPullRequestList.css";
 
@@ -31,7 +31,7 @@ function ItemRow({ pr, nowMs, onStop }: { pr: SessionPullRequest; nowMs: number;
       <div className={shared.rowMain}>
         <div className={shared.rowLine}>
           <PrStateGlyph state={state} className={shared.glyph} />
-          <a className={shared.prLink} href={pr.url} target="_blank" rel="noopener noreferrer" aria-label={`Pull request ${prTarget(pr)}${pr.title ? `, ${pr.title}` : ""}, opens in new tab`}>
+          <a className={shared.prLink} href={prUrl(pr)} target="_blank" rel="noopener noreferrer" aria-label={`Pull request ${prTarget(pr)}${pr.title ? `, ${pr.title}` : ""}, opens in new tab`}>
             #{pr.number}
           </a>
           {pr.title && <span className={shared.prTitleText} data-testid={`item-pr-title-${pr.number}`}>{pr.title}</span>}
@@ -111,7 +111,7 @@ export function ItemPullRequestList({ pullRequests, holds, actions, readOnly = f
             const result = await actions.stopTracking(toRef(dialog.pr));
             if (result.ok) {
               toastSeq.current += 1;
-              setToast({ id: toastSeq.current, message: `Stopped tracking #${dialog.pr.number}.`, undo: () => void actions.trackByUrl(dialog.pr.url) });
+              setToast({ id: toastSeq.current, message: `Stopped tracking #${dialog.pr.number}.`, undo: () => void actions.trackByUrl(prUrl(dialog.pr)) });
             }
             return result;
           }}

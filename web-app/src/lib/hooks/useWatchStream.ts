@@ -87,6 +87,14 @@ interface LoopState<TEvent> {
   stopped: boolean;
   lastActivity: number;
   connectionState: WatchConnectionState;
+  /** Pending backoff timer; cleared on forceReconnect/stop so it can't open a duplicate stream. */
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** Full-jitter backoff: uniform in [base/2, base], capped at MAX_BACKOFF_MS. Exported for tests. */
+export function backoffDelayMs(retries: number, random: () => number = Math.random): number {
+  const base = Math.min(1000 * Math.pow(2, retries), MAX_BACKOFF_MS);
+  return Math.round(base / 2 + (random() * base) / 2);
 }
 
 function setConnectionState<TEvent>(state: LoopState<TEvent>, next: WatchConnectionState): void {
@@ -103,9 +111,11 @@ function scheduleReconnect<TEvent>(state: LoopState<TEvent>): void {
     setConnectionState(state, EXHAUSTED);
     return;
   }
-  const delay = Math.min(1000 * Math.pow(2, state.retries), MAX_BACKOFF_MS);
+  const delay = backoffDelayMs(state.retries);
   state.retries++;
-  setTimeout(() => {
+  if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
     if (!state.stopped) void connect(state);
   }, delay);
 }
@@ -172,11 +182,17 @@ async function connect<TEvent>(state: LoopState<TEvent>): Promise<void> {
  */
 function forceReconnect<TEvent>(state: LoopState<TEvent>): void {
   if (state.stopped) return;
+  clearReconnectTimer(state);
   state.abortController.abort();
   state.abortController = new AbortController();
   state.retries = 0;
   setConnectionState(state, "stale");
   void connect(state);
+}
+
+function clearReconnectTimer<TEvent>(state: LoopState<TEvent>): void {
+  if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
 }
 
 function isStale<TEvent>(state: LoopState<TEvent>, threshold: number): boolean {
@@ -196,6 +212,7 @@ function newLoopState<TEvent>(
     stopped: false,
     lastActivity: Date.now(),
     connectionState: "connecting",
+    reconnectTimer: null,
   };
 }
 
@@ -277,6 +294,7 @@ export function useWatchStream<TEvent>(options: WatchStreamOptions<TEvent>): Use
 
     return () => {
       state.stopped = true;
+      clearReconnectTimer(state);
       reconnectRef.current = () => {};
       stopWatchdog();
       state.abortController.abort();

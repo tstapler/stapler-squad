@@ -1254,6 +1254,12 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 	return i.pm().GetPTY()
 }
 
+// RestoredPTY returns the PTY of a pane RestoreProcess just attached. Unlike GetPTYReader it
+// has no started gate: a boot-loaded instance is not started until its first lazy restore.
+func (i *Instance) RestoredPTY() (*os.File, error) {
+	return i.pm().GetPTY()
+}
+
 // IsRemote reports whether this instance's tmux session runs on a remote
 // host (ssh-remote-workspaces Phase 4 Epic 4.2's ExecutionTarget), exposed
 // for server/services call sites (a different package, so the unexported
