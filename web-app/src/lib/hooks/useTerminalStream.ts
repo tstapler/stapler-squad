@@ -862,7 +862,7 @@ export function useTerminalStream({
     isDisconnectingRef.current = false;
     textDecoderRef.current = new TextDecoder();
     scrollbackDecoderRef.current = new TextDecoder();
-  }, [getIsResyncingRef, onInputDropped, clearConnectTimeout]);
+  }, [getIsResyncingRef, onInputDropped, clearConnectTimeout, sessionId]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
