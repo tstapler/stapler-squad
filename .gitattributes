@@ -24,6 +24,7 @@ MODULE.bazel.lock merge=bazel-lockfile-merge
 /session/testdata/BUILD.bazel -linguist-generated
 /session/tmux/embed/BUILD.bazel -linguist-generated
 /session/tymux/embed/BUILD.bazel -linguist-generated
+/third_party/ghostty/BUILD.bazel -linguist-generated
 /tools/bzl/BUILD.bazel -linguist-generated
 /tools/bzl/e2e/BUILD.bazel -linguist-generated
 /tools/bzl/ent/BUILD.bazel -linguist-generated
