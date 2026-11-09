@@ -54,6 +54,11 @@ class PruneTest(unittest.TestCase):
         doomed = run([newest, older, bench])
         self.assertEqual(set(doomed), {older.id})
 
+    def test_idle_family_newest_entry_is_pruned_but_active_one_is_kept(self):
+        idle = cache("ghostty-wasm-" + "a" * 32, used_days=9, age_days=9)
+        active = cache("buf-1.41.0-Linux-X64", used_days=0, age_days=20)
+        self.assertEqual(set(run([idle, active])), {idle.id})
+
     def test_empty(self):
         self.assertEqual(run([]), {})
 

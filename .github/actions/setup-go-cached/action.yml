@@ -24,7 +24,7 @@ runs:
   using: composite
   steps:
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
       with:
         go-version-file: ${{ inputs.go-version-file }}
         cache: false
@@ -50,11 +50,11 @@ runs:
         write: ${{ inputs.save }}
         rolling: 'true'
         path: |
-          ${{ steps.paths.outputs.gocache }}
           ${{ steps.paths.outputs.gomodcache }}
+          ${{ steps.paths.outputs.gocache }}
           ${{ inputs.golangci-cache == 'true' && '~/.cache/golangci-lint' || '' }}
         key: go-${{ inputs.scope }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.arch }}
-        # The last line is the pre-policy setup-go key family: lets the first runs after this lands
+        # Path order matches actions/setup-go (cache version hashes it). The last line is the pre-policy setup-go key family: lets the first runs after this lands
         # warm-start from main's old entry until main has saved a go-* one. Drop it afterwards.
         restore-keys: |
           go-${{ inputs.scope }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.arch }}-

@@ -6,7 +6,7 @@ Policy (see docs/reference/ci-job-budget.md, "Cache policy"):
   * Default-branch entries: keep the newest KEEP_MAIN per family, never delete the newest one.
   * Other refs (PRs): delete once the PR is closed or the entry was last used PR_MAX_AGE_DAYS ago.
   * Anything left over is dropped oldest-used-first until the total is under TARGET_GB, still
-    never touching a family's newest default-branch entry.
+    never touching the newest default-branch entry of a family still in use (idle > 7 d it goes too).
   * bench-* entries are zero-byte baseline markers and are left alone.
 
 Dry run by default; pass --apply to delete. Needs an authenticated `gh`.
@@ -115,8 +115,15 @@ def plan(
         if now - c.accessed > timedelta(days=PR_MAX_AGE_DAYS):
             doomed[c.id] = f"{c.ref}: not used for >{PR_MAX_AGE_DAYS}d"
 
+    # A family's newest entry is protected only while in use: a family no key writes to any more
+    # (renamed keys) would otherwise hold its last entry forever.
+    protected_main = {
+        i for i in newest_main if now - by_id[i].accessed <= timedelta(days=MAIN_MAX_AGE_DAYS)
+    }
+    for i in newest_main - protected_main:
+        doomed.setdefault(i, f"{by_id[i].family}: family idle >{MAIN_MAX_AGE_DAYS}d")
     for cid in list(doomed):
-        if by_id[cid].key.startswith(PROTECTED_PREFIXES) or cid in newest_main:
+        if by_id[cid].key.startswith(PROTECTED_PREFIXES) or cid in protected_main:
             del doomed[cid]
 
     remaining = sum(c.size for c in caches if c.id not in doomed)
@@ -126,7 +133,7 @@ def plan(
                 c
                 for c in caches
                 if c.id not in doomed
-                and c.id not in newest_main
+                and c.id not in protected_main
                 and not c.key.startswith(PROTECTED_PREFIXES)
             ),
             key=lambda c: c.accessed,
@@ -176,8 +183,10 @@ def main() -> int:
         print(f"  {c.size / 1e6:8.1f} MB  id={c.id}  {c.ref}  {c.key[:70]}  [{why}]")
     if args.apply:
         for c, _ in doomed:
-            subprocess.run(["gh", "api", "-X", "DELETE", f"repos/{args.repo}/actions/caches/{c.id}"],
-                           check=True, capture_output=True)
+            res = subprocess.run(["gh", "api", "-X", "DELETE", f"repos/{args.repo}/actions/caches/{c.id}"],
+                                 capture_output=True, text=True)
+            if res.returncode != 0 and "404" not in res.stderr:  # 404: already gone
+                print(f"delete failed for id={c.id}: {res.stderr.strip()}", file=sys.stderr)
         left = gh_json_lines([f"repos/{args.repo}/actions/cache/usage"])[0]
         print(f"after: {left['active_caches_count']} caches, {left['active_caches_size_in_bytes'] / 1e9:.2f} GB")
     return 0
