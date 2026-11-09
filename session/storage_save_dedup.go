@@ -92,6 +92,13 @@ func fingerprintInstanceData(data InstanceData) (sum [sha256.Size]byte, ok bool)
 	h := sha256.New()
 	_, _ = h.Write(raw)
 	_, _ = h.Write([]byte(data.DiffStats.Content))
+	// The PR set is json:"-" but a full save persists its links, so a change to it
+	// (or a failed earlier persist) must defeat the unchanged-row skip.
+	prRaw, prErr := json.Marshal([]any{data.PRs, data.HasPRLinks, data.LegacyPRUnrepresented, data.TerminalClearPending})
+	if prErr != nil {
+		return sum, false
+	}
+	_, _ = h.Write(prRaw)
 	copy(sum[:], h.Sum(nil))
 	return sum, true
 }

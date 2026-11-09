@@ -606,6 +606,18 @@ func enterpriseHostsForRemoteParsing() []string {
 	return hosts
 }
 
+// OriginGitHubRepo resolves the GitHub owner, repo and host of repoPath's origin
+// remote ("" host means github.com). ok is false when the path has no readable
+// origin or it is not a GitHub remote.
+func OriginGitHubRepo(repoPath string) (owner, repo, host string, ok bool) {
+	remote, err := readOriginRemoteURL(repoPath)
+	if err != nil {
+		return "", "", "", false
+	}
+	owner, repo, host = parseGitHubRemoteURL(remote)
+	return owner, repo, host, owner != "" && repo != ""
+}
+
 // parseGitHubRemoteURL extracts owner, repo, and host from a GitHub remote
 // URL, recognizing both github.com and any configured GitHub Enterprise host.
 // Supports HTTPS and SSH formats, e.g.:

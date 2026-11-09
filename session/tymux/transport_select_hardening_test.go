@@ -151,7 +151,7 @@ func TestSocketPathForAddr_OverlongPathIsTCPOnly(t *testing.T) {
 	require.Empty(t, socketPathForAddr(addr), "a sun_path over the limit can never be dialed")
 	require.Empty(t, unixSocketPath(cfg))
 	require.Equal(t, long, ownedSocketPath(cfg), "the never-kill veto still names the path")
-	_, selects := NewRealTransport(addr).(*selecting.Client)
+	_, selects := NewRealTransport(addr).(*splitTransport)
 	require.False(t, selects, "TCP-only transport")
 }
 

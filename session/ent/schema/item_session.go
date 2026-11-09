@@ -92,6 +92,9 @@ func (ItemSession) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("The worktree's pre-work HEAD SHA, captured once when this session spawns. This is the BASE of the review gate's base..HEAD diff — by construction always an ancestor of main. It is NOT evidence of anything having shipped: any \"is this session's work on main?\" check must read last_commit_sha (live-refreshed), never this. Splitting the two is the fix for BUG-047's collateral damage, where the spawn-time base SHA was written into last_commit_sha and made IsCommitOnMain trivially true, causing closeIfSupersededByMain to close a real, unmerged PR as \"superseded\"."),
+		field.Bool("diff_truncated").
+			Default(false).
+			Comment("Set at review-session spawn: true when the diff handed to the reviewer was truncated to fit the context budget. Copied onto the review verdict by submit_review_verdict."),
 		field.String("last_commit_sha").
 			Optional().
 			Comment("The work session's CURRENT tip commit, re-read from the session's worktree HEAD on every reconciliation tick by refreshWorkSessionGitActivity (session/backlog_lifecycle.go) for as long as the session is active. Safe to treat as \"the latest commit this session authored\". For the pre-work baseline, use base_commit_sha."),

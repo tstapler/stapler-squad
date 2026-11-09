@@ -34,8 +34,8 @@ func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.R
 	storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},
@@ -91,8 +91,8 @@ func TestReportPRCreated_should_NotPostComment_When_NoProvenanceSourceWired(t *t
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	calls := 0
 	handler := &backlogHandlers{
-		storage:              storage,
-		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		storage:            storage,
+		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
 		verifyPRMatchesBranch: func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
 			return NewPRVerification(true, true, "backlog/ship-it", githubpkg.PRStateOpen, "tstapler"), nil
 		},

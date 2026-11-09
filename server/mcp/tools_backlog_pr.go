@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -238,6 +239,18 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
 
+	// replaces_pr_number names the tracked PR a correction replaces; it must be
+	// the item's current one, so a stale or guessed number cannot select the
+	// reassignment path.
+	if raw, present := args["replaces_pr_number"]; present {
+		rp, isNum := raw.(float64)
+		if !isNum || rp <= 0 || int(rp) != item.PrNumber {
+			return errResult(ErrInvalidArgument, fmt.Sprintf(
+				"replaces_pr_number=%v is not this item's tracked PR (#%d) — omit it to report an additional PR, or pass the tracked number to replace it",
+				raw, item.PrNumber), ""), nil
+		}
+	}
+
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
 	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
@@ -253,7 +266,13 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// and the currently tracked PR is hard-checked for already being merged
 	// (AC2) before anything else, since a merged PR's association must never
 	// be silently swapped.
-	isReassignment := item.Status == string(session.BacklogStatusPRPending)
+	// With the multi-PR backlog scope on, a different PR reported without
+	// replaces_pr_number is an ADDITIONAL PR (a follow-up), not a reassignment: no
+	// override_reason, no reassignment guard, status unchanged. The branch check below
+	// still applies. Scope off: today's reassignment rules.
+	_, replacesPresent := args["replaces_pr_number"]
+	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
+	isReassignment := item.Status == string(session.BacklogStatusPRPending) && !additive
 	if isReassignment && overrideReason == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
@@ -291,6 +310,12 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// Parse the reported URL to extract owner/repo, and cross-check it
 	// against the reported pr_number — a typo'd URL/number pair fails fast
 	// here, before any network call.
+	prURL = normalizeReportedPRURL(prURL)
+	if strings.Contains(prURL, "://") {
+		if u, uErr := url.Parse(prURL); uErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
+		}
+	}
 	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
@@ -298,6 +323,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	if ref.PRNumber != 0 && ref.PRNumber != prNumber {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber), ""), nil
 	}
+
+	// Store the canonical URL, not the agent's raw one (e.g. .../pull/5/files).
+	ref.PRNumber = prNumber
+	canonicalPRURL := ref.PRURL()
 
 	// Resolve this session's own branch to verify the reported PR against —
 	// the whole point of this check is to refuse a self-reported PR number
@@ -310,6 +339,30 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	repoRef, repoRefErr := githubpkg.NewRepoRefWithHost(ref.Owner, ref.Repo, ref.Host)
 	if repoRefErr != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", repoRefErr), ""), nil
+	}
+	// VerifyPRMatchesBranch matches on head-branch name alone, so any repo with a
+	// same-named branch would pass. Anchor on the repo of the PR the item already
+	// tracks, else on the session's own repo. An additional PR must live in the
+	// anchor repo; a first or replacement PR elsewhere (or with no resolvable anchor)
+	// must take the override path: override_reason plus the operator's own authorship.
+	anchor, anchorErr := h.itemAnchorRepo(ctx, item, callerUUID)
+	inItemRepo := anchorErr == nil && sameRepo(anchor, repoRef)
+	foreignRepo := !inItemRepo && !additive
+	if additive && !inItemRepo {
+		if anchorErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf(
+				"could not determine the repository of the PR this item already tracks, so PR #%d cannot be added as an additional PR: %v", prNumber, anchorErr), ""), nil
+		}
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"PR #%d is in %s/%s, not the repository of the PR this item already tracks (%s) — an additional PR must be in the same repository. "+
+				"To move the item to a PR in another repository, use replaces_pr_number with override_reason.",
+			prNumber, ref.Owner, ref.Repo, anchor), ""), nil
+	}
+	if foreignRepo && !isReassignment && overrideReason == "" {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"PR #%d is in %s/%s, which is not this item's repository (%s) — refusing to record it without override_reason. "+
+				"Retry with override_reason explaining why; the PR must also be authored by your own GitHub identity.",
+			prNumber, ref.Owner, ref.Repo, anchorLabel(anchor, anchorErr)), ""), nil
 	}
 	verification, verifyErr := h.verifyPR(ctx, repoRef, prNumber, branch)
 	if verifyErr != nil {
@@ -327,7 +380,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// branch matches — isReassignment is already only ever true here with a
 	// non-empty overrideReason (the early reject above guarantees it).
 	var callerLogin string
-	if verification.Exists && overrideReason != "" && (isReassignment || !verification.Matched) {
+	if verification.Exists && overrideReason != "" && (isReassignment || foreignRepo || !verification.Matched) {
 		login, loginErr := h.callerGitHubLogin(ctx, repoRef.Host())
 		if loginErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("could not resolve your GitHub identity to verify the override — retry: %v", loginErr), ""), nil
@@ -335,7 +388,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		callerLogin = login
 	}
 
-	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment)
+	accept, code, _ := decideOverridePolicy(verification, overrideReason, callerLogin, isReassignment || foreignRepo)
 	if !accept {
 		var msg string
 		switch code {
@@ -380,7 +433,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 
 	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
 		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard}); setErr != nil {
+	}, session.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
 		}
@@ -403,9 +456,11 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 
 	log.InfoLog().Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
-	h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	if inItemRepo {
+		h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	}
 
-	if isReassignment || !verification.Matched {
+	if isReassignment || foreignRepo || !verification.Matched {
 		// The override path was actually taken (not the fast path) — audit
 		// it, since this path has no technical human gate. Gated on
 		// isReassignment too (not just !verification.Matched): a
@@ -425,7 +480,78 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		)
 	}
 
+	if additive {
+		return mcpgo.NewToolResultText(fmt.Sprintf(
+			"PR #%d added to item %s as an additional PR. The item stays pr_pending.", prNumber, itemID,
+		)), nil
+	}
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
 	)), nil
+}
+
+// itemAnchorRepo is the repository a reported PR must live in: the repo of the
+// PR the item already tracks, else the session's own repo. An error means no
+// anchor could be resolved, which callers treat as "not in the item's repo".
+func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *session.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
+	if item.PrURL != "" {
+		cur, err := session.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
+		if err != nil {
+			return githubpkg.RepoRef{}, fmt.Errorf("tracked PR URL %q is unparseable: %w", item.PrURL, err)
+		}
+		return githubpkg.NewRepoRefWithHost(cur.Owner, cur.Repo, cur.Host)
+	}
+	return h.sessionRepo(ctx, sessionUUID)
+}
+
+// sessionRepo resolves the GitHub repo the session works in: the worktree's
+// origin remote, else the session's recorded github_owner/github_repo. The
+// resolveSessionRepo seam replaces it in tests.
+func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (githubpkg.RepoRef, error) {
+	if h.resolveSessionRepo != nil {
+		return h.resolveSessionRepo(ctx, sessionUUID)
+	}
+	if wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID); err == nil && wt.RepoPath != "" {
+		if owner, repo, host, ok := session.OriginGitHubRepo(wt.RepoPath); ok {
+			return githubpkg.NewRepoRefWithHost(owner, repo, host)
+		}
+	}
+	data, err := h.storage.FindInstanceDataByID(sessionUUID)
+	if err != nil {
+		return githubpkg.RepoRef{}, fmt.Errorf("find session: %w", err)
+	}
+	if data.GitHubOwner == "" || data.GitHubRepo == "" {
+		return githubpkg.RepoRef{}, errors.New("the session has no resolvable GitHub repository")
+	}
+	return githubpkg.NewRepoRefWithHost(data.GitHubOwner, data.GitHubRepo, data.GitHubHost)
+}
+
+// sameRepo compares two repos by host, owner and repo, ignoring case, a "www."
+// host prefix and a ".git" repo suffix.
+func sameRepo(a, b githubpkg.RepoRef) bool { return repoIdentity(a) == repoIdentity(b) }
+
+func repoIdentity(r githubpkg.RepoRef) string {
+	host := strings.TrimPrefix(githubpkg.NormalizeHost(r.Host()), "www.")
+	return host + "/" + strings.ToLower(r.Owner()) + "/" + strings.TrimSuffix(strings.ToLower(r.Repo()), ".git")
+}
+
+func anchorLabel(anchor githubpkg.RepoRef, err error) string {
+	if err != nil {
+		return "unresolved"
+	}
+	return anchor.String()
+}
+
+// normalizeReportedPRURL trims the agent's pr_url and prefixes https:// onto a
+// scheme-less host form such as "github.com/o/r/pull/5", which older agents send.
+// "o/r#5" shorthand has no dot in its first segment and is left for the parser.
+func normalizeReportedPRURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "://") {
+		return raw
+	}
+	if first, _, _ := strings.Cut(raw, "/"); strings.Contains(first, ".") && !strings.ContainsAny(first, ":@") {
+		return "https://" + raw
+	}
+	return raw
 }

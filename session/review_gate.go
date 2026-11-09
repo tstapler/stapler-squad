@@ -442,10 +442,11 @@ func (r *ReviewGateRunner) Run(
 
 	// Create ItemSession linking the new review session to the backlog item.
 	if _, createErr := r.storage.CreateItemSession(ctx, ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: reviewInst.UUID,
-		SessionRole: SessionRoleReview,
-		AcSnapshot:  is.AcSnapshot,
+		ItemID:        item.ID,
+		SessionUUID:   reviewInst.UUID,
+		SessionRole:   SessionRoleReview,
+		AcSnapshot:    is.AcSnapshot,
+		DiffTruncated: truncated,
 	}); createErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)
 		return

@@ -46,6 +46,7 @@ import { ScrollHint, useScrollHint } from "./ScrollHint";
 import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { createTerminalLatencyProbe } from "@/lib/telemetry/terminalLatency";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
@@ -127,6 +128,9 @@ function blockedToastCopy(reason: ScrollBlockedReason, program: string): string 
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, windowActive = true, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
   const { track } = useAnalytics();
+  const trackRef = useRef(track);
+  trackRef.current = track;
+  const [latencyProbe] = useState(() => createTerminalLatencyProbe({ track: (e) => trackRef.current(e) }));
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
@@ -772,6 +776,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // from being written before the post-resize snapshot.
   const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
+    latencyProbe.noteOutput();
 
     // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
     // tagged resync request tracked via EITHER hook's resync flow (resize or
@@ -812,7 +817,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     if (manager) {
       manager.write(output);
     }
-  }, [getOrCreateStreamManager, echoGuard, xtermRef]);
+  }, [getOrCreateStreamManager, echoGuard, xtermRef, latencyProbe]);
 
   // Unified WebSocket streaming (effectiveSessionId computed near the top of
   // this component -- see usePooledTerminal's call site comment for why).
@@ -1052,6 +1057,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // keys (drag, momentum, toolbar PgUp/PgDn, the jump button) use this directly; user input
   // goes through handleTerminalData, which also invalidates the estimate.
   const deliverTerminalData = useCallback((data: string): SendResult => {
+    latencyProbe.noteInput();
     const result = sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
@@ -1068,7 +1074,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }
     }
     return result;
-  }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
+  }, [sendInput, latencyProbe, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
   const lastReadOnlyHintRef = useRef(0);
@@ -1279,6 +1285,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     let postConnectionResizeTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (!wasConnected && isConnected) {
+      latencyProbe.noteConnected();
       if (metricsRef.current.connectedTime === null) {
         metricsRef.current.connectedTime = performance.now();
       }
@@ -1333,7 +1340,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // showReconnectBanner is a pre-existing missing dependency: adding it would re-run
     // this effect on every banner toggle. Left alone rather than fixed as a drive-by.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, resize, xtermRef]);
+  }, [isConnected, resize, xtermRef, latencyProbe]);
 
   // Story 3.2.1 — reconnecting banner: show after 2s of disconnection (if was ever connected)
   useEffect(() => {

@@ -219,9 +219,9 @@ func TestFlagMatrix_ShouldResolveAnswerQuestionComposition_ForActionRouteClassHi
 	}
 }
 
-func TestFlagMatrix_ShouldKeepSpikeGatedCellsClosed_WhenSpikeResultsNotRecorded(t *testing.T) {
+func TestFlagMatrix_ShouldKeepSpikeGatedCellsClosed_WhenSpikeResultsNotRecorded_ExceptS6(t *testing.T) {
 	t.Parallel()
 	assert.False(t, spikeS1HookReplyPassed, "flip only when S1 PASS is recorded in research/spike-S1.md")
-	assert.False(t, spikeS6TierBPassed, "flip only when S6 PASS is recorded")
+	assert.True(t, spikeS6TierBPassed, "S6 PASS recorded; channel:remote:tierB stays an operator opt-in scope")
 	assert.Equal(t, "This action is turned off. Open session.", flagOffMessage)
 }

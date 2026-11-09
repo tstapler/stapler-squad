@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -45,6 +46,28 @@ func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.Pi
 	piExtensionHealthResolverMu.RLock()
 	defer piExtensionHealthResolverMu.RUnlock()
 	return piExtensionHealthResolver
+}
+
+// artifactsToProto maps the stored scan blob to the wire message. A session with
+// no blob reports why: "scanning" when a transcript is linked and awaiting its
+// first scan, otherwise "not_linked". supportsTranscript is only consulted for
+// the unlinked case, since it reads program config from disk.
+func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
+	if a == nil {
+		if linked {
+			return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateScanning), TranscriptSupported: true}
+		}
+		return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
+	}
+	return &sessionv1.SessionArtifacts{
+		PrUrls:              validUTF8All(a.PRURLs),
+		CommitShas:          validUTF8All(a.CommitSHAs),
+		ExternalUrls:        validUTF8All(a.ExternalURLs),
+		LastScannedAt:       timestamppb.New(a.LastScannedAt),
+		ScanState:           string(a.State()),
+		TranscriptSupported: true,
+		Records:             artifactRecordsToProto(a.Records),
+	}
 }
 
 // InstanceToProto converts a session.Instance to a proto Session message.
@@ -102,6 +125,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		// GitHub integration fields
 		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber), //#nosec G115 -- GitHub PR numbers are far below int32 max
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
+		PullRequests:    SessionPullRequestsForList(snap.GitHub.PRs, snap.Branch), // slim form (K11); the legacy scalars above stay the active PR's mirror
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
 		GithubHost:      snap.GitHub.GitHubHost,
@@ -116,7 +140,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrPriority:      inst.GitHubPRPriority,
 		GithubApprovedCount:   int32(inst.GitHubApprovedCount),   //#nosec G115 -- PR review count, always small
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount), //#nosec G115 -- PR review count, always small
-		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		GithubCheckConclusion: snap.ActiveCheckConclusion(),
 		GithubChecks:          checksToProto(inst.GitHubChecks),
 		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
 		GithubMergeable:       inst.GitHubMergeable,
@@ -148,16 +172,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
-	// Convert artifact data if available
-	if snap.Artifacts != nil {
-		a := snap.Artifacts
-		protoSession.Artifacts = &sessionv1.SessionArtifacts{
-			PrUrls:        a.PRURLs,
-			CommitShas:    a.CommitSHAs,
-			ExternalUrls:  a.ExternalURLs,
-			LastScannedAt: timestamppb.New(a.LastScannedAt),
-		}
-	}
+	protoSession.Artifacts = artifactsToProto(snap.Artifacts, snap.HistoryFilePath != "", inst.SupportsTranscript)
 
 	// Convert git worktree data if available
 	wt, err := inst.GetGitWorktree()

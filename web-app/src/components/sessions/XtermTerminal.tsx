@@ -27,7 +27,8 @@ import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 import { TerminalLinkMenu } from "./TerminalLinkMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
-import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
+import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
+import { safeFit, safeProposeDimensions } from "@/lib/terminal/safeFit";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
@@ -37,6 +38,7 @@ import { isTouchPrimary as isTouchPrimaryDevice } from "@/lib/terminal/mobileInp
 import type { SendResult } from "@/lib/terminal/mobileInput/types";
 import type { MobileInputHandle, MobileInputRendererProps } from "@/lib/terminal/mobileInput/useMobileInput";
 import { useRendererMobileInput } from "@/lib/terminal/mobileInput/useRendererMobileInput";
+import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -705,10 +707,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             fitDeferredRef.current = true;
             return;
           }
-          const proposed = fitAddonRef.current?.proposeDimensions();
-          if (fitAddonRef.current && isFiniteResizeDimensions(proposed)) {
-            fitAddonRef.current.fit();
-          } else {
+          if (!(fitAddonRef.current && safeFit(fitAddonRef.current))) {
             console.warn('[XtermTerminal] Skipped post-fallback fit: proposed dimensions not finite');
           }
           repaint("context-loss");
@@ -923,7 +922,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           }
 
           // Log what FitAddon will see
-          const proposedDims = fitAddon.proposeDimensions();
+          const proposedDims = safeProposeDimensions(fitAddon);
           console.log(`[XtermTerminal] Proposed dimensions:`, proposedDims);
 
           // Check if cell dimensions are available (via private API for debugging)
@@ -934,7 +933,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             console.warn(`[XtermTerminal] Cell dimensions not available yet!`);
           }
 
-          fitAddon.fit();
+          safeFit(fitAddon);
           updateScrollbar(terminal);
 
           console.log(`[XtermTerminal] Initial fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
@@ -962,7 +961,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Setup event handlers using refs to avoid recreating terminal
       sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
       const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
+      const imeSupport = terminal.element
+        ? attachTerminalImeSupport(terminal.element, "xterm", (data) => onDataRef.current?.(data), (text) => terminal.paste(text))
+        : undefined;
       const dataDisposable = terminal.onData((data) => {
+        imeSupport?.traceData(data);
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
@@ -1348,7 +1351,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           return;
         }
 
-        const proposed = fitAddonRef.current.proposeDimensions();
+        const proposed = safeProposeDimensions(fitAddonRef.current);
         const applied: ResizeDimensions = {
           cols: terminalRef.current.cols,
           rows: terminalRef.current.rows,
@@ -1357,7 +1360,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         logFit("sampler-tick", { count: sampleCount, proposed, applied });
 
         if (result.schedule) {
-          fitAddonRef.current.fit();
+          safeFit(fitAddonRef.current);
           console.log(`[XtermTerminal] Sampler confirmed resize, fit applied: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
           logFit("sampler-fit", { forced: repaintRequested });
           if (anchorBottom) terminalRef.current.scrollToBottom?.();
@@ -1633,6 +1636,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
+        imeSupport?.dispose();
         sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();

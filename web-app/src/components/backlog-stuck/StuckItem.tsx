@@ -333,6 +333,11 @@ export function StuckItem({
         </div>
         <div className={styles.metaRow}>
           <span>{identity}</span>
+          {item.prCount > 1 && (
+            <span data-testid="stuck-item-pr-progress">
+              · {item.prMergedCount} of {item.prCount} merged
+            </span>
+          )}
           {unknown && (
             <span data-testid="stuck-item-last-checked">
               · last checked {formatAgo(item.lastCheckedAt)} (check failing)

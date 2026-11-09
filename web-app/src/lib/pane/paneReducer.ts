@@ -1,4 +1,4 @@
-import {
+import type {
   PaneState,
   PaneAction,
   PaneNode,
@@ -108,15 +108,15 @@ export function paneReducer(state: PaneState, action: PaneAction): PaneState {
 
       // Step 1: clear the source pane (atomic — uses the immutable replaceNode chain)
       let newRoot = state.root;
-      if (sourcePaneId) {
-        const sourceLeaf = findLeaf(newRoot, sourcePaneId)!;
+      const sourceLeaf = sourcePaneId ? findLeaf(newRoot, sourcePaneId) : undefined;
+      if (sourcePaneId && sourceLeaf) {
         newRoot = replaceNode(newRoot, sourcePaneId, { ...sourceLeaf, sessionId: null });
       }
 
       // Step 2: assign to the target pane.
       // If the target is a session-list pane, auto-split to create a detail pane.
       if (target.viewKind === "session-list" && !wouldExceedMaxDepth(newRoot, paneId)) {
-        const newDetail = createLeaf(undefined, "terminal", "session-detail");
+        const newDetail = createLeaf(undefined, action.tab ?? "terminal", "session-detail");
         const detailWithSession: LeafPane = { ...newDetail, sessionId };
         const splitNode: SplitPane = {
           type: "split",
@@ -218,8 +218,8 @@ export function paneReducer(state: PaneState, action: PaneAction): PaneState {
       const sourcePaneId = sourceLeaf?.id ?? null;
 
       let newRoot = state.root;
-      if (sourcePaneId && sourcePaneId !== paneId) {
-        const src = findLeaf(newRoot, sourcePaneId)!;
+      const src = sourcePaneId && sourcePaneId !== paneId ? findLeaf(newRoot, sourcePaneId) : undefined;
+      if (sourcePaneId && src) {
         newRoot = replaceNode(newRoot, sourcePaneId, { ...src, sessionId: null });
       }
 

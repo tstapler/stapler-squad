@@ -120,14 +120,12 @@ const (
 	// ephemeral notification (onAutonomousDriverComplete), invisible to the
 	// Unfinished tab's durable stuck-reason system.
 	StuckReasonAutonomousStuck StuckReason = "autonomous_stuck"
-	// StuckReasonSpawnFailed: AutoReopenAfterFailedReview transitioned an item
-	// to in_progress, then SpawnSessionFromItem failed AND the scoped rollback
-	// to "review" also failed (its precondition no longer matched — something
-	// else touched the item in the interim). Previously this left the item
-	// silently stranded at in_progress with no work session and no visible
-	// error (server/services/backlog_service_triage.go's rollback branch only
-	// logged it) — invisible to every other stuck detector, since none of them
-	// check "in_progress with zero live sessions and no error surfaced."
+	// StuckReasonSpawnFailed: SpawnSessionFromItem failed after an item was moved to
+	// in_progress. Callers: AutoReopenAfterFailedReview (rollback -> review),
+	// AutoReopenForPRFix (rollback -> pr_pending), DequeueNextQueuedItems (rollback ->
+	// fromStatus). In the first two, and in Dequeue when its rollback also fails, the row
+	// marks an item stranded at in_progress with no session; after a successful Dequeue
+	// rollback it instead carries the retry backoff.
 	StuckReasonSpawnFailed StuckReason = "spawn_failed"
 	// StuckReasonPlanNotApproved: DequeueNextQueuedItems' planning gate
 	// (SkipPlanning=false, PlanApproved=false) refuses to claim a queued item
@@ -415,6 +413,10 @@ func (t QuestionType) IsValid() bool {
 	return false
 }
 
+// OwnerActionQuestionPrefix marks a GuidanceRequest raised by request_owner_action; the UI
+// keys its "waiting for your decision" treatment off it.
+const OwnerActionQuestionPrefix = "[Owner action] "
+
 // AcStatus represents the status of a single acceptance criterion.
 type AcStatus string
 
@@ -423,16 +425,22 @@ const (
 	AcStatusInProgress AcStatus = "in_progress"
 	AcStatusDone       AcStatus = "done"
 	AcStatusFail       AcStatus = "fail"
+	// AcStatusWaived is set only through WaiveAcCriterion (audited), never by an agent's
+	// report_progress or a whole-list rewrite. It satisfies the completion gates like AcStatusDone.
+	AcStatusWaived AcStatus = "waived"
 )
 
 // IsValid reports whether s is a known AC status value.
 func (s AcStatus) IsValid() bool {
 	switch s {
-	case AcStatusPending, AcStatusInProgress, AcStatusDone, AcStatusFail:
+	case AcStatusPending, AcStatusInProgress, AcStatusDone, AcStatusFail, AcStatusWaived:
 		return true
 	}
 	return false
 }
+
+// IsSatisfied reports whether the criterion no longer blocks completion: done or waived.
+func (s AcStatus) IsSatisfied() bool { return s == AcStatusDone || s == AcStatusWaived }
 
 // BacklogCategory is a validated string-backed enum classifying a backlog
 // item into a coarse bucket (bugfix/feature/chore/refactor). It is purely a
@@ -482,8 +490,14 @@ func (j AcCriteriaJSON) IsEmpty() bool { return j == "" }
 type AcCriterion struct {
 	Index  int      `json:"index"`
 	Text   string   `json:"text"`
-	Status AcStatus `json:"status"` // pending, in_progress, done, fail
+	Status AcStatus `json:"status"` // pending, in_progress, done, fail, waived
 	Note   string   `json:"note,omitempty"`
+	// WaiverReason is the mandatory justification when Status is waived.
+	WaiverReason string `json:"waiver_reason,omitempty"`
+	// WaivedBy and WaivedAt record who waived (AcActor.Label) and when (RFC 3339 UTC); display
+	// copies of the authoritative AcAuditEvent row.
+	WaivedBy string `json:"waived_by,omitempty"`
+	WaivedAt string `json:"waived_at,omitempty"`
 }
 
 // ParseAcCriteria deserializes acceptance criteria from a JSON string.

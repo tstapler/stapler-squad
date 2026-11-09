@@ -1084,7 +1084,9 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	require.Nil(t, terminalData.GetError(), "must not surface a hub-start-failed error frame")
 
 	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
-	require.Equal(t, session.Active, inst.Snapshot().Status)
+	// The fake tmux's control mode ends at once, which the exit callback self-heal now wires
+	// reports as Stopped; the invariant here is that Creating was left, not that it stays Active.
+	require.NotEqual(t, session.Creating, inst.Snapshot().Status)
 
 	// The regression this test guards: before the self-heal branch existed, Started() stayed
 	// false forever, so every capture call returned streamhub.ErrSessionNotStarted.

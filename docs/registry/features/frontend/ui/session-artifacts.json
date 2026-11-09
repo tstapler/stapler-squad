@@ -5,11 +5,15 @@
   "path": "web-app/src/components/sessions/ArtifactsTab.tsx",
   "tested": true,
   "testIds": [
-    "ArtifactsTab > ArtifactsTab_should_showEmptyState_When_artifactsIsNull",
+    "ArtifactsTab > ArtifactsTab_should_showScanning_When_artifactsIsNull",
     "ArtifactsTab > ArtifactsTab_should_showNoArtifacts_When_artifactsIsEmptyArrays",
     "ArtifactsTab > ArtifactsTab_should_renderPRLinks_When_artifactsHasPRURLs",
     "ArtifactsTab > ArtifactsTab_should_truncateURLs_When_URLExceeds60Chars",
     "ArtifactsTab > ArtifactsTab_should_renderCommitSHAs_When_artifactsHasCommits",
+    "ArtifactsTab > scan states > ArtifactsTab_should_showNoneFoundWithRescan_When_scanFoundNothing",
+    "ArtifactsTab > scan states > ArtifactsTab_should_showAlertAndKeepLastGoodData_When_scanFailed",
+    "ArtifactsTab > scan states > slow scan escape (UX-S7-4) > ArtifactsTab_should_offerRescanAndCancelWaiting_When_scanningOver60s",
+    "ArtifactsTab > scan states > manual rescan (UX-S7-2) > ArtifactsTab_should_disableRescanAndAnnounceResult_When_rescanCompletes",
     "session-artifacts > T-E2E-ARTIFACTS-001 Artifacts tab visible in session detail"
   ],
   "lastModified": "2026-06-22T00:00:00Z"

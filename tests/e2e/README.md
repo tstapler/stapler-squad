@@ -36,6 +36,17 @@ bun run test:ui
 npx playwright test smoke.spec.ts
 ```
 
+## Playwright Projects
+
+| Project | Runs | Gating |
+|---|---|---|
+| `chromium`, `chromium-dom` | every spec except `MOBILE_ONLY_SPECS` and the dev-mode, demo and perf specs | yes |
+| `mobile-chromium` (Pixel 7, 390x844, touch) | `MOBILE_SPECS` | yes |
+| `mobile-webkit` (iPhone 14, `PW_WEBKIT=1`) | `MOBILE_SPECS` | informational (nightly) |
+| `desktop-firefox`, `desktop-webkit` | `SHORTCUT_SPECS` | informational |
+
+A spec that asserts touch, `isMobile` or a 390px layout belongs in `MOBILE_ONLY_SPECS` in `playwright.config.ts`; that adds it to `MOBILE_SPECS` and keeps it off the desktop projects, where a resized window is not a mobile test. `baseline/mobile-specs-registered.test.ts` fails when a new `*-mobile.spec.ts` is in neither list.
+
 ## How It Works
 
 ### Test Mode Architecture

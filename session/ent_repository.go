@@ -54,6 +54,15 @@ type EntRepository struct {
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	dbPath          string
 	pendingGuidance pendingGuidanceCache
+
+	// prVerifyCountersTrusted flips true once this process's PR startup
+	// maintenance has succeeded; until then stored verification counters on
+	// unverified-terminal rows read as zero (see linkStateToView).
+	prVerifyCountersTrusted atomic.Bool
+	prDrops                 prDropTracker
+	// afterPRLinkHook (tests only) runs inside AttachSessionPR's transaction after
+	// the link upsert, to inject a failure before the mirror update.
+	afterPRLinkHook func() error
 	migrationMode   bool // When true, enables dual-write mode for migration
 
 	// markerLimiter is built lazily (markerLimiterOnce) from markerClock, an
@@ -538,6 +547,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		}
 	}
 
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
+	}
+
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -618,6 +631,10 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 		if err := r.upsertClaudeSessionRow(ctx, tx, sess, data); err != nil {
 			return err
 		}
+	}
+
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
 	}
 
 	// Commit transaction
@@ -729,6 +746,37 @@ func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	}
 }
 
+// setGitHubPRMirrorFields writes the legacy scalar PR columns on a full save.
+// A session whose snapshot carries links writes them unconditionally so a detach
+// or an open PR can clear the number, URL and terminal flag; a session whose legacy
+// number has no link keeps its stored number/URL untouched. A session without links
+// keeps the old set-only behavior, so a stale in-memory zero cannot erase data (its
+// stale terminal=true is cleared by the immediate title-keyed write, not here).
+func setGitHubPRMirrorFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
+	switch {
+	case data.LegacyPRUnrepresented:
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		}
+	case data.HasPRLinks:
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL).
+			SetGithubPrNumber(data.GitHubPRNumber).
+			SetGithubPrStatusTerminal(data.GitHubPRStatusTerminal)
+	default:
+		if data.GitHubPRURL != "" {
+			sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+		}
+		if data.GitHubPRNumber > 0 {
+			sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+		}
+		if data.GitHubPRStatusTerminal {
+			sessionUpdate.SetGithubPrStatusTerminal(true)
+		} else if data.TerminalClearPending {
+			sessionUpdate.SetGithubPrStatusTerminal(false)
+		}
+	}
+}
+
 func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -755,15 +803,7 @@ func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data Instanc
 	if !data.CreationProgressUpdatedAt.IsZero() {
 		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
-	if data.GitHubPRURL != "" {
-		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
-	}
-	if data.GitHubPRNumber > 0 {
-		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
-	}
-	if data.GitHubPRStatusTerminal {
-		sessionUpdate.SetGithubPrStatusTerminal(true)
-	}
+	setGitHubPRMirrorFields(sessionUpdate, data)
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
 	}
@@ -1011,6 +1051,13 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
 	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete shells: %w", err)
+	}
+
+	// PR links and detach tombstones are keyed by the session uuid, not an FK.
+	if sess.UUID != "" {
+		if err := deleteOwnerPRRows(ctx, tx, SessionPROwner(sess.UUID)); err != nil {
+			return err
+		}
 	}
 
 	// Finally delete the session

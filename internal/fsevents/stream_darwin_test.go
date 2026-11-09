@@ -75,7 +75,9 @@ func TestStreamCreateModifyRenameDelete(t *testing.T) {
 	startTestStream(t, Config{Paths: []string{dir}, SinceWhen: SinceNow, OnEvents: c.add})
 
 	f := filepath.Join(dir, "a.txt")
-	const budget = 500 * time.Millisecond
+	// Upper bound only: waitFor returns on arrival. fseventsd delivery took
+	// 0.4s-1.2s even when idle-ish, so 500ms failed deterministically.
+	const budget = 20 * time.Second
 	if err := os.WriteFile(f, []byte("1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +132,10 @@ func TestStreamResumeReplaysAndSignalsHistoryDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Stop()
-	c.waitFor(t, 5*time.Second, "replayed create", func(e Event) bool {
+	c.waitFor(t, 20*time.Second, "replayed create", func(e Event) bool {
 		return strings.HasSuffix(e.Path, "missed.txt")
 	})
-	c.waitFor(t, 5*time.Second, "HistoryDone", func(e Event) bool { return e.Flags&HistoryDone != 0 })
+	c.waitFor(t, 20*time.Second, "HistoryDone", func(e Event) bool { return e.Flags&HistoryDone != 0 })
 }
 
 func TestStreamStopIsIdempotent(t *testing.T) {

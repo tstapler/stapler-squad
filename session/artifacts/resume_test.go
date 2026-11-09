@@ -91,11 +91,12 @@ func TestScanFile_RestartDoesNotRescanUnchangedTranscript(t *testing.T) {
 	}
 
 	second := newHarness(states)
+	second.blob = first.blob // the blob store is shared across restarts
 	second.ae.restoreState(context.Background())
 	second.ae.scanFile(path)
 
-	// An artifact-free file never wrote a blob, so only the state table can
-	// have remembered it; a skipped scan never even resolves the session.
+	// The state table remembers the file (and that its blob carries a scan
+	// state); a skipped scan never even resolves the session.
 	if second.lookups != 0 {
 		t.Fatalf("unchanged file was rescanned after restart (lookups=%d)", second.lookups)
 	}
@@ -281,7 +282,7 @@ func TestMergeAndPersist_DedupsRepeatedCommands(t *testing.T) {
 		func(string) (string, error) { return string(raw), nil },
 		func(string) (string, bool) { return "s", true },
 	)
-	blob := ae.mergeAndPersist("s", 1, nil, nil, nil, []CommandArtifact{cmd})
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: []CommandArtifact{cmd}}, false)
 	if len(blob.Commands) != 1 {
 		t.Fatalf("commands = %v, want the repeat dropped", blob.Commands)
 	}

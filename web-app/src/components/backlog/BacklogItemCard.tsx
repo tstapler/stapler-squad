@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
+import { isAcSatisfied } from "@/lib/backlog/acStatus";
 import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
@@ -92,7 +93,7 @@ export function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externa
 
 export function AcSummary({ item }: { item: BacklogItem }) {
   if (item.acCriteria.length === 0) return null;
-  const done = item.acCriteria.filter((c) => c.status === "done").length;
+  const done = item.acCriteria.filter(isAcSatisfied).length;
   return (
     <span className={styles.acSummary} aria-label={`${done} of ${item.acCriteria.length} criteria done`}>
       {done}/{item.acCriteria.length} done

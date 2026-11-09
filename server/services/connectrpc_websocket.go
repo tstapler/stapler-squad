@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
@@ -966,7 +967,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	creation.Mark(stageUpgrade)
 
 	log.Info("ConnectRPC WebSocket connection established")
-	h.serveTimedTerminalStream(conn, r.URL.Path, requestListener(r), creation)
+	h.serveTimedTerminalStream(conn, r.URL.Path, creation, requestListener(r))
 }
 
 // serveTerminalStream runs one StreamTerminal call over a virtual mux stream (ADR-033). There is
@@ -974,19 +975,24 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 func (h *ConnectRPCWebSocketHandler) serveTerminalStream(conn streamConn, methodPath string) {
 	creation := beginTerminalCreation()
 	defer creation.End(false)
-	h.serveTimedTerminalStream(conn, methodPath, "", creation)
+	listener := ""
+	if mux, ok := conn.(*muxStreamConn); ok {
+		listener = mux.sock.listener
+	}
+	h.serveTimedTerminalStream(conn, methodPath, creation, listener)
 }
 
 // serveTimedTerminalStream runs one StreamTerminal call over conn, a real WebSocket or a mux
 // stream, recording creation stages on creation.
-func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath, listener string, creation *terminalCreation) {
+func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, methodPath string, creation *terminalCreation, listener string) {
 	stream, ok := negotiateConnectStream(conn, methodPath)
 	if !ok {
 		return
 	}
 	creation.Mark(stageHandshake)
 	stream.creation = creation
-	stream.listener = listener
+	stream.listener = listener // input source reads it; latency labels below
+	stream.latency.setListener(listener)
 
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
@@ -1112,13 +1118,24 @@ type connectWebSocketStream struct {
 	// inputOnce guards input, the stream's lazily built input observability source.
 	inputOnce sync.Once
 	input     *inputSource
+	// latency labels the stream's latency observations (backend and listener); see terminal_latency.go.
+	latency streamLatency
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
 func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) error {
+	waitStart := time.Now()
 	s.writeMutex.Lock()
-	defer s.writeMutex.Unlock()
-	return s.conn.WriteMessage(messageType, data)
+	writeStart := time.Now()
+	err := s.conn.WriteMessage(messageType, data)
+	end := time.Now()
+	s.writeMutex.Unlock()
+	// Record after unlock: telemetry must not extend the per-stream write critical section.
+	labels := s.latency.labels()
+	termlat.Default.Record(termlat.StageWSWriteWait, labels, writeStart.Sub(waitStart))
+	termlat.Default.Record(termlat.StageWSWrite, labels, end.Sub(writeStart))
+	s.latency.noteOutputWritten(end)
+	return err
 }
 
 // firstPaintWriteTimeout bounds a first-paint socket write: the hub holds its resize lock across
@@ -1332,6 +1349,12 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 		workDir := instance.ActiveDir()
 		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
+		}
+		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
+		if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
+			log.Warn("[streamViaControlMode] restored session but PTY attach failed, not marking started", "session", sessionID, "err", ptyErr)
+		} else {
+			instance.MarkStartedIfTmuxAlive() // a lazily-restored instance is not started; input is refused until it is
 		}
 	}
 	if err := streamer.StartControlMode(); err != nil {
@@ -1554,6 +1577,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 	// Update LastViewed timestamp - user is viewing this session
 	instance.MarkViewed()
+	stream.latency.setBackend(instance.Snapshot().Backend)
 
 	// Client sends dimensions in the handshake's first message (no empty
 	// handshake), so tmux can be resized and captured immediately.
@@ -1667,23 +1691,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				return false
 			}
 
-			// Update timestamps for user interaction
-			instance.UpdateTerminalTimestamps(string(data), true)
-			instance.MarkUserResponded()
-
-			// Try CM path first (low-latency, no subprocess). Falls back to
-			// subprocess send-keys if CM queue is backed up or not running.
-			// Errors are non-fatal — keystrokes may be lost under load but
-			// the stream stays alive (sending TerminalError kills the stream).
-			sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = writer.SendInput(sendCtx, PaneInput{
-				ControlMode: instance,
-				TmuxSocket:  instance.Snapshot().TmuxServerSocket,
-				TmuxSession: tmuxSessionName,
-				LogPrefix:   "[streamViaControlMode]",
-				Data:        data,
-			})
-			sendCancel()
+			keystrokeDelivery{
+				instance:    instance,
+				latency:     &stream.latency,
+				logPrefix:   "[streamViaControlMode]",
+				tmuxSession: tmuxSessionName,
+				tmuxSocket:  instance.Snapshot().TmuxServerSocket,
+			}.deliver(writer, data)
 			return true
 		},
 		onResize: func(cols, rows int) {
@@ -2154,10 +2168,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Ins
 	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
-	if _, ptyErr := instance.GetPTYReader(); ptyErr != nil {
+	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
 	}
+	instance.MarkStartedIfTmuxAlive()
 	return true, nil
 }
 
@@ -2412,6 +2427,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName, "backend", snap.Backend)
 
 	instance.MarkViewed()
+	stream.latency.setBackend(snap.Backend)
 	stream.creation.Mark(stageResolve)
 
 	currentPaneReq, err := parseControlModeHandshake(stream)
@@ -2503,18 +2519,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				log.Warn("[streamViaHub] send permission denied", "session", sessionID)
 				return false
 			}
-			instance.UpdateTerminalTimestamps(string(data), true)
-			instance.MarkUserResponded()
-
-			sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = writer.SendInput(sendCtx, PaneInput{
-				ControlMode: instance,
-				TmuxSocket:  snap.TmuxServerSocket,
-				TmuxSession: tmuxSessionName,
-				LogPrefix:   "[streamViaHub]",
-				Data:        data,
-			})
-			sendCancel()
+			hub.NoteInteractive(subscriberID)
+			keystrokeDelivery{
+				instance:    instance,
+				latency:     &stream.latency,
+				logPrefix:   "[streamViaHub]",
+				tmuxSession: tmuxSessionName,
+				tmuxSocket:  snap.TmuxServerSocket,
+			}.deliver(writer, data)
 			return true
 		},
 		onResize: func(cols, rows int) {

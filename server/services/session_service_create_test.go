@@ -590,6 +590,42 @@ func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T
 	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_CREATING, resp.Msg.Session.Status)
 }
 
+// TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneShot covers
+// the create-from-URL writer (checklist rows 2 and 8): a PR URL resolved in the
+// background joins the session's PR set as created_from_url instead of overwriting
+// the legacy scalars. The CreatePullRequest writer (row 6) is covered in
+// pr_creation_service_test.go; the one-shot writer (row 7) shares its SetGitHubPR wrapper.
+func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneShot(t *testing.T) {
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+	statusMgr := session.NewInstanceStatusManager()
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), statusMgr, nil))
+	svc.SetStatusManager(statusMgr)
+
+	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
+		return t.TempDir(), &session.GitHubRef{Owner: "octocat", Repo: "Hello-World", PRNumber: 12}, nil
+	}
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "create-from-pr-url",
+		Path:  "https://github.com/octocat/Hello-World/pull/12",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+
+	require.NoError(t, wait.WaitForCondition(func() bool {
+		return len(inst.Snapshot().GitHub.PRs) == 1
+	}, wait.WaitConfig{Timeout: 30 * time.Second, PollInterval: 50 * time.Millisecond, Description: "resolved PR attached"}))
+	prs := inst.Snapshot().GitHub.PRs
+	assert.Equal(t, 12, prs[0].Ref.Number())
+	assert.Equal(t, session.AttachSourceCreatedFromURL, prs[0].AttachSource)
+	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
+}
+
 // ---------------------------------------------------------------------------
 // Status manager wiring regression
 // ---------------------------------------------------------------------------

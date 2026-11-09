@@ -61,7 +61,7 @@ func evaluateACCompleteCheck(item BacklogItemTransitionInput) structuralCheckRes
 	}
 	incomplete := 0
 	for _, c := range criteria {
-		if c.Status != AcStatusDone {
+		if !c.Status.IsSatisfied() {
 			incomplete++
 		}
 	}
