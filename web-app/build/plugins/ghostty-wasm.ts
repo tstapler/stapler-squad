@@ -12,7 +12,7 @@ export function externalizeGhosttyWasm(source: string, wasmPath: string): string
     throw new Error("ghostty-wasm plugin: the embedded WASM data URL was not found in ghostty-web; update build/plugins/ghostty-wasm.ts for the new release");
   }
   const url = `new URL(__ghosttyVtWasmUrl, self.location)`;
-  return `import __ghosttyVtWasmUrl from ${JSON.stringify(wasmPath)};\n${source.replace(EMBEDDED_WASM, url)}`;
+  return `import __ghosttyVtWasmUrl from ${JSON.stringify(wasmPath)}; ${source.replace(EMBEDDED_WASM, url)}`;
 }
 
 export function ghosttyWasmPlugin(): BunPlugin {
