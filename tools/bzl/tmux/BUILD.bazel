@@ -32,7 +32,7 @@ genrule(
     name = "tmux_bin",
     srcs = [":tmux_build_dir"],
     outs = ["tmux"],
-    cmd = "cp $(location :tmux_build_dir) $@",
+    cmd = "cp $(execpath :tmux_build_dir) $@",
     executable = True,
     visibility = ["//session/tmux/embed:__pkg__"],
 )
@@ -41,8 +41,8 @@ sh_test(
     name = "hermetic_test",
     srcs = ["hermetic_test.sh"],
     args = [
-        "$(location :tmux_bin)",
-        "$(location :PIN)",
+        "$(rootpath :tmux_bin)",
+        "$(rootpath :PIN)",
     ],
     data = [
         ":PIN",

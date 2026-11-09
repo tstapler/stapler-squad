@@ -7,18 +7,18 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 # testonly: nothing production-facing may depend on them.
 write_file(
     name = "fake_tmux",
+    testonly = True,
     out = "embed/tmux",
     content = ["FAKE-TMUX"],
     newline = "unix",
-    testonly = True,
 )
 
 write_file(
     name = "fake_tymuxd",
+    testonly = True,
     out = "embed/tymuxd",
     content = ["FAKE-TYMUXD"],
     newline = "unix",
-    testonly = True,
 )
 
 go_library(

@@ -5,22 +5,34 @@ load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 # binary_embedded.go's //go:embed names. Only referenced under --config=embed_tymux.
 config_setting(
     name = "linux_x86_64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "linux_aarch64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
 )
 
 config_setting(
     name = "macos_x86_64",
-    constraint_values = ["@platforms//os:macos", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "macos_aarch64",
-    constraint_values = ["@platforms//os:macos", "@platforms//cpu:aarch64"],
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
 )
 
 copy_file(

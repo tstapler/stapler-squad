@@ -16,6 +16,7 @@ def _impl(ctx):
         args.add_all(items, before_each = flag)
         files += [f for f in items if type(f) == "File"]
     sdk = depset([go.sdk.go, go.sdk.root_file] + files, transitive = [go.sdk.libs, go.sdk.srcs, go.sdk.tools, go.sdk.headers])
+
     # tag-reason: modcache fetch needs the network, go.sum-verified; the weave is sandboxed and remote-cacheable; no per-issue tracker yet, placeholder (#1423)
     reqs = {"no-remote-exec": "1"} if weave else {"requires-network": "1"}
     ctx.actions.run(executable = ctx.file.script, arguments = [args], outputs = [out], inputs = sdk, execution_requirements = reqs, mnemonic = "OtelWeaveHermetic" if weave else "OtelModcache")
