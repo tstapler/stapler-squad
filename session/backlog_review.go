@@ -488,15 +488,26 @@ func ParseHeadlessToolReads(text string) []string {
 
 // verifyToolReadsExist does a cheap, non-LLM os.Stat on every path in toolReads,
 // resolved relative to codebaseWorkDir (absolute paths are stat'd as-is). Every
-// resolved path MUST also be contained within codebaseWorkDir — an absolute path
-// pointing anywhere else on the host, or a relative path that escapes
-// codebaseWorkDir via "..", is treated as unverified/fabricated rather than stat'd
-// unconditionally. Returns false and the first offending path if ANY claimed path
-// does not exist or escapes codebaseWorkDir.
-func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, badPath string) {
+// resolved path MUST also be contained within codebaseWorkDir or one of
+// extraRoots (the item's own plan-artifacts directory, where evidence such as
+// captured race logs legitimately lives outside the worktree) — any other
+// absolute path, or a relative path that escapes via "..", is treated as
+// unverified/fabricated rather than stat'd unconditionally. Returns false and
+// the first offending path if ANY claimed path does not exist or escapes every
+// allowed root.
+func verifyToolReadsExist(codebaseWorkDir string, toolReads []string, extraRoots ...string) (ok bool, badPath string) {
 	root, rootErr := filepath.Abs(codebaseWorkDir)
 	if rootErr != nil {
 		return false, codebaseWorkDir
+	}
+	roots := []string{root}
+	for _, r := range extraRoots {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(r); err == nil {
+			roots = append(roots, abs)
+		}
 	}
 	for _, p := range toolReads {
 		if strings.TrimSpace(p) == "" {
@@ -512,16 +523,19 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 		if err != nil {
 			return false, p
 		}
-		rel, relErr := filepath.Rel(root, resolved)
-		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			// Escapes codebaseWorkDir — treat as unverified/fabricated regardless of
-			// whether the path happens to exist somewhere else on the host.
-			return false, p
-		}
-		if rel == "." {
-			// The path resolves to codebaseWorkDir itself (e.g. "" or ".") — the
+		contained, isRoot := false, false
+		for _, r := range roots {
+			rel, relErr := filepath.Rel(r, resolved)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			contained = true
+			// The path resolves to an allowed root itself (e.g. "" or ".") — the
 			// directory always exists, so this would otherwise trivially satisfy
 			// the check without citing any real evidence. Reject it.
+			isRoot = isRoot || rel == "."
+		}
+		if !contained || isRoot {
 			return false, p
 		}
 		info, err := os.Stat(resolved)
@@ -539,11 +553,11 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 // outcome, verdicts, an annotated summary, and the refined path label
 // ("codebase-read-verified" or "codebase-read-degraded") for logging. No-op when
 // path != "codebase-read".
-func DegradeIfUnverified(path string, overall ReviewOutcome, verdicts []CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string) (ReviewOutcome, []CriterionVerdict, string, string) {
+func DegradeIfUnverified(path string, overall ReviewOutcome, verdicts []CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string, extraRoots ...string) (ReviewOutcome, []CriterionVerdict, string, string) {
 	if path != "codebase-read" {
 		return overall, verdicts, summary, path
 	}
-	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads)
+	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads, extraRoots...)
 	if len(toolReads) > 0 && verified {
 		return overall, verdicts, summary, "codebase-read-verified"
 	}

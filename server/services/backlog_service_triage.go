@@ -3494,7 +3494,7 @@ Do not modify the code. Only write the review verdict.
 
 		overall, perCriterion, reviewSummary := session.ParseHeadlessVerdictResult(reviewResult)
 		toolReads := session.ParseHeadlessToolReads(reviewResult)
-		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir)
+		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
 		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
 		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
 		// observability fields.
