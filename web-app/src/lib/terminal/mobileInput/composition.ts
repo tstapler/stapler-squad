@@ -183,10 +183,13 @@ function composingBeforeinput(c: Composing, e: Beforeinput, policy: MobileInputP
     case "insertParagraph":
       return finish(c, c.region, policy, COMPOSITION_END_ECHO, [emit(CR, policy)]);
     case "deleteContentBackward": {
+      // An abandoned region's Backspace is a straggler of the old target, not input for the new one.
+      if (c.region === "" && c.mode === "abandoned") return result(c);
       if (c.region === "") return finish(c, "", policy, COMPOSITION_END_ECHO, [emit(DEL, policy)]);
       return applyRegion(c, graphemes(c.region).slice(0, -1).join(""), policy);
     }
     case "deleteWordBackward": {
+      if (c.region === "" && c.mode === "abandoned") return result(c);
       if (c.region === "") return finish(c, "", policy, COMPOSITION_END_ECHO, [emit(wordDelete(e, policy), policy)]);
       return applyRegion(c, c.region.replace(/\S+\s*$/u, ""), policy);
     }

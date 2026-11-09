@@ -49,3 +49,28 @@ export const TEXTAREA_ATTRIBUTES = {
   autocomplete: "off",
   enterkeyhint: "send",
 } as const;
+
+/** Hidden longer than this and the host invalidates the layer (`invalidate("visibility")`). */
+export const HIDDEN_INVALIDATE_MS = 5000;
+
+/** A deferred commit shows the "Typing..." indicator only after this long. */
+export const DEFERRED_INDICATOR_MS = 300;
+
+/** Watchdog cadence while a composition is live; the stuck threshold itself is `stuckCompositionMs`. */
+export const WATCHDOG_TICK_MS = 500;
+
+/** One tap fires pointerup, touchend and click; later triggers inside this window are the same tap. */
+export const TAP_DEDUPE_MS = 800;
+
+/** A touch that travels further than this is a scroll, not a tap. */
+export const TAP_SLOP_PX = 10;
+
+/**
+ * Attribute set for the hidden textarea. `autocorrect="off"` and `spellcheck="false"` are added only
+ * when a reliable echo-off signal exists (ADR-008); today nothing calls this with `echoOff: true`.
+ */
+export function attributesFor(opts: { echoOff: boolean }): Record<string, string> {
+  return opts.echoOff
+    ? { ...TEXTAREA_ATTRIBUTES, autocorrect: "off", spellcheck: "false" }
+    : { ...TEXTAREA_ATTRIBUTES };
+}

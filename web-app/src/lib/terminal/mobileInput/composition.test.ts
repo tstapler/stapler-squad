@@ -451,6 +451,13 @@ describe("reduce: delivery boundary (hooks for the ledger)", () => {
     expect(r.state.kind).toBe("idle");
   });
 
+  it("reduce_should_StayAbandonedAndEmitNothing_When_EmptyAbandonedRegionGetsBackspaceOrWordDelete", () => {
+    const start = abandonRegion(composing("", ""));
+    const r = run(start, [ev.beforeinput("deleteContentBackward", null), ev.beforeinput("deleteWordBackward", null)]);
+    expect(r.bytes).toBe("");
+    expect(r.state).toMatchObject({ kind: "composing", mode: "abandoned" });
+  });
+
   it("reduce_should_ReturnNonCompositionStateUnchanged_When_Demoting", () => {
     expect(demoteToDeferred(idle(), "")).toEqual(idle());
     expect(abandonRegion(idle())).toEqual(idle());

@@ -6,8 +6,17 @@ import type { MobileInputEvent } from "./types";
 
 export type FixtureSource = "synthetic" | "device";
 
-/** Link and session boundaries the harness applies between IME events (Story 1.2.4). */
-export type BoundaryStep = { kind: "linkDown" } | { kind: "linkUp" } | { kind: "sessionSwitch" };
+/**
+ * Link and session boundaries the harness applies between IME events (Story 1.2.4).
+ * `dropNext`: the sink refuses the next unit (`dropped`). `loseNext`: the sink accepts it but the frame
+ * never arrives (half-open socket), so the layer believes it was sent.
+ */
+export type BoundaryStep =
+  | { kind: "linkDown" }
+  | { kind: "linkUp" }
+  | { kind: "sessionSwitch" }
+  | { kind: "dropNext" }
+  | { kind: "loseNext" };
 export type FixtureStep = MobileInputEvent | BoundaryStep;
 
 export interface ReplayFixture {
@@ -45,6 +54,8 @@ const EVENT_KINDS = [
   "linkDown",
   "linkUp",
   "sessionSwitch",
+  "dropNext",
+  "loseNext",
 ] as const;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
