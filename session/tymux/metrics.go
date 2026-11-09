@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -210,6 +211,11 @@ var capturePaneRPCAttrs = metric.WithAttributeSet(attribute.NewSet(attribute.Str
 // observeCapturePaneRPC records one CapturePane round trip started at start.
 func observeCapturePaneRPC(start time.Time) {
 	rpcDurationMS.Record(context.Background(), float64(time.Since(start).Microseconds())/1000, capturePaneRPCAttrs)
+}
+
+// observeCaptureRender records the squad-side grid-to-escape-sequence render of one capture.
+func observeCaptureRender(start time.Time) {
+	termlat.Default.Record(termlat.StageCaptureRender, tymuxLabels, time.Since(start))
 }
 
 // recordReconnect increments tymux_attach_stream_reconnects_total{cause}.

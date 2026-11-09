@@ -1,5 +1,7 @@
 package tymux
 
+import "github.com/tstapler/stapler-squad/internal/termlat"
+
 // Sequenced delivery: tymuxd numbers every output chunk (OutputChunk.seq) and every snapshot
 // (PaneSnapshot.seq) in one space, so a snapshot taken at N can be spliced into the stream
 // exactly: everything <= N is inside the snapshot, everything > N must still follow it.
@@ -132,6 +134,7 @@ func (f *ClientFanout) GapGeneration() uint64 {
 // skips subscribers whose resync already contained this seq, and reports gap=true when the seq
 // jumped without a preceding OutputGap (the caller must resync).
 func (f *ClientFanout) BroadcastSeq(seq uint64, data []byte) (gap bool) {
+	var tel fanoutTelemetry
 	f.mu.Lock()
 	if f.seq.valid {
 		st := &f.seq
@@ -150,9 +153,10 @@ func (f *ClientFanout) BroadcastSeq(seq uint64, data []byte) (gap bool) {
 		st.last = seq
 		st.push(seq, data)
 	}
-	dropped := f.deliverLocked(data, seq)
+	dropped := f.deliverLocked(data, seq, &tel)
 	onDrop := f.onDrop
 	f.mu.Unlock()
+	f.recordTelemetry(&tel)
 	if dropped && onDrop != nil {
 		onDrop()
 	}
@@ -194,14 +198,8 @@ func (f *ClientFanout) ResyncAt(snapSeq, gen uint64, redraw []byte, scope Resync
 		if scope == ScopeDropped && !sub.dropped {
 			continue
 		}
-		for drained := false; !drained; {
-			select {
-			case <-sub.ch:
-			default:
-				drained = true
-			}
-		}
-		sub.ch <- payload // emptied under f.mu above, so this cannot block
+		sub.drainLocked()
+		sub.sendLocked(payload) // emptied under f.mu above, so this cannot drop
 		sub.dropped, sub.skipThrough = false, through
 		sub.resyncing, sub.held, sub.heldLost = false, nil, false
 		n++
@@ -211,7 +209,7 @@ func (f *ClientFanout) ResyncAt(snapSeq, gen uint64, redraw []byte, scope Resync
 
 // deliverLocked is the non-blocking send shared by Broadcast and BroadcastSeq. seq 0 means
 // unsequenced. It reports whether any subscriber dropped the frame. f.mu must be held.
-func (f *ClientFanout) deliverLocked(data []byte, seq uint64) (dropped bool) {
+func (f *ClientFanout) deliverLocked(data []byte, seq uint64, tel *fanoutTelemetry) (dropped bool) {
 	for _, sub := range f.subscribers {
 		if seq != 0 && seq <= sub.skipThrough {
 			continue
@@ -224,12 +222,36 @@ func (f *ClientFanout) deliverLocked(data []byte, seq uint64) (dropped bool) {
 			}
 			continue
 		}
-		select {
-		case sub.ch <- data:
-		default:
+		tel.depth(len(sub.ch))
+		if !sub.sendLocked(data) {
+			tel.drops++
 			sub.dropped = true
 			dropped = true
 		}
 	}
 	return dropped
+}
+
+// fanoutTelemetry collects per-frame samples under f.mu so they are recorded after Unlock and
+// never extend the per-frame lock hold.
+type fanoutTelemetry struct {
+	backing [8]float64
+	samples []float64
+	drops   int
+}
+
+func (t *fanoutTelemetry) depth(n int) {
+	if t.samples == nil {
+		t.samples = t.backing[:0]
+	}
+	t.samples = append(t.samples, float64(n))
+}
+
+func (f *ClientFanout) recordTelemetry(t *fanoutTelemetry) {
+	for _, d := range t.samples {
+		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, d)
+	}
+	for range t.drops {
+		f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
+	}
 }

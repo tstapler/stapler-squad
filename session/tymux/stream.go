@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/lifecycle"
 )
@@ -208,9 +209,14 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 	case *v1.AttachEvent_Output:
 		// Legacy output has no seq, so the stream can no longer be spliced exactly.
 		s.fanout.DisableSeq()
+		handleStart := time.Now()
 		s.fanout.Broadcast(p.Output)
+		termlat.Default.Record(termlat.StageFrameHandle, tymuxLabels, time.Since(handleStart))
 	case *v1.AttachEvent_OutputChunk:
-		if s.fanout.BroadcastSeq(p.OutputChunk.GetSeq(), p.OutputChunk.GetData()) {
+		handleStart := time.Now()
+		gap := s.fanout.BroadcastSeq(p.OutputChunk.GetSeq(), p.OutputChunk.GetData())
+		termlat.Default.Record(termlat.StageFrameHandle, tymuxLabels, time.Since(handleStart))
+		if gap {
 			log.Warn("tymux: output sequence jumped without an output_gap, resyncing", "session_id", s.GetSessionIdentifier())
 			s.requestStreamResync(resyncReasonSeqGap, ScopeAll)
 		}

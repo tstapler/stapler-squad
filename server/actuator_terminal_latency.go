@@ -17,6 +17,8 @@ type terminalLatencyReport struct {
 	Stages   []termlat.Stats `json:"stages"`
 	// Resync counts resync requests and client-side skips by reason and backend since start.
 	Resync []termlat.ResyncCount `json:"resync"`
+	// Drops counts output frames dropped on a full queue by cause and backend since start.
+	Drops []termlat.DropCount `json:"drops"`
 }
 
 const terminalLatencyNote = "ms for duration stages, counts for *_depth stages; p50/p95/p99 over the last 5 minutes, max since start. " +
@@ -31,7 +33,7 @@ func handleActuatorTerminalLatency(rec *termlat.Recorder) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		rep := terminalLatencyReport{Note: terminalLatencyNote, Alerting: rec.Alerting(), Stages: rec.Report(), Resync: rec.ResyncCounts()}
+		rep := terminalLatencyReport{Note: terminalLatencyNote, Alerting: rec.Alerting(), Stages: rec.Report(), Resync: rec.ResyncCounts(), Drops: rec.DropCounts()}
 		if rep.Alerting == nil {
 			rep.Alerting = []termlat.Stats{}
 		}
@@ -53,6 +55,9 @@ func formatTerminalLatency(rep terminalLatencyReport) string {
 	}
 	for _, r := range rep.Resync {
 		fmt.Fprintf(&b, "resync %-20s %-7s %8d\n", r.Reason, r.Backend, r.Total)
+	}
+	for _, d := range rep.Drops {
+		fmt.Fprintf(&b, "drop %-20s %-7s %8d\n", d.Cause, d.Backend, d.Total)
 	}
 	for _, s := range rep.Alerting {
 		fmt.Fprintf(&b, "ALERT: %s %s/%s p95=%.1f\n", s.Stage, s.Backend, s.Listener, s.P95)

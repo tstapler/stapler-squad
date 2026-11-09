@@ -4,6 +4,9 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/tstapler/stapler-squad/internal/termlat"
 )
 
 // subscriberBufferSize is each subscriber channel's buffer depth — enough
@@ -25,6 +28,9 @@ type fanoutSubscriber struct {
 	// skipThrough discards sequenced frames with seq <= it: a resync already delivered them
 	// inside its redraw (see fanout_seq.go).
 	skipThrough uint64
+	// stamps holds the enqueue time of each queued frame (same order) for a timed subscriber, so
+	// Dequeued can report the queue wait without changing the frame channel's type. nil if untimed.
+	stamps chan time.Time
 }
 
 // ClientFanout is a local, in-process multi-subscriber broadcast for one
@@ -47,11 +53,56 @@ type ClientFanout struct {
 	seq         seqState // guarded by mu; see fanout_seq.go
 	// seqOn mirrors seq.valid so DisableSeq, run per legacy frame, can skip the lock.
 	seqOn atomic.Bool
+	rec   *termlat.Recorder
+	// stamps maps a timed subscriber's id to its stamp queue so Dequeued, called once per frame,
+	// never takes f.mu.
+	stamps sync.Map
 }
 
+// sendLocked queues data without blocking and reports whether it fit. A timed subscriber also
+// stamps the enqueue time (see Dequeued). Only the broadcasting paths send, all under ClientFanout.mu.
+func (s *fanoutSubscriber) sendLocked(data []byte) bool {
+	if len(s.ch) == cap(s.ch) {
+		return false
+	}
+	if s.stamps != nil {
+		select {
+		case s.stamps <- time.Now():
+		default: // a consumer that never calls Dequeued: lose the sample, never block the reader
+		}
+	}
+	s.ch <- data
+	return true
+}
+
+// drainLocked empties the frame queue and its stamps. Only call under ClientFanout.mu (nothing
+// else sends; a consumer only makes room).
+func (s *fanoutSubscriber) drainLocked() {
+	for drained := false; !drained; {
+		select {
+		case <-s.ch:
+		default:
+			drained = true
+		}
+	}
+	if s.stamps != nil {
+		for drained := false; !drained; {
+			select {
+			case <-s.stamps:
+			default:
+				drained = true
+			}
+		}
+	}
+}
+
+var tymuxLabels = termlat.Labels{Backend: "tymux"}
+
 // NewClientFanout constructs an empty ClientFanout.
-func NewClientFanout() *ClientFanout {
-	return &ClientFanout{subscribers: make(map[string]*fanoutSubscriber)}
+func NewClientFanout() *ClientFanout { return newClientFanoutRecording(termlat.Default) }
+
+func newClientFanoutRecording(rec *termlat.Recorder) *ClientFanout {
+	return &ClientFanout{subscribers: make(map[string]*fanoutSubscriber), rec: rec}
 }
 
 // SetOnDrop registers fn to run (outside the fanout's lock, on the broadcasting goroutine)
@@ -65,14 +116,40 @@ func (f *ClientFanout) SetOnDrop(fn func()) {
 // Subscribe registers a new subscriber and returns its id (for
 // Unsubscribe) and a channel that receives every subsequent Broadcast
 // call's data. The channel is closed by Unsubscribe, never by Broadcast.
-func (f *ClientFanout) Subscribe() (string, chan []byte) {
+func (f *ClientFanout) Subscribe() (string, chan []byte) { return f.subscribe(false) }
+
+// SubscribeTimed is Subscribe for a consumer that calls Dequeued after every receive, which
+// records how long each frame waited in the queue (termlat.StageFanoutWait).
+func (f *ClientFanout) SubscribeTimed() (string, chan []byte) { return f.subscribe(true) }
+
+func (f *ClientFanout) subscribe(timed bool) (string, chan []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
 	id := strconv.FormatUint(f.nextID, 10)
-	ch := make(chan []byte, subscriberBufferSize)
-	f.subscribers[id] = &fanoutSubscriber{ch: ch}
-	return id, ch
+	sub := &fanoutSubscriber{ch: make(chan []byte, subscriberBufferSize)}
+	if timed {
+		// A consumer is between receive and Dequeued for at most one frame, so the stamps can
+		// outnumber the queue by one; the slack keeps Broadcast from ever blocking on a stamp.
+		sub.stamps = make(chan time.Time, subscriberBufferSize+2)
+		f.stamps.Store(id, sub.stamps)
+	}
+	f.subscribers[id] = sub
+	return id, sub.ch
+}
+
+// Dequeued records the queue wait of the oldest frame a timed subscriber has not yet accounted
+// for. Call it once per frame received from the channel; extra calls record nothing.
+func (f *ClientFanout) Dequeued(id string) {
+	v, ok := f.stamps.Load(id)
+	if !ok {
+		return
+	}
+	select {
+	case at := <-v.(chan time.Time):
+		f.rec.Record(termlat.StageFanoutWait, tymuxLabels, time.Since(at))
+	default:
+	}
 }
 
 // Unsubscribe removes and closes the subscriber channel for id. A no-op if
@@ -82,6 +159,7 @@ func (f *ClientFanout) Unsubscribe(id string) {
 	defer f.mu.Unlock()
 	if sub, ok := f.subscribers[id]; ok {
 		delete(f.subscribers, id)
+		f.stamps.Delete(id)
 		close(sub.ch)
 	}
 }
@@ -91,10 +169,12 @@ func (f *ClientFanout) Unsubscribe(id string) {
 // rather than blocking the caller (the standing stream's reader
 // goroutine).
 func (f *ClientFanout) Broadcast(data []byte) {
+	var tel fanoutTelemetry
 	f.mu.Lock()
-	dropped := f.deliverLocked(data, 0)
+	dropped := f.deliverLocked(data, 0, &tel)
 	onDrop := f.onDrop
 	f.mu.Unlock()
+	f.recordTelemetry(&tel)
 	if dropped && onDrop != nil {
 		onDrop()
 	}
@@ -160,13 +240,20 @@ func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
 					drained = true
 				}
 			}
+			if sub.stamps != nil {
+				for drained := false; !drained; {
+					select {
+					case <-sub.stamps:
+					default:
+						drained = true
+					}
+				}
+			}
 			held = append([][]byte{repaint}, held...)
 			n++
 		}
 		for _, d := range held {
-			select {
-			case sub.ch <- d:
-			default:
+			if !sub.sendLocked(d) {
 				complete = false
 			}
 		}

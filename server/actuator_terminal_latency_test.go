@@ -32,6 +32,22 @@ func TestActuatorTerminalLatency_should_ReportPercentilesPerBackendAndListener(t
 	assert.NotNil(t, got.Alerting, "alerting is [] not null so scripts can index it")
 }
 
+func TestActuatorTerminalLatency_should_ReportDroppedFrames(t *testing.T) {
+	t.Parallel()
+	rec := termlat.New(nil)
+	rec.CountDrop(termlat.DropFanoutFull, "tymux")
+
+	w := httptest.NewRecorder()
+	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	var got terminalLatencyReport
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, []termlat.DropCount{{Cause: "tymux_fanout_full", Backend: "tymux", Total: 1}}, got.Drops)
+
+	w = httptest.NewRecorder()
+	handleActuatorTerminalLatency(rec).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?format=text", nil))
+	assert.Contains(t, w.Body.String(), "drop tymux_fanout_full")
+}
+
 func TestActuatorTerminalLatency_should_RenderTextAndRejectWrites(t *testing.T) {
 	t.Parallel()
 	rec := termlat.New(nil)

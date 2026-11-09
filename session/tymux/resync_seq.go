@@ -148,7 +148,10 @@ func (s *tymuxGRPCSession) runFlight(f *resyncFlight) {
 	cancel()
 	if err == nil {
 		var redraw string
-		if redraw, err = RenderSnapshotRedraw(snap); err == nil {
+		renderStart := time.Now()
+		redraw, err = RenderSnapshotRedraw(snap)
+		observeCaptureRender(renderStart)
+		if err == nil {
 			f.res = &resyncSnap{epoch: f.epoch, seqGen: seqGen, snap: snap, redraw: []byte(redraw), at: time.Now(), gapGen: gapGen}
 		}
 	}
