@@ -19,13 +19,7 @@ function touchPoint(e: Event): Point {
   return t ? { x: t.clientX, y: t.clientY } : { x: 0, y: 0 };
 }
 
-export function bindTapTarget(
-  surface: HTMLElement,
-  focus: () => void,
-  clock: MobileInputClock,
-  /** When given, a trigger inside the dedupe window still refocuses if the layer lost focus (the renderer's own mousedown takes it after touchend). */
-  hasFocus?: () => boolean,
-): () => void {
+export function bindTapTarget(surface: HTMLElement, focus: () => void, clock: MobileInputClock, layer?: HTMLElement): () => void {
   let start: Point | null = null;
   let lastFocusAt: number | null = null;
 
@@ -33,12 +27,20 @@ export function bindTapTarget(
 
   const tap = () => {
     const now = clock.now();
-    if (lastFocusAt !== null && now - lastFocusAt < TAP_DEDUPE_MS && hasFocus?.() !== false) return;
+    if (lastFocusAt !== null && now - lastFocusAt < TAP_DEDUPE_MS) return;
     lastFocusAt = now;
     focus();
   };
 
+  // A renderer's own touch/mouse handling focuses its helper textarea after our pointerup (xterm on the
+  // compat mousedown, ghostty on touchend). Take focus back inside the same gesture so the keyboard stays up.
+  const onRendererFocus = (e: Event) => {
+    if (!layer || e.target === layer || lastFocusAt === null) return;
+    if (clock.now() - lastFocusAt < TAP_DEDUPE_MS) focus();
+  };
+
   const handlers: Array<[string, (e: Event) => void]> = [
+    ["focusin", onRendererFocus],
     ["pointerdown", (e) => ((start = pointerPoint(e)), undefined)],
     ["touchstart", (e) => ((start = touchPoint(e)), undefined)],
     ["pointercancel", () => ((start = null), undefined)],

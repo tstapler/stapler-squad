@@ -155,7 +155,7 @@ describe("bindTapTarget", () => {
     expect(focusSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("bindTapTarget_should_RefocusLayer_When_RendererTakesFocusAfterTouchendWithinDedupeWindow", () => {
+  it("bindTapTarget_should_RefocusLayer_When_RendererTakesFocusRightAfterTheTap", () => {
     const { c, surface } = setup();
     const rendererTextarea = document.createElement("textarea");
     surface.appendChild(rendererTextarea);
@@ -164,8 +164,6 @@ describe("bindTapTarget", () => {
     expect(document.activeElement).toBe(c.element);
     // The compat mousedown after touchend makes the renderer focus its own helper textarea.
     rendererTextarea.focus();
-    expect(document.activeElement).toBe(rendererTextarea);
-    surface.click();
     expect(document.activeElement).toBe(c.element);
   });
 
