@@ -229,7 +229,7 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 		"Then " + forDefault(secAwaitVerdict) + "\n\n" + forDefault(secOnPass) + "\n\n" + forDefault(onFailSection()) + "\n")
 
 	// ship.md
-	files["ship.md"] = renderDefault(secShipIntro+"\n\n"+secShipSteps, map[string]string{"item_id": itemID}) + "\n"
+	files["ship.md"] = withWakeGuidance(renderDefault(secShipIntro+"\n\n"+secShipSteps, map[string]string{"item_id": itemID}) + "\n")
 
 	// help.md — list all available commands
 	var helpSb strings.Builder

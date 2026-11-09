@@ -383,7 +383,7 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *BacklogItemData) (map[stri
 	files := make(map[string]string, len(criteria)*2+4)
 	files["status.md"] = renderTemplate(rm.StatusCommandTemplate, base)
 	files["review.md"] = withWakeGuidance(renderTemplate(rm.ReviewCommandTemplate, base))
-	files["ship.md"] = renderTemplate(rm.ShipCommandTemplate, base)
+	files["ship.md"] = withWakeGuidance(renderTemplate(rm.ShipCommandTemplate, base))
 	files["help.md"] = renderTemplate(rm.HelpCommandTemplate, base)
 
 	for _, c := range criteria {
