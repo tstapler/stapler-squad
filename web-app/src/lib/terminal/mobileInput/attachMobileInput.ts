@@ -72,7 +72,7 @@ export interface MobileInputController {
   dispose(): void;
 }
 
-const defaultClock = (): MobileInputClock => ({
+export const defaultClock = (): MobileInputClock => ({
   now: () => performance.now(),
   setTimeout: (fn, ms) => window.setTimeout(fn, ms),
   clearTimeout: (id) => window.clearTimeout(id),

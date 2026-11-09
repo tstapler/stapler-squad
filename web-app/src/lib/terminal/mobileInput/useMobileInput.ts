@@ -6,11 +6,11 @@
  * a single owner among docked terminals, and tells the layer when its diff base can no longer be trusted.
  */
 import { useCallback, useEffect, useRef } from "react";
-import { attachMobileInput, type MobileInputController } from "./attachMobileInput";
+import { attachMobileInput, defaultClock, type MobileInputController } from "./attachMobileInput";
 import { inputDiagnostics } from "./diagnostics";
-import { countingDiagnostic } from "./inputCounters";
 import type { Modifiers } from "./keymap";
 import { HIDDEN_INVALIDATE_MS } from "./policy";
+import { createMobileInputTelemetry } from "./telemetry";
 import type { ImeAnomaly, MobileInputClock, MobileInputDiagnostic, OnData } from "./types";
 
 export type MobileInputRendererKind = "xterm" | "ghostty";
@@ -118,7 +118,8 @@ export function useMobileInput(options: UseMobileInputOptions): MobileInputHandl
     const mount = live().getMount();
     if (!mount.container) return;
     const now = () => (live().now ?? Date.now)();
-    const count = countingDiagnostic(live().renderer);
+    const clock = live().clock ?? defaultClock();
+    const telemetry = createMobileInputTelemetry({ renderer: live().renderer, clock });
     const controller = attachMobileInput(mount.container, {
       onData: (bytes, seq) => {
         inputDiagnostics.pushInput("emit", bytes, now());
@@ -127,9 +128,12 @@ export function useMobileInput(options: UseMobileInputOptions): MobileInputHandl
       getModifiers: () => live().host.getModifiers(),
       consumeModifiers: () => live().host.consumeModifiers(),
       isReadOnly: () => live().host.isReadOnly(),
-      onAnomaly: (kind) => live().host.onAnomaly?.(kind),
+      onAnomaly: (kind) => {
+        telemetry.onAnomaly(kind);
+        live().host.onAnomaly?.(kind);
+      },
       onDiagnostic: (entry) => {
-        count(entry);
+        telemetry.onDiagnostic(entry);
         live().host.onDiagnostic?.(entry);
       },
       onDeferredWaiting: (n) => live().host.onDeferredWaiting?.(n),
@@ -138,7 +142,7 @@ export function useMobileInput(options: UseMobileInputOptions): MobileInputHandl
       onWillFocus: () => {
         if (controllerRef.current) claimFocus(controllerRef.current);
       },
-      clock: live().clock,
+      clock,
       rendererElement: mount.rendererElement ?? undefined,
       describedBy: live().host.describedBy,
     });
@@ -172,6 +176,7 @@ export function useMobileInput(options: UseMobileInputOptions): MobileInputHandl
       unregister();
       unbindTap();
       controller.dispose();
+      telemetry.dispose();
       controllerRef.current = null;
     };
   }, [enabled, visible]);

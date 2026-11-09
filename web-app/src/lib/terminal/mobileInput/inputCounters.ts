@@ -1,7 +1,6 @@
 /**
- * Client counters for the layer: `cm.input{event, renderer}`. The beacon sink is installed by the
- * observability slice (Story 2.2.2); until then every increment is a no-op, so PR-A1 ships the
- * adapter and its call sites without any telemetry dependency.
+ * Optional in-process counter hook for `onDiagnostic`. Production beacons go through
+ * `telemetry.ts` (installed by `useMobileInput`); this sink stays a no-op unless a caller sets one.
  */
 import type { MobileInputDiagnostic } from "./types";
 
