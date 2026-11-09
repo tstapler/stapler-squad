@@ -89,6 +89,7 @@ func filesNamingItemPRScalars(t *testing.T, root string) []string {
 }
 
 func TestLegacyItemPRReaders_ShouldMatchAllowList_WhenGreppingPrNumberPrURL(t *testing.T) {
+	t.Parallel()
 	found := filesNamingItemPRScalars(t, moduleRoot(t))
 
 	foundSet := make(map[string]bool, len(found))
