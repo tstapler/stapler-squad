@@ -1127,7 +1127,7 @@ func (h *StreamHub) finishResize(ctx, callerCtx context.Context, budget, took ti
 	}
 	h.resizeBudget.observe(took)
 	if h.settle.droppedSinceCapture.Load() || (reachedCapture && !published) {
-		h.armSettle()
+		h.armSettleFresh()
 	}
 }
 

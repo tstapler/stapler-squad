@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"testing"
@@ -113,4 +114,36 @@ func TestRequestResize_should_NotRecapture_When_NothingWasDropped(t *testing.T) 
 
 	assert.Equal(t, before+1, int(r.ctrl.captureCalls.Load()))
 	assert.Equal(t, settled, r.hub.ResyncCaptures(streamhub.ResyncReasonResizeSettle))
+}
+
+// Output that arrives while the settle capture is in flight is neither painted over by the older
+// snapshot nor discarded with the batch: it must reach the subscriber after the repaint.
+func TestSettle_should_DeliverLiveOutputAfterTheRepaint_When_OutputArrivesDuringTheSettleCapture(t *testing.T) {
+	t.Parallel()
+	r := newSettleRig(t)
+	var captures atomic.Int32
+	hook := func() {
+		switch captures.Add(1) {
+		case 1:
+			r.hub.OnRawOutput([]byte("dropped by the resize")) // arms the settle
+		case 2:
+			r.hub.OnRawOutput([]byte("LIVE-DURING-SETTLE"))
+		}
+	}
+	r.ctrl.afterCapture.Store(&hook)
+
+	r.resize(t, 100, 30)
+
+	liveIndex := func() int {
+		for i, f := range r.sink.ReceivedFrames() {
+			if bytes.Contains(f, []byte("LIVE-DURING-SETTLE")) {
+				return i
+			}
+		}
+		return -1
+	}
+	require.Eventually(t, func() bool { return liveIndex() >= 0 }, 5*time.Second, time.Millisecond,
+		"the frame that arrived during the settle capture is delivered")
+	require.Equal(t, int32(2), captures.Load())
+	assert.Greater(t, liveIndex(), 0, "and it follows the repaint rather than preceding it")
 }

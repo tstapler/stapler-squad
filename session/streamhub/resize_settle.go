@@ -41,6 +41,14 @@ type settleState struct {
 // noteSuppressedOutput is called by OnRawOutput for each frame dropped during a resize.
 func (h *StreamHub) noteSuppressedOutput() { h.settle.droppedSinceCapture.Store(true) }
 
+// armSettleFresh arms a settle for a resize that just ended, restarting the failure budget.
+func (h *StreamHub) armSettleFresh() {
+	h.settle.mu.Lock()
+	h.settle.attempts = 0
+	h.settle.mu.Unlock()
+	h.armSettle()
+}
+
 // armSettle schedules one coalesced repaint capture; calls while one is pending do nothing.
 func (h *StreamHub) armSettle() {
 	h.settle.mu.Lock()
@@ -57,11 +65,10 @@ func (h *StreamHub) clearSettleTimer() {
 	h.settle.mu.Unlock()
 }
 
-// runSettle repaints every subscriber with a fresh full-state capture. It holds no lock across
-// the capture, so a resize or FirstPaint is never stalled behind it; instead it samples the
-// resize generation around the capture and, if a resize ran or started meanwhile, discards the
-// result and tries again later (that resize captured its own snapshot, but a retry is cheap and
-// keeps the "someone always repaints" guarantee simple). It gives up after maxSettleAttempts.
+// runSettle repaints every subscriber with a fresh full-state capture, using the same
+// hold-during-capture claim as runResync: each subscriber queues frames that arrive meanwhile
+// behind its repaint, and the capture runs under resizeApplyMu so no resize interleaves with it.
+// It gives up after maxSettleAttempts failures.
 func (h *StreamHub) runSettle() {
 	h.clearSettleTimer()
 	if h.State() == HubTornDown || h.controller == nil {
@@ -71,35 +78,55 @@ func (h *StreamHub) runSettle() {
 		recordResyncCapture(ResyncReasonResizeSettle, "skipped_idle")
 		return
 	}
-	genBefore, resizing := h.ResizeActivity()
-	if resizing {
-		h.retrySettle("skipped_busy")
+
+	h.mu.Lock()
+	var claimed []*subscriber
+	for _, sub := range h.subscribers {
+		if sub.beginRepaint() {
+			claimed = append(claimed, sub)
+		}
+	}
+	h.mu.Unlock()
+	if len(claimed) == 0 {
+		recordResyncCapture(ResyncReasonResizeSettle, "skipped_idle")
 		return
 	}
+	// Bytes still batched pre-date the capture below and will be in it; later ones are held.
+	h.batchWindow.Discard()
 
+	h.resizeApplyMu.Lock()
 	ctx, cancel := context.WithTimeout(context.Background(), h.resizeBudget.current())
-	defer cancel()
 	h.settle.droppedSinceCapture.Store(false)
 	snapshot, err := h.captureFullState(ctx)
-	if err == nil {
-		if genAfter, nowResizing := h.ResizeActivity(); nowResizing || genAfter != genBefore {
-			h.retrySettle("skipped_raced")
+	cancel()
+	h.resizeApplyMu.Unlock()
+
+	if err != nil {
+		for _, sub := range claimed {
+			sub.finishResync(nil)
+		}
+		recordResyncCapture(ResyncReasonResizeSettle, "failed")
+		log.Warn("streamhub: resize settle capture failed", "session", h.sessionName, "error", err)
+		if errors.Is(err, ErrSessionNotStarted) {
 			return
 		}
-		h.publishFullState(snapshot)
-		h.settle.mu.Lock()
-		h.settle.attempts = 0
-		h.settle.mu.Unlock()
-		h.settleCaptures.Add(1)
-		recordResyncCapture(ResyncReasonResizeSettle, "published")
+		h.retrySettle("")
 		return
 	}
-	recordResyncCapture(ResyncReasonResizeSettle, "failed")
-	log.Warn("streamhub: resize settle capture failed", "session", h.sessionName, "error", err)
-	if errors.Is(err, ErrSessionNotStarted) {
-		return
+	if snapshot.cache {
+		h.snapshotMu.Lock()
+		h.lastSnapshot = snapshot.data
+		h.snapshotMu.Unlock()
 	}
-	h.retrySettle("")
+	h.tap.Record(TapSnapshot, "", snapshot.data)
+	for _, sub := range claimed {
+		sub.finishResync(snapshot.data)
+	}
+	h.settle.mu.Lock()
+	h.settle.attempts = 0
+	h.settle.mu.Unlock()
+	h.settleCaptures.Add(1)
+	recordResyncCapture(ResyncReasonResizeSettle, "published")
 }
 
 // retrySettle re-arms the settle (counting an outcome when given) until maxSettleAttempts.

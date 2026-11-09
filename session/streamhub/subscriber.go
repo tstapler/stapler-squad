@@ -211,7 +211,22 @@ func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueD
 func (s *subscriber) beginResync() (ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || !s.dropped || s.sentFrames.Load() == s.droppedAtSent {
+	if s.closed || s.resyncing || !s.dropped || s.sentFrames.Load() == s.droppedAtSent {
+		return false
+	}
+	s.dropped = false
+	s.resyncing = true
+	s.held, s.heldLost = nil, false
+	return true
+}
+
+// beginRepaint claims a repaint regardless of dropped frames (the post-resize settle repaints
+// everyone) and holds new frames until finishResync. It returns false when the subscriber is
+// closed, or another repaint already holds it (that one will repaint it).
+func (s *subscriber) beginRepaint() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resyncing {
 		return false
 	}
 	s.dropped = false

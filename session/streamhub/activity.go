@@ -93,6 +93,9 @@ func (h *StreamHub) backgrounded() bool {
 // noteTypingForQoS marks this session interactive and keeps an expiry timer armed so the
 // "typing stopped" transition is reported promptly. O(1) on the keystroke path.
 func (h *StreamHub) noteTypingForQoS() {
+	if h.activity.closed.Load() {
+		return // closeQoS already forgot this session; Note would resurrect it in the tracker
+	}
 	h.qos.Note(h.sessionName)
 	if h.activitySink == nil {
 		return
@@ -126,6 +129,11 @@ func (h *StreamHub) refreshActivity() {
 	}
 	a := h.qos.ActivityOf(h.sessionName)
 	h.activity.desired.Store(int32(a))
+	if h.activity.closed.Load() {
+		// closeQoS raced past the check above; its final Normal must win over this stale store.
+		h.activity.desired.Store(int32(qos.ActivityNormal))
+		return
+	}
 	if a == qos.ActivityBackground {
 		h.batchWindow.SetMaxWindow(BackgroundBatchWindow)
 	} else {
