@@ -21,6 +21,9 @@ const (
 	// "elevated"; goroutineSustainFor is how long it must stay elevated to count as a leak.
 	goroutineGrowthFactor = 1.5
 	goroutineSustainFor   = 30 * time.Minute
+	// goroutineClearAfter is how long the count must stay under the limit before the sustain clock
+	// resets, so a leak hovering around the limit is not forgiven by one low sample.
+	goroutineClearAfter = 5 * time.Minute
 
 	// HighGoroutineThreshold is the absolute floor of the hard ceiling: above it, or above twice
 	// the session-scaled expectation when that is larger, the count is reported immediately
@@ -76,11 +79,12 @@ func goroutineCeiling(expected int) int { return max(HighGoroutineThreshold, 2*e
 type GoroutineWatch struct {
 	mu           sync.Mutex
 	elevatedFrom time.Time // zero when not elevated
+	belowSince   time.Time // zero while above the limit
 	last         GoroutineVerdict
 }
 
 // DefaultGoroutineWatch is the process-wide watch the server samples and /actuator/health reads.
-var DefaultGoroutineWatch = &GoroutineWatch{last: GoroutineVerdict{State: GoroutinesOK}}
+var DefaultGoroutineWatch = &GoroutineWatch{}
 
 // Observe records one sample taken at now and returns its verdict.
 func (w *GoroutineWatch) Observe(now time.Time, goroutines, sessions int) GoroutineVerdict {
@@ -93,16 +97,24 @@ func (w *GoroutineWatch) Observe(now time.Time, goroutines, sessions int) Gorout
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if goroutines > v.Limit {
+		w.belowSince = time.Time{}
 		if w.elevatedFrom.IsZero() {
 			w.elevatedFrom = now
 		}
+	} else if !w.elevatedFrom.IsZero() {
+		if w.belowSince.IsZero() {
+			w.belowSince = now
+		}
+		if now.Sub(w.belowSince) >= goroutineClearAfter {
+			w.elevatedFrom, w.belowSince = time.Time{}, time.Time{}
+		}
+	}
+	if !w.elevatedFrom.IsZero() {
 		v.ElevatedFor = now.Sub(w.elevatedFrom)
 		v.State = GoroutinesElevated
 		if v.ElevatedFor >= goroutineSustainFor {
 			v.State = GoroutinesSustained
 		}
-	} else {
-		w.elevatedFrom = time.Time{}
 	}
 	if goroutines > v.Ceiling {
 		v.State = GoroutinesOverCeiling
@@ -111,6 +123,10 @@ func (w *GoroutineWatch) Observe(now time.Time, goroutines, sessions int) Gorout
 	return v
 }
 
+// Known blind spot: the limit is 1.5x the budget (~37 goroutines per session against ~20 measured),
+// so a slow leak that stays inside that headroom is not detected; the watch catches small-fleet
+// leaks and gross growth, not drift.
+//
 // Last returns the most recent verdict, or an OK zero-sample before the first Observe.
 func (w *GoroutineWatch) Last() GoroutineVerdict {
 	w.mu.Lock()

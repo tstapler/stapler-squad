@@ -37,7 +37,8 @@ func TestGoroutineWatch_should_NotDegrade_When_ASpikeSettlesBeforeTheSustainWind
 	t.Parallel()
 	w := &GoroutineWatch{}
 	require.Equal(t, GoroutinesElevated, w.Observe(t0, 900, 3).State)
-	require.Equal(t, GoroutinesOK, w.Observe(t0.Add(20*time.Minute), 150, 3).State)
+	require.Equal(t, GoroutinesElevated, w.Observe(t0.Add(20*time.Minute), 150, 3).State, "one low sample does not clear it")
+	require.Equal(t, GoroutinesOK, w.Observe(t0.Add(25*time.Minute), 150, 3).State, "settled for the clear window")
 
 	// The clock restarts: another spike starts from zero, not from the first one.
 	v := w.Observe(t0.Add(40*time.Minute), 900, 3)
@@ -110,4 +111,30 @@ func TestRunGoroutineWatch_should_SampleOnEveryTick_AndStopWithTheContext(t *tes
 	case <-time.After(5 * time.Second):
 		t.Fatal("watch did not stop with its context")
 	}
+}
+
+func TestGoroutineWatch_should_StillReachSustained_When_ALeakDipsBelowTheLimitBriefly(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	w.Observe(t0, 900, 3)
+	w.Observe(t0.Add(10*time.Minute), 150, 3) // one dip, shorter than the clear window
+	w.Observe(t0.Add(12*time.Minute), 900, 3)
+
+	v := w.Observe(t0.Add(30*time.Minute), 900, 3)
+
+	assert.Equal(t, GoroutinesSustained, v.State)
+}
+
+func TestExpectedGoroutines_should_TreatNegativeSessionsAsZero(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, ExpectedGoroutines(0), ExpectedGoroutines(-4))
+}
+
+func TestGoroutineWatch_should_JudgeTheBoundaryExclusively(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	limit := goroutineLimit(ExpectedGoroutines(2))
+	assert.Equal(t, GoroutinesOK, w.Observe(t0, limit, 2).State, "at the limit is within budget")
+	assert.Equal(t, GoroutinesElevated, w.Observe(t0, limit+1, 2).State)
+	assert.Equal(t, GoroutinesElevated, (&GoroutineWatch{}).Observe(t0, HighGoroutineThreshold, 0).State, "at the ceiling is not over it")
 }

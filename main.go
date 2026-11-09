@@ -263,7 +263,6 @@ var (
 					return fmt.Errorf("failed to start profiling: %w", err)
 				}
 				defer cleanup()
-
 			}
 
 			// Load user-defined detector plugins from the config dir's detectors/

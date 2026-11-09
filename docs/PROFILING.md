@@ -169,7 +169,7 @@ Goroutine leaks appear as a count that grows monotonically without bound. The se
 - logs an ERROR, and `/actuator/health` reports `runtime` as `degraded`, once it has stayed above 1.5x the budget for 30 minutes ("sustained", likely a leak);
 - does the same immediately if the count exceeds a hard ceiling, 2000 or twice the budget, whichever is larger.
 
-A short spike above budget never degrades health. `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`. Steady state is about 20 goroutines per session (615 with ~30 sessions), so a fixed threshold either misses a small-fleet leak (BUG-034 was found at 310-320 goroutines) or fires permanently on a large one.
+A short spike above budget never degrades health, and the 30-minute clock only resets after the count has stayed under the limit for 5 minutes. The limit leaves headroom (about 37 goroutines per session against about 20 measured), so the watch catches small-fleet leaks like BUG-034 and gross growth, not slow drift inside that headroom. `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`. Steady state is about 20 goroutines per session (615 with ~30 sessions), so a fixed threshold either misses a small-fleet leak (BUG-034 was found at 310-320 goroutines) or fires permanently on a large one.
 
 To track manually:
 
