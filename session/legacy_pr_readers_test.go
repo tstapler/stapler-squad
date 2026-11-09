@@ -92,6 +92,7 @@ func filesNamingLegacyPRFields(t *testing.T, root string) []string {
 }
 
 func TestLegacyPRReaders_ShouldMatchAllowList_WhenGrepping27GoFiles(t *testing.T) {
+	t.Parallel()
 	found := filesNamingLegacyPRFields(t, moduleRoot(t))
 
 	foundSet := make(map[string]bool, len(found))

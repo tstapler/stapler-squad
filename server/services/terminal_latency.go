@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,4 +112,18 @@ func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	termlat.Default.Record(termlat.StageInputBookkeep, labels, sendStart.Sub(start))
 	termlat.Default.Record(termlat.StageInputSend, labels, end.Sub(sendStart))
 	termlat.Default.Record(termlat.StageInputTotal, labels, end.Sub(start))
+}
+
+// countServerResync counts one mid-stream CurrentPaneRequest. A request the client flagged as
+// same-size (visibility/focus with unchanged dimensions) is the avoidable kind.
+func countServerResync(stream *connectWebSocketStream, req *sessionv1.CurrentPaneRequest) {
+	reason := termlat.ResyncServerRequest
+	if req.GetStaleDimensions() {
+		reason = termlat.ResyncServerStaleDims
+	}
+	var backend string
+	if stream != nil {
+		backend = stream.latency.labels().Backend
+	}
+	termlat.Default.CountResync(reason, backend)
 }

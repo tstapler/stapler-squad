@@ -261,18 +261,27 @@ func (p *PRStatusPoller) AddInstance(inst *Instance) {
 
 // RemoveInstance removes an instance from monitoring.
 func (p *PRStatusPoller) RemoveInstance(title string) {
+	var removedKeys []string
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	filtered := make([]*Instance, 0, len(p.instances))
 	for _, inst := range p.instances {
 		if inst.MatchesID(title) {
-			delete(p.noPRPollAfter, pollKey(inst.Snapshot()))
+			key := pollKey(inst.Snapshot())
+			removedKeys = append(removedKeys, key)
+			delete(p.noPRPollAfter, key)
 			continue
 		}
 		filtered = append(filtered, inst)
 	}
 	p.instances = filtered
 	delete(p.noPRPollAfter, title)
+	p.mu.Unlock()
+
+	p.stateMu.Lock()
+	for _, key := range removedKeys {
+		delete(p.terminalDiscoveryAfter, key)
+	}
+	p.stateMu.Unlock()
 }
 
 // SetOnUpdated registers a callback called when a session's PR priority changes.
