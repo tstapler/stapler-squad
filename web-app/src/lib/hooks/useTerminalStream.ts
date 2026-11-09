@@ -1,5 +1,6 @@
 "use client";
 
+import type { VisibilityResyncDecision } from "@/lib/terminal/resyncPolicy";
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { TerminalData, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
@@ -131,6 +132,7 @@ interface TerminalStreamResult {
   isServerUnreachable: boolean;
   handleManualReconnect: () => void;
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
+  visibilityResyncDecision: () => VisibilityResyncDecision;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
   /**
@@ -944,6 +946,7 @@ export function useTerminalStream({
     isServerUnreachable,
     handleManualReconnect,
     requestFullResync: flowControl.requestFullResync,
+    visibilityResyncDecision: flowControl.visibilityResyncDecision,
     markResyncComplete: flowControl.markResyncComplete,
     markPaneResponseReceived: flowControl.markPaneResponseReceived,
     connectionCount,

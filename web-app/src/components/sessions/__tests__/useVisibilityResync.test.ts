@@ -79,6 +79,40 @@ describe('useVisibilityResync', () => {
     expect(params.requestFullResync).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['skipped_fresh', 'skipped_unavailable'] as const)(
+    'useVisibilityResync_should_notResyncOrArmTheStallWatchdog_When_decisionIs_%s',
+    (decision) => {
+      mockTrack.mockClear();
+      const params = makeParams({ visibilityResyncDecision: jest.fn().mockReturnValue(decision) });
+      renderHook(() => useVisibilityResync(params));
+
+      act(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        window.dispatchEvent(new Event('focus'));
+      });
+      act(() => { jest.advanceTimersByTime(10_000); }); // well past the 4s stall watchdog
+
+      expect(params.requestFullResync).not.toHaveBeenCalled();
+      expect(params.disconnect).not.toHaveBeenCalled(); // an armed watchdog would force a reconnect
+      expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name: 'cm.term_resync', labels: { reason: decision } }));
+    },
+  );
+
+  it('useVisibilityResync_should_resyncAndCountIt_When_decisionIsSend', () => {
+    mockTrack.mockClear();
+    const params = makeParams({ visibilityResyncDecision: jest.fn().mockReturnValue('send') });
+    renderHook(() => useVisibilityResync(params));
+
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => { jest.advanceTimersByTime(300); });
+
+    expect(params.requestFullResync).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name: 'cm.term_resync', labels: { reason: 'visibility' } }));
+  });
+
   it('useVisibilityResync_should_callRequestFullResyncTwice_When_transitionsAreMoreThan300msApart', () => {
     const params = makeParams();
     const { result } = renderHook(() => useVisibilityResync(params));
