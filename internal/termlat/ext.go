@@ -72,25 +72,7 @@ func (r *Recorder) CountDrop(cause, backend string) {
 		return
 	}
 	k := [2]string{NormalizeDropCause(cause), NormalizeBackend(backend)}
-	r.drops.mu.Lock()
-	if r.drops.counts == nil {
-		r.drops.counts = map[[2]string]uint64{}
-	}
-	r.drops.counts[k]++
-	r.drops.mu.Unlock()
-	r.drops.once.Do(func() {
-		c, err := telemetry.GetMeter().Int64Counter("terminal_frame_drops_total",
-			metric.WithDescription("Output frames dropped on a full queue, by cause and backend"))
-		if err != nil {
-			log.Error("termlat: failed to register terminal_frame_drops_total", "error", err)
-			return
-		}
-		r.drops.counter = c
-	})
-	if r.drops.counter != nil {
-		r.drops.counter.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("cause", k[0]), attribute.String("backend", k[1])))
-	}
+	r.drops.inc("terminal_frame_drops_total", "Output frames dropped on a full queue, by cause and backend", "cause", "backend", k)
 }
 
 // DropCounts returns every (cause, backend) count since process start, sorted.
