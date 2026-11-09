@@ -6,6 +6,7 @@ import { EstimatedValue } from "@/components/ui/EstimatedValue";
 import { srOnly } from "@/components/ui/LiveRegion.css";
 import type { FlowDeadlockPage, FlowDeadlockRow } from "@/gen/session/v1/backlog_flow_pb";
 import * as styles from "./flow.css";
+import { routes } from "@/lib/routes";
 
 /**
  * Owner decision (2026-11-05): the heading stays "Review-fail streaks (heuristic)" until the
@@ -51,7 +52,7 @@ function Row({ row, showClaimed }: { row: FlowDeadlockRow; showClaimed: boolean 
       <td className={styles.cell}>{row.diffUnchangedPairs > 0 ? `yes (${row.diffUnchangedPairs})` : "no"}</td>
       {showClaimed && <td className={styles.cell}>{row.agentClaimedDone ? "yes" : "no"}</td>}
       <td className={styles.cell}>
-        <AppLink href={`?item=${row.itemId}`} className={styles.link}>
+        <AppLink href={routes.backlogItem(row.itemId)} className={styles.link}>
           Open item<span className={srOnly}> {row.title}</span>
         </AppLink>
       </td>

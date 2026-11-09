@@ -1,7 +1,7 @@
 import { create } from "@bufbuild/protobuf";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { FlowTrendsSectionSchema, type FlowTrendsSection } from "@/gen/session/v1/backlog_flow_pb";
-import { makeSummary, makeTrends } from "@/app/backlog/flow/__tests__/flowFixtures";
+import { makeSummary, makeTrends, weekKey } from "@/app/backlog/flow/__tests__/flowFixtures";
 import { FlowSectionBody } from "./FlowSectionBody";
 import { FlowVerdictMix } from "./FlowVerdictMix";
 import { CauseSparkline, ThroughputSparkline } from "./FlowTrends";
@@ -52,6 +52,46 @@ describe("Sparklines", () => {
     render(<CauseSparkline trends={trends()} cause="review_fail" label="Review FAIL rework" />);
 
     expect(screen.getByTestId("flow-sparkline-review_fail")).toHaveTextContent("first week 30, last week 12");
+  });
+
+  it("ThroughputSparkline_should_DrillIntoThatWeek_When_WeekRowButtonClicked", () => {
+    const drill = jest.fn();
+    render(<ThroughputSparkline trends={trends()} onDrill={drill} />);
+
+    fireEvent.click(within(screen.getByTestId("flow-chart-table")).getByRole("button", { name: "2026-10-12" }));
+
+    expect(drill).toHaveBeenCalledWith(weekKey("merged", 1));
+  });
+
+  it("ThroughputSparkline_should_DrillIntoThatWeek_When_PointClicked", () => {
+    const drill = jest.fn();
+    render(<ThroughputSparkline trends={trends()} onDrill={drill} />);
+
+    fireEvent.click(screen.getAllByTestId("flow-chart-point")[3]);
+
+    expect(drill).toHaveBeenCalledWith(weekKey("merged", 3));
+  });
+
+  it("CauseSparkline_should_DrillWithTheCauseWeekKey_When_WeekRowButtonClicked", () => {
+    const drill = jest.fn();
+    render(<CauseSparkline trends={trends()} cause="review_fail" label="Review FAIL rework" onDrill={drill} />);
+
+    fireEvent.click(within(screen.getByTestId("flow-chart-table")).getByRole("button", { name: "2026-10-05" }));
+
+    expect(drill).toHaveBeenCalledWith(weekKey("rework.review_fail", 0));
+  });
+
+  it("Sparklines_should_StayPlain_When_NoDrillHandlerGiven", () => {
+    render(<ThroughputSparkline trends={trends()} />);
+
+    expect(within(screen.getByTestId("flow-chart-table")).queryByRole("button")).toBeNull();
+    expect(screen.queryAllByTestId("flow-chart-point")).toHaveLength(0);
+  });
+
+  it("FlowVerdictMix_should_StayNonDrillable_When_Rendered", () => {
+    render(<FlowVerdictMix trends={trends()} />);
+
+    expect(within(screen.getByTestId("flow-chart-table")).queryByRole("button")).toBeNull();
   });
 
   it("CauseSparkline_should_RenderNothing_When_TrendsUnavailable", () => {

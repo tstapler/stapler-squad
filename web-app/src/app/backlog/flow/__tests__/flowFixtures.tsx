@@ -33,6 +33,8 @@ export function makeSummary(overrides: SummaryInit = {}): FlowSummary {
 const WEEK_MS = 7 * 86_400_000;
 const FIRST_WEEK = Date.UTC(2026, 9, 5);
 const weekStart = (i: number) => timestampFromDate(new Date(FIRST_WEEK + i * WEEK_MS));
+/** Mirrors session/flow/drill.go: `<series>@<RFC3339 week start>`. */
+export const weekKey = (series: string, i: number) => `${series}@${new Date(FIRST_WEEK + i * WEEK_MS).toISOString().replace(".000Z", "Z")}`;
 
 interface WeeklyMix {
   pass: number;
@@ -55,7 +57,7 @@ export function makeTrends(): SummaryInit["trends"] {
   const reviewFail = [30, 25, 0, 20, 12];
   return {
     meta: OK,
-    throughput: throughput.map((n, i) => ({ weekStart: weekStart(i), n })),
+    throughput: throughput.map((n, i) => ({ weekStart: weekStart(i), n, drillKey: weekKey("merged", i) })),
     throughputTotal: 28,
     verdictMix: VERDICT_WEEKS.map((w, i) => ({
       weekStart: weekStart(i),
@@ -71,11 +73,12 @@ export function makeTrends(): SummaryInit["trends"] {
     rework: reviewFail.map((n, i) => ({
       weekStart: weekStart(i),
       n,
+      drillKey: weekKey("rework", i),
       byCause: [
-        { name: "review_fail", n },
-        { name: "pr_fix", n: i },
-        { name: "bounce", n: 0 },
-        { name: "other", n: 0 },
+        { name: "review_fail", n, drillKey: weekKey("rework.review_fail", i) },
+        { name: "pr_fix", n: i, drillKey: weekKey("rework.pr_fix", i) },
+        { name: "bounce", n: 0, drillKey: weekKey("rework.bounce", i) },
+        { name: "other", n: 0, drillKey: weekKey("rework.other", i) },
       ],
     })),
     reworkTotal: 120,

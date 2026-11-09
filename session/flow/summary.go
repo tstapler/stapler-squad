@@ -211,7 +211,7 @@ func (r *run) prOutcomes(ev *eventData, s *PRSection) error {
 		return nil
 	}
 	markers, _ := r.loadMarkers() // read error is reported by markerFailure
-	o := PRFixOutcomeCounts(PRFixOutcomeInput{Window: r.w, Spans: ev.spans, Markers: markers, Since: mc.FirstOutcome})
+	o := PRFixOutcomeCounts(PRFixOutcomeInput{Window: r.w, Spans: ev.spans, Markers: markers, Since: mc.FirstOutcome, RespawnSince: r.captureSince()})
 	s.Outcomes = PROutcomes{
 		Recording: o.Recording, Steered: o.Steered, Respawned: o.Respawned,
 		SkippedActive: o.SkippedActive, ResolvedWithin24h: o.ResolvedWithin24,

@@ -9,6 +9,7 @@ import { FLOW_POLL_INTERVAL_MS } from "@/lib/hooks/useBacklogFlow";
 import { DrillButton } from "./DrillButton";
 import { formatDurationMs, formatInt } from "./flowFormatters";
 import * as styles from "./flow.css";
+import { routes } from "@/lib/routes";
 
 interface FlowAnomaliesProps {
   anomalies: FlowAnomaliesSection;
@@ -59,7 +60,7 @@ function Row({ row, archived, now, drillKey, onDrill, onViewEvents }: RowProps) 
         {active && <span className={styles.chip}> Still active</span>}
       </td>
       <td className={styles.cell}>
-        <AppLink href={`?item=${row.itemId}`} className={styles.link}>
+        <AppLink href={routes.backlogItem(row.itemId)} className={styles.link}>
           Open item<span className={srOnly}> {row.title}</span>
         </AppLink>
         {onViewEvents && (

@@ -106,7 +106,7 @@ describe("FlowAnomalies", () => {
     expect(rows[1]).not.toHaveTextContent("Still active");
     fireEvent.click(within(rows[0]).getByRole("button", { name: /87,400/ }));
     expect(onDrill).toHaveBeenCalledWith("thrash.episode");
-    expect(within(rows[0]).getByRole("link", { name: /Open item/ })).toHaveAttribute("href", "?item=a1");
+    expect(within(rows[0]).getByRole("link", { name: /Open item/ })).toHaveAttribute("href", "/backlog?item=a1");
   });
 
   it("FlowAnomalies_should_SayNoThrash_When_Empty", () => {

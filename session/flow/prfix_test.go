@@ -88,6 +88,20 @@ func TestPRFixReader_should_DeriveRespawnedOnlyFromSystemReopensAtOrAfterCapture
 	assert.Zero(t, got.Steered+got.SkippedActive)
 }
 
+func TestPRFixReader_should_CountRespawnsFromOverallCaptureSince_When_OutcomeMarkersStartedLater(t *testing.T) {
+	t.Parallel()
+	overall := prCapture.Add(-72 * time.Hour)
+	spans := []Span{
+		systemReopen(t, "early", "system", prCapture.Add(-24*time.Hour)), // after overall capture, before first outcome marker
+		systemReopen(t, "late", "system", prCapture.Add(time.Hour)),
+		systemReopen(t, "ancient", "system", overall.Add(-time.Hour)), // before any capture
+	}
+
+	got := PRFixOutcomeCounts(PRFixOutcomeInput{Window: prWindow(t), Spans: spans, Since: prCapture, RespawnSince: overall})
+
+	assert.Equal(t, 2, got.Respawned)
+}
+
 func TestPRFixReader_should_CountMarkerOutcomesAndResolvedWithin24h_When_WindowHasThem(t *testing.T) {
 	t.Parallel()
 	at := prCapture.Add(48 * time.Hour)
@@ -242,8 +256,8 @@ func TestAggregator_should_SplitPRFixAndCountOutcomes_When_MarkersAndCaptureExis
 	s := prSummary(t, prFixFake("x"), m, capture)
 
 	assert.Equal(t, capture, s.Meta.CaptureSince)
-	assert.Equal(t, PROutcomes{Recording: true, Steered: 1, Respawned: 0, SkippedActive: 1}, s.PR.Outcomes,
-		"the reopen precedes the first outcome marker, so it is not counted as respawned")
+	assert.Equal(t, PROutcomes{Recording: true, Steered: 1, Respawned: 1, SkippedActive: 1}, s.PR.Outcomes,
+		"respawns count from the overall capture start, so the reopen before the first outcome marker still counts")
 	assert.Contains(t, s.PR.Meta.Estimated, "pr_fix_outcome:since_capture")
 	assert.Contains(t, s.PR.Meta.Estimated, "pr_fix_dwell_split:since_capture")
 	assert.NotContains(t, s.PR.Meta.Estimated, "pr_fix_cause:unavailable")

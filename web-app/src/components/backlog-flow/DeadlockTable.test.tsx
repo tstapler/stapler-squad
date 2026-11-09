@@ -64,7 +64,7 @@ describe("DeadlockTable", () => {
     const first = rows().find((r) => r.textContent?.includes("Item 2"));
     expect(first).toBeDefined();
     expect(within(first as HTMLElement).getByLabelText(/^fail, partial, unverifiable/)).toHaveTextContent("FRUUURURRURRRP");
-    expect(within(first as HTMLElement).getByRole("link", { name: /Open item/ })).toHaveAttribute("href", "?item=item0002abcdef");
+    expect(within(first as HTMLElement).getByRole("link", { name: /Open item/ })).toHaveAttribute("href", "/backlog?item=item0002abcdef");
     expect(first).toHaveTextContent("yes (c3)");
   });
 

@@ -141,6 +141,9 @@ type PRFixOutcomeInput struct {
 	Markers []Marker
 	// Since is when outcome capture began; zero means not recording.
 	Since time.Time
+	// RespawnSince is the overall capture start for derived respawns, which
+	// exist before the first outcome marker; zero falls back to Since.
+	RespawnSince time.Time
 }
 
 type outcomeEvent struct {
@@ -151,7 +154,7 @@ type outcomeEvent struct {
 // PRFixOutcomeCounts counts steered and skipped_active from system-written
 // markers, and respawned from real pr_pending>in_progress status events whose
 // TriggeredBy is "system" and whose note is the PR-fix reopen note, counted
-// only from Since. Respawned is derived rather than stored, and the RPC and
+// from the overall capture start (RespawnSince, else Since). Respawned is derived rather than stored, and the RPC and
 // MCP transition paths cannot write TriggeredBy "system", so agent text and
 // agent transitions cannot inflate it.
 //
@@ -163,6 +166,10 @@ func PRFixOutcomeCounts(in PRFixOutcomeInput) PRFixOutcomes {
 	if !out.Recording {
 		return out
 	}
+	respawnSince := in.RespawnSince
+	if respawnSince.IsZero() || in.Since.Before(respawnSince) {
+		respawnSince = in.Since
+	}
 	events := markerOutcomes(in, &out)
 	merges := map[ItemID][]time.Time{}
 	for _, s := range in.Spans {
@@ -173,7 +180,7 @@ func PRFixOutcomeCounts(in PRFixOutcomeInput) PRFixOutcomes {
 		if rs.To() == domain.BacklogStatusDone {
 			merges[rs.Item()] = append(merges[rs.Item()], rs.At())
 		}
-		if isSystemPRFixReopen(rs) && !rs.At().Before(in.Since) {
+		if isSystemPRFixReopen(rs) && !rs.At().Before(respawnSince) {
 			out.Respawned++
 			events = append(events, outcomeEvent{rs.Item(), rs.At()})
 		}

@@ -114,7 +114,7 @@ export function FlowCauses({ causes, estimated, trends, onDrill }: FlowCausesPro
                 </DrillButton>
               </td>
               <td className={styles.cell}>
-                <CauseSparkline trends={trends} cause={row.cause} label={label(row.cause)} />
+                <CauseSparkline trends={trends} cause={row.cause} label={label(row.cause)} onDrill={onDrill} />
               </td>
             </tr>
           ))}

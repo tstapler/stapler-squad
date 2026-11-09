@@ -46,7 +46,7 @@ function ThroughputTile({ summary, comparison, onDrill }: FlowTilesProps) {
         )}
       </span>
       <FlowDelta comparison={comparison} metric="merged_items" good="up" />
-      <ThroughputSparkline trends={summary.trends} />
+      <ThroughputSparkline trends={summary.trends} onDrill={onDrill} />
     </Tile>
   );
 }

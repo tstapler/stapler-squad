@@ -2,6 +2,7 @@
 
 import { Component, useId, useState, type ReactNode } from "react";
 import * as styles from "./FlowChart.css";
+import { DrillButton } from "./DrillButton";
 
 export type FlowChartKind = "line" | "stacked-bar";
 
@@ -21,6 +22,14 @@ export interface FlowChartProps {
   kind: FlowChartKind;
   width?: number;
   height?: number;
+  /** One drill key per category; with `onDrill`, that category's point and table row open its items. */
+  drillKeys?: readonly string[];
+  onDrill?: (key: string) => void;
+}
+
+interface Drill {
+  keys: readonly string[];
+  onDrill: (key: string) => void;
 }
 
 const DEFAULT_WIDTH = 240;
@@ -77,7 +86,7 @@ function PatternDefs({ prefix, indices }: { prefix: string; indices: readonly nu
   );
 }
 
-function LinePlot({ categories, series, width, height }: Required<Pick<FlowChartProps, "categories" | "series" | "width" | "height">>) {
+function LinePlot({ categories, series, width, height, drill }: Required<Pick<FlowChartProps, "categories" | "series" | "width" | "height">> & { drill?: Drill }) {
   const max = Math.max(1, ...series.flatMap((s) => s.values));
   const step = categories.length > 1 ? (width - 2 * PAD) / (categories.length - 1) : 0;
   const x = (i: number) => (categories.length > 1 ? PAD + i * step : width / 2);
@@ -92,9 +101,18 @@ function LinePlot({ categories, series, width, height }: Required<Pick<FlowChart
             className={styles.seriesStroke[slot(i)]}
             strokeDasharray={DASHES[i % DASHES.length]}
           />
-          {s.values.map((v, j) => (
-            <MarkerShape key={j} marker={markerFor(i)} x={x(j)} y={y(v)} className={styles.seriesFill[slot(i)]} />
-          ))}
+          {s.values.map((v, j) => {
+            const key = drill?.keys[j] ?? "";
+            const marker = <MarkerShape marker={markerFor(i)} x={x(j)} y={y(v)} className={styles.seriesFill[slot(i)]} />;
+            if (drill === undefined || key === "") return <g key={j}>{marker}</g>;
+            // Pointer-only: the svg is aria-hidden, keyboard and AT users drill from the data table rows.
+            return (
+              <g key={j} data-testid="flow-chart-point" className={styles.drillPoint} onClick={() => drill.onDrill(key)}>
+                <circle cx={x(j)} cy={y(v)} r={MARKER_SIZE * 2} fill="transparent" />
+                {marker}
+              </g>
+            );
+          })}
         </g>
       ))}
     </>
@@ -144,7 +162,7 @@ function Swatch({ kind, index, prefix }: { kind: FlowChartKind; index: number; p
   );
 }
 
-function DataTable({ caption, categories, series, visible }: Pick<FlowChartProps, "caption" | "categories" | "series"> & { visible: boolean }) {
+function DataTable({ caption, categories, series, visible, drill }: Pick<FlowChartProps, "caption" | "categories" | "series"> & { visible: boolean; drill?: Drill }) {
   return (
     <table className={`${styles.table}${visible ? "" : ` ${styles.tableHidden}`}`} data-testid="flow-chart-table">
       <caption>{caption}</caption>
@@ -164,7 +182,13 @@ function DataTable({ caption, categories, series, visible }: Pick<FlowChartProps
         {categories.map((category, c) => (
           <tr key={category}>
             <th scope="row" className={styles.cell}>
-              {category}
+              {drill ? (
+                <DrillButton drillKey={drill.keys[c] ?? ""} onDrill={drill.onDrill}>
+                  {category}
+                </DrillButton>
+              ) : (
+                category
+              )}
             </th>
             {series.map((s) => (
               <td key={s.name} className={styles.cell}>
@@ -191,10 +215,10 @@ class ChartBoundary extends Component<{ fallback: ReactNode; children: ReactNode
   }
 }
 
-function Plot({ kind, prefix, ...rest }: Required<Pick<FlowChartProps, "categories" | "series" | "width" | "height" | "kind">> & { prefix: string }) {
+function Plot({ kind, prefix, drill, ...rest }: Required<Pick<FlowChartProps, "categories" | "series" | "width" | "height" | "kind">> & { prefix: string; drill?: Drill }) {
   switch (kind) {
     case "line":
-      return <LinePlot {...rest} />;
+      return <LinePlot {...rest} drill={drill} />;
     case "stacked-bar":
       return <StackedBars {...rest} prefix={prefix} />;
     default:
@@ -208,7 +232,8 @@ function Plot({ kind, prefix, ...rest }: Required<Pick<FlowChartProps, "categori
  * same values in a table that assistive tech always reaches. A drawing failure falls back to
  * the table alone.
  */
-export function FlowChart({ caption, takeaway, categories, series, kind, width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT }: FlowChartProps) {
+export function FlowChart({ caption, takeaway, categories, series, kind, width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT, drillKeys, onDrill }: FlowChartProps) {
+  const drill = drillKeys && onDrill ? { keys: drillKeys, onDrill } : undefined;
   const [tableShown, setTableShown] = useState(false);
   const prefix = useId().replace(/[^a-zA-Z0-9]/g, "");
   const tableId = `${prefix}-table`;
@@ -225,7 +250,7 @@ export function FlowChart({ caption, takeaway, categories, series, kind, width =
   const unavailable = (
     <>
       <p className={styles.note}>Chart unavailable, showing data</p>
-      <DataTable caption={caption} categories={categories} series={series} visible />
+      <DataTable caption={caption} categories={categories} series={series} visible drill={drill} />
     </>
   );
 
@@ -235,7 +260,7 @@ export function FlowChart({ caption, takeaway, categories, series, kind, width =
       <ChartBoundary fallback={unavailable}>
         <div role="img" aria-label={takeaway}>
           <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={styles.plot} aria-hidden="true">
-            <Plot kind={kind} categories={categories} series={series} width={width} height={height} prefix={prefix} />
+            <Plot kind={kind} categories={categories} series={series} width={width} height={height} prefix={prefix} drill={drill} />
           </svg>
         </div>
         <ul className={styles.legend}>
@@ -250,7 +275,7 @@ export function FlowChart({ caption, takeaway, categories, series, kind, width =
           {tableShown ? "Hide data table" : "Show data table"}
         </button>
         <div id={tableId}>
-          <DataTable caption={caption} categories={categories} series={series} visible={tableShown} />
+          <DataTable caption={caption} categories={categories} series={series} visible={tableShown} drill={drill} />
         </div>
       </ChartBoundary>
     </figure>

@@ -123,3 +123,6 @@ export const axis = style({
   stroke: vars.color.borderStrong,
   strokeWidth: 1,
 });
+
+/** A clickable chart point; pointer-only, the data table carries the keyboard path. */
+export const drillPoint = style({ cursor: "pointer" });

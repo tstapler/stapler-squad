@@ -111,6 +111,7 @@ function Outcomes({ pr, estimated }: Pick<FlowPRProps, "pr" | "estimated">) {
           </li>
         ))}
       </ul>
+      <span className={styles.muted}>Outcomes from the last 24 hours of the window cannot show a merge yet, so resolved within 24h can undercount.</span>
     </div>
   );
 }

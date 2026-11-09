@@ -89,6 +89,7 @@ describe("FlowPR", () => {
     expect(box).toHaveTextContent("respawned: ~2");
     expect(box).toHaveTextContent("skipped (session active): ~1");
     expect(box).toHaveTextContent("resolved within 24h: ~3");
+    expect(box).toHaveTextContent("Outcomes from the last 24 hours of the window cannot show a merge yet, so resolved within 24h can undercount.");
     expect(box).not.toHaveTextContent("not yet recording");
   });
 
