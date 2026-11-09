@@ -174,3 +174,25 @@ func TestIsDequeueSpawnFailedContext(t *testing.T) {
 	assert.True(t, domain.IsDequeueSpawnFailedContext(dequeueCtx))
 	assert.False(t, domain.IsDequeueSpawnFailedContext("a rework session failed to spawn"))
 }
+
+// A snooze hides the row from open-row reads but must not unblock the item: the dequeue
+// sweep would otherwise re-claim it every pass.
+func TestRemediationBlockedItems_SnoozedRowStaysBlocked(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "x", Status: string(BacklogStatusReady)})
+	require.NoError(t, err)
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, BacklogStatusReady, "c")
+	require.NoError(t, err)
+	_, _, err = storage.RemediationDue(ctx, item.ID, domain.StuckReasonSpawnFailed)
+	require.NoError(t, err)
+	snoozed, err := storage.SnoozeStuckState(ctx, item.ID, domain.StuckReasonSpawnFailed, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.True(t, snoozed)
+
+	got, err := storage.RemediationBlockedItems(ctx, domain.StuckReasonSpawnFailed)
+	require.NoError(t, err)
+	assert.True(t, got[item.ID])
+}

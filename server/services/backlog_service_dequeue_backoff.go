@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -38,7 +37,8 @@ const (
 	// dequeueStreakWindow is how long a failure counts toward the streak. Without decay,
 	// unrelated items failing days apart would add up to a phantom outage.
 	dequeueStreakWindow = time.Hour
-	// dequeueSystemicMaxHolds bounds how often one item is excused as an outage victim. A
+	// dequeueSystemicMaxHolds bounds how often one item is excused as an outage victim per
+	// dequeueStreakWindow of continuous holds (the count restarts after an idle window). A
 	// real outage ends within a few holds; an item still failing after that is broken
 	// itself, and must climb the durable ladder so it parks and the operator is told.
 	dequeueSystemicMaxHolds = 2
@@ -60,7 +60,9 @@ const (
 )
 
 func classifySpawnFailure(ctx context.Context, err error) spawnFailureKind {
-	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+	// Only our own context ending is a shutdown. The sweep runs on a background context, so
+	// a Canceled wrapped by an inner step is a real failure; skipping it would retry forever.
+	if ctx.Err() != nil {
 		return spawnFailureCancelled
 	}
 	switch connect.CodeOf(err) {
@@ -260,6 +262,7 @@ func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item ses
 	_, justParked, err := s.storage.RemediationDue(ctx, item.ID, domain.StuckReasonSpawnFailed)
 	if err != nil {
 		log.Warn("[DequeueNextQueuedItems] recording spawn failure attempt failed", "item", item.ID, "error", err)
+		s.spawnGuard.hold(item.ID, dequeueRefusalHold) // attempt unrecorded, so don't re-claim every sweep
 		return
 	}
 	if justParked {
@@ -300,7 +303,7 @@ func (s *BacklogService) notifyDequeueSpawnSystemic(itemID string, spawnErr erro
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
 		derivePriority(true, true),
 		"Backlog spawns failing across items",
-		fmt.Sprintf("Spawning work sessions failed for %d different items in a row (last error: %v). This looks like a problem with the spawn path, not the items; retries are spaced %v apart and items are not being penalised until a spawn succeeds.", dequeueSystemicItems, spawnErr, dequeueSystemicHold),
+		fmt.Sprintf("Spawning work sessions failed for %d different items in a row (last error: %v). This looks like a problem with the spawn path, not the items; retries are spaced %v apart and each item is excused from its own backoff for at most %d such holds.", dequeueSystemicItems, spawnErr, dequeueSystemicHold, dequeueSystemicMaxHolds),
 		map[string]string{"item_id": itemID},
 	))
 }

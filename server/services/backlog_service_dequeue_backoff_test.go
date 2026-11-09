@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -184,7 +185,8 @@ func TestClassifySpawnFailure(t *testing.T) {
 		{"active session", t.Context(), connect.NewError(connect.CodeAlreadyExists, errors.New("x")), spawnFailureRefusal},
 		{"creator unwired", t.Context(), connect.NewError(connect.CodeUnimplemented, errors.New("x")), spawnFailureRefusal},
 		{"cancelled ctx", canceled, errSpawnBoom, spawnFailureCancelled},
-		{"context.Canceled error", t.Context(), context.Canceled, spawnFailureCancelled},
+		{"bare context.Canceled on a live ctx is a real failure", t.Context(), context.Canceled, spawnFailureReal},
+		{"wrapped context.Canceled on a live ctx is a real failure", t.Context(), fmt.Errorf("start tmux: %w", context.Canceled), spawnFailureReal},
 		{"plain failure", t.Context(), errSpawnBoom, spawnFailureReal},
 		{"internal connect error", t.Context(), connect.NewError(connect.CodeInternal, errors.New("x")), spawnFailureReal},
 	}
@@ -516,4 +518,58 @@ func TestDequeueNextQueuedItems_PersistentRefusalEscalatesToDurableRow(t *testin
 	row, ok := openSpawnFailedRow(t, storage, itemID)
 	require.True(t, ok, "the persistent refusal opens a durable row")
 	assert.Equal(t, int32(1), row.RemediationAttempts)
+}
+
+// A snooze silences the UI, not the retry loop: a snoozed spawn_failed row leaves the
+// open-row read, so the sweep used to see the item as unblocked and re-claim it every minute.
+func TestDequeueNextQueuedItems_SnoozedSpawnFailedRowStaysBlocked(t *testing.T) {
+	t.Parallel()
+	svc, storage, _ := newServiceWithFailingCreator(t)
+	itemID := newReadyItemWithRepo(t, svc, "snoozed")
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+	_, ok := openSpawnFailedRow(t, storage, itemID)
+	require.True(t, ok)
+
+	snoozed, err := storage.SnoozeStuckState(t.Context(), itemID, domain.StuckReasonSpawnFailed, time.Now().Add(24*time.Hour))
+	require.NoError(t, err)
+	require.True(t, snoozed)
+
+	for range 10 {
+		require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+	}
+	assert.Equal(t, 1, countEventsWithNote(t, storage, itemID, "dequeued: WIP slot freed"),
+		"a snoozed backoff must keep blocking claims")
+}
+
+// Only an operator's move clears the backoff; an agent or MCP transition must not.
+func TestTransitionBacklogItemStatus_SpawnBackoffClearScopedToUser(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*BacklogService, *session.Storage, string) {
+		svc, storage, _ := newServiceWithFailingCreator(t)
+		itemID := newReadyItemWithRepo(t, svc, "actor")
+		require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+		_, ok := openSpawnFailedRow(t, storage, itemID)
+		require.True(t, ok)
+		return svc, storage, itemID
+	}
+	move := func(ctx context.Context, svc *BacklogService, itemID string) error {
+		_, err := svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId: itemID, TargetStatus: "idea",
+		}))
+		return err
+	}
+	t.Run("agent keeps the backoff", func(t *testing.T) {
+		t.Parallel()
+		svc, storage, itemID := setup(t)
+		require.NoError(t, move(WithTransitionActor(t.Context(), session.TriggeredByAgent), svc, itemID))
+		_, ok := openSpawnFailedRow(t, storage, itemID)
+		assert.True(t, ok)
+	})
+	t.Run("user clears the backoff", func(t *testing.T) {
+		t.Parallel()
+		svc, storage, itemID := setup(t)
+		require.NoError(t, move(t.Context(), svc, itemID))
+		_, ok := openSpawnFailedRow(t, storage, itemID)
+		assert.False(t, ok)
+	})
 }

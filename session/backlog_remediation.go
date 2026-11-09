@@ -365,6 +365,14 @@ func (s *Storage) RemediationBlockedItems(ctx context.Context, reason domain.Stu
 			blocked[row.ItemID] = true
 		}
 	}
+	// A snooze silences the UI, not the gate: a snoozed row keeps its item blocked.
+	snoozed, err := s.repo.FindSnoozedStuckItemIDs(ctx, reason)
+	if err != nil {
+		return nil, fmt.Errorf("remediation blocked items %s: %w", reason, err)
+	}
+	for _, id := range snoozed {
+		blocked[id] = true
+	}
 	return blocked, nil
 }
 

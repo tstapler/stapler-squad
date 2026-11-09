@@ -1115,7 +1115,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
-	s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // an operator move obsoletes any spawn backoff
+	if transitionActorFromContext(ctx) == session.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
+	}
 
 	// override_reason set means this was a manual operator override (bypassing
 	// TransitionGuard, per session.TransitionGuard's override handling above),
