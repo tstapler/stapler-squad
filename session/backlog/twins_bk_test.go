@@ -3,7 +3,6 @@ package backlog
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller session.TransitionCaller, from, to session.BacklogStatus, reason string) {
@@ -271,94 +269,14 @@ func (h *gateHarness) moveRaw(t *testing.T, id string, to session.BacklogStatus)
 	require.NoError(t, err)
 }
 
-// newStuckInProgressItem is an in_progress item whose only work session ended.
-func (h *gateHarness) newStuckInProgressItem(t *testing.T) *session.BacklogItemData {
-	t.Helper()
-	ctx := context.Background()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck item", Status: string(session.BacklogStatusInProgress), Notes: "existing notes"})
-	require.NoError(t, err)
-	is, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleWork})
-	require.NoError(t, err)
-	require.NoError(t, h.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-time.Minute)))
-	return item
-}
-
 type fixedMode struct{ m session.EngineMode }
 
 func (f fixedMode) Mode() session.EngineMode { return f.m }
 
-type divergenceKey struct {
-	Method session.EngineMethod
-	Class  session.DivergenceClass
-	Config string
-	Path   session.CallPath
-}
-
-type callKey struct {
-	Method session.EngineMethod
-	Path   session.CallPath
-}
-
-type recordingShadow struct {
-	mu          sync.Mutex
-	calls       map[callKey]int
-	divergences map[divergenceKey]int
-	notCompared map[session.NotComparedReason]int
-}
-
-func (r *recordingShadow) RecordShadowCall(m session.EngineMethod, p session.CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls[callKey{m, p}]++
-}
-
-func (r *recordingShadow) RecordDivergence(m session.EngineMethod, c session.DivergenceClass, config string, p session.CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.divergences[divergenceKey{m, c, config, p}]++
-}
-
-func (r *recordingShadow) RecordNotCompared(reason session.NotComparedReason) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.notCompared[reason]++
-}
-
-func (r *recordingShadow) totalDivergences() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, v := range r.divergences {
-		n += v
-	}
-	return n
-}
-
-type lineSink struct {
-	mu    sync.Mutex
-	lines []string
-}
-
-func (l *lineSink) logf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lines = append(l.lines, fmt.Sprintf(format, args...))
-}
-
-func (l *lineSink) snapshot() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.lines...)
-}
-
 type selectorHarness struct {
-	sel      *session.SwitchableWorkflowEngine
-	cfg      *session.ConfiguredWorkflowEngine
-	client   *ent.Client
-	recorder *recordingShadow
-	warns    *lineSink
-	infos    *lineSink
-	clock    *sessiontest.SelectorClock
+	sel    *session.SwitchableWorkflowEngine
+	cfg    *session.ConfiguredWorkflowEngine
+	client *ent.Client
 }
 
 func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, enabled bool) {

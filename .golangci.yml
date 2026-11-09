@@ -355,6 +355,10 @@ linters:
         linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "session/ent/"
         linters: [gocyclo, gocognit, funlen, revive, dupl]
+      # tools/bzl and tools/ci are standalone Bazel/CI developer CLIs (never linked into the product
+      # binary): run-once main packages with flag-style globals, shell-outs and long run() functions.
+      - path: "^tools/(bzl|ci)/"
+        linters: [forbidigo, gochecknoglobals, gocyclo, gocognit, funlen, revive, dupl, prealloc]
       # exhaustive enforces DetectedStatus switch coverage in session/detection/
       # and Reason switch coverage in session/lifecycle/ only. All other
       # packages use iota types with intentional default: clauses.
@@ -441,7 +445,7 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       # Remaining services with intentional LoadInstances uses (health, backlog, etc.)
-      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
+      - path: "server/services/([a-z]+/)?(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "session/health\\.go"

@@ -1,7 +1,6 @@
 package backlog
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -44,44 +43,6 @@ func closingKeywordWithRepo(issueURL, prRemoteURL string) string {
 		return ""
 	}
 	return fmt.Sprintf("Closes #%d", issue.IssueNumber)
-}
-
-// buildAcChecklist renders a numbered checklist from AC criteria.
-// pending → "[ ]", done → "[✓]", in_progress → "[✗]"
-func buildAcChecklist(criteria []session.AcCriterion) string {
-	if len(criteria) == 0 {
-		return "(no acceptance criteria)"
-	}
-	var sb strings.Builder
-	for _, c := range criteria {
-		var marker string
-		switch c.Status {
-		case "done":
-			marker = "[✓]"
-		case "in_progress":
-			marker = "[✗]"
-		default:
-			marker = "[ ]"
-		}
-		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, session.SanitizeField(c.Text, 500))
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-// parsePerCriterionVerdicts unmarshals the JSON array stored in
-// ReviewVerdictSummary.PerCriterion (produced via json.Marshal([]CriterionVerdict) in
-// review_gate.go) into a typed slice. Malformed or empty input yields a nil slice and no
-// error is fatal to prompt construction — callers should treat a parse failure as "no
-// per-criterion evidence available" rather than aborting.
-func parsePerCriterionVerdicts(raw string) ([]session.CriterionVerdict, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	var verdicts []session.CriterionVerdict
-	if err := json.Unmarshal([]byte(raw), &verdicts); err != nil {
-		return nil, err
-	}
-	return verdicts, nil
 }
 
 // maxPriorAttemptsWithFullEvidence caps how many of the most recent ended prior sessions

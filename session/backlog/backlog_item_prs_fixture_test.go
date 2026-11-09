@@ -78,24 +78,6 @@ func (f *itemPRFixture) itemEnt() *ent.BacklogItem {
 	return it
 }
 
-func (f *itemPRFixture) numbers() []int {
-	f.t.Helper()
-	prs, err := f.repo.ItemPRs(context.Background(), f.itemEnt())
-	require.NoError(f.t, err)
-	out := make([]int, 0, len(prs))
-	for _, v := range prs {
-		out = append(out, v.Ref.Number())
-	}
-	return out
-}
-
-func (f *itemPRFixture) verdict() session.ItemVerdict {
-	f.t.Helper()
-	prs, err := f.repo.ItemPRs(context.Background(), f.itemEnt())
-	require.NoError(f.t, err)
-	return session.ItemPRVerdict(prs)
-}
-
 func (f *itemPRFixture) mirror() int {
 	f.t.Helper()
 	return f.itemEnt().PrNumber

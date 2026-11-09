@@ -1995,7 +1995,7 @@ func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *ses
 // against main via mostRecentWorkCommitShippedToMain, so an item isn't left
 // bouncing forever just because it never had a PR to check. Best-effort:
 // query/notify failures are logged, never returned.
-func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, er *session.EntRepository) {
+func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, er *session.EntRepository) { //nolint:gocognit,gocyclo // moved verbatim by the package split; simplification is a separate change
 	// Scan items in the two statuses a bouncing cycle spans; a converged item
 	// (done) is handled by the self-heal sweep, not re-flagged here.
 	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{

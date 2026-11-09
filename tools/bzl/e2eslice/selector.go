@@ -155,8 +155,6 @@ type Selector struct {
 	globals  []string
 	onDisk   []string
 	groups   []Group
-	pkgDirs  map[string]string // import path -> repo-relative dir
-	closure  map[string]map[string]bool
 	specPkgs map[string]map[string]bool
 }
 

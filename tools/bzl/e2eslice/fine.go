@@ -235,7 +235,9 @@ func parseHunks(diff string) map[string][]Line {
 		switch {
 		case strings.HasPrefix(l, "+++ b/"):
 			cur = strings.TrimPrefix(l, "+++ b/")
-			out[cur] = out[cur]
+			if _, seen := out[cur]; !seen {
+				out[cur] = nil // a file with no hunks still maps to an entry
+			}
 		case strings.HasPrefix(l, "+++ /dev/null"):
 			cur = ""
 		case strings.HasPrefix(l, "@@") && cur != "":

@@ -375,10 +375,10 @@ func TestCrossAllChecksPass(t *testing.T) {
 	hit := Spawn{Mnemonic: "GoCompile", Runner: "disk cache hit", Cacheable: true, TargetLabel: "//a"}
 	exe := Spawn{Mnemonic: "GoCompile", Runner: "linux-sandbox", Cacheable: true, TargetLabel: "//a"}
 	fx := bazelFake(t, map[string]string{"root": t.TempDir(), "f": "same"}, func(l string, c Cmd) []Spawn {
-		switch {
-		case l == "e1-b" || l == "e2-c":
+		switch l {
+		case "e1-b", "e2-c":
 			return []Spawn{hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit, hit}
-		case l == "stamp-b":
+		case "stamp-b":
 			return []Spawn{{Mnemonic: "Genrule", Runner: "linux-sandbox", TargetLabel: "//tools/bzl/spike/s6_control:stamped_control"}}
 		}
 		return []Spawn{exe}
@@ -488,7 +488,6 @@ type fakeProber struct {
 	n    int
 	idle time.Duration
 	load time.Duration
-	h    *fakeHost
 	busy func() bool
 	// enough is closed once five probes ran while a build was in flight
 	enough chan struct{}

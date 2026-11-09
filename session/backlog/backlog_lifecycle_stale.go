@@ -62,7 +62,7 @@ type ReworkBlockStaleResolver interface {
 // magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
 const maxWorkSessionStaleness = 2 * time.Hour
 
-func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *session.EntRepository) {
+func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *session.EntRepository) { //nolint:gocognit // moved verbatim by the package split; simplification is a separate change
 	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
 	})

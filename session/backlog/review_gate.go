@@ -471,7 +471,7 @@ func (r *ReviewGateRunner) Run(
 // worktreeDiffErr for: blocked=true is sufficient, since Run's own
 // committedDiffEmpty check can never fire on this path (diff is always ""
 // when this returns blocked=true).
-func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext GateContext, item *session.BacklogItemData, is session.ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) {
+func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext GateContext, item *session.BacklogItemData, is session.ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) { //nolint:gocyclo // moved verbatim by the package split; simplification is a separate change
 	// worktreeDiffErr is set only when we positively know a worktree/base-commit exists
 	// for this session but the diff still couldn't be computed (e.g. a stale/corrupted
 	// base_commit_sha pointing at a pruned or otherwise nonexistent git object). That is

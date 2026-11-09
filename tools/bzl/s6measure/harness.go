@@ -125,11 +125,3 @@ func (h *Harness) BuildLogged(ctx context.Context, wt, label string, extra ...st
 func NoCache() string { return "--disk_cache=" }
 
 func (h *Harness) DiskFlag() string { return "--disk_cache=" + h.DiskCache }
-
-func readLines(path string) []string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-}

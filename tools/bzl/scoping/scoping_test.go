@@ -73,7 +73,7 @@ func TestReplayFollowsRenames(t *testing.T) {
 	if plain.NChanges != 1 || moved.NChanges != 1 {
 		t.Fatalf("n = %d/%d, want 1/1 (non-Go change ignored)", plain.NChanges, moved.NChanges)
 	}
-	if !(moved.LibLOCByChange["a"] < plain.LibLOCByChange["a"]) {
+	if moved.LibLOCByChange["a"] >= plain.LibLOCByChange["a"] {
 		t.Fatalf("a moved leaf must invalidate less: %d vs %d", moved.LibLOCByChange["a"], plain.LibLOCByChange["a"])
 	}
 	if got := LowerShare(map[string]int{"a": 1000}, map[string]int{"a": 995}, 100000); got != 0 {

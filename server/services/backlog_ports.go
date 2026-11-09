@@ -160,7 +160,7 @@ func DropSubsumedChangesRequested(names []string) []string {
 // type for repository calls. STUCK_REASON_UNSPECIFIED and any unrecognized
 // value map to the empty StuckReason (""), which fails IsValid() — callers
 // must check IsValid() before using the result.
-func FromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
+func FromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason { //nolint:gocyclo // moved verbatim by the package split; one case per enum value
 	switch reason {
 	case sessionv1.StuckReason_STUCK_REASON_PR_READY_UNMERGED:
 		return domain.StuckReasonPRReadyUnmerged

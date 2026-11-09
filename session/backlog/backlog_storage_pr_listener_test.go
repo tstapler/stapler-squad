@@ -2,7 +2,6 @@ package backlog
 
 import (
 	"context"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,30 +9,6 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 )
-
-func itemInStatus(t *testing.T, f *itemPRFixture, status session.BacklogStatus) *session.BacklogItemData {
-	t.Helper()
-	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(status)).Save(context.Background())
-	require.NoError(t, err)
-	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
-	require.NoError(t, err)
-	return item
-}
-
-func prAssoc(n int, src session.AttachSource) session.PRAssociation {
-	return session.PRAssociation{URL: "https://github.com/acme/app/pull/" + strconv.Itoa(n), Number: n, Summary: "pr", Source: src}
-}
-
-func itemLinkNumbers(t *testing.T, f *itemPRFixture) []int {
-	t.Helper()
-	views, err := f.repo.ListByItem(context.Background(), f.itemID)
-	require.NoError(t, err)
-	out := make([]int, 0, len(views))
-	for _, v := range views {
-		out = append(out, v.Ref.Number())
-	}
-	return out
-}
 
 func TestPushAndCreatePR_ShouldRecordItemDirectLink_AndNeverLeavePendingWithoutLinkSet(t *testing.T) {
 	t.Parallel()

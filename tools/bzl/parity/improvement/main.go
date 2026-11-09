@@ -131,10 +131,10 @@ func rowVerdict(r target, m map[string]float64) string {
 func combine(vs []string) string {
 	res := pass
 	for _, v := range vs {
-		switch {
-		case v == fail:
+		switch v {
+		case fail:
 			return fail
-		case v == unmeasured:
+		case unmeasured:
 			res = unmeasured
 		}
 	}

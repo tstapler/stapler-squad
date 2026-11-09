@@ -317,7 +317,7 @@ var _ interface {
 
 // onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
 // Updates the linked backlog item status and fires a push notification.
-func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) { //nolint:gocognit,gocyclo // moved verbatim by the package split; simplification is a separate change
 	// One "stopped" line per stop, on every return path, with the final recovery.
 	rec := stopRecord{
 		Session:  instanceName,
