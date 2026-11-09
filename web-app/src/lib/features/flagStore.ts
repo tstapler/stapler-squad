@@ -23,6 +23,13 @@ export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";
 export const MOBILE_INPUT_LAYER_FLAG = "mobile_input_layer";
 /** Must equal `defaultValue` of `mobile_input_layer` in server/services/feature_flag_service.go (a test asserts it). */
 export const MOBILE_INPUT_LAYER_DEFAULT = true;
+/**
+ * Per-origin local override written by `?mobile_input=0|1`. It lives under its own key because `persistFlags`
+ * rewrites `ssq:flag:mobile_input_layer` from the server on every refresh, which would erase the param after
+ * ~30 s. It beats the persisted server value until the user flips the flag from the feature-flag panel
+ * (`recordFlagWrite` clears it), so the two never fight.
+ */
+export const MOBILE_INPUT_OVERRIDE_KEY = "ssq:flag-override:mobile_input_layer";
 
 // `etag` is the server validator for `flags`; empty when the server sent none or a local write made the body differ.
 let cached: { at: number; flags: FeatureFlag[]; etag: string } | null = null;
@@ -89,16 +96,32 @@ function persistFlags(flags: FeatureFlag[]): void {
   }
 }
 
-/** `?mobile_input=0|1` applies in this load and is saved for this origin; anything else is ignored. */
-function mobileInputQueryOverride(): boolean | undefined {
+/** The stored `?mobile_input` override, or undefined when none is set. */
+export function getMobileInputOverride(): boolean | undefined {
   try {
-    if (typeof window === "undefined") return undefined;
-    const v = new URLSearchParams(window.location.search).get("mobile_input");
-    if (v !== "0" && v !== "1") return undefined;
-    storage()?.setItem(PERSIST_PREFIX + MOBILE_INPUT_LAYER_FLAG, v);
-    return v === "1";
+    const v = storage()?.getItem(MOBILE_INPUT_OVERRIDE_KEY);
+    return v === "1" ? true : v === "0" ? false : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export function clearMobileInputOverride(): void {
+  try {
+    storage()?.removeItem(MOBILE_INPUT_OVERRIDE_KEY);
+  } catch {
+    // nothing stored we could clear
+  }
+}
+
+/** `?mobile_input=0|1` applies in this load and is stored as the override; anything else is ignored. */
+function applyMobileInputQueryParam(): void {
+  try {
+    if (typeof window === "undefined") return;
+    const v = new URLSearchParams(window.location.search).get("mobile_input");
+    if (v === "0" || v === "1") storage()?.setItem(MOBILE_INPUT_OVERRIDE_KEY, v);
+  } catch {
+    // a blocked URL or storage read just means no override
   }
 }
 
@@ -109,7 +132,8 @@ function mobileInputQueryOverride(): boolean | undefined {
 export function preloadFlagValue(name: string): boolean | undefined {
   if (name === "request_coalescing") return REQUEST_COALESCING_PRELOAD;
   if (name === MOBILE_INPUT_LAYER_FLAG) {
-    const override = mobileInputQueryOverride();
+    applyMobileInputQueryParam();
+    const override = getMobileInputOverride();
     if (override !== undefined) return override;
     try {
       const persisted = storage()?.getItem(PERSIST_PREFIX + name);
@@ -189,6 +213,8 @@ export async function loadFlags(
  * next load refetches instead of serving the pre-write cache for up to 30 s.
  */
 export function recordFlagWrite(name: string, enabled: boolean, scope?: string): void {
+  // The user's explicit choice replaces a `?mobile_input` override so the server value governs again.
+  if (name === MOBILE_INPUT_LAYER_FLAG) clearMobileInputOverride();
   if (!cached) return;
   const flags = cached.flags.map((f) => {
     if (f.name !== name) return f;

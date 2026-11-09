@@ -28,4 +28,14 @@ describe("useMobileInputLayerActive", () => {
     env(ANDROID, { "(pointer: coarse)": true });
     expect(renderHook(() => useMobileInputLayerActive()).result.current).toBe(false);
   });
+
+  it("useMobileInputLayerActive_should_HonorOverrideAheadOfServerValue_When_OverrideStoredAndServerKeyDisagrees", () => {
+    localStorage.setItem("ssq:flag:mobile_input_layer", "1"); // what persistFlags wrote from the server
+    localStorage.setItem("ssq:flag-override:mobile_input_layer", "0");
+    env(ANDROID, { "(pointer: coarse)": true });
+    expect(renderHook(() => useMobileInputLayerActive()).result.current).toBe(false);
+    localStorage.setItem("ssq:flag:mobile_input_layer", "0");
+    localStorage.setItem("ssq:flag-override:mobile_input_layer", "1");
+    expect(renderHook(() => useMobileInputLayerActive()).result.current).toBe(true);
+  });
 });
