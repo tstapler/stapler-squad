@@ -67,6 +67,8 @@ const (
 	StageStreamLockWait  = "stream_lock_wait"   // waiting for the Attach stream's input/frame lock
 	StageStreamSend      = "stream_send"        // one Attach stream Send (gRPC flow control shows here)
 	StagePMLockWait      = "pm_lock_wait"       // contended wait for Instance.pmMu (uncontended calls record nothing)
+	StageEchoDaemon      = "echo_daemon"        // tymux: keystroke send began -> daemon stamped the first output frame after it (pty write + app echo + daemon send queue)
+	StageOutputTransit   = "output_transit"     // tymux: daemon stamped an output frame -> squad received it (gRPC transit/queue)
 	// Browser-measured.
 	StageInputQueue    = "input_queue"     // keystroke enqueued -> handed to the socket
 	StageEchoRender    = "echo_render"     // echo frame arrived -> painted
@@ -86,7 +88,8 @@ func NormalizeStage(s string) string {
 		StageRestoreList, StageRestoreRevive, StageRestoreAdopt, StageRestoreStart,
 		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
 		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
-		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag:
+		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag,
+		StageEchoDaemon, StageOutputTransit:
 		return s
 	}
 	return unknown
@@ -372,4 +375,18 @@ func (r *Recorder) Alerting() []Stats {
 		}
 	}
 	return out
+}
+
+type keystrokeKey struct{}
+
+// WithKeystroke marks ctx as carrying a browser keystroke, so a backend can start its echo
+// clock for user typing only (not agent prompts or scroll forwarding).
+func WithKeystroke(ctx context.Context) context.Context {
+	return context.WithValue(ctx, keystrokeKey{}, true)
+}
+
+// IsKeystroke reports whether ctx was marked by WithKeystroke.
+func IsKeystroke(ctx context.Context) bool {
+	v, _ := ctx.Value(keystrokeKey{}).(bool)
+	return v
 }

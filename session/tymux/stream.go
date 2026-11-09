@@ -205,6 +205,10 @@ func (s *tymuxGRPCSession) classifyStreamEnd(ctx context.Context) lifecycle.Reas
 // own "not a fatal condition" contract, so a resync failure here is
 // swallowed rather than tearing down the stream.
 func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
+	switch event.GetPayload().(type) {
+	case *v1.AttachEvent_Output, *v1.AttachEvent_OutputChunk:
+		s.echo.noteOutput(event.GetSentAtUnixMicros())
+	}
 	switch p := event.GetPayload().(type) {
 	case *v1.AttachEvent_Snapshot:
 		s.mu.Lock()

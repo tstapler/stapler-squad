@@ -1,6 +1,7 @@
 package termlat
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ func TestNormalizeStage_should_AcceptEveryDecompositionStage(t *testing.T) {
 		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag,
 		StageAttachPrepare, StageAttachAliveCheck, StageAttachRestore,
 		StageRestoreList, StageRestoreRevive, StageRestoreAdopt, StageRestoreStart,
+		StageEchoDaemon, StageOutputTransit,
 	} {
 		assert.Equal(t, s, NormalizeStage(s))
 	}
@@ -82,4 +84,11 @@ func TestHotSessions_should_TruncateLongIDs(t *testing.T) {
 	h := NewHotSessions(HotSessionsConfig{Max: 2, Lifetime: 10, Window: time.Minute}, nil)
 	got := h.Label("0123456789012345678901234567890123456789")
 	assert.LessOrEqual(t, len(got), maxSessionLabelLen)
+}
+
+func TestKeystrokeContext_should_MarkOnlyTheContextsItWraps(t *testing.T) {
+	t.Parallel()
+	base := context.Background()
+	assert.False(t, IsKeystroke(base))
+	assert.True(t, IsKeystroke(WithKeystroke(base)))
 }
