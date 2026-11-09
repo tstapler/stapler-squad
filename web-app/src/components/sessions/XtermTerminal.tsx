@@ -906,7 +906,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           }
 
           safeFit(fitAddon);
-          scrollbarUpdaterRef.current?.flush(terminal);
+          updateScrollbar(terminal);
 
           console.log(`[XtermTerminal] Initial fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
 
