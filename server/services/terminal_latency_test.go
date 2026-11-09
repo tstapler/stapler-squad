@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/session"
@@ -49,6 +50,25 @@ func TestStreamLatency_should_IgnoreOutputTooLongAfterTheKeystroke(t *testing.T)
 	sl.noteInput(now)
 	sl.noteOutputWritten(now.Add(maxEchoGap + time.Second))
 	assert.Equal(t, before, latencyTotal(termlat.StageEchoServer, sl.labels()))
+}
+
+func TestKeystrokeDelivery_should_BuildASlowCallTreeOnlyAboveTheThreshold(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1_700_000_000, 0)
+	k := keystrokeDelivery{logPrefix: "[x]"}
+	labels := termlat.Labels{Backend: "tymux", Listener: "local"}
+
+	_, slow := k.slowCall(labels, "sess", start, start.Add(time.Millisecond), start.Add(10*time.Millisecond))
+	assert.False(t, slow)
+
+	c, slow := k.slowCall(labels, "sess", start, start.Add(5*time.Millisecond), start.Add(900*time.Millisecond))
+	assert.True(t, slow)
+	assert.Equal(t, "terminal.input", c.Name)
+	assert.Equal(t, 900*time.Millisecond, c.Duration)
+	require.Len(t, c.Stages, 2)
+	assert.Equal(t, "terminal.input.bookkeep", c.Stages[0].Name)
+	assert.Equal(t, "terminal.input.send", c.Stages[1].Name)
+	assert.Equal(t, start.Add(5*time.Millisecond), c.Stages[1].Start)
 }
 
 func TestStreamLatency_should_DefaultAnUnsetBackendToTmux(t *testing.T) {

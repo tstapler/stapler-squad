@@ -1,15 +1,7 @@
 package termlat
 
 import (
-	"context"
 	"sort"
-	"sync"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
-
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // Resync reasons. Client reasons come from the browser (cm.term_resync); server reasons are
@@ -44,13 +36,6 @@ type ResyncCount struct {
 	Total   uint64 `json:"total"`
 }
 
-type resyncCounters struct {
-	mu      sync.Mutex
-	counts  map[[2]string]uint64
-	once    sync.Once
-	counter metric.Int64Counter
-}
-
 // CountResync records one resync event under a bounded (reason, backend) label pair and the
 // OTel counter terminal_resync_total.
 func (r *Recorder) CountResync(reason, backend string) {
@@ -58,25 +43,7 @@ func (r *Recorder) CountResync(reason, backend string) {
 		return
 	}
 	k := [2]string{NormalizeResyncReason(reason), NormalizeBackend(backend)}
-	r.resync.mu.Lock()
-	if r.resync.counts == nil {
-		r.resync.counts = map[[2]string]uint64{}
-	}
-	r.resync.counts[k]++
-	r.resync.mu.Unlock()
-	r.resync.once.Do(func() {
-		c, err := telemetry.GetMeter().Int64Counter("terminal_resync_total",
-			metric.WithDescription("Terminal resync requests and client-side skips by reason and backend"))
-		if err != nil {
-			log.Error("termlat: failed to register terminal_resync_total", "error", err)
-			return
-		}
-		r.resync.counter = c
-	})
-	if r.resync.counter != nil {
-		r.resync.counter.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("reason", k[0]), attribute.String("backend", k[1])))
-	}
+	r.resync.inc("terminal_resync_total", "Terminal resync requests and client-side skips by reason and backend", "reason", "backend", k)
 }
 
 // ResyncCounts returns every (reason, backend) count since process start, sorted.

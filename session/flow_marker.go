@@ -28,7 +28,10 @@ const (
 	PRFixTriggerReview   = "review"
 	PRFixTriggerFeedback = "feedback"
 	PRFixTriggerMixed    = "mixed"
-	PRFixTriggerUnknown  = "unknown"
+	// PRFixTriggerClosed marks the closed-without-merge branch, which has no
+	// trigger flags by design, so it must not inflate the unknown counter.
+	PRFixTriggerClosed  = "closed"
+	PRFixTriggerUnknown = "unknown"
 )
 
 // FlowMarkerData is one stored marker row.

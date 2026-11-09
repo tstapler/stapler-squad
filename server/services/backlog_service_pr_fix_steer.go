@@ -430,11 +430,7 @@ func (s *BacklogService) recordPRFixOutcome(ctx context.Context, itemID, outcome
 	if s == nil || s.storage == nil {
 		return
 	}
-	prNumber := 0
-	if item, err := s.storage.GetBacklogItem(ctx, itemID); err == nil && item != nil {
-		prNumber = item.PrNumber
-	}
-	s.storage.RecordFlowMarker(ctx, itemID, session.FlowMarkerPRFixOutcome, outcome, prNumber)
+	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, session.FlowMarkerPRFixOutcome, outcome)
 }
 
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for

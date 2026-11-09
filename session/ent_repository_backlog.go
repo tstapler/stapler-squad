@@ -2501,6 +2501,19 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
 
+	// Cheap pre-check so the hot no-op path opens no write transaction.
+	open, err := r.client.BacklogStuckState.Query().Where(
+		backlogstuckstate.ItemID(parsedID),
+		backlogstuckstate.Reason(string(reason)),
+		backlogstuckstate.ResolvedAtIsNil(),
+	).Exist(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve stuck %s/%s: %w", itemID, reason, err)
+	}
+	if !open {
+		return false, nil
+	}
+
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("resolve stuck: begin transaction: %w", err)

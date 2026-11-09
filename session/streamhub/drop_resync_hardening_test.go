@@ -105,7 +105,11 @@ func TestHub_should_EvictStalledSubscriber_When_DefaultGraceAndWriterNeverDrains
 	hub.Broadcast([]byte("f1"))
 	require.Eventually(t, func() bool { return count(tr.frames(), "f1") == 1 }, 5*time.Second, time.Millisecond)
 
-	for _, f := range []string{"f2", "f3", "f4", "f5", "f6"} {
+	// Park the writer inside the blocked Send of f2 first: only then is "writer sent nothing since
+	// the drop" settled, so the repaint is deterministically withheld and the grace timer evicts.
+	hub.Broadcast([]byte("f2"))
+	require.Eventually(t, func() bool { return tr.free.Load() < 0 }, 5*time.Second, time.Millisecond)
+	for _, f := range []string{"f3", "f4", "f5", "f6"} {
 		hub.Broadcast([]byte(f))
 	}
 	for i := 0; i < 20 && hub.SlowSubscriberDropsTotal() == 0; i++ {

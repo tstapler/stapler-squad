@@ -83,6 +83,20 @@ func (l *MarkerLimiter) Allow(key, value string) bool {
 	return true
 }
 
+// Forget rolls back an Allow for (key, value) whose write failed, so the lost
+// marker is not deduped for TriggerRecordMinInterval. It is a no-op if the key
+// has since recorded a different value.
+func (l *MarkerLimiter) Forget(key, value string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if prev, ok := l.last[key]; ok && prev.value == value {
+		delete(l.last, key)
+		if l.windowCount > 0 {
+			l.windowCount--
+		}
+	}
+}
+
 // Dropped returns how many writes the global cap has dropped.
 func (l *MarkerLimiter) Dropped() int {
 	l.mu.Lock()

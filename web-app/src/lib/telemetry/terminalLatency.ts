@@ -1,4 +1,5 @@
 import type { AnalyticsProvider } from "@/lib/analytics/types";
+import type { InputSendSample } from "./terminalInputTiming";
 
 /** One keystroke is sampled per this gap, so a held key or a paste costs one probe, not hundreds. */
 export const ECHO_MIN_GAP_MS = 250;
@@ -7,11 +8,15 @@ export const ECHO_TIMEOUT_MS = 3000;
 /** Largest sample the server accepts (see maxTermLatencyMs); anything slower is a throttled tab. */
 export const MAX_SAMPLE_MS = 10_000;
 /** Most terminal-latency events one tab may send per minute. */
-export const MAX_TERM_EVENTS_PER_MINUTE = 60;
+export const MAX_TERM_EVENTS_PER_MINUTE = 300;
 
 export type TermLatencyStage =
   | "echo_arrive"
   | "echo_paint"
+  | "echo_render"
+  | "input_queue"
+  | "ws_buffered_kib"
+  | "eventloop_lag"
   | "ttfp_connect"
   | "ttfp_first_data"
   | "ttfp_first_paint";
@@ -23,6 +28,8 @@ export interface TerminalLatencyProbe {
   noteOutput(): void;
   /** The stream opened. */
   noteConnected(): void;
+  /** An input frame reached the socket; counts only for the keystroke currently being sampled. */
+  noteInputSent(sample: InputSendSample): void;
 }
 
 export interface TerminalLatencyProbeOptions {
@@ -61,6 +68,7 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
   const isVisible = opts.isVisible ?? defaultIsVisible;
   const mountedAt = now();
   let pendingInputAt: number | null = null;
+  let sendNoted = false;
   let lastSampledAt = -Infinity;
   let windowStart = mountedAt;
   let sent = 0;
@@ -101,7 +109,14 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       if (pendingInputAt !== null && t - pendingInputAt <= ECHO_TIMEOUT_MS) return;
       if (t - lastSampledAt < ECHO_MIN_GAP_MS) return;
       pendingInputAt = t;
+      sendNoted = false;
       lastSampledAt = t;
+    },
+    noteInputSent(sample) {
+      if (pendingInputAt === null || sendNoted) return;
+      sendNoted = true;
+      emit("input_queue", sample.queuedMs);
+      emit("ws_buffered_kib", Math.ceil(sample.bufferedBytes / 1024)); // ceil: any backlog reads as at least 1 KiB
     },
     noteOutput() {
       const arrivedAt = now();
@@ -115,7 +130,10 @@ export function createTerminalLatencyProbe(opts: TerminalLatencyProbeOptions): T
       pendingInputAt = null;
       if (arrivedAt - sentAt > ECHO_TIMEOUT_MS) return;
       emit("echo_arrive", arrivedAt - sentAt);
-      afterPaint(() => emitPaint("echo_paint", sentAt, arrivedAt));
+      afterPaint(() => {
+        emitPaint("echo_paint", sentAt, arrivedAt);
+        emitPaint("echo_render", arrivedAt, arrivedAt);
+      });
     },
     noteConnected() {
       if (connected) return;
