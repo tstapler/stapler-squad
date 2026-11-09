@@ -656,14 +656,11 @@ func (s *unarySession) releaseCall(id uint32) {
 // enqueueUnlessCanceled closes the CANCEL window between finishCall and the
 // enqueue: cancelCall sets canceled under s.mu before its drop(), so holding
 // s.mu here means either we see the cancel or drop() sees our stream.
-func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, body []byte, onStreamDone, beforeEnqueue func()) (streamed, canceled bool, err error) {
+func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, body []byte, onStreamDone func()) (streamed, canceled bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if call := s.inflight[id]; call != nil && call.canceled {
 		return false, true, nil
-	}
-	if beforeEnqueue != nil {
-		beforeEnqueue()
 	}
 	streamed, err = s.writer.enqueueResponse(id, meta, body, func() {
 		s.releaseCall(id)
@@ -781,11 +778,7 @@ func (s *unarySession) respond(f unaryFrame, res callResult) {
 		meta := rec.responseMeta()
 		var canceled bool
 		var err error
-		streamed, canceled, err = s.enqueueUnlessCanceled(f.ID, meta, rec.body.Bytes(), rec.release, func() {
-			// Before the enqueue: a client can read the queued frame and check counters at once.
-			// A failed enqueue (rare: writer overflow) is thus still counted "ok".
-			s.b.metrics.call(f.Method, "ok")
-		})
+		streamed, canceled, err = s.enqueueUnlessCanceled(f.ID, meta, rec.body.Bytes(), rec.release)
 		if canceled {
 			return
 		}
@@ -794,9 +787,10 @@ func (s *unarySession) respond(f unaryFrame, res callResult) {
 				s.cancel()
 				return
 			}
-			s.replyError(f.ID, "", unaryErrorBody{Code: codeInternal, Message: err.Error()})
+			s.replyError(f.ID, f.Method, unaryErrorBody{Code: codeInternal, Message: err.Error()})
 			return
 		}
+		s.b.metrics.call(f.Method, "ok")
 	}
 }
 
