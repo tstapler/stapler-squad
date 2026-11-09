@@ -69,6 +69,7 @@ func (f *ClientFanout) ResetSeq(base uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq.valid, f.seq.last, f.seq.gapSignaled = true, base, false
+	f.seqOn.Store(true)
 	f.seq.gen++
 	f.seq.clearRing()
 	f.clearSkipsLocked()
@@ -84,9 +85,13 @@ func (f *ClientFanout) clearSkipsLocked() {
 // DisableSeq marks the stream as unsequenced (an older daemon, or legacy output), so resyncs use
 // the unsequenced path.
 func (f *ClientFanout) DisableSeq() {
+	if !f.seqOn.Load() {
+		return // already unsequenced: nothing to invalidate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq.valid = false
+	f.seqOn.Store(false)
 	f.seq.gen++
 	f.seq.clearRing()
 	f.clearSkipsLocked()
@@ -136,13 +141,12 @@ func (f *ClientFanout) BroadcastSeq(seq uint64, data []byte) (gap bool) {
 		}
 		if seq != st.last+1 {
 			st.clearRing()
-			if st.gapSignaled {
-				st.gapSignaled = false
-			} else {
+			if !st.gapSignaled {
 				st.gaps++
 				gap = true
 			}
 		}
+		st.gapSignaled = false // an announcement covers only the next chunk, never a later gap
 		st.last = seq
 		st.push(seq, data)
 	}
@@ -199,6 +203,7 @@ func (f *ClientFanout) ResyncAt(snapSeq, gen uint64, redraw []byte, scope Resync
 		}
 		sub.ch <- payload // emptied under f.mu above, so this cannot block
 		sub.dropped, sub.skipThrough = false, through
+		sub.resyncing, sub.held, sub.heldLost = false, nil, false
 		n++
 	}
 	return n, true

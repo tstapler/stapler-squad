@@ -183,6 +183,9 @@ func (s *tymuxGRPCSession) resyncAfterReconnect(ctx context.Context, first *v1.A
 		}
 		return s.applySnapshotResync(snap)
 	}
+	// No priming snapshot to reseed from: a restarted daemon may number from lower seqs, which
+	// BroadcastSeq would drop as duplicates.
+	s.fanout.DisableSeq()
 	return s.resyncViaCapturePane(ctx)
 }
 

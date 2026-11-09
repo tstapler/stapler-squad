@@ -3,6 +3,7 @@ package tymux
 import (
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // subscriberBufferSize is each subscriber channel's buffer depth — enough
@@ -44,6 +45,8 @@ type ClientFanout struct {
 	nextID      uint64
 	onDrop      func()
 	seq         seqState // guarded by mu; see fanout_seq.go
+	// seqOn mirrors seq.valid so DisableSeq, run per legacy frame, can skip the lock.
+	seqOn atomic.Bool
 }
 
 // NewClientFanout constructs an empty ClientFanout.
@@ -141,6 +144,9 @@ func (f *ClientFanout) FinishRepaint(ids []string, repaint []byte) int {
 		sub, ok := f.subscribers[id]
 		if !ok {
 			continue
+		}
+		if !sub.resyncing {
+			continue // a sequenced ResyncAt already replaced this claim
 		}
 		held := sub.held
 		complete := repaint != nil && !sub.heldLost

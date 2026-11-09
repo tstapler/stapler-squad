@@ -494,3 +494,56 @@ func TestStreamConsistency_RandomFaultSchedules(t *testing.T) {
 		})
 	}
 }
+
+// A background resync (need 0) must not splice a capture that started before a resize: it
+// shows the old size, and ResyncAt would replay post-resize output on top of it.
+func TestStreamConsistency_ResizeRejectsPreResizeCaptures(t *testing.T) {
+	h := newHarness(t, true)
+	h.s.resync.freshFor = time.Minute
+	rng := rand.New(rand.NewSource(31))
+	h.emitAll(frames(rng, 10, 0))
+
+	hold := make(chan struct{})
+	h.d.captureHold.Store(&hold)
+	h.d.emitLost(frames(rng, 3, 100), nil) // starts a gap flight that stays in flight
+	require.Eventually(t, func() bool { return h.d.captureCalls.Load() >= 1 }, 2*time.Second, time.Millisecond)
+
+	resizeDone := make(chan error, 1)
+	go func() { resizeDone <- h.s.ResyncInStream(context.Background()) }()
+	require.Eventually(t, func() bool {
+		h.s.resync.mu.Lock()
+		defer h.s.resync.mu.Unlock()
+		return h.s.resync.sizeEpoch != 0
+	}, 2*time.Second, time.Millisecond)
+
+	type result struct {
+		snap *resyncSnap
+		err  error
+	}
+	bg := make(chan result, 1)
+	go func() {
+		snap, _, err := h.s.snapshotForSplice(context.Background(), 0, resyncReasonDrop)
+		bg <- result{snap, err}
+	}()
+	close(hold)
+
+	require.NoError(t, <-resizeDone)
+	r := <-bg
+	require.NoError(t, r.err)
+	h.s.resync.mu.Lock()
+	sizeEpoch := h.s.resync.sizeEpoch
+	h.s.resync.mu.Unlock()
+	assert.GreaterOrEqual(t, r.snap.epoch, sizeEpoch, "a background resync reused a pre-resize capture")
+	h.converge()
+}
+
+func TestFanout_DisableSeqIsIdempotentAndGapAnnouncementExpires(t *testing.T) {
+	f := NewClientFanout()
+	f.DisableSeq()
+	assert.Zero(t, f.SeqGeneration(), "DisableSeq on an unsequenced stream must not churn the generation")
+
+	f.ResetSeq(10)
+	f.NoteGapSignaled()
+	assert.False(t, f.BroadcastSeq(11, []byte("a")), "contiguous chunk")
+	assert.True(t, f.BroadcastSeq(15, []byte("b")), "a later jump is a real gap, not the old announcement's")
+}

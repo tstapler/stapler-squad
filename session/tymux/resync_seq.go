@@ -36,6 +36,7 @@ const (
 	defaultResyncRetryCap      = 5 * time.Second
 	defaultResyncMaxAttempts   = 8
 	defaultResyncCaptureBudget = 5 * time.Second
+	defaultResizeResyncBudget  = 2 * time.Second
 )
 
 var errUnsequenced = errors.New("tymux: resync: stream is not sequenced")
@@ -80,19 +81,20 @@ func (f *resyncFlight) wait(ctx context.Context) (*resyncSnap, error) {
 // resyncCoordinator deduplicates captures and runs the retrying resync loop for one session.
 // Zero tunables mean the defaults above; tests shrink them.
 type resyncCoordinator struct {
-	mu       sync.Mutex
-	epoch    uint64 // bumped by every request that lost upstream output
-	pending  uint64 // epoch the background loop must satisfy
-	again    bool   // a request arrived since the current pass began
-	flight   *resyncFlight
-	last     *resyncSnap
-	running  bool
-	scopeAll bool
+	mu        sync.Mutex
+	epoch     uint64 // bumped by every request that lost upstream output
+	sizeEpoch uint64 // epoch of the latest resize resync; older captures show the old size
+	pending   uint64 // epoch the background loop must satisfy
+	again     bool   // a request arrived since the current pass began
+	flight    *resyncFlight
+	last      *resyncSnap
+	running   bool
+	scopeAll  bool
 
 	captures atomic.Int64 // CapturePane RPCs issued by shared flights
 
-	freshFor, retryBase, retryCap, captureBudget time.Duration
-	maxAttempts                                  int
+	freshFor, retryBase, retryCap, captureBudget, resizeBudget time.Duration
+	maxAttempts                                                int
 }
 
 func orDefault[T comparable](v, def T) T {
@@ -111,6 +113,7 @@ func (s *tymuxGRPCSession) sharedSnapshot(ctx context.Context, need uint64, revi
 	c := &s.resync
 	for {
 		c.mu.Lock()
+		need := max(need, c.sizeEpoch) // a pre-resize capture shows the old size
 		f := c.flight
 		switch {
 		case f != nil && f.epoch >= need && (f.revive || !revive):
@@ -274,6 +277,12 @@ func (s *tymuxGRPCSession) spliceResyncCtx(ctx context.Context, need uint64, sco
 	if err != nil {
 		return err
 	}
+	s.resync.mu.Lock()
+	stale := snap.epoch < s.resync.sizeEpoch
+	s.resync.mu.Unlock()
+	if stale {
+		return errTailEvicted // captured before a resize; the retry must capture again
+	}
 	s.mu.Lock()
 	s.liveness = snap.snap.GetLiveness()
 	s.restartIsPending = false
@@ -317,8 +326,9 @@ func (s *tymuxGRPCSession) snapshotForSplice(ctx context.Context, need uint64, r
 	c := &s.resync
 	c.mu.Lock()
 	last := c.last
+	sizeEpoch := c.sizeEpoch
 	c.mu.Unlock()
-	if last != nil && last.epoch >= need && time.Since(last.at) < orDefault(c.freshFor, defaultResyncFreshFor) &&
+	if last != nil && last.epoch >= max(need, sizeEpoch) && time.Since(last.at) < orDefault(c.freshFor, defaultResyncFreshFor) &&
 		last.gapGen == s.fanout.GapGeneration() && last.seqGen == s.fanout.SeqGeneration() {
 		recordStreamResync(reason, resyncOutcomeFresh)
 		return last, false, nil
@@ -348,8 +358,12 @@ func (s *tymuxGRPCSession) ResyncInStream(ctx context.Context) error {
 	c.mu.Lock()
 	c.epoch++
 	need := c.epoch
+	c.sizeEpoch = need
+	c.last = nil
 	c.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(ctx, orDefault(c.resizeBudget, defaultResizeResyncBudget))
+	defer cancel()
 	var err error
 	for attempt := 1; attempt <= resizeResyncAttempts; attempt++ {
 		if err = s.spliceResyncCtx(ctx, need, ScopeAll, resyncReasonResize); err == nil {
