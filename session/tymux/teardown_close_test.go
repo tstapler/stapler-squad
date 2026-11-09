@@ -17,7 +17,6 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // closeOnlyStream models an HTTP/2 bidi stream whose headers have arrived: cancelling the
@@ -85,7 +84,10 @@ func (headersThenIdleSvc) Attach(ctx context.Context, st *connect.BidiStream[v1.
 func TestRealHTTP2Stream_should_WakeReceiveOnCloseResponseAfterHeaders(t *testing.T) {
 	t.Parallel()
 	_, h := tymuxv1connect.NewTymuxServiceHandler(headersThenIdleSvc{})
-	srv := httptest.NewServer(h2c.NewHandler(h, &http2.Server{}))
+	srv := httptest.NewUnstartedServer(h)
+	srv.Config.Protocols = new(http.Protocols)
+	srv.Config.Protocols.SetUnencryptedHTTP2(true)
+	srv.Start()
 	t.Cleanup(srv.Close)
 	hc := &http.Client{Transport: &http2.Transport{AllowHTTP: true, DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
