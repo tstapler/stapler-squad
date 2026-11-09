@@ -67,8 +67,8 @@ func closingKeywordWithRepo(issueURL, prRemoteURL string) string {
 	return fmt.Sprintf("Closes #%d", issue.IssueNumber)
 }
 
-// buildAcChecklist renders a numbered checklist from AC criteria.
-// pending → "[ ]", done → "[✓]", in_progress → "[✗]"
+// buildAcChecklist renders a numbered checklist from AC criteria, followed by a legend.
+// done → "[✓]", waived → "[~]" (owner-set, skip it), fail → "[✗]", in_progress → "[>]", else "[ ]".
 func buildAcChecklist(criteria []AcCriterion) string {
 	if len(criteria) == 0 {
 		return "(no acceptance criteria)"
@@ -77,16 +77,21 @@ func buildAcChecklist(criteria []AcCriterion) string {
 	for _, c := range criteria {
 		var marker string
 		switch c.Status {
-		case "done":
+		case AcStatusDone:
 			marker = "[✓]"
-		case "in_progress":
+		case AcStatusWaived:
+			marker = "[~]"
+		case AcStatusFail:
 			marker = "[✗]"
+		case AcStatusInProgress:
+			marker = "[>]"
 		default:
 			marker = "[ ]"
 		}
 		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, sanitizeField(c.Text, 500))
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	sb.WriteString("Legend: [✓] done  [~] waived by the owner (skip it)  [✗] failed  [>] in progress  [ ] pending")
+	return sb.String()
 }
 
 // parsePerCriterionVerdicts unmarshals the JSON array stored in
@@ -134,22 +139,16 @@ const maxPriorAttemptsWithFullEvidence = 3
 const MaxSameSessionReviewAttempts = 3
 
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
-var taskProtocolBlock = fmt.Sprintf(`## Your Task Protocol
-1. Read ALL acceptance criteria before starting any work.
-2. Work through criteria systematically; run `+"`/backlog/done-N`"+` when criterion N is complete. If you
-need to manually run a standalone stapler-squad instance to click through a change by
-hand, see CLAUDE.md's "Manual/interactive testing without touching the live deployed
-instance" section - use a distinct PORT and STAPLER_SQUAD_INSTANCE every time, and kill
-that instance yourself once you are done with it. Never leave one running in the
-background. Other sessions in this same workspace will not know it exists, and repeated
-unclosed instances have previously exhausted this machine's memory.
-3. When ALL criteria are done, run `+"`/backlog/review`"+` with a 2–3 sentence summary of what you built.
-4. If you hit a blocker or need human input, run `+"`/backlog/review`"+` describing what you need — do not stop silently.
-5. If your context is compacted or you lose track of your task, re-read `+"`.backlog-context.md`"+` or run `+"`/backlog/status`"+` immediately before continuing.
-6. If the `+"`/backlog/*`"+` commands fail or the MCP server is unavailable, continue your work using the criteria listed in `+"`.backlog-context.md`"+` and record completed criteria in your commit messages.
-7. NEVER end your session without calling `+"`/backlog/review`"+` — this is how the task is closed properly.
-8. After `+"`/backlog/review`"+`, end your turn and stay idle in this session — do not exit, do NOT poll, and do NOT use ScheduleWakeup or /loop to wait (every wake re-reads your whole context). The app sends you a message with the verdict as soon as it is recorded. PASS → immediately run `+"`/backlog/ship`"+` yourself to open the pull request (it drives `+"`/github:pr-ship`"+`, which can rebase, resolve merge conflicts, and react to failing CI checks) — shipping the PR is part of this task, not a separate step someone else does; do not stop here. FAIL/PARTIAL → fix the noted gaps yourself and run `+"`/backlog/review`"+` again.
-9. `+"`/backlog/review`"+`'s underlying request_review call reports which attempt you're on out of %d allowed in THIS session — the count is tracked server-side, so trust what it reports. Once it says you've hit the cap, STOP looping: run `+"`/backlog/ship`"+` anyway to open a PR so a human can pick up the review directly, rather than retrying `+"`/backlog/review`"+` again. Nothing will kill or replace this session while you do any of this.`, MaxSameSessionReviewAttempts)
+var taskProtocolBlock = forDefault("## Your Task Protocol\n" +
+	"1. Read ALL acceptance criteria before starting any work.\n" +
+	"2. Work through criteria systematically. " + secWorkDiscipline + "\n" +
+	"3. When ALL criteria are done or waived, run ¦/backlog/review¦ with a 2–3 sentence summary of what you built, and pass each proving command with its output in verification_notes.\n" +
+	"4. " + secBlockerRouting + "\n" +
+	"5. " + secContextLost + "\n" +
+	"6. " + secCommandsFail + "\n" +
+	"7. " + secNeverEnd + "\n" +
+	"8. After ¦/backlog/review¦, " + secAwaitVerdict + " " + secOnPass + "\n" +
+	"9. " + onFailSection())
 
 // reviewVerdictSummariesMostRecentFirst extracts the review verdicts from
 // priorSessions (ordered oldest-first, as Storage.ListItemSessions returns)
