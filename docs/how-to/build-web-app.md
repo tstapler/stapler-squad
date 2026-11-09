@@ -73,7 +73,7 @@ What is already split (2026-11-08, entry 1.39 MB, total 6.35 MB): every page in 
 
 1. Load the heavy component with `lazyComponent(() => import("..."))` from `@/lib/lazy` (adds a Suspense boundary and stale-chunk recovery after a deploy). Use `React.lazy` directly only when you need the preload handle, as `TerminalPool` does.
 2. Never import the heavy module statically from code the entry reaches, including through a barrel file. `import type` is erased and safe.
-3. Add the package (or a scope ending in `/`) to `web-app/build/heavy-modules.json` with a reason. The next build fails if it ends up in the entry. The check reads `node_modules` paths from source maps, so list transitive heavies (`d3-*`, `micromark*`) separately if they matter.
+3. Add the package (or a scope ending in `/`) to `web-app/build/heavy-modules.json` with a reason. A later build fails if it ends up in the entry. The check reads `node_modules` paths from source maps, so list transitive heavies (`d3-*`, `micromark*`) separately if they matter.
 4. Build minified and check `largestLazyChunkBytes` in the stats against the 1 MB ceiling.
 
 ## Checks that guard the output
