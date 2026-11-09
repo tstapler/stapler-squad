@@ -1,0 +1,14 @@
+{
+  "id": "ListFlowDrilldown",
+  "type": "backend",
+  "service": "BacklogFlowService",
+  "method": "ListFlowDrilldown",
+  "protoFile": "proto/session/v1/backlog_flow.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestBacklogFlowService_should_MapDrilldownAndTimeline",
+    "TestBacklogFlowService_should_PassThroughUnknownDrillKeyMessage"
+  ],
+  "lastModified": "2026-11-06T05:48:01.739746872-08:00"
+}

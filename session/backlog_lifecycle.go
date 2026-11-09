@@ -2368,6 +2368,18 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonTransitionDenied:
 			resolve = !transitionDenialAnchored(row)
+		case domain.StuckReasonSpawnFailed:
+			// Only the dequeue-backoff use is anchored; the review-reopen use (item
+			// stranded in_progress) keeps waiting for its own event site. in_progress
+			// stays in the anchor: it is the transient claim state of a retry, and
+			// resolving there would erase the backoff count. Rows written by #1460 lack the
+			// prefix until the next failed retry rewrites the context (MarkStuck's upsert), so they
+			// are skipped here only until then.
+			if !domain.IsDequeueSpawnFailedContext(row.Context) {
+				continue
+			}
+			resolve = row.ItemStatus != BacklogStatusReady && row.ItemStatus != BacklogStatusQueued &&
+				row.ItemStatus != BacklogStatusInProgress
 		default:
 			// push_failed, rework_cap, multiple_reasons, and any future
 			// reason with no non-terminal anchor: stays open until the

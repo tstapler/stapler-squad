@@ -64,6 +64,11 @@ var notTerminalWriteRPCs = map[string][]string{
 		"UnarchiveBacklogItem", "UpdateBacklogItem", "UpdateItemSource", "UpdateLivenessDefinition",
 		"UpdatePipelineMode", "UpdateStage", "UpdateStageTransition", "UpdateTransitionGate", "WaiveAcceptanceCriterion", "WatchBacklogItems",
 	},
+	"BacklogFlowService": {
+		// Read-only analytics over backlog events; type into no pane and write no state.
+		"CompareFlowWindows", "GetFlowSummary", "GetItemFlowTimeline", "ListDeadlockCandidates",
+		"ListFlowDrilldown", "ListThrashEpisodes",
+	},
 	"DiagnosticService": {
 		"AssembleDiagnosticBundle", "DispatchDiagnose",
 	},

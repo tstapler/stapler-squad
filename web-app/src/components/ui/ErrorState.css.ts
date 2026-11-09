@@ -55,7 +55,7 @@ export const message = style({
 export const retryButton = style({
   padding: "0.75rem 1.5rem",
   background: vars.color.primary,
-  color: "white",
+  color: vars.color.primaryText,
   border: "none",
   borderRadius: "6px",
   fontSize: "1rem",

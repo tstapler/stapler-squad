@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/flow"
 )
 
 func newMarkerTestRepo(t *testing.T) (*EntRepository, *fakeMarkerClock) {
@@ -114,6 +116,43 @@ func TestEntFlowReader_should_ReadOnlySystemWrittenMarkers_When_AgentNoteCarries
 	assert.Equal(t, o0, o1)
 	assert.Equal(t, t0, t1)
 	assert.Equal(t, 1, o1)
+
+	// The aggregator reads through EntFlowReader.Markers: the forged notes must not appear there either.
+	reader := NewEntFlowReader(repo.GetEntClient())
+	got, err := reader.Markers(ctx, clk.Now().Add(-time.Hour), clk.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only the system-written outcome marker")
+	assert.Equal(t, flow.Marker{Item: flow.ItemID(item.ID), Kind: flow.MarkerPRFixOutcome, Value: "steered", PRNumber: 5, At: clk.Now()}, got[0])
+	capture, err := reader.MarkerCapture(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, clk.Now(), capture.FirstOutcome)
+	assert.True(t, capture.FirstTrigger.IsZero(), "a forged pr_fix_trigger note must not start trigger capture")
+}
+
+func TestEntFlowReader_should_ReturnMarkersOldestFirstAndFirstTimes_When_BothKindsRecorded(t *testing.T) {
+	t.Parallel()
+	repo, clk := newMarkerTestRepo(t)
+	ctx := context.Background()
+	item := uuid.NewString()
+	t0 := clk.Now()
+	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixTrigger, PRFixTriggerCI, 7)
+	clk.Advance(time.Minute)
+	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSkippedActive, 7)
+	reader := NewEntFlowReader(repo.GetEntClient())
+
+	got, err := reader.Markers(ctx, t0, t0.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, flow.MarkerPRFixTrigger, got[0].Kind)
+	assert.Equal(t, flow.MarkerPRFixOutcome, got[1].Kind)
+	capture, err := reader.MarkerCapture(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, t0, capture.FirstTrigger)
+	assert.Equal(t, t0.Add(time.Minute), capture.FirstOutcome)
+
+	empty, err := NewEntFlowReader(repo.GetEntClient()).Markers(ctx, t0.Add(time.Hour), t0.Add(2*time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, empty)
 }
 
 // flowMarkerCountingDriver records transaction begins and queries by SQL text.

@@ -15,6 +15,7 @@ import BacklogBoardPage from "../page";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -121,8 +122,9 @@ describe("BacklogBoardPage — single useStuckBacklogItems() call (Story 5.1.1)"
     const callsFor2Cards = useStuckBacklogItemsMock.mock.calls.length;
 
     const cards = screen.getAllByTestId("backlog-item-card");
-    const stuckCard = cards.find((c) => c.getAttribute("data-item-id") === "item-2")!;
-    const clearCard = cards.find((c) => c.getAttribute("data-item-id") === "item-1")!;
+    const stuckCard = cards.find((c) => c.getAttribute("data-item-id") === "item-2");
+    const clearCard = cards.find((c) => c.getAttribute("data-item-id") === "item-1");
+    if (!stuckCard || !clearCard) throw new Error("expected both item cards to render");
 
     expect(stuckCard.querySelector('[data-testid="blocker-chip"]')).toBeInTheDocument();
     expect(clearCard.querySelector('[data-testid="blocker-chip"]')).not.toBeInTheDocument();

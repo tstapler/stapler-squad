@@ -190,6 +190,10 @@ type StreamHub struct {
 	resizeMu       sync.Mutex
 	negotiatedSize TerminalSize
 	resizing       bool
+	// suppressOutput makes OnRawOutput drop frames. It equals resizing, except that an in-stream
+	// resync clears it just before splicing, so the spliced redraw and the output after the
+	// capture are not themselves dropped.
+	suppressOutput bool
 	// resizeGeneration increments once per completed applyNegotiatedSize
 	// call (success or failure), alongside resizing flipping back to
 	// false. ForwardScroll (session package, via ResizeActivity) samples
@@ -967,9 +971,9 @@ var streamEndedSentinel = []byte("\x00STREAM_ENDED\x00")
 // accumulation/coalesce pass per burst instead of each running their own.
 func (h *StreamHub) OnRawOutput(data []byte) {
 	h.resizeMu.Lock()
-	resizing := h.resizing
+	suppress := h.suppressOutput
 	h.resizeMu.Unlock()
-	if resizing {
+	if suppress {
 		h.noteSuppressedOutput()
 		h.tap.Record(TapDrop, DropCauseResizeSettling, data)
 		return
@@ -1027,12 +1031,12 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	h.settle.droppedSinceCapture.Store(false)
 
 	h.resizeMu.Lock()
-	h.resizing = true
+	h.resizing, h.suppressOutput = true, true
 	h.resizeMu.Unlock()
 	h.tap.RecordResize(size)
 	defer func() {
 		h.resizeMu.Lock()
-		h.resizing = false
+		h.resizing, h.suppressOutput = false, false
 		h.resizeGeneration++
 		h.resizeMu.Unlock()
 		h.finishResize(ctx, callerCtx, budget, h.clock.Now().Sub(started), published, reachedCapture)
@@ -1084,6 +1088,12 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 
 	reachedCapture = true
 	h.settle.droppedSinceCapture.Store(false) // frames dropped before this point are in the capture
+	if h.resyncInStream(ctx) {
+		// The splice carries every frame after its capture, so nothing is stale.
+		h.settle.droppedSinceCapture.Store(false)
+		published = true
+		return
+	}
 	if redraw, ok := h.captureRedrawContext(ctx); ok {
 		h.publishSnapshot(redraw)
 		published = true
@@ -1135,6 +1145,30 @@ func (h *StreamHub) finishResize(ctx, callerCtx context.Context, budget, took ti
 	if h.settle.droppedSinceCapture.Load() || (reachedCapture && !published) {
 		h.armSettleFresh()
 	}
+}
+
+// resyncInStream finishes a resize for a controller whose output is numbered: the capture is
+// spliced into the raw-output stream as a redraw plus everything after it, so output that arrives
+// between the capture and the end of this call is delivered once, in order, instead of dropped.
+// Suppression ends first because the spliced frame travels the same OnRawOutput path. It reports
+// false, having changed nothing, when the controller cannot (the caller takes the capture path).
+func (h *StreamHub) resyncInStream(ctx context.Context) bool {
+	r, ok := h.controller.(InStreamResyncer)
+	if !ok || !r.SupportsInStreamResync() {
+		return false
+	}
+	h.resizeMu.Lock()
+	h.suppressOutput = false
+	h.resizeMu.Unlock()
+	if err := r.ResyncInStream(ctx); err != nil {
+		log.Info("streamhub: in-stream resync unavailable, falling back to a capture",
+			"session", h.sessionName, "error", err)
+		h.resizeMu.Lock()
+		h.suppressOutput = true // the capture fallback assumes output is dropped until it returns
+		h.resizeMu.Unlock()
+		return false
+	}
+	return true
 }
 
 // publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not

@@ -172,8 +172,12 @@ type tymuxGRPCSession struct {
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
 
-	// dropRepaintPending is true while a repaint for frames the fanout dropped is running.
+	// dropRepaintPending is true while a repaint for frames the fanout dropped is running
+	// (unsequenced streams only; sequenced ones go through resync).
 	dropRepaintPending atomic.Bool
+
+	// resync dedupes captures and drives gap/drop repair; see resync_seq.go.
+	resync resyncCoordinator
 
 	// lastEventUnixNano is when the standing stream last delivered any
 	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
@@ -1445,22 +1449,16 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 // restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
 // mouse work in a freshly attached client before the app re-sets any of them.
 func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
-	snap, err := s.capturePane(ctx, 0)
+	snap, err := s.redrawFor(ctx)
 	if err != nil {
 		return "", false, false, err
 	}
 	// A daemon older than v1.9.0 sends no Modes; its redraw would be a bare grid paint with no
 	// state reset, which the legacy text path (prefix + cursor sync) does better.
-	if snap.GetModes() == nil {
+	if snap.snap.GetModes() == nil {
 		return "", false, false, nil
 	}
-	renderStart := time.Now()
-	data, err = RenderSnapshotRedraw(snap)
-	observeCaptureRender(renderStart)
-	if err != nil {
-		return "", false, false, err
-	}
-	return data, snap.GetAltScreen(), true, nil
+	return string(snap.redraw), snap.snap.GetAltScreen(), true, nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

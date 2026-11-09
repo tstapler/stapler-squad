@@ -1585,6 +1585,26 @@ func (i *Instance) SetPaneActivity(ctx context.Context, activity qos.Activity) e
 	return h.SetPaneActivity(ctx, activity)
 }
 
+// SupportsInStreamResync reports whether ResyncInStream can splice by sequence number right now.
+// Satisfies streamhub.InStreamResyncer.
+func (i *Instance) SupportsInStreamResync() bool {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	return ok && i.terminalScreenReady() && c.SupportsInStreamResync()
+}
+
+// ResyncInStream captures the pane and splices a redraw plus all later output into every raw
+// output subscriber's stream, in order. Satisfies streamhub.InStreamResyncer.
+func (i *Instance) ResyncInStream(ctx context.Context) error {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	if !ok {
+		return streamhub.ErrSessionNotStarted
+	}
+	if !i.terminalScreenReady() {
+		return streamhub.ErrSessionNotStarted
+	}
+	return c.ResyncInStream(ctx)
+}
+
 // GetCurrentPaneContent captures the current visible tmux pane content.
 // Delegates to processManager.CaptureViewport.
 func (i *Instance) GetCurrentPaneContent(lines int) (string, error) {
