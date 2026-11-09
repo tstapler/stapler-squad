@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -173,6 +174,22 @@ func TestRecordFlowMarkerForItemPR_should_DoNoItemRead_When_DecisionDeduped(t *t
 	txs, queries := drv.snapshot()
 	assert.Zero(t, txs)
 	assert.Empty(t, queries, "deduped decision issues no read")
+}
+
+func TestRecordFlowMarkerForItemPR_should_DropMarkerAndReleaseLimiter_When_PRReadFails(t *testing.T) {
+	t.Parallel()
+	repo, clk := newMarkerTestRepo(t)
+	ctx := context.Background()
+	item := uuid.NewString() // no such backlog item: the pr_number read returns NotFound
+	t0 := clk.Now()
+
+	repo.RecordFlowMarkerForItemPR(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered)
+
+	got, err := repo.ListFlowMarkersForItem(ctx, item, FlowMarkerPRFixOutcome, t0, t0.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Empty(t, got, "a failed pr_number read must not write a marker with pr_number=0")
+	key := fmt.Sprintf("%s|%s|item", FlowMarkerPRFixOutcome, item)
+	assert.True(t, repo.markerLimiterFor().Allow(key, PRFixOutcomeSteered), "the failed read must release the limiter so the marker can retry")
 }
 
 func TestRecordFlowMarker_should_RetryAfterFailure_When_InsertFailsOnce(t *testing.T) {
