@@ -2160,6 +2160,16 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return nil
 	}
 
+	// A verdict the reviewer classed as unfixable by rework (unattainable, unrelated failure,
+	// environmental, wrong branch, or a proposed waiver) goes to the owner, not another round.
+	if verdictErr == nil && len(recentVerdicts) > 0 {
+		if criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria); parseErr == nil {
+			if flagged := flaggedForOwner(recentVerdicts[0].PerCriterion, criteria); len(flagged) > 0 && s.escalateVerdictToOwner(ctx, item, flagged) {
+				return nil
+			}
+		}
+	}
+
 	workCount := 0
 	for _, is := range sessions {
 		if is.Role == session.SessionRoleWork {

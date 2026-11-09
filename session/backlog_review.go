@@ -276,9 +276,10 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	sb.WriteString("Call submit_review_verdict ONCE with ALL criteria verdicts in the verdicts array:\n")
 	sb.WriteString("  - item_id: the backlog item UUID shown below\n")
 	sb.WriteString("  - summary: a concise overall assessment\n")
-	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence}, ...] for each criterion\n")
+	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence, failure_class?, proposed_waiver?}, ...] for each criterion\n")
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
-	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
+	sb.WriteString("  - evidence: direct quote or reference from the diff\n")
+	sb.WriteString("  - " + forDefault(secReviewFailureClass) + "\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
 	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 

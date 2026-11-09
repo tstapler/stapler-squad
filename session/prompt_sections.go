@@ -116,3 +116,13 @@ const (
 	triageTasksLine       = `- tasks: implementation task breakdown (max 12). estimate is a cost class, never hours or days: S (one agent turn), M (one agent wave), L (several waves)`
 	triageNoSubmitLine    = `- Do NOT call submit_triage_result. Do NOT write any source code.`
 )
+
+const secReviewFailureClass = `For each criterion that is not PASS, set failure_class so the app routes it correctly: ` +
+	`NOT_DONE (default) when the worker has more to do; ` +
+	`CANNOT_VERIFY when you lack access to the evidence; ` +
+	`UNRELATED_FAILURE when the proof fails only because of a test or code the change did not touch; ` +
+	`ENVIRONMENTAL when tooling, network, or CI outside the change is broken; ` +
+	`WRONG_BRANCH when the cited commits are not on the reviewed branch; ` +
+	`UNATTAINABLE when the criterion cannot be met as written. ` +
+	`Anything except NOT_DONE goes to the owner instead of another rework round, so use it only when more work in this change cannot fix the gap. ` +
+	`When you judge the owner should waive the criterion, also set proposed_waiver=true and put the reason in evidence.`

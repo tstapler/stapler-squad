@@ -587,6 +587,41 @@ type CriterionVerdict struct {
 	CriterionIndex int           `json:"criterion_index"`
 	Outcome        ReviewOutcome `json:"outcome"`
 	Evidence       string        `json:"evidence"`
+	// FailureClass says why a non-PASS criterion did not pass; empty means NOT_DONE.
+	FailureClass FailureClass `json:"failure_class,omitempty"`
+	// ProposedWaiver is the reviewer's recommendation that the owner waive this criterion.
+	ProposedWaiver bool `json:"proposed_waiver,omitempty"`
+}
+
+// FailureClass separates "the worker has more to do" from reasons more rework cannot fix.
+type FailureClass string
+
+const (
+	FailureClassNotDone          FailureClass = "NOT_DONE"
+	FailureClassCannotVerify     FailureClass = "CANNOT_VERIFY"
+	FailureClassUnrelatedFailure FailureClass = "UNRELATED_FAILURE"
+	FailureClassEnvironmental    FailureClass = "ENVIRONMENTAL"
+	FailureClassWrongBranch      FailureClass = "WRONG_BRANCH"
+	FailureClassUnattainable     FailureClass = "UNATTAINABLE"
+)
+
+// IsValid reports whether c is a known class; the empty class is valid and means NOT_DONE.
+func (c FailureClass) IsValid() bool {
+	switch c {
+	case "", FailureClassNotDone, FailureClassCannotVerify, FailureClassUnrelatedFailure,
+		FailureClassEnvironmental, FailureClassWrongBranch, FailureClassUnattainable:
+		return true
+	}
+	return false
+}
+
+// NeedsOwner reports whether another worker round cannot resolve this verdict, so the owner
+// must decide (waive, fix the environment, or correct the criterion).
+func (v CriterionVerdict) NeedsOwner() bool {
+	if v.Outcome == ReviewOutcomePass {
+		return false
+	}
+	return v.ProposedWaiver || (v.FailureClass != "" && v.FailureClass != FailureClassNotDone)
 }
 
 // AggregateOutcome computes the overall outcome from a slice of CriterionVerdicts.

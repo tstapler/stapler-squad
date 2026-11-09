@@ -141,4 +141,9 @@ func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, dat
 	if noteErr := s.storage.AppendActivityNote(ctx, itemID, "", "Owner Action", note); noteErr != nil {
 		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver: AppendActivityNote item=%s: %v", itemID, noteErr)
 	}
+	if err == nil {
+		if fn := s.waiverResumer.Load(); fn != nil && *fn != nil {
+			(*fn)(context.WithoutCancel(ctx), itemID)
+		}
+	}
 }

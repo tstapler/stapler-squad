@@ -315,3 +315,27 @@ func TestParseOwnerActionWaiver_should_RoundTripOnlyMarkedOwnerActionQuestions(t
 		}
 	}
 }
+
+func TestCriterionVerdict_should_NeedOwner_Only_When_NotPassAndUnfixableOrWaiverProposed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		v    CriterionVerdict
+		want bool
+	}{
+		{"fail default class", CriterionVerdict{Outcome: ReviewOutcomeFail}, false},
+		{"fail not done", CriterionVerdict{Outcome: ReviewOutcomeFail, FailureClass: FailureClassNotDone}, false},
+		{"fail unattainable", CriterionVerdict{Outcome: ReviewOutcomeFail, FailureClass: FailureClassUnattainable}, true},
+		{"unverifiable environmental", CriterionVerdict{Outcome: ReviewOutcomeUnverifiable, FailureClass: FailureClassEnvironmental}, true},
+		{"partial with proposed waiver", CriterionVerdict{Outcome: ReviewOutcomePartial, ProposedWaiver: true}, true},
+		{"pass ignores class", CriterionVerdict{Outcome: ReviewOutcomePass, FailureClass: FailureClassUnattainable, ProposedWaiver: true}, false},
+	}
+	for _, c := range cases {
+		if got := c.v.NeedsOwner(); got != c.want {
+			t.Errorf("%s: NeedsOwner() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if FailureClass("BOGUS").IsValid() || !FailureClass("").IsValid() {
+		t.Error("IsValid must accept empty and reject unknown classes")
+	}
+}
