@@ -24,7 +24,7 @@ function assertNever(x: never): never {
   throw new Error(`unhandled variant: ${JSON.stringify(x)}`);
 }
 
-function utf8Length(s: string): number {
+export function utf8Length(s: string): number {
   let n = 0;
   for (const ch of s) {
     const cp = ch.codePointAt(0) ?? 0;
