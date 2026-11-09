@@ -58,19 +58,29 @@ These split one slow call or frame into the places it can wait. All are in the s
 | `stream_lock_wait` | tymux | waiting for the Attach stream's input or frame lock before a send (keystroke, resize, paste chunk) |
 | `stream_send` | tymux | one Attach stream `Send`; gRPC flow-control stalls land here |
 | `pm_lock_wait` | server | a contended wait for `Instance.pmMu`. An uncontended call records nothing, so the sample count is how often a call met the lock |
+| `echo_daemon` | server (tymux) | keystroke send began -> the daemon stamped the first output frame after it: pty write + app/shell echo + daemon send queue. Needs capability `output.sent_at` (daemon v1.17.0+); no samples otherwise |
+| `output_transit` | server (tymux) | daemon stamped an output frame -> squad's `Receive` returned it: gRPC/HTTP2 transit and the client receive queue. Every stamped frame, not only echo frames; an upper bound (the daemon may pull a frame before flow control releases it) |
 | `input_queue` | browser | keystroke entered the send queue -> handed to the socket |
 | `ws_buffered_kib` | browser | KiB the socket still had buffered when the keystroke was sent, rounded up so any backlog is at least 1 (a count, not ms; the histogram tops out at 5000) |
 | `echo_render` | browser | echo frame arrived -> painted |
 | `eventloop_lag` | browser | worst drift of a 100 ms timer in a 5 s window, reported when over 16 ms; ticks while the tab is hidden, and the first one after it returns, are skipped |
 
-Not observable: the time a frame spends inside the gRPC client's flow-control window before
-`Receive` returns, because the daemon stamps no send time on a frame. `tymux_frame_handle` starts
-when `Receive` returns; a stall before that shows up as late output at the browser, not as a stage.
+The time a frame spends inside the gRPC client's flow-control window before `Receive` returns is
+`output_transit` on daemons that stamp frames (capability `output.sent_at`, v1.17.0+). On older
+daemons it is not observable: `tymux_frame_handle` starts when `Receive` returns, and a stall before
+that shows up as late output at the browser, not as a stage. Daemon and squad must share a host
+(the stamp is wall-clock); a stamp from the future drops both samples.
 
 Residuals are computed on the dashboard, not recorded: `capture_pane` squad-side time is the
 `session.backend.capture_pane` duration minus the RPC round trip (`tymux_rpc_duration_ms`),
 `capture_render` and `capture_revive`; echo "network + return" is `echo_arrive` minus
 `echo_server` minus `input_queue`. Both use means (they add; percentiles do not).
+
+On tymux, `echo_server` splits into `input_bookkeep` (squad pre-write), `echo_daemon` (pty write,
+app echo, daemon send queue), `output_transit`, `tymux_fanout_wait`, `output_queue_wait` (hub
+batch) and `ws_write_wait` + `ws_write`; the dashboard stacks them. The pieces are an
+approximation: `echo_daemon` and `output_transit` attribute the first stamped frame after a
+keystroke, which under bulk output need not be its echo.
 
 ## Dropped frames
 

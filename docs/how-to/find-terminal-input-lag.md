@@ -37,6 +37,23 @@ renderer's own work, or the remote host).
   attribute `session`.
 - **Contended Instance lock waits**: typing met a lock held by something else.
 
+### Splitting `echo_server` on tymux
+
+Panel *tymux echo_server decomposition* stacks the mean time of each piece against the
+`echo_server` line. Read the tallest block:
+
+| Block | Means |
+|---|---|
+| `input_bookkeep` | squad work before the write |
+| `echo_daemon` | pty write, the shell or app producing its echo, and the daemon's send queue. Large = the program is slow to echo (loaded host, busy app), not squad |
+| `output_transit` | daemon -> squad gRPC transit and receive queue |
+| `tymux_fanout_wait`, `output_queue_wait` | squad draining the daemon stream, then the hub batch |
+| `ws_write_wait`, `ws_write` | the browser socket |
+
+`echo_daemon` and `output_transit` need a daemon with capability `output.sent_at` (v1.17.0+); the
+panel shows nothing for them on older daemons. Check with `curl -s localhost:8543/actuator/terminal-latency`
+for stage `echo_daemon`.
+
 ## 4. Head-of-line waits per hop
 
 Walk the path output takes: tymuxd -> squad -> browser.

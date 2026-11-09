@@ -129,6 +129,7 @@ func (s *tymuxGRPCSession) sendOnStreamCtx(ctx context.Context, req *v1.AttachRe
 		payloadTimeout = defaultInputPayloadTimeout
 	}
 	if _, isInput := req.GetPayload().(*v1.AttachRequest_Input); isInput {
+		s.echo.noteInput(time.Now())
 		return sendInputPayload(ctx, stream, gate, req.GetInput(), frameWait, payloadTimeout)
 	}
 	return 0, sendFrame(ctx, stream, gate, req, frameWait)

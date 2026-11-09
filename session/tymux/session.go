@@ -41,6 +41,7 @@ const (
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
 	transport    rpcTransport
+	echo         echoProbe // splits echo_server with the daemon's send stamp (echo_probe.go)
 	bannerFilter *tmux.BannerFilter
 
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
