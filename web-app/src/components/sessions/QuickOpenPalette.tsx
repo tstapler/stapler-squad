@@ -9,6 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import { createPortal } from "react-dom";
+import Fuse from "fuse.js";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon as getFileIconByName } from "@/lib/utils/fileIcons";
@@ -16,19 +17,6 @@ import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import type { LabelsOf } from "@/lib/files/analytics/events";
 import * as styles from "./QuickOpenPalette.css";
 import { visuallyHidden } from "@/styles/a11y.css";
-
-// ---------------------------------------------------------------------------
-// Fuse.js — optional progressive enhancement
-// ---------------------------------------------------------------------------
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let FuseClass: any = null;
-try {
-  // Dynamic require so the bundle never fails when fuse.js is absent.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  FuseClass = require("fuse.js").default ?? require("fuse.js");
-} catch {
-  // fuse.js not installed — fall back to raw server results
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,8 +154,8 @@ export function QuickOpenPalette({
 
           let files: FileNode[] = resp.files;
 
-          if (FuseClass && files.length > 0) {
-            const fuse = new FuseClass(files, {
+          if (files.length > 0) {
+            const fuse = new Fuse(files, {
               keys: [
                 { name: "name", weight: 2 },
                 { name: "path", weight: 1 },
@@ -175,9 +163,7 @@ export function QuickOpenPalette({
               threshold: 0.4,
               ignoreLocation: true,
             });
-            files = fuse.search(query).map(
-              (r: { item: FileNode }) => r.item
-            );
+            files = fuse.search(query).map((r) => r.item);
           }
 
           setResults(files);
