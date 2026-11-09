@@ -64,8 +64,9 @@ cd "$ROOT"
 # cquery --output=files prints paths relative to Bazel's execution root; resolve them there rather
 # than through the workspace's bazel-out/bazel-bin symlinks, which --symlink_prefix or a read-only
 # checkout can remove or rename.
-EXEC_ROOT="$(bazel info ${FLAGS[@]+"${FLAGS[@]}"} execution_root)"
-[[ -d "$EXEC_ROOT" ]] || err "could not resolve Bazel's execution_root"
+INFO_OUT="$(bazel info ${FLAGS[@]+"${FLAGS[@]}"} execution_root 2>&1)" || err "bazel info failed: $INFO_OUT"
+EXEC_ROOT="$(printf '%s\n' "$INFO_OUT" | tail -n1)" # the path is the last line; Bazel may print INFO lines before it
+[[ -d "$EXEC_ROOT" ]] || err "could not resolve Bazel's execution_root from: $INFO_OUT"
 
 if [[ "$RUN_TESTS" == 1 ]]; then
   log "bazel build $TEST_TARGET (zig build test-lib-vt -Dtest-filter=softReset)"
