@@ -43,6 +43,15 @@ const (
 	StageTTFPFirstPaint = "ttfp_first_paint"   // browser: terminal mounted -> first frame painted
 	StageAttachQueue    = "attach_queue"       // server: waiting for an attach slot (reload thundering herd)
 	StageAttachOpen     = "attach_open"        // server: backend alive/adopt/restore for one terminal attach
+	// attach_open decomposed: prepare + alive_check + restore cover its body (backend = the stream's).
+	StageAttachPrepare    = "attach_prepare"     // server: PrepareRetainedTerminalView (read-only adopt of an inactive session)
+	StageAttachAliveCheck = "attach_alive_check" // server: IsBackendProcessAlive, an uncached daemon/tmux liveness probe
+	StageAttachRestore    = "attach_restore"     // server: RestoreProcess, only when the backend was not alive
+	// restore_* split attach_restore on tymux (backend="tymux").
+	StageRestoreList   = "restore_list"   // tymux: ListSessions while claiming the owner's session
+	StageRestoreRevive = "restore_revive" // tymux: lifecycle probe + ReviveSession of a DEAD-listed session
+	StageRestoreAdopt  = "restore_adopt"  // tymux: cacheFromSession after claim/revive (stream attach)
+	StageRestoreStart  = "restore_start"  // tymux: no session to adopt, so Start created one
 )
 
 // Decomposition stages: where one slow capture_pane / send / frame spent its time. Backend is
@@ -73,6 +82,8 @@ func NormalizeStage(s string) string {
 	case StageInputTotal, StageInputSend, StageInputBookkeep, StageBookkeepFlush, StageOutputSend,
 		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint, StageResyncQueue,
 		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint, StageAttachQueue, StageAttachOpen,
+		StageAttachPrepare, StageAttachAliveCheck, StageAttachRestore,
+		StageRestoreList, StageRestoreRevive, StageRestoreAdopt, StageRestoreStart,
 		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
 		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
 		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag:
