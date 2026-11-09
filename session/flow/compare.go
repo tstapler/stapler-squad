@@ -12,6 +12,13 @@ import (
 // period to compare it with, and guessing one would mislead.
 var ErrCompareAllTime = errors.New("compare needs a bounded window; pick 7, 30 or 90 days")
 
+const (
+	// MaxWindowDays is the longest bounded window; all_time exists for the rest.
+	MaxWindowDays = 365
+	// maxOffsetDays bounds b_offset_days (about ten years back).
+	maxOffsetDays = 3650
+)
+
 // compareSections are the sections the compare metrics read.
 var compareSections = []SectionName{SectionTiles, SectionCauses, SectionReview, SectionPR, SectionStuck, SectionAnomalies}
 
@@ -319,6 +326,9 @@ func (a *Aggregator) offsetWindows(q CompareQuery) (winA, winB FlowWindow, err e
 	if q.ADays < 1 || q.BDays < 1 || q.BOffsetDays < 0 {
 		return winA, winB, errors.New("compare: a_days and b_days must be >= 1 and b_offset_days >= 0")
 	}
+	if q.ADays > MaxWindowDays || q.BDays > MaxWindowDays || q.BOffsetDays > maxOffsetDays {
+		return winA, winB, fmt.Errorf("compare: a_days and b_days must be 1..%d and b_offset_days 0..%d; use bounded windows, compare has no all-time form", MaxWindowDays, maxOffsetDays)
+	}
 	end := a.clock.Now().UTC().AddDate(0, 0, -q.BOffsetDays)
 	bStart := end.AddDate(0, 0, -q.BDays)
 	if winB, err = NewFlowWindowBounds(bStart, end); err != nil {
@@ -339,16 +349,28 @@ func (a *Aggregator) explicitWindows(q CompareQuery) (winA, winB FlowWindow, cla
 		}
 	}
 	now := a.clock.Now().UTC()
-	bEnd := q.BEnd.UTC()
+	aEnd, bEnd := q.AEnd.UTC(), q.BEnd.UTC()
+	if aEnd.After(now) {
+		aEnd = now
+		clamps = append(clamps, "a_end clamped to as-of "+now.Format(time.RFC3339))
+	}
 	if bEnd.After(now) {
 		bEnd = now
 		clamps = append(clamps, "b_end clamped to as-of "+now.Format(time.RFC3339))
 	}
-	if winA, err = NewFlowWindowBounds(q.AStart, q.AEnd); err != nil {
+	if winA, err = NewFlowWindowBounds(q.AStart, aEnd); err != nil {
 		return winA, winB, nil, fmt.Errorf("compare: a_start must be before a_end: %w", err)
 	}
 	if winB, err = NewFlowWindowBounds(q.BStart, bEnd); err != nil {
 		return winA, winB, nil, fmt.Errorf("compare: b_start must be before b_end: %w", err)
+	}
+	for _, w := range []struct {
+		name string
+		win  FlowWindow
+	}{{"A", winA}, {"B", winB}} {
+		if days := windowDays(w.win); days > MaxWindowDays {
+			return winA, winB, nil, fmt.Errorf("compare: window %s spans %.0f days; the longest bounded window is %d days", w.name, days, MaxWindowDays)
+		}
 	}
 	return winA, winB, clamps, nil
 }

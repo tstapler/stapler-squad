@@ -228,3 +228,14 @@ func TestWeekStarts_should_ReturnOnlyLastWeek_When_AllTimeWindowHasNoData(t *tes
 
 	assert.Equal(t, []time.Time{time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)}, got)
 }
+
+func TestWeekStarts_should_CapBuckets_When_WindowIsFarBeyondAnyRealRange(t *testing.T) {
+	t.Parallel()
+	w, err := NewFlowWindowBounds(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+
+	got := weekStarts(w, time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	assert.LessOrEqual(t, len(got), maxTrendWeeks)
+	assert.Equal(t, isoWeekStart(w.End().Add(-time.Nanosecond)), got[len(got)-1], "the cap keeps the most recent weeks")
+}

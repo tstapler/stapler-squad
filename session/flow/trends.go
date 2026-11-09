@@ -18,6 +18,9 @@ func maxTime(a, b time.Time) time.Time {
 	return a
 }
 
+// maxTrendWeeks bounds the weekly buckets (about ten years) whatever the window.
+const maxTrendWeeks = 520
+
 // weekStarts lists the ISO week starts (Monday 00:00 UTC) from the week of the
 // window start to the week of its last instant. A window starting over a year
 // before the earliest datum (all-time) starts at that datum instead; with no
@@ -31,8 +34,12 @@ func weekStarts(w FlowWindow, earliest time.Time) []time.Time {
 	if datum.Sub(first) > allTimeSpan {
 		first = datum
 	}
+	last := isoWeekStart(w.End().Add(-time.Nanosecond))
+	if earliestAllowed := last.AddDate(0, 0, -7*(maxTrendWeeks-1)); isoWeekStart(first).Before(earliestAllowed) {
+		first = earliestAllowed
+	}
 	var weeks []time.Time
-	for ws, last := isoWeekStart(first), isoWeekStart(w.End().Add(-time.Nanosecond)); !ws.After(last); ws = ws.AddDate(0, 0, 7) {
+	for ws := isoWeekStart(first); !ws.After(last); ws = ws.AddDate(0, 0, 7) {
 		weeks = append(weeks, ws)
 	}
 	return weeks

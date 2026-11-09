@@ -314,3 +314,30 @@ func TestCompare_should_StraddleCapture_When_CaptureFallsInTheGapBetweenWindows(
 	assert.NotContains(t, metricByName(t, at(q.AStart), "stuck_p50_hours.pr_needs_fix").Reason, "straddles", "capture at the first start leaves both windows post-capture")
 	assert.NotContains(t, metricByName(t, at(q.BEnd), "stuck_p50_hours.pr_needs_fix").Reason, "straddles", "capture at the last end leaves both windows pre-capture")
 }
+
+func TestCompare_should_RejectOrClamp_When_WindowSpanOrEndIsAbsurd(t *testing.T) {
+	t.Parallel()
+	agg := NewAggregator(newFakeSrc().sources(), fixtureClock)
+	ctx := context.Background()
+	day := func(d int) time.Time { return fixtureClock.T.AddDate(0, 0, d) }
+
+	for name, q := range map[string]CompareQuery{
+		"a_days_max_int32":  {ADays: 2147483647, BDays: 7},
+		"a_days_366":        {ADays: 366, BDays: 7},
+		"b_days_366":        {ADays: 7, BDays: 366},
+		"offset_absurd":     {ADays: 7, BDays: 7, BOffsetDays: 2147483647},
+		"a_span_over_365":   {AStart: day(-800), AEnd: day(-100), BStart: day(-7), BEnd: day(0)},
+		"b_start_year_0001": {AStart: day(-30), AEnd: day(-7), BStart: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), BEnd: day(0)},
+	} {
+		_, err := agg.Compare(ctx, q)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "compare:", name)
+	}
+
+	// a_end in the future with a sane start is clamped to now (then A is empty or short), not accepted as 9999.
+	res, err := agg.Compare(ctx, CompareQuery{AStart: day(-30), AEnd: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), BStart: day(-60), BEnd: day(-30)})
+	require.NoError(t, err)
+	assert.Equal(t, fixtureClock.T, res.A.Meta.WindowEnd)
+	require.NotEmpty(t, res.Meta.Clamps)
+	assert.Contains(t, res.Meta.Clamps[0], "a_end")
+}

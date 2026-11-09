@@ -452,3 +452,20 @@ func TestGetFlowSummary_should_CarryPROutcomesTriggerDwellAndStuckNotes_When_Cap
 	assert.NotEmpty(t, legend["pr_fix_outcome:since_capture"])
 	assert.NotEmpty(t, legend["stuck_episode_drift:2"])
 }
+
+func TestCompareFlowWindows_should_RefuseOutOfRangeDays_When_ServerSeesWhatSchemaForbids(t *testing.T) {
+	t.Parallel()
+	h := newRealFlowHandlers(&memFlowSources{})
+
+	for name, args := range map[string]map[string]any{
+		"a_days_huge":     {"a_days": float64(2147483647), "b_days": float64(7)},
+		"b_days_366":      {"a_days": float64(7), "b_days": float64(366)},
+		"a_span_over_365": {"a_start": "2020-01-01", "a_end": "2026-10-01", "b_start": "2026-10-20", "b_end": "2026-11-03"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, m := callFlowTool(t, h.compareFlowWindows, args)
+			assert.Contains(t, errorMessage(t, m), "365")
+		})
+	}
+}
