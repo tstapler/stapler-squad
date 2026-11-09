@@ -1878,7 +1878,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, PRFixTriggerUnknown)
+		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, PRFixTriggerClosed)
 		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
