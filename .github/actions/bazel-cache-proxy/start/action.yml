@@ -1,0 +1,54 @@
+name: Start Bazel cache proxy
+description: >
+  Starts tstapler/bazel-cache-proxy on loopback, backed by the GitHub Actions cache (the only
+  remote cache this repo allows). Add `--remote_cache=http://127.0.0.1:9090/cache` to Bazel, then run
+  the sibling `flush` action with `if: always()`.
+inputs:
+  rev:
+    description: bazel-cache-proxy commit to build (cargo install --git ... --rev)
+    default: 82a1d600b49a708f286ea0a291b221528de25c6e
+  prefix:
+    description: Cache key prefix; include the workflow/job so unrelated caches stay apart
+    required: true
+  upload:
+    description: Publish new blobs on flush. Defaults to true except on pull_request runs.
+    default: auto
+runs:
+  using: composite
+  steps:
+    # run: steps do not get ACTIONS_RESULTS_URL / ACTIONS_RUNTIME_TOKEN; this action exports them.
+    - uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124 # v3.1.0
+    - id: bin
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/bazel-cache-proxy-bin
+        key: bazel-cache-proxy-bin-${{ runner.os }}-${{ runner.arch }}-${{ inputs.rev }}
+    - if: steps.bin.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        REV: ${{ inputs.rev }}
+      run: >
+        cargo install --git https://github.com/tstapler/bazel-cache-proxy --rev "$REV" --locked
+        --root "$HOME/.cache/bazel-cache-proxy-bin" bazel-cache-proxy
+    - name: Start proxy
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+        UPLOAD_INPUT: ${{ inputs.upload }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        upload=true
+        if [[ $UPLOAD_INPUT == false || ( $UPLOAD_INPUT == auto && $EVENT == pull_request ) ]]; then upload=false; fi
+        dir="$RUNNER_TEMP/bazel-cache-proxy"; mkdir -p "$dir"
+        cat >"$dir/config.toml" <<TOML
+        [backend]
+        type = "gha"
+        prefix = "$PREFIX"
+        root = "$dir/store"
+        upload = $upload
+        TOML
+        "$HOME/.cache/bazel-cache-proxy-bin/bin/bazel-cache-proxy" serve --config "$dir/config.toml" >"$dir/proxy.log" 2>&1 &
+        echo "$!" >"$dir/pid"
+        for _ in $(seq 50); do curl -fsS http://127.0.0.1:9090/healthz >/dev/null 2>&1 && exit 0; sleep 0.2; done
+        echo "::warning::bazel-cache-proxy did not become healthy; builds will run without a remote cache"
+        cat "$dir/proxy.log"
