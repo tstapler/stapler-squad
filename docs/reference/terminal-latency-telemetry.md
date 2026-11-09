@@ -58,8 +58,8 @@ These split one slow call or frame into the places it can wait. All are in the s
 | `stream_lock_wait` | tymux | waiting for the Attach stream's input or frame lock before a send (keystroke, resize, paste chunk) |
 | `stream_send` | tymux | one Attach stream `Send`; gRPC flow-control stalls land here |
 | `pm_lock_wait` | server | a contended wait for `Instance.pmMu`. An uncontended call records nothing, so the sample count is how often a call met the lock |
-| `echo_daemon` | server (tymux) | keystroke send began -> the daemon stamped the first output frame after it: pty write + app/shell echo + daemon send queue. Needs capability `output.sent_at` (daemon v1.17.0+); no samples otherwise |
-| `output_transit` | server (tymux) | daemon stamped an output frame -> squad's `Receive` returned it: gRPC/HTTP2 transit and the client receive queue. Every stamped frame, not only echo frames; an upper bound (the daemon may pull a frame before flow control releases it) |
+| `echo_daemon` | server (tymux) | browser keystroke handed to the tymux session -> the daemon stamped the first output frame after it. Includes `stream_lock_wait`, `stream_send`, squad -> daemon transit, pty write, app/shell echo and the daemon's send queue. Needs capability `output.sent_at` (daemon v1.17.0+); no samples otherwise |
+| `output_transit` | server (tymux) | daemon stamped the echo frame (the one `echo_daemon` ended on) -> squad handled it: gRPC/HTTP2 transit and the client receive queue. An upper bound (the daemon may pull a frame before flow control releases it) |
 | `input_queue` | browser | keystroke entered the send queue -> handed to the socket |
 | `ws_buffered_kib` | browser | KiB the socket still had buffered when the keystroke was sent, rounded up so any backlog is at least 1 (a count, not ms; the histogram tops out at 5000) |
 | `echo_render` | browser | echo frame arrived -> painted |
@@ -76,8 +76,8 @@ Residuals are computed on the dashboard, not recorded: `capture_pane` squad-side
 `capture_render` and `capture_revive`; echo "network + return" is `echo_arrive` minus
 `echo_server` minus `input_queue`. Both use means (they add; percentiles do not).
 
-On tymux, `echo_server` splits into `input_bookkeep` (squad pre-write), `echo_daemon` (pty write,
-app echo, daemon send queue), `output_transit`, `tymux_fanout_wait`, `output_queue_wait` (hub
+On tymux, `echo_server` splits into `input_bookkeep` (squad pre-write), `echo_daemon` (squad send,
+daemon, app echo; it contains `stream_lock_wait` and `stream_send`), `output_transit`, `tymux_fanout_wait`, `output_queue_wait` (hub
 batch) and `ws_write_wait` + `ws_write`; the dashboard stacks them. The pieces are an
 approximation: `echo_daemon` and `output_transit` attribute the first stamped frame after a
 keystroke, which under bulk output need not be its echo.

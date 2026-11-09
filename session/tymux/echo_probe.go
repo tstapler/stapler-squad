@@ -36,14 +36,21 @@ func (p *echoProbe) recorder() *termlat.Recorder {
 	return termlat.Default
 }
 
-// noteInput marks the start of a keystroke send, before any wait for the stream's locks.
+// noteInput marks the start of a keystroke send, before any wait for the stream's locks, so the
+// echo_daemon window includes stream_lock_wait and stream_send.
 func (p *echoProbe) noteInput(at time.Time) { p.lastInputNs.Store(at.UnixNano()) }
 
-// noteOutput handles one output frame carrying the daemon's stamp. Every stamped frame records
-// output_transit; the first one after a keystroke also records echo_daemon. Like echo_server,
-// echo_daemon is an upper bound under bulk output because the first frame need not be the echo.
+// noteOutput handles one output frame carrying the daemon's stamp. Only the first frame stamped
+// after the pending keystroke is attributed, and it records both echo_daemon and output_transit,
+// so bulk output with no keystroke pending costs one atomic load. A frame stamped before the
+// keystroke was already in flight and leaves it pending. Like echo_server, the result is an upper
+// bound under bulk output because the first frame need not be the echo.
 func (p *echoProbe) noteOutput(sentAtMicros uint64) {
 	if sentAtMicros == 0 {
+		return
+	}
+	in := p.lastInputNs.Load()
+	if in == 0 {
 		return
 	}
 	recv := p.clock()
@@ -52,13 +59,13 @@ func (p *echoProbe) noteOutput(sentAtMicros uint64) {
 	if transit < 0 {
 		return // stamp from the future: the clocks disagree, so neither sample is trustworthy
 	}
+	d := sent.Sub(time.Unix(0, in))
+	if d < 0 || !p.lastInputNs.CompareAndSwap(in, 0) {
+		return // stale frame, or a newer keystroke replaced the one we read
+	}
 	rec := p.recorder()
 	rec.Record(termlat.StageOutputTransit, tymuxLabels, transit)
-	in := p.lastInputNs.Swap(0)
-	if in == 0 {
-		return
-	}
-	if d := sent.Sub(time.Unix(0, in)); d >= 0 && d <= maxEchoDaemonGap {
+	if d <= maxEchoDaemonGap {
 		rec.Record(termlat.StageEchoDaemon, tymuxLabels, d)
 	}
 }

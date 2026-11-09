@@ -1,6 +1,7 @@
 package tymux
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestEchoProbe_should_AttributeOnlyTheFirstOutputAfterAKeystroke(t *testing.
 	daemon, _ := statFor(rec, termlat.StageEchoDaemon)
 	assert.Equal(t, uint64(1), daemon.Total, "the second frame is not an echo of the same keystroke")
 	transit, _ := statFor(rec, termlat.StageOutputTransit)
-	assert.Equal(t, uint64(2), transit.Total, "transit is measured on every stamped frame")
+	assert.Equal(t, uint64(1), transit.Total, "transit is measured on the echo frame only, so bulk output costs one atomic load")
 }
 
 func TestEchoProbe_should_IgnoreFramesTheDaemonDidNotStamp(t *testing.T) {
@@ -70,6 +71,52 @@ func TestEchoProbe_should_IgnoreFramesTheDaemonDidNotStamp(t *testing.T) {
 
 	assert.Empty(t, rec.Report())
 	assert.NotZero(t, p.lastInputNs.Load(), "an unstamped frame must not consume the keystroke")
+}
+
+func TestEchoProbe_should_LeaveTheKeystrokePendingWhenAStaleFrameArrives(t *testing.T) {
+	t.Parallel()
+	rec := termlat.New(nil)
+	base := time.Unix(1_700_000_000, 0)
+	p := probeAt(rec, base.Add(40*time.Millisecond))
+	p.noteInput(base)
+
+	// A frame the daemon stamped before the keystroke was already in flight.
+	p.noteOutput(uint64(base.Add(-3 * time.Millisecond).UnixMicro()))
+	_, recorded := statFor(rec, termlat.StageEchoDaemon)
+	require.False(t, recorded, "a frame older than the keystroke is not its echo")
+
+	p.noteOutput(uint64(base.Add(20 * time.Millisecond).UnixMicro()))
+	daemon, ok := statFor(rec, termlat.StageEchoDaemon)
+	require.True(t, ok, "the real echo must still be attributed")
+	assert.InDelta(t, 20.0, daemon.Max, 0.01)
+}
+
+func TestSendInputViaControlMode_should_StartTheEchoClockButSendKeysShouldNot(t *testing.T) {
+	// sessionWith uses t.Setenv, so this test cannot be parallel.
+	sess, _ := sessionWith(t)
+
+	_, err := sess.SendKeys("agent prompt")
+	require.NoError(t, err)
+	assert.Zero(t, sess.echo.lastInputNs.Load(), "programmatic input is not a user keystroke")
+
+	require.NoError(t, sess.SendInputViaControlMode(context.Background(), []byte("k")))
+	assert.NotZero(t, sess.echo.lastInputNs.Load())
+}
+
+func TestHandleAttachEvent_should_FeedTheEchoProbeFromLegacyOutput(t *testing.T) {
+	t.Parallel()
+	rec := termlat.New(nil)
+	base := time.Unix(1_700_000_000, 0)
+	s := &tymuxGRPCSession{fanout: NewClientFanout(), echo: *probeAt(rec, base.Add(8*time.Millisecond))}
+	s.echo.noteInput(base)
+
+	s.handleAttachEvent(&v1.AttachEvent{
+		SentAtUnixMicros: uint64(base.Add(4 * time.Millisecond).UnixMicro()),
+		Payload:          &v1.AttachEvent_Output{Output: []byte("a")},
+	})
+
+	_, ok := statFor(rec, termlat.StageEchoDaemon)
+	assert.True(t, ok)
 }
 
 func TestEchoProbe_should_DropImplausibleSamples(t *testing.T) {

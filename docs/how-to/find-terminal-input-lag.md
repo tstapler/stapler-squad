@@ -45,7 +45,7 @@ Panel *tymux echo_server decomposition* stacks the mean time of each piece again
 | Block | Means |
 |---|---|
 | `input_bookkeep` | squad work before the write |
-| `echo_daemon` | pty write, the shell or app producing its echo, and the daemon's send queue. Large = the program is slow to echo (loaded host, busy app), not squad |
+| `echo_daemon` | everything from handing the keystroke to the tymux session to the daemon stamping the echo: `stream_lock_wait` and `stream_send` (check *Server input path*), squad -> daemon transit, pty write, the app producing its echo, the daemon's send queue. Large with quiet *Server input path* = slow app or loaded host |
 | `output_transit` | daemon -> squad gRPC transit and receive queue |
 | `tymux_fanout_wait`, `output_queue_wait` | squad draining the daemon stream, then the hub batch |
 | `ws_write_wait`, `ws_write` | the browser socket |
