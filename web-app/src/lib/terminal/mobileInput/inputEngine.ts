@@ -29,6 +29,8 @@ export interface EngineOptions {
   /** Receives the anomaly class only, never typed data. */
   onAnomaly(anomaly: ImeAnomaly): void;
   onDiagnostic?(entry: MobileInputDiagnostic): void;
+  /** A multi-line paste was joined with spaces because bracketed paste is off. */
+  onPasteFlattened?(): void;
 }
 
 export interface DispatchOutcome {
@@ -59,6 +61,7 @@ export class InputEngine {
     const prev = this.state;
     const r = reduceWithKeymap(prev, event, this.opts.policy, this.opts.deps);
     this.state = r.state;
+    if (r.flattened) this.opts.onPasteFlattened?.();
     if (prev.kind !== "composing" && r.state.kind === "composing") this.regionId++;
 
     let dropped = false;

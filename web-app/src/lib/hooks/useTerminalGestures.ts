@@ -108,6 +108,16 @@ export interface GestureOptions {
    * terminal reports mouse tracking (often stale from a program that never reset it). Default 'any'.
    */
   mouseModeOverride?: 'none' | 'any';
+  /**
+   * Focus entry point for taps. With the mobile input layer active this focuses the layer textarea
+   * (the renderer's own focus would raise no keyboard); absent, the gesture focuses the terminal itself.
+   */
+  focusTerminal?: () => void;
+  /**
+   * Blurs the layer textarea after a text selection; returns true when a layer handled it, which also
+   * means xterm's own textarea workaround (below) is skipped. Absent or false: the workaround runs.
+   */
+  blurInput?: () => boolean;
   /** True while the PTY program has enabled SGR mouse encoding (?1006h); taps then send SGR, else X10. */
   isSgrMouseEncoding?: () => boolean;
 }
@@ -144,6 +154,7 @@ export function useTerminalGestures(options: GestureOptions): void {
 
     const onSendData = (data: string) => optionsRef.current.onSendData(data);
     const longPressMs = () => optionsRef.current.longPressMs ?? 400;
+    const focusTerminal = (t: Terminal) => (optionsRef.current.focusTerminal ?? (() => t.focus()))();
 
     // ---- State machine ----
     let state: GestureState = 'IDLE';
@@ -637,7 +648,7 @@ export function useTerminalGestures(options: GestureOptions): void {
         // Read via optionsRef: the gesture effect doesn't re-run when the toggle changes.
         const forwardMouseClicks = isMouseTracking() && optionsRef.current.mouseModeOverride !== 'none';
         if (!forwardMouseClicks) {
-          t.focus();
+          focusTerminal(t);
         } else if (t.element) {
           const { cellH, cellW } = getCellDimensions(t);
           const canvasRect = t.element.getBoundingClientRect();
@@ -657,7 +668,7 @@ export function useTerminalGestures(options: GestureOptions): void {
             const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
             onSendData(press + release);
           }
-          t.focus();
+          focusTerminal(t);
         }
       }
 
@@ -686,7 +697,7 @@ export function useTerminalGestures(options: GestureOptions): void {
         // keyboard mid text-selection. Desktop Linux wants that; touch doesn't. The
         // focus already happened synchronously inside dispatchEvent above, so blur
         // it back immediately.
-        t?.textarea?.blur();
+        if (!optionsRef.current.blurInput?.()) t?.textarea?.blur();
       }
       // Selection preserved in xterm's buffer — just transition back
     };

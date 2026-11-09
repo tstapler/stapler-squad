@@ -77,6 +77,9 @@ import type { ScrollMode } from "@/lib/terminal/scrollRouting";
 import { GHOSTTY_RENDERER_FLAG, MOBILE_INPUT_LAYER_FLAG, preloadFlagValue } from "@/lib/features/flagStore";
 import { resolveRenderer } from "@/lib/terminal/rendererPolicy";
 import { shouldAttachMobileInput } from "@/lib/terminal/mobileInput/platform";
+import { NO_MODIFIERS } from "@/lib/terminal/mobileInput/keymap";
+import type { MobileInputHost, MobileInputRendererProps } from "@/lib/terminal/mobileInput/useMobileInput";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
 import * as styles from "./TerminalPool.css";
 
 type TerminalRenderer = React.ForwardRefExoticComponent<XtermTerminalProps & React.RefAttributes<XtermTerminalHandle>>;
@@ -128,12 +131,12 @@ interface PoolEntry {
   // usePooledTerminal on every render (same ref-mirror idiom TerminalOutput.tsx
   // already uses throughout). Stable wrapper functions below close over these
   // so <XtermTerminal>'s own props never need to change identity.
-  onDataRef: React.RefObject<((data: string) => void) | null>;
+  onDataRef: React.RefObject<((data: string) => SendResult | void) | null>;
   onResizeRef: React.RefObject<((cols: number, rows: number) => void) | null>;
   isAltScreenActiveRef: React.RefObject<(() => boolean) | null>;
   onAltScreenScrollUpRef: React.RefObject<((lines: number) => void) | null>;
   // Stable wrappers passed as <XtermTerminal> props, created once per entry.
-  stableOnData: (data: string) => void;
+  stableOnData: (data: string) => SendResult | void;
   stableOnResize: (cols: number, rows: number) => void;
   stableIsAltScreenActive: () => boolean;
   stableOnAltScreenScrollUp: (lines: number) => void;
@@ -145,6 +148,13 @@ interface PoolEntry {
   onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null>;
   scrollGesture: ScrollGestureProps;
   stableOnScrollModeChange: (mode: ScrollMode) => void;
+  /** The consumer's mobile-input-layer host, behind a stable delegate (see usePooledTerminalCallbacks). */
+  mobileInputHostRef: React.RefObject<MobileInputHost | null>;
+  stableMobileInputHost: MobileInputHost;
+  /** Snapshot handed to the renderer; null while no consumer has the layer active. Re-snapshotted like `scrollGesture`. */
+  mobileInput: MobileInputRendererProps | null;
+  /** Bumped each time a new consumer mounts against this entry; the layer treats a change as pool reuse. */
+  consumerGeneration: number;
   /** False while the consumer's window is hidden (keep-alive): the terminal skips fit and yields its WebGL slot. Docking is unaffected. */
   windowActive: boolean;
 }
@@ -184,10 +194,26 @@ function createEntry(sessionId: string): PoolEntry {
   hostEl.className = styles.host;
   hostEl.dataset.pooledSessionId = sessionId;
 
-  const onDataRef: React.RefObject<((data: string) => void) | null> = { current: null };
+  const onDataRef: React.RefObject<((data: string) => SendResult | void) | null> = { current: null };
   const onResizeRef: React.RefObject<((cols: number, rows: number) => void) | null> = { current: null };
   const isAltScreenActiveRef: React.RefObject<(() => boolean) | null> = { current: null };
   const onAltScreenScrollUpRef: React.RefObject<((lines: number) => void) | null> = { current: null };
+  const mobileInputHostRef: React.RefObject<MobileInputHost | null> = { current: null };
+  // No consumer means nothing can receive the bytes: report a drop and stay read-only.
+  const stableMobileInputHost: MobileInputHost = {
+    onData: (bytes, seq) => mobileInputHostRef.current?.onData(bytes, seq) ?? "dropped",
+    getModifiers: () => mobileInputHostRef.current?.getModifiers() ?? NO_MODIFIERS,
+    consumeModifiers: () => mobileInputHostRef.current?.consumeModifiers(),
+    isReadOnly: () => mobileInputHostRef.current?.isReadOnly() ?? true,
+    onAnomaly: (kind) => mobileInputHostRef.current?.onAnomaly?.(kind),
+    onDiagnostic: (entry) => mobileInputHostRef.current?.onDiagnostic?.(entry),
+    onDeferredWaiting: (n) => mobileInputHostRef.current?.onDeferredWaiting?.(n),
+    onPasteFlattened: () => mobileInputHostRef.current?.onPasteFlattened?.(),
+    onReadOnlyTap: () => mobileInputHostRef.current?.onReadOnlyTap?.(),
+    get describedBy() {
+      return mobileInputHostRef.current?.describedBy;
+    },
+  };
   const scrollGestureSourceRef: React.RefObject<ScrollGestureProps | null> = { current: null };
   const onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null> = { current: null };
   const src = () => scrollGestureSourceRef.current;
@@ -212,7 +238,7 @@ function createEntry(sessionId: string): PoolEntry {
     onResizeRef,
     isAltScreenActiveRef,
     onAltScreenScrollUpRef,
-    stableOnData: (data) => onDataRef.current?.(data),
+    stableOnData: (data) => (onDataRef.current ? onDataRef.current(data) : "dropped"),
     // Task 3.5 / Bug 7 — onResizeRef is only ever populated (non-null) while
     // the entry is docked for a foreground consumer, see usePooledTerminal;
     // a resize firing on a backgrounded/parked entry is a plain no-op here.
@@ -223,6 +249,10 @@ function createEntry(sessionId: string): PoolEntry {
     onScrollModeChangeRef,
     scrollGesture,
     stableOnScrollModeChange: (mode) => onScrollModeChangeRef.current?.(mode),
+    mobileInputHostRef,
+    stableMobileInputHost,
+    mobileInput: null,
+    consumerGeneration: 0,
     windowActive: true,
   };
 }
@@ -391,6 +421,7 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             isAltScreenActive={entry.stableIsAltScreenActive}
             onAltScreenScrollUp={entry.stableOnAltScreenScrollUp}
             windowActive={entry.windowActive}
+            mobileInput={entry.mobileInput ?? undefined}
           />
         </Suspense>,
         entry.hostEl
@@ -578,8 +609,14 @@ export function usePooledTerminal(
   return { xtermRef: entry.handleRef, warmRef: entry.warmRef };
 }
 
+/** The consumer's side of the mobile input layer; omit it when the layer is not active. */
+export interface PooledMobileInput {
+  host: MobileInputHost;
+  isConnected: boolean;
+}
+
 export interface PooledTerminalCallbacks {
-  onData: (data: string) => void;
+  onData: (data: string) => SendResult | void;
   onResize: (cols: number, rows: number) => void;
   isAltScreenActive: () => boolean;
   onAltScreenScrollUp: (lines: number) => void;
@@ -588,6 +625,7 @@ export interface PooledTerminalCallbacks {
   onScrollModeChange?: (mode: ScrollMode) => void;
   /** Defaults to true; false when the owning window is hidden (Story 4.1.3e). */
   windowActive?: boolean;
+  mobileInput?: PooledMobileInput;
 }
 
 /**
@@ -601,7 +639,7 @@ export interface PooledTerminalCallbacks {
 export function usePooledTerminalCallbacks(
   sessionId: string,
   isVisible: boolean,
-  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange, windowActive = true }: PooledTerminalCallbacks
+  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange, windowActive = true, mobileInput }: PooledTerminalCallbacks
 ): void {
   const pool = useTerminalPoolContext();
   // Entry must already exist -- usePooledTerminal (called earlier in the
@@ -665,4 +703,40 @@ export function usePooledTerminalCallbacks(
     entry.scrollGesture = { ...cur, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch };
     pool.registerEntry();
   }, [entry, pool, scrollOverride, gestureScrollEnabled, tuiScrollPolicy, connectionEpoch]);
+
+  usePooledMobileInput(entry, sessionId, isVisible, mobileInput);
+}
+
+/** Registers the consumer's layer host and re-snapshots the renderer's props when a primitive changes. */
+function usePooledMobileInput(entry: PoolEntry, sessionId: string, isVisible: boolean, mobileInput: PooledMobileInput | undefined): void {
+  const pool = useTerminalPoolContext();
+  const host = mobileInput?.host ?? null;
+  const isConnected = mobileInput?.isConnected ?? false;
+  const present = mobileInput !== undefined;
+
+  // A new consumer mounting against a warm entry is the pool-reuse boundary.
+  useEffect(() => {
+    if (present) entry.consumerGeneration += 1;
+  }, [entry, present]);
+
+  useEffect(() => {
+    entry.mobileInputHostRef.current = host;
+    return () => {
+      if (entry.mobileInputHostRef.current === host) entry.mobileInputHostRef.current = null;
+    };
+  }, [entry, host]);
+
+  useEffect(() => {
+    const cur = entry.mobileInput;
+    if (!present) {
+      if (cur === null) return;
+      entry.mobileInput = null;
+      pool.registerEntry();
+      return;
+    }
+    const reuseKey = entry.consumerGeneration;
+    if (cur && cur.sessionId === sessionId && cur.isConnected === isConnected && cur.visible === isVisible && cur.reuseKey === reuseKey) return;
+    entry.mobileInput = { host: entry.stableMobileInputHost, sessionId, isConnected, visible: isVisible, reuseKey };
+    pool.registerEntry();
+  }, [entry, pool, present, sessionId, isConnected, isVisible]);
 }

@@ -12,9 +12,9 @@ export interface MobileInputLiveRegions {
 
 /**
  * Per-terminal polite (`role="status"`) and assertive (`role="alert"`) regions plus the one `announcer`
- * that writes to them. Writes go straight to the DOM so clear-then-set is not batched away by React.
+ * that writes to them. `politeId` is the id the layer textarea's `aria-describedby` points at. Writes go straight to the DOM so clear-then-set is not batched away by React.
  */
-export function useMobileInputLiveRegions(): MobileInputLiveRegions {
+export function useMobileInputLiveRegions(politeId?: string): MobileInputLiveRegions {
   const polite = useRef<HTMLDivElement>(null);
   const assertive = useRef<HTMLDivElement>(null);
   return useMemo(() => {
@@ -26,10 +26,10 @@ export function useMobileInputLiveRegions(): MobileInputLiveRegions {
     });
     const regions = (
       <>
-        <div ref={polite} role="status" aria-live="polite" aria-atomic="true" className={visuallyHidden} data-testid="mobile-input-live-polite" />
+        <div ref={polite} id={politeId} role="status" aria-live="polite" aria-atomic="true" className={visuallyHidden} data-testid="mobile-input-live-polite" />
         <div ref={assertive} role="alert" aria-live="assertive" aria-atomic="true" className={visuallyHidden} data-testid="mobile-input-live-assertive" />
       </>
     );
     return { announcer, regions };
-  }, []);
+  }, [politeId]);
 }

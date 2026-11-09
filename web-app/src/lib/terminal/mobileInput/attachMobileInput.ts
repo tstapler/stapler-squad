@@ -37,6 +37,10 @@ export interface AttachOptions {
   onQueueDiscard?(listener: (report: DeliveryReport) => void): () => void;
   /** Grapheme count held back by a deferred commit once it has waited 300 ms; null when cleared. */
   onDeferredWaiting?(waiting: number | null): void;
+  /** Called just before the textarea takes focus, so the host can name the focus owner first. */
+  onWillFocus?(): void;
+  /** A multi-line paste was joined with spaces (bracketed paste off): the host may say so. */
+  onPasteFlattened?(): void;
   /** DECSET 2004 state of the active renderer; defaults to off. */
   bracketedPasteEnabled?(): boolean;
   policy?: MobileInputPolicy;
@@ -63,6 +67,8 @@ export interface MobileInputController {
   reportQueueDiscard(report: DeliveryReport): void;
   /** Re-reads `isReadOnly()` into the textarea's `inputmode`. */
   syncReadOnly(): void;
+  /** Only the focus owner among docked terminals may raise the soft keyboard; the rest get `inputmode="none"`. */
+  setFocusOwner(owner: boolean): void;
   dispose(): void;
 }
 
@@ -97,7 +103,7 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
   // After a mid-composition reset the browser keeps sending updates for text already flushed.
   let ignoreStale = false;
   let watchdog: number | null = null;
-  let readOnlyApplied: boolean | null = null;
+  let focusOwner = true;
   const loggedKinds = new Set<ImeAnomaly>();
   const tapUnbinds = new Set<() => void>();
 
@@ -126,16 +132,21 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
     isReadOnly: opts.isReadOnly,
     onAnomaly: report,
     onDiagnostic: opts.onDiagnostic,
+    onPasteFlattened: opts.onPasteFlattened,
   });
 
   const indicator = new DeferredIndicator(clock, DEFERRED_INDICATOR_MS, (n) => opts.onDeferredWaiting?.(n));
 
-  const syncReadOnly = () => {
-    const ro = opts.isReadOnly();
-    if (ro === readOnlyApplied) return;
-    readOnlyApplied = ro;
-    if (ro) el.setAttribute("inputmode", "none");
+  // Read-only and non-owner both mean "no soft keyboard"; the attribute follows their union.
+  let keyboardSuppressed: boolean | null = null;
+  const applyInputMode = (suppress: boolean) => {
+    if (suppress === keyboardSuppressed) return;
+    keyboardSuppressed = suppress;
+    if (suppress) el.setAttribute("inputmode", "none");
     else el.removeAttribute("inputmode");
+  };
+  const syncReadOnly = () => {
+    applyInputMode(opts.isReadOnly() || !focusOwner);
   };
 
   const syncTimers = () => {
@@ -211,7 +222,9 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
       return !disposed && doc.activeElement === el;
     },
     focus() {
-      if (!disposed) el.focus({ preventScroll: true });
+      if (disposed) return;
+      opts.onWillFocus?.();
+      el.focus({ preventScroll: true });
     },
     blur() {
       if (!disposed) el.blur();
@@ -236,6 +249,11 @@ export function attachMobileInput(container: HTMLElement, opts: AttachOptions): 
       syncTimers();
     },
     syncReadOnly,
+    setFocusOwner(owner) {
+      if (disposed) return;
+      focusOwner = owner;
+      syncReadOnly();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
