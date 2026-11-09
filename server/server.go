@@ -208,14 +208,26 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
-// liveSessionCount reports the sessions the review-queue poller holds in memory, which is the
-// population goroutines scale with. Nil-safe: a server without the poller reports zero.
-func liveSessionCount(deps *ServerDependencies) func() int {
-	return func() int {
+// liveSessionCount reports how many sessions own goroutines (Active or Creating; hibernated,
+// paused, stopped and failed ones hold none) and whether the review-queue poller has been given its
+// instances yet. An empty poller reads as unknown rather than zero, so the leak watch does not
+// judge the process against an empty budget during startup.
+func liveSessionCount(deps *ServerDependencies) func() (int, bool) {
+	return func() (int, bool) {
 		if deps.ReviewQueuePoller == nil {
-			return 0
+			return 0, false
 		}
-		return len(deps.ReviewQueuePoller.GetInstances())
+		all := deps.ReviewQueuePoller.GetInstances()
+		if len(all) == 0 {
+			return 0, false
+		}
+		n := 0
+		for _, inst := range all {
+			if inst.IsActive() || inst.IsCreating() {
+				n++
+			}
+		}
+		return n, true
 	}
 }
 

@@ -15,19 +15,24 @@ var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 func TestGoroutineWatch_should_StayOK_When_CountMatchesTheSessionScaledBudget(t *testing.T) {
 	t.Parallel()
 	w := &GoroutineWatch{}
-	// Measured steady state: 615 goroutines with ~30 sessions.
 	v := w.Observe(t0, 615, 30)
 	assert.Equal(t, GoroutinesOK, v.State)
 	assert.False(t, v.Degraded())
 }
 
-func TestGoroutineWatch_should_FlagBug034ScaleLeak_When_FewSessionsHaveHundredsOfGoroutines(t *testing.T) {
+func TestGoroutineWatch_should_StayOK_AtTheMeasuredIdleAndLiveCounts(t *testing.T) {
+	t.Parallel()
+	// 2026-11-09: a fresh idle instance ran 149-156 goroutines; the live service 575-579 with 19 active sessions.
+	assert.Equal(t, GoroutinesOK, (&GoroutineWatch{}).Observe(t0, 156, 0).State)
+	assert.Equal(t, GoroutinesOK, (&GoroutineWatch{}).Observe(t0, 579, 19).State)
+}
+
+func TestGoroutineWatch_should_FlagASmallFleetLeak_OnceItIsSustained(t *testing.T) {
 	t.Parallel()
 	w := &GoroutineWatch{}
-	// BUG-034 leaked to 310-320 goroutines with a handful of sessions; the old 2000 threshold missed it.
-	assert.Equal(t, GoroutinesElevated, w.Observe(t0, 315, 3).State)
-	assert.Equal(t, GoroutinesElevated, w.Observe(t0.Add(29*time.Minute), 320, 3).State, "not yet sustained")
-	v := w.Observe(t0.Add(30*time.Minute), 330, 3)
+	assert.Equal(t, GoroutinesElevated, w.Observe(t0, 500, 3).State)
+	assert.Equal(t, GoroutinesElevated, w.Observe(t0.Add(29*time.Minute), 520, 3).State, "not yet sustained")
+	v := w.Observe(t0.Add(30*time.Minute), 530, 3)
 	assert.Equal(t, GoroutinesSustained, v.State)
 	assert.True(t, v.Degraded())
 	assert.Equal(t, 30*time.Minute, v.ElevatedFor)
@@ -93,7 +98,7 @@ func TestRunGoroutineWatch_should_SampleOnEveryTick_AndStopWithTheContext(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer close(done)
-		runGoroutineWatch(ctx, w, ticks, func() time.Time { return clock }, func() int { return int(count.Load()) }, func() int { return 3 })
+		runGoroutineWatch(ctx, w, ticks, func() time.Time { return clock }, func() int { return int(count.Load()) }, func() (int, bool) { return 3, true })
 	}()
 
 	ticks <- clock
@@ -137,4 +142,87 @@ func TestGoroutineWatch_should_JudgeTheBoundaryExclusively(t *testing.T) {
 	assert.Equal(t, GoroutinesOK, w.Observe(t0, limit, 2).State, "at the limit is within budget")
 	assert.Equal(t, GoroutinesElevated, w.Observe(t0, limit+1, 2).State)
 	assert.Equal(t, GoroutinesElevated, (&GoroutineWatch{}).Observe(t0, HighGoroutineThreshold, 0).State, "at the ceiling is not over it")
+}
+
+func TestRunGoroutineWatch_should_SkipTicks_WhileTheSessionCountIsUnknown(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	ticks := make(chan time.Time)
+	var known atomic.Bool
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runGoroutineWatch(ctx, w, ticks, func() time.Time { return t0 }, func() int { return 5000 },
+		func() (int, bool) { return 0, known.Load() })
+
+	ticks <- t0
+	ticks <- t0 // the first tick has been fully handled once this send returns
+	assert.Equal(t, GoroutineState(""), w.Last().State, "an unpopulated poller must not be judged against an empty budget")
+
+	known.Store(true)
+	ticks <- t0
+	ticks <- t0
+	assert.Equal(t, GoroutinesOverCeiling, w.Last().State)
+}
+
+// feed samples the watch every 30s for d, with count(minutes) giving the goroutine count.
+func feed(w *GoroutineWatch, d time.Duration, sessions int, count func(min float64) int) GoroutineVerdict {
+	var v GoroutineVerdict
+	for el := time.Duration(0); el <= d; el += 30 * time.Second {
+		v = w.Observe(t0.Add(el), count(el.Minutes()), sessions)
+	}
+	return v
+}
+
+func TestGoroutineWatch_should_FlagADrift_WhenTheCountClimbsSteadilyInsideItsLimit(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	// 150/h from 300 stays under the 1.5x limit (1500 at 20 sessions) for the whole window.
+	v := feed(w, 90*time.Minute, 20, func(m float64) int { return 700 + int(m*2.5) })
+
+	assert.Equal(t, GoroutinesDrifting, v.State)
+	assert.InDelta(t, 150, v.DriftPerHour, 5)
+	assert.True(t, v.Degraded())
+}
+
+func TestGoroutineWatch_should_NotFlagADrift_BeforeAnHourOfHistory(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	v := feed(w, 50*time.Minute, 20, func(m float64) int { return 700 + int(m*2.5) })
+	assert.Equal(t, GoroutinesOK, v.State)
+}
+
+func TestGoroutineWatch_should_NotFlagADrift_ForANoisyPlateau(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	v := feed(w, 2*time.Hour, 20, func(m float64) int { return 700 + int(m)%7*15 })
+	assert.Equal(t, GoroutinesOK, v.State)
+}
+
+func TestGoroutineWatch_should_NotFlagADrift_ForASlowClimbBelowTheRate(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	v := feed(w, 2*time.Hour, 20, func(m float64) int { return 700 + int(m/6) }) // 10/h
+	assert.Equal(t, GoroutinesOK, v.State)
+}
+
+func TestGoroutineWatch_should_NotFlagADrift_WhenOnlyTheSessionCountGrows(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	var v GoroutineVerdict
+	for el := time.Duration(0); el <= 90*time.Minute; el += 30 * time.Second {
+		sessions := 10 + int(el.Minutes()/9) // +1 session per 9 minutes, ~25 goroutines each
+		v = w.Observe(t0.Add(el), 400+25*sessions, sessions)
+	}
+	assert.Equal(t, GoroutinesOK, v.State, "growth explained by sessions is not a leak")
+}
+
+func TestGoroutineWatch_should_ForgetOldSamples_SoARecoveredLeakStopsDrifting(t *testing.T) {
+	t.Parallel()
+	w := &GoroutineWatch{}
+	feed(w, 90*time.Minute, 20, func(m float64) int { return 700 + int(m*2.5) })
+	var v GoroutineVerdict
+	for el := 90 * time.Minute; el <= 4*time.Hour; el += 30 * time.Second {
+		v = w.Observe(t0.Add(el), 925, 20) // leak fixed: flat
+	}
+	assert.Equal(t, GoroutinesOK, v.State)
 }

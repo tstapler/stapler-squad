@@ -163,13 +163,14 @@ make profile-goroutines
 
 ### Detect Leaks
 
-Goroutine leaks appear as a count that grows monotonically without bound. The server always runs a leak watch (`profiling.GoroutineWatch`, sampled every 30 seconds, no `--profile` needed). It compares the live goroutine count with a budget of about 100 + 25 per live session and:
+Goroutine leaks appear as a count that grows monotonically without bound. The server always runs a leak watch (`profiling.GoroutineWatch`, sampled every 30 seconds, no `--profile` needed). Its budget is 200 + 35 goroutines per Active or Creating session (hibernated, paused, stopped and failed sessions hold none). Measured 2026-11-09: a fresh idle instance runs 149-156 goroutines, and the live service ran 575-579 with 19 active sessions (about 23 each). The watch:
 
-- logs a WARN when the count first exceeds 1.5x that budget ("elevated");
-- logs an ERROR, and `/actuator/health` reports `runtime` as `degraded`, once it has stayed above 1.5x the budget for 30 minutes ("sustained", likely a leak);
+- logs a WARN when the count first exceeds 1.5x the budget ("elevated");
+- logs an ERROR, and `/actuator/health` reports `runtime` as `degraded`, once it has stayed above 1.5x the budget for 30 minutes ("sustained");
+- does the same ("drifting") when the session-adjusted count has risen steadily, at least 40 goroutines/hour with R-squared of 0.8 or better, over at least an hour of history in a 2 hour window, even while inside the limit;
 - does the same immediately if the count exceeds a hard ceiling, 2000 or twice the budget, whichever is larger.
 
-A short spike above budget never degrades health, and the 30-minute clock only resets after the count has stayed under the limit for 5 minutes. The limit leaves headroom (about 37 goroutines per session against about 20 measured), so the watch catches small-fleet leaks like BUG-034 and gross growth, not slow drift inside that headroom. `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`. Steady state is about 20 goroutines per session (615 with ~30 sessions), so a fixed threshold either misses a small-fleet leak (BUG-034 was found at 310-320 goroutines) or fires permanently on a large one.
+A short spike above budget never degrades health, and the 30-minute clock only resets after the count has stayed under the limit for 5 minutes. Until the session poller is populated at startup the watch skips its samples instead of judging against an empty budget (a server with no sessions at all therefore only gets the ceiling check). `/actuator/health` shows `goroutines`, `state`, `sessions`, `expected`, `limit` and `elevated_for_s` under `components.runtime.detail`.
 
 To track manually:
 

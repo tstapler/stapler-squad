@@ -178,6 +178,7 @@ func writeActuatorHealth(w http.ResponseWriter, forkLevel tmux.ForkPressureLevel
 				"expected":       growth.Expected,
 				"limit":          growth.Limit,
 				"elevated_for_s": int(growth.ElevatedFor.Seconds()),
+				"drift_per_hour": int(growth.DriftPerHour),
 			},
 		},
 	}
