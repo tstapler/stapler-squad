@@ -18,14 +18,14 @@ type Decl struct {
 }
 type Sel struct{ X, S string }
 type File struct {
-	Dir     string   `json:"dir"`
-	Name    string   `json:"name"`
-	Test    bool     `json:"test"`
-	Pkg     string   `json:"pkg"`
-	LOC     int      `json:"loc"`
-	Imports []string `json:"imports"` // as "alias path" (alias may be empty)
-	Decls   []Decl   `json:"decls"`
-	Idents  []string `json:"idents"`
+	Dir     string      `json:"dir"`
+	Name    string      `json:"name"`
+	Test    bool        `json:"test"`
+	Pkg     string      `json:"pkg"`
+	LOC     int         `json:"loc"`
+	Imports []string    `json:"imports"` // as "alias path" (alias may be empty)
+	Decls   []Decl      `json:"decls"`
+	Idents  []string    `json:"idents"`
 	Sels    [][2]string `json:"sels"`
 }
 
