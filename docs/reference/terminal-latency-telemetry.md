@@ -47,3 +47,18 @@ over 2 s (`echo_server`) or 3 s (browser) is dropped as unrelated.
 A rolling p95 over its limit with at least 20 samples logs `terminal latency p95 over threshold`
 at most once a minute and appears in `alerting`. Limits: `echo_paint` and `echo_server` 150 ms
 (`STAPLER_SQUAD_TERMINAL_ECHO_P95_MS`), `input_total` 100 ms.
+
+## Resync counters
+
+`terminal_resync_total{reason,backend}` and the `resync` section of `/actuator/terminal-latency`
+count resyncs (each costs the server a full-pane capture):
+
+| Reason | Meaning |
+|---|---|
+| `visibility` | the browser sent a resync on tab/window focus or visibility |
+| `skipped_fresh` | focus/visibility, but the size is unchanged and the last sync is under 60 s old (`lib/terminal/resyncPolicy.ts`) |
+| `skipped_unavailable` | focus/visibility, but the terminal could not be measured |
+| `server_request` | the server received a mid-stream CurrentPaneRequest (resize, visibility, or manual) |
+| `server_stale_dims` | the same, flagged by the client as a same-size visibility resync: the avoidable kind |
+
+Browser reasons arrive as `cm.term_resync` events with `backend="unknown"`; server reasons carry the real backend.

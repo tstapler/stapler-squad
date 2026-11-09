@@ -867,7 +867,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, visibilityResyncDecision, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -951,6 +951,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     connect,
     disconnect,
     requestFullResync,
+    visibilityResyncDecision,
     markResyncComplete,
     markPaneResponseReceived,
     setShowReconnectButton,

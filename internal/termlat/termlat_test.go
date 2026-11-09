@@ -141,3 +141,18 @@ func TestObserve_should_GateChecksPerKey(t *testing.T) {
 	r.Record(StageEchoPaint, b, time.Millisecond)
 	assert.NotZero(t, r.window(kb).lastCheck.Load())
 }
+
+func TestCountResync_should_BoundLabelsAndSortRows(t *testing.T) {
+	t.Parallel()
+	r, _ := newTest()
+	r.CountResync(ResyncVisibility, "tymux")
+	r.CountResync(ResyncVisibility, "tymux")
+	r.CountResync(ResyncSkippedFresh, "tmux")
+	r.CountResync("made-up-by-a-client", "weird")
+
+	got := r.ResyncCounts()
+	require.Len(t, got, 3)
+	assert.Equal(t, ResyncCount{Reason: "skipped_fresh", Backend: "tmux", Total: 1}, got[0])
+	assert.Equal(t, ResyncCount{Reason: "unknown", Backend: "unknown", Total: 1}, got[1])
+	assert.Equal(t, ResyncCount{Reason: "visibility", Backend: "tymux", Total: 2}, got[2])
+}
