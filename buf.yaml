@@ -20,6 +20,11 @@ lint:
 breaking:
   use:
     - FILE
+  # The Bazel proto rules need go_package set in the source; buf's managed mode already generated the same
+  # import path (go_package_prefix in buf.gen.yaml), so generated output is unchanged. Removable once main has it.
+  ignore_only:
+    FILE_SAME_GO_PACKAGE:
+      - proto/session/v1
   except:
     # First version, no breaking changes to check
     - FIELD_SAME_NAME
