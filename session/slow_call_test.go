@@ -26,7 +26,10 @@ func TestTimeBackendOp_should_ReportOnlyCallsOverTheSlowThreshold(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, got, "a fast call must not be reported")
 
-	_, err = timeBackendOp(op, func() (string, error) { time.Sleep(40 * time.Millisecond); return "slow", nil })
+	_, err = timeBackendOp(op, func() (string, error) {
+		time.Sleep(40 * time.Millisecond) //nolint:notimesleeptest the op must really exceed the slow threshold measured by wall clock
+		return "slow", nil
+	})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, opCapturePane, got[0].op)

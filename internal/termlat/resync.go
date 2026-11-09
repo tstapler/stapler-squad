@@ -3,7 +3,6 @@ package termlat
 import (
 	"context"
 	"sort"
-	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -37,13 +36,6 @@ type ResyncCount struct {
 	Reason  string `json:"reason"`
 	Backend string `json:"backend"`
 	Total   uint64 `json:"total"`
-}
-
-type resyncCounters struct {
-	mu      sync.Mutex
-	counts  map[[2]string]uint64
-	once    sync.Once
-	counter metric.Int64Counter
 }
 
 // CountResync records one resync event under a bounded (reason, backend) label pair and the

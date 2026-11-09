@@ -183,8 +183,8 @@ type Recorder struct {
 	windows map[key]*window
 	hist    metric.Float64Histogram
 	alerts  alerter
-	resync  resyncCounters
-	drops   dropCounters
+	resync  pairCounter
+	drops   pairCounter
 }
 
 // New returns a Recorder reading time from now (time.Now when nil).

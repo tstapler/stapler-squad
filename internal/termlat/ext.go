@@ -35,11 +35,34 @@ type DropCount struct {
 	Total   uint64 `json:"total"`
 }
 
-type dropCounters struct {
+// pairCounter counts events per bounded (first, second) label pair and mirrors each to one OTel
+// counter, registered lazily on first use.
+type pairCounter struct {
 	mu      sync.Mutex
 	counts  map[[2]string]uint64
 	once    sync.Once
 	counter metric.Int64Counter
+}
+
+func (p *pairCounter) inc(name, desc, firstKey, secondKey string, k [2]string) {
+	p.mu.Lock()
+	if p.counts == nil {
+		p.counts = map[[2]string]uint64{}
+	}
+	p.counts[k]++
+	p.mu.Unlock()
+	p.once.Do(func() {
+		c, err := telemetry.GetMeter().Int64Counter(name, metric.WithDescription(desc))
+		if err != nil {
+			log.Error("termlat: failed to register counter", "name", name, "error", err)
+			return
+		}
+		p.counter = c
+	})
+	if p.counter != nil {
+		p.counter.Add(context.Background(), 1, metric.WithAttributes(
+			attribute.String(firstKey, k[0]), attribute.String(secondKey, k[1])))
+	}
 }
 
 // CountDrop records one dropped output frame under a bounded (cause, backend) label pair and the

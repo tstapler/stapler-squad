@@ -31,7 +31,7 @@ func TestInstancePM_should_RecordTheWaitOnlyWhenPmMuIsContended(t *testing.T) {
 	inst.pmMu.Lock()
 	done := make(chan struct{})
 	go func() { inst.pm(); close(done) }()
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest holds a real mutex long enough for the waiter to measure a real wait
 	inst.pmMu.Unlock()
 	<-done
 
