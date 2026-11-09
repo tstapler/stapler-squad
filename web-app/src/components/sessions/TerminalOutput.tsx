@@ -16,6 +16,9 @@ import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { ScrollGestureProps } from "./XtermTerminal";
 import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
+import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
+import { useMobileInputChrome } from "./useMobileInputChrome";
 import * as poolStyles from "@/lib/terminal/TerminalPool.css";
 import { clearTerminalConnectionStatus, setTerminalConnectionStatus, setTerminalHardFailed } from "@/lib/terminal/terminalConnectionStatus";
 import { InputDropBadge } from "./InputDropBadge";
@@ -88,6 +91,8 @@ interface TerminalOutputProps {
 
 // Read-only view: a keypress announces "Read-only session" at most once per this window (design/ux.md Surface 12).
 const READ_ONLY_HINT_INTERVAL_MS = 10_000;
+/** Height of the extra-keys toolbar row, for the mobile input chrome budget. */
+const MOBILE_TOOLBAR_PX = 44;
 
 // Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
 const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
@@ -1046,8 +1051,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Delivers bytes to the session without touching the page-key estimate. Programmatic page
   // keys (drag, momentum, toolbar PgUp/PgDn, the jump button) use this directly; user input
   // goes through handleTerminalData, which also invalidates the estimate.
-  const deliverTerminalData = useCallback((data: string) => {
-    sendInput(data);
+  const deliverTerminalData = useCallback((data: string): SendResult => {
+    const result = sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
     if (data === "\r") {
@@ -1062,21 +1067,22 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
       }
     }
+    return result;
   }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // User keystrokes and pastes move the app's own position, so the estimate no longer holds.
   const lastReadOnlyHintRef = useRef(0);
-  const handleTerminalData = useCallback((data: string) => {
+  const handleTerminalData = useCallback((data: string): SendResult => {
     if (readOnly) {
       const now = Date.now();
       if (now - lastReadOnlyHintRef.current >= READ_ONLY_HINT_INTERVAL_MS) {
         lastReadOnlyHintRef.current = now;
         announce("Read-only session", "polite", "terminal-read-only-hint");
       }
-      return;
+      return "dropped";
     }
     netPagesUp.invalidate("keystroke");
-    deliverTerminalData(data);
+    return deliverTerminalData(data);
   }, [netPagesUp, deliverTerminalData, readOnly, announce]);
 
   // Scroll route shared by the toolbar PgUp/PgDn (and later the chip and jump button).
@@ -1422,7 +1428,31 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // site near the top of this component and its own doc comment for why
   // this is a separate call, made here once all four callbacks it needs
   // exist).
+  // The mobile input layer's chrome and host. Both are inert (null / undefined) off the Android class.
+  const modifiersRef = useRef({ ctrl: ctrlActive, alt: altActive, shift: shiftActive });
+  modifiersRef.current = { ctrl: ctrlActive, alt: altActive, shift: shiftActive };
+  const mobileChrome = useMobileInputChrome({
+    streamState: isConnected ? "connected" : "disconnected",
+    readOnly,
+    toolbarPx: isKeyboardVisible && !readOnly ? MOBILE_TOOLBAR_PX : 0,
+    getCellHeightPx: () => {
+      const term = xtermRef.current?.terminal;
+      return term ? getCellDimensions(term).cellH : 0;
+    },
+    source: {
+      onData: (bytes) => handleTerminalData(bytes),
+      getModifiers: () => modifiersRef.current,
+      consumeModifiers: () => {
+        modifiersRef.current = { ctrl: false, alt: false, shift: false };
+        setCtrlActive(false);
+        setAltActive(false);
+        setShiftActive(false);
+      },
+    },
+  });
+
   usePooledTerminalCallbacks(effectiveSessionId, isVisible !== false, {
+    mobileInput: mobileChrome.host ? { host: mobileChrome.host, isConnected } : undefined,
     onData: handleTerminalData,
     onResize: handleTerminalResize,
     isAltScreenActive,
@@ -1515,7 +1545,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   useEffect(() => {
     if (isVisible && xtermRef.current) {
       xtermRef.current.refit({ reason: 'visibility' });
-      xtermRef.current.terminal?.focus();
+      xtermRef.current.focus();
     }
   }, [isVisible, xtermRef]);
 
@@ -2395,6 +2425,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           Row 2: TAB CTRL ALT ← ↓ → PGDN
           Row 3: ^C  ^D  ^Z  ^L  ^R  ^W  ^U  (direct Ctrl sequences, no sticky needed)
           CTRL and ALT are sticky: tap to arm, next key fires the modified sequence. */}
+      {mobileChrome.fragment}
       {isKeyboardVisible && !readOnly && (
         <div className={styles.mobileKeyboard}>
           <div className={styles.mobileKeyRow}>

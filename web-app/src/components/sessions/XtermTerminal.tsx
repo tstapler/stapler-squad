@@ -34,6 +34,9 @@ import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosi
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import { isTouchPrimary as isTouchPrimaryDevice } from "@/lib/terminal/mobileInput/platform";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
+import type { MobileInputHandle, MobileInputRendererProps } from "@/lib/terminal/mobileInput/useMobileInput";
+import { useRendererMobileInput } from "@/lib/terminal/mobileInput/useRendererMobileInput";
 import {
   postFitRepaint,
   trackWebglTerminal,
@@ -212,7 +215,7 @@ export interface XtermTerminalProps {
   /**
    * Callback when user types in terminal
    */
-  onData?: (data: string) => void;
+  onData?: (data: string) => SendResult | void;
 
   /**
    * Callback when terminal is resized
@@ -254,6 +257,8 @@ export interface XtermTerminalProps {
    * keeps writing to xterm either way.
    */
   windowActive?: boolean;
+  /** Set by the pool only when the mobile input layer is active for this terminal. */
+  mobileInput?: MobileInputRendererProps;
 }
 
 export interface XtermTerminalHandle {
@@ -309,6 +314,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   isAltScreenActive,
   onAltScreenScrollUp,
   windowActive = true,
+  mobileInput,
 }, ref) => {
   const windowActiveRef = useRef(windowActive);
   windowActiveRef.current = windowActive;
@@ -386,6 +392,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled ?? true;
 
+  // The mobile input layer (Android class only): its handle routes focus; absent, the terminal focuses itself.
+  const layerRef = useRef<MobileInputHandle | null>(null);
+  const focusTerminal = useCallback(() => {
+    if (!layerRef.current?.focus()) terminalRef.current?.focus();
+  }, []);
+  const blurInput = useCallback(() => layerRef.current?.blur() ?? false, []);
+
   // Unified mobile gesture state machine (R4.3).
   // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
   // having both register touchmove caused double-scroll and prevented selection.
@@ -407,6 +420,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onPageKeysSent: scrollGesture?.onPageKeysSent,
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
     isInputBusy: scrollGesture?.isInputBusy,
+    focusTerminal,
+    blurInput,
     mouseModeOverride: scrollGesture?.mouseModeOverride,
     isSgrMouseEncoding: () => sgrMouseEncodingRef.current,
   });
@@ -1734,7 +1749,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.clear();
     },
     focus: () => {
-      terminalRef.current?.focus();
+      if (!layerRef.current?.focus()) terminalRef.current?.focus();
     },
     fit: () => {
       requestFitRef.current({ forceRepaint: true, reason: "manual-resize" });
@@ -1759,9 +1774,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     },
   }), []);
 
+  const layer = useRendererMobileInput({
+    renderer: "xterm",
+    mobileInput,
+    onDataRef,
+    containerRef,
+    getHelperTextarea: () => terminalRef.current?.textarea,
+    bracketedPasteEnabled: () => terminalRef.current?.modes.bracketedPasteMode ?? false,
+  });
+  layerRef.current = layer.handle;
+
   return (
     <div className={styles.container} data-context="terminal">
       <div ref={containerRef} className={styles.terminal} data-gesture-scroll={gestureScrollEnabled ? "on" : "off"} />
+      {layer.layerActive && <div ref={layer.layerContainerRef} data-mobile-input-host />}
       {/* Custom left-side scrollbar — stays out of the right-side window-scrollbar zone.
           Only visible when scrollback content exists (controlled via updateScrollbar). */}
       <div ref={scrollTrackRef} className={styles.scrollTrack} style={{ display: 'none' }}>

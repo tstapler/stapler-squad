@@ -15,6 +15,7 @@ import {
 import { loadFixtures } from "./fixtureCorpus";
 import type { ReplayFixture } from "./fixtureSchema";
 import { NO_MODIFIERS, type Modifiers } from "./keymap";
+import { countingDiagnostic, setInputCounterSink, type InputCounterEvent } from "./inputCounters";
 import { DEFAULT_POLICY, resetValue } from "./policy";
 import { replayFixture } from "./replayHarness";
 import type { ImeAnomaly, MobileInputDiagnostic, SendResult } from "./types";
@@ -500,5 +501,64 @@ describe("attachMobileInput deferred indicator", () => {
     r.clock.advance(2500);
     expect(r.waiting).toEqual([100, null]);
     expect(r.diagnostics).toContainEqual({ event: "watchdog" });
+  });
+});
+
+describe("host callbacks", () => {
+  it("attach_should_CallOnPasteFlattenedOnce_When_MultilinePasteJoinedWithBracketedPasteOff", () => {
+    const flattened = jest.fn();
+    const r = make({ onPasteFlattened: flattened });
+    beforeinput(r.ta, "insertFromPaste", "a\nb");
+    expect(flattened).toHaveBeenCalledTimes(1);
+  });
+
+  it("attach_should_NotCallOnPasteFlattened_When_BracketedPasteOn", () => {
+    const flattened = jest.fn();
+    const r = make({ onPasteFlattened: flattened, bracketedPasteEnabled: () => true });
+    beforeinput(r.ta, "insertFromPaste", "a\nb");
+    expect(flattened).not.toHaveBeenCalled();
+  });
+
+  it("setFocusOwner_should_SetInputmodeNone_When_NotOwnerAndRestoreWhenOwnerAgain", () => {
+    const r = make();
+    r.c.setFocusOwner(false);
+    expect(r.ta.getAttribute("inputmode")).toBe("none");
+    r.c.setFocusOwner(true);
+    expect(r.ta.hasAttribute("inputmode")).toBe(false);
+  });
+
+  it("setFocusOwner_should_KeepInputmodeNone_When_OwnerButReadOnly", () => {
+    const r = make();
+    r.readOnly.value = true;
+    r.c.setFocusOwner(true);
+    expect(r.ta.getAttribute("inputmode")).toBe("none");
+  });
+});
+
+describe("input counters", () => {
+  const seen: Array<[InputCounterEvent, string]> = [];
+  beforeEach(() => {
+    seen.length = 0;
+    setInputCounterSink({ increment: (event, renderer) => seen.push([event, renderer]) });
+  });
+  afterEach(() => setInputCounterSink(null));
+
+  it("executor_should_IncrementDroppedDisconnectedCounter_When_SinkReturnsDropped", () => {
+    const r = make({ onDiagnostic: countingDiagnostic("xterm") });
+    r.sink.linkUp = false;
+    beforeinput(r.ta, "insertText", "x");
+    expect(seen).toEqual([["dropped_disconnected", "xterm"]]);
+  });
+
+  it("executor_should_IncrementEmittedCounter_When_SinkAcceptsUnit", () => {
+    const r = make({ onDiagnostic: countingDiagnostic("ghostty") });
+    beforeinput(r.ta, "insertText", "x");
+    expect(seen).toEqual([["emitted", "ghostty"]]);
+  });
+
+  it("counters_should_BeNoOp_When_NoSinkInstalled", () => {
+    setInputCounterSink(null);
+    const r = make({ onDiagnostic: countingDiagnostic("xterm") });
+    expect(() => beforeinput(r.ta, "insertText", "x")).not.toThrow();
   });
 });

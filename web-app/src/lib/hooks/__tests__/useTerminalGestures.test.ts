@@ -544,6 +544,61 @@ describe('useTerminalGestures', () => {
       expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
     });
 
+    // ---- mobile input layer routing (Story 1.2.3 / Task 1.2.3b) ----
+    function mountWithLayer(focusTerminal: jest.Mock, blurInput?: jest.Mock, mouseTrackingMode = 'none') {
+      const terminalRef = makeTerminalRef(mouseTrackingMode);
+      renderHook(() =>
+        useTerminalGestures({ containerRef, terminalRef: terminalRef as any, onSendData, focusTerminal, blurInput }),
+      );
+      return { terminalRef };
+    }
+
+    it('tap_should_CallFocusTerminalAndNotTerminalFocus_When_LayerActive', () => {
+      const focusTerminal = jest.fn();
+      const { terminalRef } = mountWithLayer(focusTerminal);
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 105);
+      expect(focusTerminal).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current?.focus).not.toHaveBeenCalled();
+    });
+
+    it('tap_should_CallFocusTerminalAfterMouseBytes_When_MouseTrackingForwardsClick', () => {
+      const focusTerminal = jest.fn();
+      const { terminalRef } = mountWithLayer(focusTerminal, undefined, 'vt200');
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(100, 105);
+      expect(onSendData).toHaveBeenCalledTimes(1);
+      expect(focusTerminal).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current?.focus).not.toHaveBeenCalled();
+    });
+
+    it('endSelecting_should_BlurLayerAndSkipXtermTextareaWorkaround_When_LayerActive', () => {
+      withScreen();
+      const blurInput = jest.fn(() => true);
+      const { terminalRef } = mountWithLayer(jest.fn(), blurInput);
+      const blur = jest.fn();
+      (terminalRef.current as any).textarea = { blur };
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      cancel();
+      expect(blurInput).toHaveBeenCalledTimes(1);
+      expect(blur).not.toHaveBeenCalled();
+    });
+
+    it('endSelecting_should_BlurXtermTextarea_When_NoLayerHandlesBlur', () => {
+      withScreen();
+      const blurInput = jest.fn(() => false);
+      const { terminalRef } = mountWithLayer(jest.fn(), blurInput);
+      const blur = jest.fn();
+      (terminalRef.current as any).textarea = { blur };
+      fireTouchStart(100, 100);
+      jest.advanceTimersByTime(400);
+      cancel();
+      expect(blur).toHaveBeenCalledTimes(1);
+    });
+
     // Deliberate change (plan Slop rule): tap tolerance widened from 8px to SLOP_PX, so there is no dead zone.
     it.each([8, 12, 14])('touchend_should_Tap_When_MovedUnderSlopAndReleasedBefore400ms (%ipx drift, no dead zone)', (dy) => {
       const { terminalRef } = mount('none');
