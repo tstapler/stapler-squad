@@ -94,4 +94,32 @@ describe("createScrollbarUpdater", () => {
     updater.flush();
     expect(writes.some((w) => w.startsWith("thumb.height"))).toBe(true);
   });
+
+  it("flush cancels the pending frame so it does not apply twice", () => {
+    const { updater, writes, runFrame } = setup();
+    updater.schedule(fakeBuffer(1000, 0, 40));
+    updater.flush();
+    writes.length = 0;
+    runFrame();
+    expect(writes).toEqual([]);
+  });
+
+  it("dispose drops the pending frame", () => {
+    const { updater, writes, runFrame } = setup();
+    updater.schedule(fakeBuffer(1000, 0, 40));
+    updater.dispose();
+    runFrame();
+    expect(writes).toEqual([]);
+  });
+
+  it("re-reads the track height after the track was hidden and shown again", () => {
+    const { updater, runFrame, reads } = setup();
+    updater.schedule(fakeBuffer(1000, 0, 40));
+    runFrame();
+    updater.schedule(fakeBuffer(40, 0, 40)); // everything fits: track hidden
+    runFrame();
+    updater.schedule(fakeBuffer(1000, 0, 40));
+    runFrame();
+    expect(reads()).toBe(2);
+  });
 });

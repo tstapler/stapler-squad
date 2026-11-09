@@ -1503,7 +1503,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+        // The track spans the container, so any container resize (even one that leaves rows and
+        // cols unchanged and never fires onResize) invalidates the cached track height.
+        scrollbarUpdaterRef.current?.invalidateTrackHeight();
         if (!fitAddonRef.current || !terminalRef.current) return;
+        updateScrollbar(terminalRef.current);
         if (!windowActiveRef.current) {
           fitDeferredRef.current = true;
           return;
