@@ -83,6 +83,8 @@ type run struct {
 	asOf  time.Time
 	rows  RowCounts
 	fails []SectionFailure
+	// failedSections counts sections reset to Failed; Partial ones do not count.
+	failedSections int
 
 	streamed bool // events were read through StreamEvents
 
@@ -282,6 +284,7 @@ func runSection[T any](r *run, sel map[SectionName]bool, name SectionName, sec *
 		*sec = zero
 		*meta(sec) = SectionMeta{Status: SectionFailed, Error: err.Error()}
 		r.failure(name, err)
+		r.failedSections++
 		return
 	}
 	r.noteEstimated(meta(sec).Estimated...)

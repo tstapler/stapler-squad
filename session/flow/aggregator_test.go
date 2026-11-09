@@ -406,3 +406,20 @@ func TestAggregator_should_RetryFollower_When_CoalescedLeaderIsCancelled(t *test
 	require.NoError(t, got.err)
 	assert.Equal(t, SectionOK, got.s.Tiles.Meta.Status, "a live follower must retry, not inherit the cancelled leader's failed sections")
 }
+
+func TestAggregator_should_CacheSummary_When_SectionIsStablyPartial(t *testing.T) {
+	t.Parallel()
+	src := prFixFake("x").sources()
+	src.Markers = fakeMarkers{err: errors.New("marker table locked")}
+	capture := func(context.Context) (time.Time, error) { return prCapture, nil }
+	agg := NewAggregator(src, fixtureClock, WithCaptureSince(capture))
+	q := FlowQuery{Window: WindowSpec{Days: 30}}
+
+	first, err := agg.Summary(context.Background(), q)
+	require.NoError(t, err)
+	require.Equal(t, SectionPartial, first.PR.Meta.Status)
+	second, err := agg.Summary(context.Background(), q)
+
+	require.NoError(t, err)
+	assert.Same(t, first, second, "a stable Partial section must not force a recompute on every poll")
+}

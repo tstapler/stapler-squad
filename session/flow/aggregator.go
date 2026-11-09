@@ -188,7 +188,7 @@ func (a *Aggregator) computeSummary(ctx context.Context, q FlowQuery, w FlowWind
 	}
 	s.Meta = r.meta(sel)
 	s.Meta.QueryMs = a.clock.Now().Sub(started).Milliseconds()
-	s.Meta.degraded = len(r.fails) > 0 || ctx.Err() != nil
+	s.Meta.degraded = r.failedSections > 0
 	stats := ComputeStats{Window: q.Window, Rows: s.Meta.RowCounts.total(), QueryMs: s.Meta.QueryMs, Cache: "miss", Failures: r.fails}
 	a.logger.Debug("flow summary computed", "cache", stats.Cache, "rows", stats.Rows, "query_ms", stats.QueryMs)
 	for _, f := range r.fails {

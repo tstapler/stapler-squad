@@ -63,7 +63,7 @@ type FlowMeta struct {
 	Estimated    []string
 	SlowPath     bool
 	CaptureSince time.Time
-	// degraded marks a result with a failed section or a cancelled compute; it is never cached.
+	// degraded marks a result with a Failed section; it is never cached (a stable Partial one is).
 	degraded bool
 	Clamps   []string
 }
