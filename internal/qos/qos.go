@@ -49,13 +49,15 @@ func (a Activity) String() string {
 		return "interactive"
 	case ActivityBackground:
 		return "background"
+	case ActivityNormal:
+		return "normal"
 	default:
 		return "normal"
 	}
 }
 
 // Default is the tracker the hub and the background pollers share.
-var Default = NewTracker(time.Now, InteractiveWindow)
+var Default = NewTracker(time.Now, InteractiveWindow) //nolint:gochecknoglobals one process-wide tracker, shared by the hub and the pollers
 
 // NewTracker builds a tracker with an injectable clock for deterministic tests.
 func NewTracker(now func() time.Time, window time.Duration) *Tracker {

@@ -142,8 +142,8 @@ func TestInputOrderGate_should_IgnoreALateRelease_FromAHoldTheSafetyValveDropped
 	fa.fireAll() // the first resize is given up on
 	g.begin()    // a newer resize starts a new hold
 	g.input([]byte("b"))
-	g.release() // the stale resize finally reports: it must not lift the newer hold
-	time.Sleep(20 * time.Millisecond)
+	g.release()                       // the stale resize finally reports: it must not lift the newer hold
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest absence check: gives a wrongly lifted hold time to flush input
 	assert.Empty(t, log.get())
 	g.release() // the real one
 	eventuallyLogged(t, log, "b")

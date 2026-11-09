@@ -152,7 +152,7 @@ func TestGatedAttach_should_RunOpenUnderTheLimit_AndReturnItsResult(t *testing.T
 				running++
 				peak = max(peak, running)
 				mu.Unlock()
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond) //nolint:notimesleeptest holds the attach slot long enough for concurrent attaches to overlap; real concurrency is the point
 				mu.Lock()
 				running--
 				mu.Unlock()

@@ -79,7 +79,7 @@ func TestRequestResize_should_RecaptureOnce_When_OutputWasDroppedAfterTheSnapsho
 		return r.hub.ResyncCaptures(streamhub.ResyncReasonResizeSettle) == settledBefore+1
 	}, 5*time.Second, time.Millisecond, "a settle capture is published after the resize ends")
 	assert.Equal(t, before+2, int(r.ctrl.captureCalls.Load()), "one capture for the resize, one for the settle")
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest absence check: a re-armed settle would capture again within this window
 	assert.Equal(t, before+2, int(r.ctrl.captureCalls.Load()), "and exactly one: the settle does not re-arm itself")
 }
 
@@ -109,7 +109,7 @@ func TestRequestResize_should_NotRecapture_When_NothingWasDropped(t *testing.T) 
 	settled := r.hub.ResyncCaptures(streamhub.ResyncReasonResizeSettle)
 
 	r.resize(t, 100, 30)
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond) //nolint:notimesleeptest absence check: no settle capture may run for a resize that suppressed no output
 
 	assert.Equal(t, before+1, int(r.ctrl.captureCalls.Load()))
 	assert.Equal(t, settled, r.hub.ResyncCaptures(streamhub.ResyncReasonResizeSettle))

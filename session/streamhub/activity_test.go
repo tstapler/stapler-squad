@@ -23,11 +23,12 @@ func newActivityRig() *activityRig {
 }
 
 func (r *activityRig) hub(name string, extra ...streamhub.HubOption) *streamhub.StreamHub {
-	opts := []streamhub.HubOption{
+	opts := make([]streamhub.HubOption, 0, 4+len(extra))
+	opts = append(opts,
 		streamhub.WithClock(r.clock), streamhub.WithQoSTracker(r.qos),
 		streamhub.WithActivitySink(func(a qos.Activity) { r.got <- a }),
 		streamhub.WithTeardownGrace(time.Hour),
-	}
+	)
 	return streamhub.NewStreamHub(name, newFakeSessionController(), append(opts, extra...)...)
 }
 
