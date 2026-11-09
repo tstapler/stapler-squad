@@ -18,7 +18,9 @@ runs:
         path: |
           ~/.cache/bazel-disk
           ~/.cache/bazel-repo
-        key: bazel-ghostty-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion') }}
+        # Also hashes third_party/ghostty/**: an exact hit is never re-saved, so editing BUILD/bzl files
+        # would otherwise keep restoring a stale disk cache and rebuild Zig cold.
+        key: bazel-ghostty-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', 'third_party/ghostty/**') }}
         restore-keys: |
           bazel-ghostty-${{ runner.os }}-
           ghostty-wasm-
