@@ -1,7 +1,7 @@
 import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { externalizeGhosttyWasm } from "../plugins/ghostty-wasm";
+import { chooseGhosttyWasm, externalizeGhosttyWasm } from "../plugins/ghostty-wasm";
 import { pruneUnreferencedCss } from "../stages/prune-css";
 
 describe("externalizeGhosttyWasm", () => {
@@ -16,6 +16,16 @@ describe("externalizeGhosttyWasm", () => {
 
   it("fails loudly when a ghostty-web release no longer inlines the WASM", () => {
     expect(() => externalizeGhosttyWasm("const B = 1;", "/x/ghostty-vt.wasm")).toThrow(/ghostty-wasm plugin/);
+  });
+});
+
+describe("chooseGhosttyWasm", () => {
+  it("prefers our own build when it exists and falls back to the stock wasm otherwise", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "own-wasm-"));
+    const own = path.join(dir, "ghostty-vt.wasm");
+    expect(chooseGhosttyWasm("/stock/ghostty-vt.wasm", own)).toBe("/stock/ghostty-vt.wasm");
+    writeFileSync(own, "x");
+    expect(chooseGhosttyWasm("/stock/ghostty-vt.wasm", own)).toBe(own);
   });
 });
 
