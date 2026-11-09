@@ -108,11 +108,12 @@ jobs:
           repository-cache: true
 
       - name: Build the binary
-          # Stamping embeds the git revision that the revision guard below checks.
         run: |
+          # Stamping embeds the git revision that the revision guard below checks.
           bazel build --config=ci --stamp --workspace_status_command=tools/bzl/workspace_status.sh --lockfile_mode=error --remote_upload_local_results=false //:stapler-squad
           mkdir -p out
           cp -L bazel-bin/stapler-squad_/stapler-squad out/stapler-squad 2>/dev/null || cp -L "$(bazel cquery --config=ci --output=files //:stapler-squad)" out/stapler-squad
+
       # The seed tools are plain `go build`s: they need the gitignored proto and ent output that Bazel does not use.
       - name: Generate protos and ent for the seed tools
         uses: ./.github/actions/prepare-stub
