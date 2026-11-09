@@ -107,6 +107,10 @@ build/
 # scripts/fetch-tymuxd.sh and ADR-001).
 .tymuxd-fetch.stamp
 
+# Own ghostty-vt.wasm build (scripts/build-ghostty-wasm.sh): toolchain cache and outputs
+/.cache/
+/web-app/build/ghostty-own/
+
 # Scanner build artifacts
 tools/scanner/cmd
 tools/scanner/backend/cmd/scanner
@@ -153,3 +157,5 @@ user.bazelrc
 .bazel-logs/
 # Captured Bazel failure fixtures are test data, not logs
 !tools/bzl/testdata/errors/**/*.log
+# Ghostty wasm build (main's #1491) tolerates a personal .bazelrc.user
+/.bazelrc.user

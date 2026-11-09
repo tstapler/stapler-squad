@@ -8,3 +8,9 @@ gen
 web-app/node_modules
 web-app/out
 build
+.cache
+.git
+node_modules
+web-app/.next
+tests/e2e/node_modules
+website/node_modules

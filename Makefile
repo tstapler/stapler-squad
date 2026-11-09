@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -377,6 +377,20 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 	@mkdir -p session/tmux/embed
 	@cp $(BIN_TMUX) session/tmux/embed/tmux
 	@echo "✅ session/tmux/embed/tmux ready ($(shell $(BIN_TMUX) -V 2>/dev/null || echo unknown))"
+
+# ── Own ghostty-vt.wasm (see docs/explanation/own-ghostty-wasm-build.md) ─────
+# Bazel (//third_party/ghostty:ghostty_vt_wasm): pinned Ghostty fork + checksum-verified
+# Zig, all in MODULE.bazel. Opt-in: not part of `make build`, because Bazel downloads a Zig
+# toolchain. Output is gitignored; the web build falls back to ghostty-web's stock wasm when
+# web-app/build/ghostty-own/ghostty-vt.wasm is absent.
+build-ghostty-wasm: ## Build ghostty-vt.wasm with Bazel into web-app/build/ghostty-own
+	@./scripts/build-ghostty-wasm.sh
+
+test-ghostty-wasm: ## Run the Zig unit tests for our Ghostty patches, then build
+	@./scripts/build-ghostty-wasm.sh --test
+
+verify-ghostty-wasm: ## Build and fail unless the wasm sha256 matches scripts/ghostty-wasm.sha256
+	@./scripts/build-ghostty-wasm.sh --verify
 
 # ── Pinned tymuxd binary (fetched, not compiled — see ADR-001) ─────────────
 # Fetches a prebuilt tymuxd release binary from github.com/tstapler/tymux

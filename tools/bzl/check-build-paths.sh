@@ -13,7 +13,7 @@ is_under_gitlink() {
   local p="$1" dir
   dir=$(dirname "$p")
   while [ "$dir" != "." ] && [ "$dir" != "/" ]; do
-    if git ls-files -s -- "$dir" | grep -q '^160000 '; then
+    if git ls-files -s -- "$dir" | awk -v d="$dir" '$1 == "160000" && $4 == d { found = 1 } END { exit !found }'; then
       echo "$dir"; return 0
     fi
     dir=$(dirname "$dir")

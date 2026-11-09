@@ -363,6 +363,9 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `docs/how-to/bundle-tmux.md` |
 | Bundling tymuxd (single-binary, supervised) | `docs/reference/bundling-tymuxd.md` |
+| Own ghostty-vt.wasm: why, layout, pins, patches, serving, rollback (ADR-039) | `docs/explanation/own-ghostty-wasm-build.md`, `docs/adr/ADR-039-own-ghostty-wasm-build.md` |
+| Build/verify the wasm (`make build-ghostty-wasm`), record its sha256, bump the pin | `docs/how-to/build-own-ghostty-wasm.md` |
+| `tstapler/ghostty` fork: seed `ssq/main`, upstream sync, contribute patches upstream | `docs/how-to/ghostty-fork-workflow.md` |
 | CSS architecture (vanilla-extract) | `docs/reference/css-architecture.md` |
 | Feature registry rules | `docs/reference/feature-registry.md` |
 | Omnibar feature testing registry | `docs/reference/feature-testing-registry.md` |

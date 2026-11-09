@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { BunPlugin } from "bun";
 
@@ -15,12 +15,22 @@ export function externalizeGhosttyWasm(source: string, wasmPath: string): string
   return `import __ghosttyVtWasmUrl from ${JSON.stringify(wasmPath)}; ${source.replace(EMBEDDED_WASM, url)}`;
 }
 
+/** Where scripts/build-ghostty-wasm.sh installs our wasm (gitignored; under build/ so the Makefile tracks it). */
+export const OWN_WASM_PATH = path.resolve(__dirname, "..", "ghostty-own", "ghostty-vt.wasm");
+
+/** Our build when present, else ghostty-web's stock wasm; either way it ships as one hashed asset. */
+export function chooseGhosttyWasm(stockWasm: string, ownWasm: string = OWN_WASM_PATH): string {
+  const own = existsSync(ownWasm);
+  console.info(`ghostty-wasm plugin: shipping ${own ? "own build" : "stock"} wasm (${own ? ownWasm : stockWasm})`);
+  return own ? ownWasm : stockWasm;
+}
+
 export function ghosttyWasmPlugin(): BunPlugin {
   return {
     name: "ghostty-wasm",
     setup: (b) => {
       b.onLoad({ filter: GHOSTTY_ENTRY }, ({ path: p }) => ({
-        contents: externalizeGhosttyWasm(readFileSync(p, "utf8"), path.join(path.dirname(p), "ghostty-vt.wasm")),
+        contents: externalizeGhosttyWasm(readFileSync(p, "utf8"), chooseGhosttyWasm(path.join(path.dirname(p), "ghostty-vt.wasm"))),
         loader: "js",
       }));
     },
