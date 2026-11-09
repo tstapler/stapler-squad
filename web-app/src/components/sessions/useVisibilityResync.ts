@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import type { VisibilityResyncDecision } from "@/lib/terminal/resyncPolicy";
 import { useDebouncedCallback } from '@/lib/hooks/useDebounce';
 import { useFeatureFlag } from '@/lib/contexts/FeatureFlagsContext';
 import { useAnalytics } from '@/lib/contexts/AnalyticsContext';
@@ -35,6 +36,8 @@ export interface UseVisibilityResyncParams {
   connect: (cols?: number, rows?: number) => Promise<void>;
   disconnect: () => Promise<void>;
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
+  /** Omitted: every focus/visibility event resyncs (pre-gate behavior). */
+  visibilityResyncDecision?: () => VisibilityResyncDecision;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
   setShowReconnectButton: (value: boolean) => void;
@@ -100,7 +103,7 @@ export interface UseVisibilityResyncResult {
 export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisibilityResyncResult {
   const {
     sessionId, isVisible, isConnected, terminalState, connect, disconnect,
-    requestFullResync, markResyncComplete, markPaneResponseReceived, setShowReconnectButton,
+    requestFullResync, visibilityResyncDecision, markResyncComplete, markPaneResponseReceived, setShowReconnectButton,
     setShowReconnectBanner, scheduleResync, outstandingResyncIdsRef,
   } = params;
 
@@ -148,6 +151,8 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
   const terminalStateRef = useRef(terminalState);
   const connectRef = useRef(connect);
   const disconnectRef = useRef(disconnect);
+  const visibilityResyncDecisionRef = useRef(visibilityResyncDecision);
+  visibilityResyncDecisionRef.current = visibilityResyncDecision;
   const requestFullResyncRef = useRef(requestFullResync);
   const markResyncCompleteRef = useRef(markResyncComplete);
   const markPaneResponseReceivedRef = useRef(markPaneResponseReceived);
@@ -284,6 +289,17 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
     if (isConnectedRef.current) {
       // Rapid-flap re-entrancy guard — see Story 2.1.3.
       if (pendingResyncCompletionRef.current) return;
+
+      // A resync costs the server a full-pane capture; skip it when the size is unchanged and
+      // the terminal synced recently. Skipping before pendingResyncCompletion is set keeps the
+      // stall watchdog (which forces a reconnect) from arming for a request that never left.
+      const decision = visibilityResyncDecisionRef.current?.() ?? 'send';
+      trackRef.current({
+        name: 'cm.term_resync',
+        category: 'performance',
+        labels: { reason: decision === 'send' ? 'visibility' : decision },
+      });
+      if (decision !== 'send') return;
 
       pendingResyncCompletionRef.current = true;
       // Epic 6.1 (terminal:resync-stagger) — `fire` is exactly today's

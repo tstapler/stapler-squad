@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,20 +79,20 @@ func (t *WebSocketTransport) LatencyLabels() termlat.Labels {
 type keystrokeDelivery struct {
 	instance    *session.Instance
 	latency     *streamLatency
+	bookkeeper  *inputBookkeeper
 	logPrefix   string
 	tmuxSession string
 	tmuxSocket  string
 }
 
-// deliver runs the per-keystroke bookkeeping, then the backend send, recording
+// deliver queues the (deferred) keystroke bookkeeping, then sends to the backend, recording
 // input_bookkeep, input_send and input_total.
 func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	labels := k.latency.labels()
 	start := time.Now()
 	k.latency.noteInput(start)
 
-	k.instance.UpdateTerminalTimestamps(string(data), true)
-	k.instance.MarkUserResponded()
+	k.bookkeeper.note(data)
 	sendStart := time.Now()
 
 	// Try the control-mode path first (low latency, no subprocess); it falls back to a
@@ -111,4 +112,18 @@ func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	termlat.Default.Record(termlat.StageInputBookkeep, labels, sendStart.Sub(start))
 	termlat.Default.Record(termlat.StageInputSend, labels, end.Sub(sendStart))
 	termlat.Default.Record(termlat.StageInputTotal, labels, end.Sub(start))
+}
+
+// countServerResync counts one mid-stream CurrentPaneRequest. A request the client flagged as
+// same-size (visibility/focus with unchanged dimensions) is the avoidable kind.
+func countServerResync(stream *connectWebSocketStream, req *sessionv1.CurrentPaneRequest) {
+	reason := termlat.ResyncServerRequest
+	if req.GetStaleDimensions() {
+		reason = termlat.ResyncServerStaleDims
+	}
+	var backend string
+	if stream != nil {
+		backend = stream.latency.labels().Backend
+	}
+	termlat.Default.CountResync(reason, backend)
 }
