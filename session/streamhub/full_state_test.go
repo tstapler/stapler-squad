@@ -357,11 +357,6 @@ func (s *seqTransport) Send(d []byte) error {
 	return nil
 }
 func (s *seqTransport) Close() error { return nil }
-func (s *seqTransport) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.events)
-}
 func (s *seqTransport) snapshot() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
