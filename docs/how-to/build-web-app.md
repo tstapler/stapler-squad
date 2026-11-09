@@ -16,7 +16,7 @@ Stages, in order: `guard` (the vanilla-extract `eval` patch is applied), `clean`
 - Assets keep the `/_next/static/` prefix (ADR-003): Go exempts it from login and serves it as immutable. The name is a leftover from the removed Next build; renaming it is the optional Story 9.4.
 - Fonts are copied from `src/app/fonts/` to `/_next/static/media/<name>.<hash>.woff2`. Bun would otherwise inline them as `data:` URIs.
 - `verify` fails on a file outside the auth-exempt prefixes and `server/middleware/testdata/public-allowlist.json`. Add an entry with a reason when adding a file to `web-app/public/`.
-- Budgets are in `web-app/build/budgets.json` and apply to the minified build; stats go to `web-app/.build/stats.json`.
+- Budgets are in `web-app/build/budgets.json` and apply to the minified build; stats go to `web-app/.build/stats.json`. See "Size budgets" below.
 - `index.html` ships no `<title>`; the router renders it. Titles and feature-flag guards live in `web-app/src/app/route-meta.ts`, one row per `page.tsx`.
 
 ## Scripts and targets
@@ -53,10 +53,33 @@ bun build/build.ts --out .build/out-min --stats .build/stats-minified.json
 
 Source maps are emitted next to each chunk (`sourcemap: "linked"`). The stage that failed is named in the error.
 
+## Size budgets
+
+Initial JS (what blocks first paint) is the metric that matters, not total JS: lazy chunks cost nothing until used.
+
+| Check | Where | Fails when |
+|---|---|---|
+| Growth vs main | CI step "Bundle growth vs main" (`build/compare-stats-cli.ts`) | Total, Initial, Largest chunk or Largest lazy chunk grew past `growthToleranceBytes` (Initial and Largest chunk 1 KB, Largest lazy chunk 4 KB, Total 10 KB) versus the `web-build-bun-stats` artifact of main's push run at the first parent of the PR's merge commit (main's tip when the merge ref was built). The run must have succeeded overall; with none at that exact SHA (path-filtered, red, expired) the step logs why and skips. It never falls back to an older main. |
+| Absolute ceilings | `verify` stage, `budgets.json` | Initial JS or any file over 1.6 MB, any lazy chunk over 1 MB, Total JS over the 8 MB tripwire. Generous on purpose, so main drifting never blocks an unrelated PR. |
+| Heavy modules out of the entry | `verify` stage, `build/heavy-modules.json` | A registered package is bundled into a file of the initial closure (read from the `.js.map` `sources`). |
+
+To raise a ceiling, measure first (`bun build/build.ts --out .build/out-min --stats .build/s.json`) and write the measurement into the entry's `source`. `growthToleranceBytes` is read from the PR's own `budgets.json`, so raising it loosens the gate for later PRs too, not just that one; reviewers should treat such a change as permanent. Each PR may still grow within the tolerance, so slow creep is caught only by the absolute ceilings.
+
+`stats.json` lists the five biggest files (`largestFiles`). To see what is inside a chunk, group its `.js.map` `sources` by package.
+
+## Adding a code split
+
+What is already split (2026-11-08, entry 1.39 MB, total 6.35 MB): every page in the `src/app/routes.tsx` table (`load: () => import(...)`), `XtermTerminal` and `GhosttyTerminal` (separate chunks loaded by `TerminalPool`; ghostty-web and its embedded WASM are a 638 KB chunk fetched only when the `ghostty_renderer` flag is on), the insights charts (recharts), codemirror, `SessionDetailView` and the OTel SDK (`otel-init`).
+
+1. Load the heavy component with `lazyComponent(() => import("..."))` from `@/lib/lazy` (adds a Suspense boundary and stale-chunk recovery after a deploy). Use `React.lazy` directly only when you need the preload handle, as `TerminalPool` does.
+2. Never import the heavy module statically from code the entry reaches, including through a barrel file. `import type` is erased and safe.
+3. Add the package (or a scope ending in `/`) to `web-app/build/heavy-modules.json` with a reason. A later build fails if it ends up in the entry. The check reads `node_modules` paths from source maps, so list transitive heavies (`d3-*`, `micromark*`) separately if they matter.
+4. Build minified and check `largestLazyChunkBytes` in the stats against the 1 MB ceiling.
+
 ## Checks that guard the output
 
 - `verify-output` (inside the build) and `server/middleware/built_assets_test.go` both walk every file in `web-app/out` against the auth exemption. Run the Go side locally with `REQUIRE_BUILT_OUT=1 go test ./server/middleware -run TestBuiltAssets` after a build; without `out/` it skips unless `CI` or `REQUIRE_BUILT_OUT=1` is set.
-- `web-app/.size-limit.json` caps Total JS at the number in `web-app/build/budgets.json`; `bunx size-limit` checks it against `out/_next/static/**/*.js`.
+- `web-app/.size-limit.json` mirrors the `totalJsBytes` tripwire in `web-app/build/budgets.json`; `bunx size-limit` checks it against `out/_next/static/**/*.js`.
 - `bun run check:dependency-screen` fails on a banned version, a `github:` source, or a `trustedDependencies` entry whose package has no install script.
 - `verify-output` and ESLint both refuse an import of `next`; `web-app/package.json` must not list it.
 - The vanilla-extract `eval` patch: `docs/how-to/patch-vanilla-extract-eval.md`.

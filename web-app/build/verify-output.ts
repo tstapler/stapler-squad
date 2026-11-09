@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { EXEMPT_PREFIXES } from "./config";
-import { BuildStats, OutputStats, walkFiles } from "./stats";
+import { BuildStats, initialJsFiles, OutputStats, walkFiles } from "./stats";
 
 export interface Budget {
   limit: number;
@@ -14,7 +14,15 @@ export interface Budgets {
   totalJsBytes: Budget;
   initialJsBytes: Budget;
   largestChunkBytes: Budget;
+  /** Cap on any single JS file outside the initial closure (a lazy chunk that grew past this was not split further). */
+  lazyChunkBytes: Budget;
   maxWallMs: Budget;
+}
+/** A package that must stay out of the initial JS closure; see docs/how-to/build-web-app.md "Adding a code split". */
+export interface HeavyModule {
+  /** Package name, or a scope prefix ending in "/" (e.g. "@xterm/"). */
+  package: string;
+  reason: string;
 }
 export interface AllowlistEntry {
   path: string;
@@ -31,6 +39,8 @@ export interface VerifyInput {
   enforceBytes: boolean;
   /** JS files reachable from the /login route's entry (from the bundler metafile), when known. */
   loginClosure?: string[];
+  /** Packages that must not appear in the initial closure; defaults to none. */
+  heavyModules?: HeavyModule[];
 }
 export interface VerifyResult {
   errors: string[];
@@ -118,9 +128,38 @@ function checkBudgets(input: VerifyInput, errors: string[]): void {
     ["Total JS", stats.jsBytes, budgets.totalJsBytes],
     ["Initial JS", stats.initialJsBytes, budgets.initialJsBytes],
     ["Largest chunk", stats.largestChunkBytes, budgets.largestChunkBytes],
+    ["Largest lazy chunk", stats.largestLazyChunkBytes, budgets.lazyChunkBytes],
   ];
   for (const [name, bytes, b] of rows) {
     if (bytes > b.limit) errors.push(`budget: ${name} is ${bytes} B, over the ${b.limit} B limit (${b.source})`);
+  }
+}
+
+/** The package a source-map `sources` entry belongs to (innermost node_modules), or undefined for app code. */
+export function packageOfSource(source: string): string | undefined {
+  const marker = "node_modules/";
+  const i = source.lastIndexOf(marker);
+  return i === -1 ? undefined : source.slice(i + marker.length).match(/^((?:@[^/]+\/)?[^/]+)\//)?.[1];
+}
+
+/** Fails when a registered heavy package is bundled into a file the browser loads before first paint. */
+function checkHeavyModules(input: VerifyInput, errors: string[]): void {
+  const heavy = input.heavyModules ?? [];
+  if (heavy.length === 0) return;
+  for (const file of initialJsFiles(input.outDir)) {
+    const mapFile = `${file}.map`;
+    if (!existsSync(mapFile)) {
+      errors.push(`split: ${path.basename(file)} has no source map, so the heavy-module check cannot see inside it`);
+      continue;
+    }
+    const { sources = [] } = JSON.parse(readFileSync(mapFile, "utf8")) as { sources?: string[] };
+    const found = new Set<string>();
+    for (const src of sources) {
+      const pkg = packageOfSource(src);
+      const hit = pkg && heavy.find((h) => (h.package.endsWith("/") ? pkg.startsWith(h.package) : pkg === h.package));
+      if (hit) found.add(`${pkg} (${hit.reason})`);
+    }
+    for (const f of found) errors.push(`split: ${path.basename(file)} is in the initial closure and bundles ${f}; load it with import() instead`);
   }
 }
 
@@ -150,5 +189,6 @@ export function verifyOutput(input: VerifyInput): VerifyResult {
   if (html) checkThemeBoot(html, css, errors);
   if (input.loginClosure) checkLoginClosure(input.loginClosure, input.allowlist, errors);
   checkBudgets(input, errors);
+  checkHeavyModules(input, errors);
   return { errors, warnings };
 }

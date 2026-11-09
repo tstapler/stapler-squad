@@ -15,11 +15,15 @@ export interface BuildStats {
   chunkCount: number;
   initialJsBytes: number;
   largestChunkBytes: number;
+  /** Largest JS file outside the initial closure: the per-file cap for lazy chunks. */
+  largestLazyChunkBytes: number;
+  /** The five biggest JS files (path relative to the output dir), for diagnosing a regression. */
+  largestFiles: { file: string; bytes: number }[];
   gzipJsBytes: number;
   peakRssKb?: number;
 }
 
-export type OutputStats = Pick<BuildStats, "jsBytes" | "cssBytes" | "chunkCount" | "initialJsBytes" | "largestChunkBytes" | "gzipJsBytes">;
+export type OutputStats = Pick<BuildStats, "jsBytes" | "cssBytes" | "chunkCount" | "initialJsBytes" | "largestChunkBytes" | "largestLazyChunkBytes" | "largestFiles" | "gzipJsBytes">;
 
 export function walkFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -53,12 +57,17 @@ export function computeOutputStats(outDir: string): OutputStats {
   const files = walkFiles(path.join(outDir, "_next/static"));
   const js = files.filter((f) => f.endsWith(".js"));
   const size = (f: string): number => statSync(f).size;
+  const initial = new Set(initialJsFiles(outDir));
+  const bySize = js.map((f) => ({ file: path.relative(outDir, f).split(path.sep).join("/"), bytes: size(f), lazy: !initial.has(f) }));
+  bySize.sort((a, b) => b.bytes - a.bytes);
   return {
     jsBytes: js.reduce((n, f) => n + size(f), 0),
     cssBytes: files.filter((f) => f.endsWith(".css")).reduce((n, f) => n + size(f), 0),
     chunkCount: js.length,
-    initialJsBytes: initialJsFiles(outDir).reduce((n, f) => n + size(f), 0),
-    largestChunkBytes: js.reduce((n, f) => Math.max(n, size(f)), 0),
+    initialJsBytes: [...initial].reduce((n, f) => n + size(f), 0),
+    largestChunkBytes: bySize[0]?.bytes ?? 0,
+    largestLazyChunkBytes: bySize.find((f) => f.lazy)?.bytes ?? 0,
+    largestFiles: bySize.slice(0, 5).map(({ file, bytes }) => ({ file, bytes })),
     gzipJsBytes: js.reduce((n, f) => n + gzipSync(readFileSync(f)).length, 0),
   };
 }
@@ -72,6 +81,7 @@ export function statsToMarkdown(stats: BuildStats, title = "Bun web build"): str
     ["JS bytes", stats.jsBytes],
     ["Initial JS bytes", stats.initialJsBytes],
     ["Largest chunk bytes", stats.largestChunkBytes],
+    ["Largest lazy chunk bytes", stats.largestLazyChunkBytes],
     ["gzip JS bytes", stats.gzipJsBytes],
     ["CSS bytes", stats.cssBytes],
     ["JS files", stats.chunkCount],

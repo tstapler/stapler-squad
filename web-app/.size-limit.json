@@ -2,7 +2,7 @@
   {
     "name": "Total JS bundle",
     "path": "out/_next/static/**/*.js",
-    "limit": "6450000 B",
+    "limit": "8000000 B",
     "gzip": false,
     "brotli": false
   }
