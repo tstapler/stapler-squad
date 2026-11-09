@@ -1002,6 +1002,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 						CriterionIndex: int32(cv.CriterionIndex),
 						Outcome:        string(cv.Outcome),
 						Evidence:       cv.Evidence,
+						FailureClass:   string(cv.FailureClass),
+						ProposedWaiver: cv.ProposedWaiver,
 					}
 				}
 			}

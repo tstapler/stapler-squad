@@ -1546,6 +1546,8 @@ func (s *BacklogService) SubmitManualReview(
 				CriterionIndex: int(pv.CriterionIndex),
 				Outcome:        session.ReviewOutcome(pv.Outcome),
 				Evidence:       pv.Evidence,
+				FailureClass:   domain.FailureClass(pv.FailureClass),
+				ProposedWaiver: pv.ProposedWaiver,
 			})
 		}
 	} else {
