@@ -44,7 +44,7 @@ func TestDashboard_ShouldParseAndHaveTerminalInputPanel_When_JsonLoaded(t *testi
 		assert.Contains(t, joined, series)
 	}
 
-	var titles []string
+	titles := make([]string, 0, len(d.Panels))
 	var anomalyExprs string
 	for _, p := range d.Panels {
 		titles = append(titles, p.Title)
