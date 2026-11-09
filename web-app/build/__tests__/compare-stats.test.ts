@@ -1,4 +1,7 @@
-import { compareToBaseline, type GrowthTolerances } from "../compare-stats";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { compareToBaseline, findStatsFile, type GrowthTolerances } from "../compare-stats";
 
 const TOL: GrowthTolerances = { jsBytes: 100, initialJsBytes: 10, largestChunkBytes: 10, largestLazyChunkBytes: 50 };
 const base = { jsBytes: 1000, initialJsBytes: 500, largestChunkBytes: 500, largestLazyChunkBytes: 300 };
@@ -13,7 +16,7 @@ describe("compareToBaseline", () => {
     expect(errs).toEqual(["growth: Initial JS grew 11 B vs main (500 -> 511), over the 10 B tolerance"]);
   });
 
-  it("never fails a PR because main itself is large", () => {
+  it("compares only to the baseline, so a large main (or one that shrank) does not fail an unchanged PR", () => {
     const big = { jsBytes: 9e9, initialJsBytes: 9e9, largestChunkBytes: 9e9, largestLazyChunkBytes: 9e9 };
     expect(compareToBaseline(big, big, TOL)).toEqual([]);
   });
@@ -21,5 +24,16 @@ describe("compareToBaseline", () => {
   it("skips a metric the baseline predates", () => {
     const { largestLazyChunkBytes: _omit, ...old } = base;
     expect(compareToBaseline({ ...base, largestLazyChunkBytes: 99999 }, old, TOL)).toEqual([]);
+  });
+});
+
+describe("findStatsFile", () => {
+  it("finds a flat or nested stats file and returns undefined when absent", () => {
+    const d = mkdtempSync(path.join(os.tmpdir(), "bl-"));
+    mkdirSync(path.join(d, "x/y"), { recursive: true });
+    writeFileSync(path.join(d, "x/y/s.json"), "{}");
+    expect(findStatsFile(d, "s.json")).toBe(path.join(d, "x/y/s.json"));
+    expect(findStatsFile(d, "nope.json")).toBeUndefined();
+    expect(findStatsFile(path.join(d, "missing"), "s.json")).toBeUndefined();
   });
 });

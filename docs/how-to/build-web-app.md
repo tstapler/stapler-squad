@@ -59,11 +59,11 @@ Initial JS (what blocks first paint) is the metric that matters, not total JS: l
 
 | Check | Where | Fails when |
 |---|---|---|
-| Growth vs main | CI step "Bundle growth vs main" (`build/compare-stats-cli.ts`) | Total, Initial, Largest chunk or Largest lazy chunk grew past `growthToleranceBytes` (1 KB for Initial and Largest chunk) versus the last successful main push run's `web-build-bun-stats` artifact. No artifact: the step skips. |
+| Growth vs main | CI step "Bundle growth vs main" (`build/compare-stats-cli.ts`) | Total, Initial, Largest chunk or Largest lazy chunk grew past `growthToleranceBytes` (Initial and Largest chunk 1 KB, Largest lazy chunk 4 KB, Total 10 KB) versus the `web-build-bun-stats` artifact of main's successful push run at the PR's base commit (else the latest one; the log prints which). No artifact: the step skips. |
 | Absolute ceilings | `verify` stage, `budgets.json` | Initial JS or any file over 1.6 MB, any lazy chunk over 1 MB, Total JS over the 8 MB tripwire. Generous on purpose, so main drifting never blocks an unrelated PR. |
 | Heavy modules out of the entry | `verify` stage, `build/heavy-modules.json` | A registered package is bundled into a file of the initial closure (read from the `.js.map` `sources`). |
 
-To raise a ceiling, measure first (`bun build/build.ts --out .build/out-min --stats .build/s.json`) and write the measurement into the entry's `source`. The growth gate has no knob to raise per PR: a PR that must grow the bundle needs a deliberate `growthToleranceBytes` change in the PR, which reviewers see.
+To raise a ceiling, measure first (`bun build/build.ts --out .build/out-min --stats .build/s.json`) and write the measurement into the entry's `source`. `growthToleranceBytes` is read from the PR's own `budgets.json`, so raising it loosens the gate for later PRs too, not just that one; reviewers should treat such a change as permanent. Each PR may still grow within the tolerance, so slow creep is caught only by the absolute ceilings.
 
 `stats.json` lists the five biggest files (`largestFiles`). To see what is inside a chunk, group its `.js.map` `sources` by package.
 
@@ -73,7 +73,7 @@ What is already split (2026-11-08, entry 1.39 MB, total 6.35 MB): every page in 
 
 1. Load the heavy component with `lazyComponent(() => import("..."))` from `@/lib/lazy` (adds a Suspense boundary and stale-chunk recovery after a deploy). Use `React.lazy` directly only when you need the preload handle, as `TerminalPool` does.
 2. Never import the heavy module statically from code the entry reaches, including through a barrel file. `import type` is erased and safe.
-3. Add the package (or a scope ending in `/`) to `web-app/build/heavy-modules.json` with a reason. The next build fails if it ends up in the entry.
+3. Add the package (or a scope ending in `/`) to `web-app/build/heavy-modules.json` with a reason. The next build fails if it ends up in the entry. The check reads `node_modules` paths from source maps, so list transitive heavies (`d3-*`, `micromark*`) separately if they matter.
 4. Build minified and check `largestLazyChunkBytes` in the stats against the 1 MB ceiling.
 
 ## Checks that guard the output

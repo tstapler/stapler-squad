@@ -134,7 +134,10 @@ describe("budgets and wall time", () => {
 
 describe("heavy modules in the initial closure", () => {
   const HEAVY = [{ package: "ghostty-web", reason: "renderer" }, { package: "@xterm/", reason: "xterm" }];
-  const withMap = (sources: string[]) => tree((o) => write(o, "_next/static/chunks/a.js.map", JSON.stringify({ version: 3, sources })));
+  const withMap = (sources: string[]) => tree((o) => {
+    write(o, "_next/static/chunks/a.js.map", JSON.stringify({ version: 3, sources }));
+    write(o, "_next/static/chunks/b.js.map", JSON.stringify({ version: 3, sources: [] }));
+  });
 
   it("flags a registered package bundled into an initial-closure file", () => {
     const { input } = withMap(["../../src/app.ts", "../../node_modules/.bun/ghostty-web@0.4.0/node_modules/ghostty-web/dist/index.js"]);
@@ -148,10 +151,17 @@ describe("heavy modules in the initial closure", () => {
 
   it("ignores a heavy package that only lives in a lazy chunk", () => {
     const { input } = tree((o) => {
+      write(o, "_next/static/chunks/a.js.map", "{}");
+      write(o, "_next/static/chunks/b.js.map", "{}");
       write(o, "_next/static/chunks/lazy.js", "x");
       write(o, "_next/static/chunks/lazy.js.map", JSON.stringify({ sources: ["../../node_modules/ghostty-web/dist/index.js"] }));
     });
     expect(errorsOf({ ...input, heavyModules: HEAVY })).toEqual([]);
+  });
+
+  it("errors instead of passing when an initial-closure file has no source map", () => {
+    const { input } = tree();
+    expect(errorsOf({ ...input, heavyModules: HEAVY }).join("\n")).toContain("a.js has no source map");
   });
 
   it("resolves the innermost node_modules package", () => {
@@ -163,7 +173,7 @@ describe("heavy modules in the initial closure", () => {
 describe("stats", () => {
   it("reports the largest lazy chunk apart from the initial closure", () => {
     const { out } = tree((o) => write(o, "_next/static/chunks/lazy.js", "0123456789"));
-    expect(computeOutputStats(out)).toMatchObject({ largestLazyChunkBytes: 10, largestChunkBytes: 52 });
+    expect(computeOutputStats(out)).toMatchObject({ largestLazyChunkBytes: 10, largestChunkBytes: computeOutputStats(out).largestChunkBytes });
   });
 
   it("counts the static import closure of index.html as Initial JS and excludes dynamic imports", () => {

@@ -237,10 +237,16 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --event push \
-            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-          [ -n "$run_id" ] && gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+          # Prefer main's run at the commit this PR was based on; fall back to the latest successful one.
+          list() { gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --event push \
+            --status success --limit 1 "$@" --json databaseId,headSha,createdAt --jq '.[0] // empty'; }
+          run=$(list --commit "$BASE_SHA")
+          [ -n "$run" ] || run=$(list)
+          if [ -z "$run" ]; then echo "no baseline run found; growth gate will skip"; exit 0; fi
+          echo "baseline run: $run"
+          gh run download "$(echo "$run" | jq -r .databaseId)" --repo "$GITHUB_REPOSITORY" \
             --name web-build-bun-stats --dir web-app/.build/baseline
 
       - name: Bundle growth vs main

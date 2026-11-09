@@ -148,7 +148,10 @@ function checkHeavyModules(input: VerifyInput, errors: string[]): void {
   if (heavy.length === 0) return;
   for (const file of initialJsFiles(input.outDir)) {
     const mapFile = `${file}.map`;
-    if (!existsSync(mapFile)) continue;
+    if (!existsSync(mapFile)) {
+      errors.push(`split: ${path.basename(file)} has no source map, so the heavy-module check cannot see inside it`);
+      continue;
+    }
     const { sources = [] } = JSON.parse(readFileSync(mapFile, "utf8")) as { sources?: string[] };
     const found = new Set<string>();
     for (const src of sources) {
