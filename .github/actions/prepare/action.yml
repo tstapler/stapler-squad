@@ -1,6 +1,14 @@
 name: 'Prepare: Protos, Ent ORM, and Web UI'
 description: 'Generates protobuf code, ent ORM code, and builds the web UI into server/web/dist'
 
+inputs:
+  own-ghostty-wasm:
+    description: >-
+      Ship our own sha256-pinned ghostty-vt.wasm instead of ghostty-web's stock one, and fail the build
+      if it cannot be produced and verified. Fetches the published asset (seconds), and builds it with
+      Bazel only when that asset does not exist yet (a pin-bump PR).
+    default: 'true'
+
 runs:
   using: composite
   steps:
@@ -54,12 +62,44 @@ runs:
       shell: bash
       run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+    - name: Fetch own ghostty-vt.wasm (sha256-verified)
+      id: ghostty-fetch
+      if: ${{ inputs.own-ghostty-wasm == 'true' }}
+      shell: bash
+      run: |
+        if ./scripts/fetch-ghostty-wasm.sh; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+
+    # Only reached when the pin has no published asset yet; verifies against the recorded sha256.
+    - name: Set up Bazelisk (own wasm not published for this pin)
+      if: ${{ inputs.own-ghostty-wasm == 'true' && steps.ghostty-fetch.outputs.ok != 'true' }}
+      uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
+
+    - name: Cache Bazel repository and disk cache
+      if: ${{ inputs.own-ghostty-wasm == 'true' && steps.ghostty-fetch.outputs.ok != 'true' }}
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/bazel-disk
+          ~/.cache/bazel-repo
+        key: ghostty-wasm-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion') }}
+        restore-keys: |
+          ghostty-wasm-
+
+    - name: Build own ghostty-vt.wasm with Bazel
+      if: ${{ inputs.own-ghostty-wasm == 'true' && steps.ghostty-fetch.outputs.ok != 'true' }}
+      shell: bash
+      run: |
+        export BAZEL_FLAGS="--disk_cache=$HOME/.cache/bazel-disk --repository_cache=$HOME/.cache/bazel-repo"
+        ./scripts/build-ghostty-wasm.sh --verify
+
     - name: Build web UI
       shell: bash
       working-directory: web-app
       # Unminified, matching the Makefile's WEB_MINIFY default; retried once-ish for host load.
       env:
         WEB_MINIFY: '0'
+        # Fail the build rather than silently shipping the stock wasm when own-ghostty-wasm is on.
+        GHOSTTY_WASM_REQUIRE_OWN: ${{ inputs.own-ghostty-wasm == 'true' && '1' || '0' }}
       run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
 
     - name: Copy web UI to dist
