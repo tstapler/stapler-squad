@@ -518,6 +518,7 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
       bannerShownRef.current = false;
       resyncStartTimeRef.current = null;
       retriedRef.current = false;
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- .current is a stable Set, never reassigned
       supersededIdsRef.current.clear();
       staleRef.current = false;
       disconnectCancelRef.current?.cancel();
