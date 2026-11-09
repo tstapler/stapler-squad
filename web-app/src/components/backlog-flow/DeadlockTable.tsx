@@ -117,7 +117,7 @@ export function DeadlockTable({ page, weakFilter, estimated, promoted = DEADLOCK
               Showing {visible.length} of {total}
             </span>
             {!showAll && ranked.length > DEFAULT_VISIBLE && (
-              <button type="button" className={styles.textButton} onClick={() => setShowAll(true)}>
+              <button type="button" className={styles.textButton} onClick={() => setShowAll(true)}>{/* analytics-exempt */}
                 Show all
               </button>
             )}

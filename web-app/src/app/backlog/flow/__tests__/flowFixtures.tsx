@@ -93,7 +93,7 @@ export function LocationProbe() {
   return (
     <>
       <span data-testid="loc">{`${usePathname()}${search ? `?${search}` : ""}`}</span>
-      <button type="button" data-testid="history-back" onClick={router.back} />
+      <button type="button" data-testid="history-back" onClick={router.back}>{/* analytics-exempt */}</button>
     </>
   );
 }

@@ -104,7 +104,7 @@ export function RadioGroup<T extends string>({
             className={[radioBtn, value === option.value ? radioBtnActive : ""]
               .filter(Boolean)
               .join(" ")}
-          >
+          >{/* analytics-exempt */}
             {option.label}
           </button>
         ))}

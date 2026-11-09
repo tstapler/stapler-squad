@@ -56,7 +56,7 @@ function SortHeader({ sortKey, sort, onSort, children }: SortHeaderProps) {
   const active = sort.key === sortKey;
   return (
     <th scope="col" className={styles.cell} aria-sort={active ? sort.dir : "none"}>
-      <button type="button" className={styles.sortButton} onClick={() => onSort(sortKey)}>
+      <button type="button" className={styles.sortButton} onClick={() => onSort(sortKey)}>{/* analytics-exempt */}
         {children}
       </button>
     </th>

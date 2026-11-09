@@ -42,10 +42,12 @@ type Cache[V any] struct {
 	// storable, when set, vetoes caching a computed value (a degraded result
 	// must not be served from cache for a whole TTL).
 	storable func(V) bool
-	clock    Clock
-	opts     CacheOptions
-	group    singleflight.Group
-	slot     chan struct{}
+	// onJoin, when set, runs after a caller has attached to a flight (test barrier).
+	onJoin func()
+	clock  Clock
+	opts   CacheOptions
+	group  singleflight.Group
+	slot   chan struct{}
 
 	mu      sync.Mutex
 	entries map[string]*list.Element
@@ -113,6 +115,9 @@ func (c *Cache[V]) Do(ctx context.Context, q FlowQuery, compute func(context.Con
 			}
 			return c.fill(ctx, storeKey, compute)
 		})
+		if c.onJoin != nil {
+			c.onJoin()
+		}
 		select {
 		case <-ctx.Done():
 			return zero, fmt.Errorf("%w: %w", ErrBusy, ctx.Err())

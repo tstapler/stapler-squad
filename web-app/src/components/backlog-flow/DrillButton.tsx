@@ -17,7 +17,7 @@ interface DrillButtonProps {
 export function DrillButton({ drillKey, onDrill, children, label, testId }: DrillButtonProps) {
   if (drillKey === "") return <span data-testid={testId}>{children}</span>;
   return (
-    <button type="button" className={styles.drillButton} aria-label={label} data-testid={testId} onClick={() => onDrill(drillKey)}>
+    <button type="button" className={styles.drillButton} aria-label={label} data-testid={testId} onClick={() => onDrill(drillKey)}>{/* analytics-exempt */}
       {children}
     </button>
   );

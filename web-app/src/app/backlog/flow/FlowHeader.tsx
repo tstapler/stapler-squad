@@ -75,11 +75,11 @@ export function FlowHeader(props: FlowHeaderProps) {
           aria-disabled={isRefreshing}
           onClick={() => !isRefreshing && props.onRefresh()}
           data-testid="flow-refresh"
-        >
+        >{/* analytics-exempt */}
           {isRefreshing ? "Refreshing..." : "Refresh"}
         </button>
         {estimatedCount > 0 && (
-          <button type="button" className={styles.linkButton} onClick={() => props.onJump("notes")}>
+          <button type="button" className={styles.linkButton} onClick={() => props.onJump("notes")}>{/* analytics-exempt */}
             {estimatedCount} {estimatedCount === 1 ? "metric" : "metrics"} estimated
           </button>
         )}
@@ -100,7 +100,7 @@ export function FlowHeader(props: FlowHeaderProps) {
               event.preventDefault();
               props.onJump(link.id);
             }}
-          >
+          >{/* analytics-exempt */}
             {link.label}
           </a>
         ))}

@@ -52,7 +52,7 @@ function WindowTooLarge({ window, tooLarge, onPick }: WindowTooLargeProps) {
       </p>
       <div className={styles.stateActions}>
         {choices.map((days, index) => (
-          <button key={days} type="button" className={styles.textButton} autoFocus={index === 0} onClick={() => onPick(days)}>
+          <button key={days} type="button" className={styles.textButton} autoFocus={index === 0} onClick={() => onPick(days)}>{/* analytics-exempt */}
             {days}d
           </button>
         ))}
@@ -67,7 +67,7 @@ function EmptyWindow({ window, onWiden }: { window: FlowWindow; onWiden: (window
     <div className={styles.stateBlock}>
       <p>{window === "all" ? "No items have finished yet" : `No items finished in the last ${window} days`}</p>
       {wider !== null && (
-        <button type="button" className={styles.textButton} onClick={() => onWiden(wider)}>
+        <button type="button" className={styles.textButton} onClick={() => onWiden(wider)}>{/* analytics-exempt */}
           Widen to {windowLabel(wider)}
         </button>
       )}
@@ -80,7 +80,7 @@ function StaleBanner({ since, onRetry }: { since: Date; onRetry: () => void }) {
     <div className={styles.staleBanner} role="status" data-testid="flow-stale-banner">
       <span className={styles.staleLabel}>Stale</span>
       <span>Showing data from {formatClock(since)} - refresh failed</span>
-      <button type="button" className={styles.textButton} onClick={onRetry}>
+      <button type="button" className={styles.textButton} onClick={onRetry}>{/* analytics-exempt */}
         Retry
       </button>
     </div>

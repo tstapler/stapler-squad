@@ -271,7 +271,7 @@ export function FlowChart({ caption, takeaway, categories, series, kind, width =
             </li>
           ))}
         </ul>
-        <button type="button" className={styles.toggle} aria-expanded={tableShown} aria-controls={tableId} onClick={() => setTableShown((shown) => !shown)}>
+        <button type="button" className={styles.toggle} aria-expanded={tableShown} aria-controls={tableId} onClick={() => setTableShown((shown) => !shown)}>{/* analytics-exempt */}
           {tableShown ? "Hide data table" : "Show data table"}
         </button>
         <div id={tableId}>

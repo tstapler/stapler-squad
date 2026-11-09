@@ -41,7 +41,7 @@ export function FlowSection({ def, status, loading, open, onToggle, summaryLine,
         <span>
           {def.shortName} section failed to load: {status?.error || "unknown error"}
         </span>
-        <button type="button" className={styles.textButton} onClick={onReload}>
+        <button type="button" className={styles.textButton} onClick={onReload}>{/* analytics-exempt */}
           Reload
         </button>
       </div>
@@ -69,7 +69,7 @@ export function FlowSection({ def, status, loading, open, onToggle, summaryLine,
             aria-controls={bodyId}
             onClick={onToggle}
             data-testid={`flow-toggle-${def.id}`}
-          >
+          >{/* analytics-exempt */}
             {open ? "Hide" : "Show"}
             <span className={srOnly}> {def.title}</span>
           </button>

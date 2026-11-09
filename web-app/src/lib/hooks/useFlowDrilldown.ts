@@ -95,6 +95,8 @@ export function useFlowDrilldown(key: string, window: FlowWindow): UseFlowDrilld
         if (sequence === sequenceRef.current) setState({ ...LOADING, phase: "error", error: getErrorMessage(err, "Could not load items") });
       });
     return () => {
+      // sequenceRef is a request counter, not a DOM ref: the live value is intended.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       sequenceRef.current++;
     };
   }, [fetchPage, nonce]);

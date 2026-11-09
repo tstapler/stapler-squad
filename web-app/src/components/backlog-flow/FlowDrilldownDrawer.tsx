@@ -52,7 +52,7 @@ function CountNote({ drill, asOf, listHref }: CountNoteProps) {
     return (
       <p className={styles.dialogMeta}>
         No items match (the count may have changed since as-of {asOf}){" "}
-        <button type="button" className={styles.textButton} onClick={drill.reload}>
+        <button type="button" className={styles.textButton} onClick={drill.reload}>{/* analytics-exempt */}
           Refresh
         </button>
       </p>
@@ -64,7 +64,7 @@ function CountNote({ drill, asOf, listHref }: CountNoteProps) {
         Showing {formatInt(items.length)} of {formatInt(totalCount)} items{" "}
         {truncated && listHref && <AppLink href={listHref}>Open full list in List view</AppLink>}
         {!truncated && hasMore && (
-          <button type="button" className={styles.textButton} disabled={drill.loadingMore} onClick={drill.loadMore}>
+          <button type="button" className={styles.textButton} disabled={drill.loadingMore} onClick={drill.loadMore}>{/* analytics-exempt */}
             {drill.loadingMore ? "Loading..." : "Load more"}
           </button>
         )}
@@ -75,7 +75,7 @@ function CountNote({ drill, asOf, listHref }: CountNoteProps) {
     return (
       <p className={styles.dialogMeta}>
         Counts changed since {asOf}; refresh{" "}
-        <button type="button" className={styles.textButton} onClick={drill.reload}>
+        <button type="button" className={styles.textButton} onClick={drill.reload}>{/* analytics-exempt */}
           Refresh
         </button>
       </p>

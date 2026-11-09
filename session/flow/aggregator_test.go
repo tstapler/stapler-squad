@@ -379,6 +379,8 @@ func TestAggregator_should_RetryFollower_When_CoalescedLeaderIsCancelled(t *test
 	blocking := &ctxBlockingSrc{fakeSrc: f, entered: make(chan struct{})}
 	agg := NewAggregator(Sources{Events: blocking, Verdicts: f, Stuck: f, Items: f}, fixtureClock)
 	q := FlowQuery{Window: WindowSpec{Days: 30}}
+	joined := make(chan struct{}, 2)
+	agg.cache.onJoin = func() { joined <- struct{}{} }
 
 	leaderCtx, cancel := context.WithCancel(context.Background())
 	leaderDone := make(chan error, 1)
@@ -397,8 +399,9 @@ func TestAggregator_should_RetryFollower_When_CoalescedLeaderIsCancelled(t *test
 		s, err := agg.Summary(context.Background(), q)
 		followerDone <- result{s, err}
 	}()
-	// Cancel only once the follower has had time to attach to the flight.
-	time.Sleep(50 * time.Millisecond)
+	// Both callers have attached to the singleflight; only now cancel the leader.
+	<-joined
+	<-joined
 	cancel()
 
 	require.Error(t, <-leaderDone)

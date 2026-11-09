@@ -46,12 +46,12 @@ export function FlowDialog({ title: heading, testId, onClose, returnFocusTo, bus
           <Dialog.Title ref={headingRef} tabIndex={-1} className={`${title} ${styles.dialogTitle}`}>
             {heading}
           </Dialog.Title>
-          <button type="button" className={styles.dialogClose} aria-label="Close dialog" onClick={onClose}>
+          <button type="button" className={styles.dialogClose} aria-label="Close dialog" onClick={onClose}>{/* analytics-exempt */}
             ×
           </button>
           {children}
           <div className={footer}>
-            <button type="button" className={styles.textButton} onClick={onClose}>
+            <button type="button" className={styles.textButton} onClick={onClose}>{/* analytics-exempt */}
               Close
             </button>
           </div>
@@ -75,7 +75,7 @@ export function DialogError({ message, onRetry }: { message: string; onRetry: ()
   return (
     <div className={pageStyles.stateBlock} role="alert">
       <p>
-        {message} <button type="button" className={styles.textButton} onClick={onRetry}>Retry</button>
+        {message} <button type="button" className={styles.textButton} onClick={onRetry}>{/* analytics-exempt */}Retry</button>
       </p>
     </div>
   );

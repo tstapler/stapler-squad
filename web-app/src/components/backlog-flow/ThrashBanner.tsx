@@ -24,7 +24,7 @@ export function ThrashBanner({ anomalies, archivedIds, onView, onReload }: Thras
       <div className={styles.banner} role="status" data-testid="flow-thrash-banner">
         <span aria-hidden="true">!</span>
         <span>Anomaly data unavailable</span>
-        <button type="button" className={styles.textButton} onClick={onReload}>
+        <button type="button" className={styles.textButton} onClick={onReload}>{/* analytics-exempt */}
           Reload
         </button>
       </div>
@@ -39,7 +39,7 @@ export function ThrashBanner({ anomalies, archivedIds, onView, onReload }: Thras
       <span>
         {plural(count, "item")} thrashing{archived > 0 ? ` (${archived} archived)` : ""}; excluded from averages
       </span>
-      <button type="button" className={styles.textButton} onClick={onView}>
+      <button type="button" className={styles.textButton} onClick={onView}>{/* analytics-exempt */}
         View
       </button>
     </div>

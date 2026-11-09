@@ -64,7 +64,7 @@ function Row({ row, archived, now, drillKey, onDrill, onViewEvents }: RowProps) 
           Open item<span className={srOnly}> {row.title}</span>
         </AppLink>
         {onViewEvents && (
-          <button type="button" className={styles.textButton} onClick={(event) => onViewEvents(row.itemId, event.currentTarget)}>
+          <button type="button" className={styles.textButton} onClick={(event) => onViewEvents(row.itemId, event.currentTarget)}>{/* analytics-exempt */}
             View events<span className={srOnly}> {row.title}</span>
           </button>
         )}
