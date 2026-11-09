@@ -19,7 +19,7 @@
  * the long-press state machine. The existing codebase already uses TouchEvent exclusively.
  */
 
-import { useEffect, useRef, RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking as isMouseTrackingUtil, readScrollMode } from "@/lib/terminal/mouseTracking";

@@ -6,7 +6,7 @@
  */
 
 import { renderHook } from '@testing-library/react';
-import { RefObject } from 'react';
+import type { RefObject } from 'react';
 
 // Mock cellDimensions before importing the hook so the module resolves cleanly.
 jest.mock('@/lib/terminal/cellDimensions', () => ({
@@ -259,7 +259,7 @@ describe('useTerminalGestures', () => {
         const { terminalRef } = mountWithOverride('none');
         tap();
         expect(onSendData).not.toHaveBeenCalled();
-        expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+        expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
       });
 
       it('handleTap_should_sendMouseBytes_When_overrideIsAnyAndTrackingOn', () => {
@@ -531,7 +531,7 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(100, 105);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
       expect(onSendData).not.toHaveBeenCalled();
     });
 
@@ -541,7 +541,7 @@ describe('useTerminalGestures', () => {
       move(100, 107); // 7px: stays PENDING (below the 15px scroll threshold)
       jest.advanceTimersByTime(399);
       fireTouchEnd(100, 107);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
     });
 
     // ---- mobile input layer routing (Story 1.2.3 / Task 1.2.3b) ----
@@ -606,7 +606,7 @@ describe('useTerminalGestures', () => {
       move(100, 100 + dy);
       jest.advanceTimersByTime(100);
       fireTouchEnd(100, 100 + dy);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
     });
 
     it('touchend_should_NotTap_When_TotalDyExceedsSlop (boundary is SLOP_PX inclusive, not 8px)', () => {
@@ -614,7 +614,7 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(100, 100 + SLOP_PX + 1);
-      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      expect(terminalRef.current.focus).not.toHaveBeenCalled();
     });
 
     // A horizontal-first drag past the slop stays PENDING (long-press still armed) but its quick release is not a tap.
@@ -624,7 +624,7 @@ describe('useTerminalGestures', () => {
       move(160, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(160, 100);
-      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      expect(terminalRef.current.focus).not.toHaveBeenCalled();
     });
 
     it('touchend_should_Tap_When_HorizontalDriftUnderSlop', () => {
@@ -633,7 +633,7 @@ describe('useTerminalGestures', () => {
       move(112, 100);
       jest.advanceTimersByTime(100);
       fireTouchEnd(112, 100);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
     });
 
     // Deliberate change (Story 1.2.10): a tap while a selection is active only clears it (was: focused, never cleared).
@@ -674,14 +674,14 @@ describe('useTerminalGestures', () => {
         jest.advanceTimersByTime(16);
         move(100, 100 + i * 19.2);
       }
-      const callsBeforeCancel = (terminalRef.current!.scrollLines as jest.Mock).mock.calls.length;
+      const callsBeforeCancel = (terminalRef.current.scrollLines as jest.Mock).mock.calls.length;
       cancel();
       jest.advanceTimersByTime(16 * 30);
-      expect(terminalRef.current!.scrollLines).toHaveBeenCalledTimes(callsBeforeCancel); // no coasting frames
+      expect(terminalRef.current.scrollLines).toHaveBeenCalledTimes(callsBeforeCancel); // no coasting frames
       expect(move(100, 300).preventDefault).not.toHaveBeenCalled();
       fireTouchStart(100, 100); // next touchstart begins a fresh PENDING: a tap focuses
       fireTouchEnd(100, 100);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
     });
 
     // ---- long-press selecting ----
@@ -699,7 +699,7 @@ describe('useTerminalGestures', () => {
       const { terminalRef } = mount('vt200');
       fireTouchStart(50, 60); // col 5, row 3 with 10x20 cells
       jest.advanceTimersByTime(400);
-      expect(terminalRef.current!.select).toHaveBeenCalledWith(5, 3, 1);
+      expect(terminalRef.current.select).toHaveBeenCalledWith(5, 3, 1);
     });
 
     it('selecting_should_NotScroll_When_DragInSelectionMode', () => {
@@ -709,7 +709,7 @@ describe('useTerminalGestures', () => {
       jest.advanceTimersByTime(400);
       const ev = move(100, 200);
       flushFrame();
-      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(terminalRef.current.scrollLines).not.toHaveBeenCalled();
       expect(ev.preventDefault).toHaveBeenCalled();
       expect(dispatchedTypes(screen)).toEqual(['mousedown', 'mousemove']);
     });
@@ -721,7 +721,7 @@ describe('useTerminalGestures', () => {
       jest.advanceTimersByTime(400);
       fireTouchEnd(100, 100);
       expect(dispatchedTypes(screen)).toEqual(['mousedown', 'mouseup']);
-      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      expect(terminalRef.current.focus).not.toHaveBeenCalled();
       // Back in IDLE: a further move is ignored (no preventDefault)
       expect(move(100, 300).preventDefault).not.toHaveBeenCalled();
     });
@@ -738,7 +738,7 @@ describe('useTerminalGestures', () => {
       jest.advanceTimersByTime(50);
       fireTouchEnd(110, 105);
       expect(dispatchedTypes(screen)).toEqual(['dblclick']);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1); // first tap only
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1); // first tap only
     });
 
     it('doubleTap_should_NotSelectWord_When_SecondTapAfter300ms', () => {
@@ -750,7 +750,7 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 100);
       fireTouchEnd(100, 100);
       expect(dispatchedTypes(screen)).toEqual([]);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(2);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(2);
     });
 
     it('doubleTap_should_NotSelectWord_When_SecondTapBeyond20px', () => {
@@ -794,7 +794,7 @@ describe('useTerminalGestures', () => {
       move(100, 60); // -> SCROLLING
       docHandlers['touchmove'](touchEventWith('touchmove', [[100, 40], [200, 40]]));
       flushFrame();
-      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(terminalRef.current.scrollLines).not.toHaveBeenCalled();
       expect(move(100, 20).preventDefault).not.toHaveBeenCalled(); // IDLE now
     });
 
@@ -806,7 +806,7 @@ describe('useTerminalGestures', () => {
       move(100, 20); // frame pending
       cancel();
       flushFrame();
-      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled(); // pending frame cancelled
+      expect(terminalRef.current.scrollLines).not.toHaveBeenCalled(); // pending frame cancelled
       expect(move(100, 0).preventDefault).not.toHaveBeenCalled();
     });
 
@@ -881,7 +881,7 @@ describe('useTerminalGestures', () => {
       move(160, 102);
       jest.advanceTimersByTime(100);
       fireTouchEnd(160, 102);
-      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      expect(terminalRef.current.focus).not.toHaveBeenCalled();
     });
 
     it('touchend_should_Tap_When_ReleasedExactlyAtSlopDistance', () => {
@@ -890,7 +890,7 @@ describe('useTerminalGestures', () => {
       move(100, 115); // absDy == SLOP_PX: still PENDING
       jest.advanceTimersByTime(100);
       fireTouchEnd(100, 115);
-      expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      expect(terminalRef.current.focus).toHaveBeenCalledTimes(1);
     });
 
     it('touchend_should_ApplyLastCoalescedScrollPoint_When_ReleasedBeforeTheFrameFires', () => {
@@ -898,9 +898,9 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 100);
       move(100, 80); // enters SCROLLING; seed frame is pending
       move(100, 40); // 40px up with 20px cells -> +2 lines, still unflushed
-      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(terminalRef.current.scrollLines).not.toHaveBeenCalled();
       fireTouchEnd(100, 40); // no frame advance: release must flush instead of dropping the point
-      expect(terminalRef.current!.scrollLines).toHaveBeenCalledWith(2);
+      expect(terminalRef.current.scrollLines).toHaveBeenCalledWith(2);
     });
 
     const mouseEvents = (screen: { dispatchEvent: jest.Mock }) =>
@@ -912,8 +912,8 @@ describe('useTerminalGestures', () => {
       fireTouchStart(100, 120);
       jest.advanceTimersByTime(400);
       cancel(); // no touch, no drag point yet: falls back to the press point
-      const up = mouseEvents(screen).find((e) => e.type === 'mouseup')!;
-      expect([up.clientX, up.clientY]).toEqual([100, 120]);
+      const up = mouseEvents(screen).find((e) => e.type === 'mouseup');
+      expect([up?.clientX, up?.clientY]).toEqual([100, 120]);
     });
 
     it('touchend_should_FlushLastCoalescedSelectPoint_When_ReleasedBeforeTheFrameFires', () => {
@@ -938,7 +938,7 @@ describe('useTerminalGestures', () => {
         move(100, 80);
         move(100, 40);
         flushFrame();
-        expect(terminalRef.current!.scrollLines).toHaveBeenCalled();
+        expect(terminalRef.current.scrollLines).toHaveBeenCalled();
         expect(logSpy.mock.calls.filter(([type]) => type === 'scroll')).toEqual([]);
       } finally {
         logSpy.mockRestore();
@@ -952,7 +952,7 @@ describe('useTerminalGestures', () => {
       const ev = move(200, 103); // large dx, tiny dy
       flushFrame();
       expect(ev.preventDefault).not.toHaveBeenCalled();
-      expect(terminalRef.current!.scrollLines).not.toHaveBeenCalled();
+      expect(terminalRef.current.scrollLines).not.toHaveBeenCalled();
     });
 
     // Deliberate change (Task 1.2.1c): the first move past the slop now preventDefaults too.
@@ -969,9 +969,9 @@ describe('useTerminalGestures', () => {
       move(100, 80); // enters SCROLLING, lastY = 80, no scroll yet
       move(100, 40); // 40px up with 20px cells -> +2 lines
       flushFrame();
-      expect(terminalRef.current!.scrollLines).toHaveBeenCalledWith(2);
+      expect(terminalRef.current.scrollLines).toHaveBeenCalledWith(2);
       fireTouchEnd(100, 40);
-      expect(terminalRef.current!.focus).not.toHaveBeenCalled();
+      expect(terminalRef.current.focus).not.toHaveBeenCalled();
     });
   });
 
@@ -1357,10 +1357,10 @@ describe('useTerminalGestures', () => {
       const entries = JSON.parse((window as any).__termDebug.dump()) as Array<{ type: string; data: any }>;
       const byType = (t: string) => entries.filter((e) => e.type === t);
       expect(byType('scroll-start').length).toBeGreaterThan(0);
-      expect(byType('scroll').pop()!.data).toMatchObject({
+      expect(byType('scroll').pop()?.data).toMatchObject({
         bufferType: 'normal', mouseTrackingMode: 'none', viewportY: 3, baseY: 7, rows: 24, cellH: 20, lines: -2,
       });
-      expect(byType('scroll').pop()!.data).toHaveProperty('moveDy');
+      expect(byType('scroll').pop()?.data).toHaveProperty('moveDy');
       expect(byType('not-cancelable').length).toBeGreaterThan(0);
       expect(byType('touchcancel').length).toBeGreaterThan(0);
       (console.debug as jest.Mock).mockRestore();
@@ -1600,7 +1600,7 @@ describe('useTerminalGestures', () => {
       // and the hook is the only scroller: 40px past the slop = exactly 3 lines in total.
       events.forEach((ev) => expect(ev.preventDefault).toHaveBeenCalledTimes(1));
       expect(term.scrollLines.mock.calls).toEqual([[-3]]);
-      const [, , touchmoveOptions] = (document.addEventListener as jest.Mock).mock.calls.filter((c) => c[0] === 'touchmove').pop()!;
+      const [, , touchmoveOptions] = (document.addEventListener as jest.Mock).mock.calls.filter((c) => c[0] === 'touchmove').pop() ?? [];
       expect(touchmoveOptions).toMatchObject({ passive: false });
     });
 
@@ -1955,7 +1955,7 @@ describe('useTerminalGestures', () => {
       fling(1.2);
       frame(3);
       expect(bufferChangeCb).not.toBeNull();
-      bufferChangeCb!();
+      bufferChangeCb?.();
       term.scrollLines.mockClear();
       frame(20);
       expect(term.scrollLines).not.toHaveBeenCalled();
