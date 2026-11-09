@@ -65,6 +65,12 @@ jobs:
           curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" -o /usr/local/bin/buf
           chmod +x /usr/local/bin/buf
 
+      # make build compiles the embedded tmux itself (scripts/build-tmux.sh); same deps as .github/actions/build-tmux.
+      - name: Install tmux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+
       - name: make ready
         run: make ready
 
