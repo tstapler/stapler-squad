@@ -95,3 +95,29 @@ export interface ReduceResult {
 export type RewriteEdit =
   | { kind: "edit"; backspaces: number; insert: string }
   | { kind: "deferred"; anomaly: "rewrite_bound_exceeded" };
+
+/** Counter bumped at every transport boundary; delivery is trusted only within one epoch. */
+export type DeliveryEpoch = Brand<number, "DeliveryEpoch">;
+export const asDeliveryEpoch = (n: number): DeliveryEpoch => n as DeliveryEpoch;
+
+/** Why the host tells the layer its diff base can no longer be trusted (Story 1.2.4). */
+export type InvalidateReason = "session" | "pool_reuse" | "visibility" | "queue_discard" | "transport";
+
+/** What the disconnected queue reports when it discards units; `null` means nothing was delivered. */
+export interface DeliveryReport {
+  deliveredThroughSeq: UnitSeq | null;
+}
+
+/** Content-free trace entries for the diagnostics ring: never carry typed text. */
+export type MobileInputDiagnostic =
+  | { event: "unit"; seq: UnitSeq; epoch: DeliveryEpoch; result: SendResult }
+  | { event: "invalidate"; reason: InvalidateReason }
+  | { event: "anomaly"; kind: ImeAnomaly }
+  | { event: "watchdog" };
+
+/** Injected time source: the layer never reads wall-clock time or requestAnimationFrame directly. */
+export interface MobileInputClock {
+  now(): number;
+  setTimeout(fn: () => void, ms: number): number;
+  clearTimeout(id: number): void;
+}

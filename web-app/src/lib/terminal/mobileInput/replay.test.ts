@@ -1,6 +1,6 @@
 import { loadFixtures } from "./fixtureCorpus";
 import { validateFixture, type ReplayFixture } from "./fixtureSchema";
-import { replayFixture, summarize } from "./replayHarness";
+import { FrameSampler, intermediateLines, ModelTerminal, replayFixture, summarize } from "./replayHarness";
 
 const fixtures = loadFixtures();
 const plain = fixtures.find((f) => f.id === "gboard-typing-hello") as ReplayFixture;
@@ -45,7 +45,7 @@ describe("replay corpus", () => {
   });
 
   it("summary_should_PrintSyntheticAndDeviceCountsSeparately_When_SuiteRuns", () => {
-    const line = summarize(fixtures.map(replayFixture));
+    const line = summarize(fixtures.map((f) => replayFixture(f)));
     const synthetic = fixtures.filter((f) => f.source === "synthetic").length;
     const device = fixtures.filter((f) => f.source === "device").length;
     expect(line).toBe(`synthetic ${synthetic}/${synthetic}, device ${device}/${device}`);
@@ -122,5 +122,99 @@ describe("replay harness boundary steps", () => {
     });
     expect(r.overDeletes).toBe(1);
     expect(r.passed).toBe(false);
+  });
+});
+
+describe("Story 1.2.4 boundary fixtures", () => {
+  const ids = {
+    "partial-delivery-then-drop": "help",
+    "keystroke-after-reconnect-before-flush": "l",
+    "session-switch-mid-composition": "helx",
+    "sent-then-close-then-autocorrect": "he",
+    "enter-after-mid-region-drop": "ls\r",
+  } as const;
+
+  it("fiveBoundaryFixtures_should_HoldFinalTextAndInvariant_When_Replayed", () => {
+    for (const [id, finalText] of Object.entries(ids)) {
+      const f = fixtures.find((x) => x.id === id);
+      expect({ id, found: f !== undefined }).toEqual({ id, found: true });
+      const r = replayFixture(f as ReplayFixture);
+      expect({ id, failures: r.failures, violations: r.invariantViolations }).toEqual({ id, failures: [], violations: [] });
+      expect(r.finalText).toBe(finalText);
+    }
+  });
+
+  it("harness_should_RecordPerUnitDropAndDeliveredPrefix_When_UnitDroppedMidRegion", () => {
+    const r = replayFixture(fixtures.find((x) => x.id === "partial-delivery-then-drop") as ReplayFixture);
+    expect(r.droppedBytes).toBe("l");
+    expect(r.bytes).toBe("help");
+    expect(r.bytes).toContain("lp");
+    expect(r.bytes).not.toMatch(/\x7f/);
+  });
+
+  it("harness_should_ModelSilentlyLostFrame_When_LoseNextStepPrecedesUnit", () => {
+    const r = replayFixture(fixtures.find((x) => x.id === "sent-then-close-then-autocorrect") as ReplayFixture);
+    expect(r.bytes).toBe("hel"); // handed to the transport
+    expect(r.finalText).toBe("he"); // but the frame never arrived
+    expect(r.anomalies).toEqual(["unrecognized_sequence"]);
+  });
+
+  it("harness_should_NeverShortenPrompt_When_SessionSwitchOrCloseThenAutocorrect", () => {
+    for (const id of ["session-switch-mid-composition", "sent-then-close-then-autocorrect"]) {
+      const r = replayFixture(fixtures.find((x) => x.id === id) as ReplayFixture, { prompt: "$ " });
+      expect({ id, over: r.overDeletes }).toEqual({ id, over: 0 });
+      expect(r.invariantViolations).toEqual([]);
+    }
+  });
+});
+
+describe("Story 1.2.5 flicker sampler", () => {
+  const base: ReplayFixture = {
+    id: "inline-autocorrect",
+    source: "synthetic",
+    keyboard: "test",
+    notes: "inline trace",
+    events: [],
+    expectedBytes: "",
+    finalText: "",
+  };
+  const comp = (data: string, t: number, inputType = "insertCompositionText") =>
+    ({ kind: "beforeinput", inputType, data, value: data, selStart: data.length, selEnd: data.length, t }) as const;
+
+  const cases: Array<[string, string, string]> = [
+    ["teh", "the", "gboard-autocorrect-teh-the"],
+    ["helo wrld", "hello world", "inline"],
+  ];
+
+  it.each(cases)(
+    "rewrite_should_ShowAtMostOneIntermediateFrameAndNeverShortenPrompt_When_AutocorrectSampledPerFrame: %s -> %s",
+    (pre, post, id) => {
+      const f: ReplayFixture =
+        id === "inline"
+          ? { ...base, events: [{ kind: "compositionstart", t: 0 }, comp(pre, 16), comp(post, 48, "insertReplacementText"), { kind: "compositionend", data: post, t: 80 }] }
+          : (fixtures.find((x) => x.id === id) as ReplayFixture);
+      const sampler = new FrameSampler(16);
+      const r = replayFixture(f, { prompt: "$ ", sampler });
+      expect(r.overDeletes).toBe(0);
+      const lines = sampler.lines;
+      expect(lines.every((l) => l.startsWith("$ "))).toBe(true);
+      expect(lines).toContain(`$ ${pre}`);
+      expect(lines.at(-1)).toBe(`$ ${post}`);
+      expect(intermediateLines(lines, `$ ${pre}`, `$ ${post}`).length).toBeLessThanOrEqual(1);
+    },
+  );
+
+  it("sampler_should_FlagMoreThanOneIntermediate_When_RewriteBytesLandOnePerFrame", () => {
+    const f = fixtures.find((x) => x.id === "gboard-autocorrect-teh-the") as ReplayFixture;
+    const sampler = new FrameSampler(16);
+    replayFixture(f, { prompt: "$ ", sampler, framePerByte: true });
+    expect(intermediateLines(sampler.lines, "$ teh", "$ the").length).toBeGreaterThan(1);
+  });
+
+  it("model_should_CountPromptDeletion_When_DelEatsProtectedPrefix", () => {
+    const t = new ModelTerminal("$ ");
+    t.apply("\x7f");
+    expect(t.overDeletes).toBe(1);
+    expect(t.text).toBe("$ ");
   });
 });

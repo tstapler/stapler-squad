@@ -1,0 +1,43 @@
+{
+  "id": "keystroke-after-reconnect-before-flush",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Without a queue (PR-A) keys typed while the link is down are dropped; the first key after the link returns is sent on its own and reaches the sink in order. Story 1.2.4 / ADR-004 in project_plans/mobile-input-layer/implementation/plan.md.",
+  "events": [
+    {
+      "kind": "linkDown"
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "h",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "e",
+      "value": "e",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "linkUp"
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "l",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    }
+  ],
+  "expectedBytes": "l",
+  "finalText": "l"
+}
