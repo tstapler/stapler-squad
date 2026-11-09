@@ -77,7 +77,8 @@ func uniquePath(h *blockerHarness, label string) context.Context {
 
 // Each removal path respects the gate with one open PR, with the live clause on and off.
 func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it asserts exact deltas on process-global per-path blocked counters, which
+	// other tests in the package bump concurrently via ArchiveBacklogItem and the sweep paths.
 	for _, scope := range []bool{false, true} {
 		for _, path := range []string{session.CleanupPathArchiveRPC, session.CleanupPathTransition, session.CleanupPathHook, session.CleanupPathSweep, session.CleanupPathRework, session.CleanupPathTombstone} {
 			scope, path := scope, path
