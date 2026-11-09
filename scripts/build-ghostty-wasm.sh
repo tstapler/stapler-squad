@@ -66,7 +66,7 @@ cd "$ROOT"
 # checkout can remove or rename.
 INFO_OUT="$(bazel info ${FLAGS[@]+"${FLAGS[@]}"} execution_root 2>&1)" || err "bazel info failed: $INFO_OUT"
 EXEC_ROOT="$(printf '%s\n' "$INFO_OUT" | tail -n1)" # the path is the last line; Bazel may print INFO lines before it
-[[ -d "$EXEC_ROOT" ]] || err "could not resolve Bazel's execution_root from: $INFO_OUT"
+[[ "$EXEC_ROOT" == /* ]] || err "could not resolve Bazel's execution_root from: $INFO_OUT" # the directory itself exists only after the first build
 
 if [[ "$RUN_TESTS" == 1 ]]; then
   log "bazel build $TEST_TARGET (zig build test-lib-vt -Dtest-filter=softReset)"
