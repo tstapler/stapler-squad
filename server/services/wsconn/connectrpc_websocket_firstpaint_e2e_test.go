@@ -63,7 +63,7 @@ type e2eOracleScreen struct {
 // FIDELITY_REQUIRE_ORACLE is set (CI), mirroring session/tymux's requireOracle.
 func replayInXterm(t *testing.T, rows, cols int, stream []byte) e2eOracleScreen {
 	t.Helper()
-	dir := filepath.Join("..", "..", "session", "tymux", "testdata", "fidelity", "oracle")
+	dir := filepath.Join("..", "..", "..", "session", "tymux", "testdata", "fidelity", "oracle")
 	missing := ""
 	if _, err := exec.LookPath("bun"); err != nil {
 		missing = "bun is not installed"

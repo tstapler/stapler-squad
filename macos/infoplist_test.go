@@ -25,6 +25,9 @@ func infoPlist(path string) ([]byte, error) {
 }
 
 func TestInfoPlistEmbedded(t *testing.T) {
+	if os.Getenv("TEST_SRCDIR") == "" {
+		t.Skip("needs the Bazel-built macOS //:stapler-squad in runfiles; not runnable under plain go test")
+	}
 	bin := filepath.Join(os.Getenv("TEST_SRCDIR"), os.Getenv("TEST_WORKSPACE"), "stapler-squad")
 	data, err := infoPlist(bin)
 	if err != nil {
