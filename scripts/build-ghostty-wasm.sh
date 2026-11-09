@@ -92,7 +92,7 @@ RECORDED="$(awk -v k="$RECORD_KEY" '$1 == k { print $2 }' "$RECORD_FILE" 2>/dev/
 if [[ -z "$RECORDED" ]]; then
   echo "! No recorded sha256 for key $RECORD_KEY. After reviewing the build, add to $RECORD_FILE:"
   echo "    $RECORD_KEY $WASM_SHA"
-  [[ "$VERIFY" == 1 ]] && err "--verify needs a recorded sha256 for this pin"
+  if [[ "$VERIFY" == 1 ]]; then err "--verify needs a recorded sha256 for this pin"; fi  # `&&` as the last command would exit 1 under set -e even without --verify
 elif [[ "$RECORDED" != "$WASM_SHA" ]]; then
   err "Non-reproducible or changed output: recorded $RECORDED, built $WASM_SHA (key $RECORD_KEY)"
 else
