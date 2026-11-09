@@ -359,7 +359,7 @@ export function createWebsocketBasedTransport(
                 const msgBytes = encodeEnvelope(0, serialized);
                 stream.socket.send(msgBytes);
                 if ((msg as { data?: { case?: string } }).data?.case === "input") {
-                  terminalInputTimer.markSent((stream.socket as unknown as WebSocket).bufferedAmount ?? 0);
+                  terminalInputTimer.markSent((msg as { sessionId?: string }).sessionId ?? "", (stream.socket as unknown as WebSocket).bufferedAmount ?? 0);
                 }
               }
               if (isDebugEnabled()) {

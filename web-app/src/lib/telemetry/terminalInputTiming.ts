@@ -50,5 +50,53 @@ export function createInputSendTimer(now: () => number = () => performance.now()
   };
 }
 
+export interface KeyedInputSendTimers {
+  markQueued(key: string): void;
+  markSent(key: string, bufferedBytes: number): void;
+  reset(key: string): void;
+  subscribe(key: string, listener: (s: InputSendSample) => void): () => void;
+}
+
+/**
+ * One FIFO per terminal key (the session id), so a reset or send on one terminal never pairs with
+ * or wipes another's queue. An entry is dropped once it has no listeners and nothing queued.
+ */
+export function createKeyedInputSendTimers(now?: () => number): KeyedInputSendTimers {
+  const timers = new Map<string, { timer: InputSendTimer; listeners: number }>();
+  const entry = (key: string) => {
+    let e = timers.get(key);
+    if (!e) {
+      e = { timer: createInputSendTimer(now), listeners: 0 };
+      timers.set(key, e);
+    }
+    return e;
+  };
+  const prune = (key: string) => {
+    const e = timers.get(key);
+    if (e && e.listeners === 0 && e.timer.pending() === 0) timers.delete(key);
+  };
+  return {
+    markQueued: (key) => entry(key).timer.markQueued(),
+    markSent(key, bufferedBytes) {
+      timers.get(key)?.timer.markSent(bufferedBytes);
+      prune(key);
+    },
+    reset(key) {
+      timers.get(key)?.timer.reset();
+      prune(key);
+    },
+    subscribe(key, listener) {
+      const e = entry(key);
+      e.listeners++;
+      const off = e.timer.subscribe(listener);
+      return () => {
+        off();
+        e.listeners--;
+        prune(key);
+      };
+    },
+  };
+}
+
 /** Shared by the terminal hook (queue side) and the WebSocket transport (send side). */
-export const terminalInputTimer = createInputSendTimer();
+export const terminalInputTimer = createKeyedInputSendTimers();

@@ -127,7 +127,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const trackRef = useRef(track);
   trackRef.current = track;
   const [latencyProbe] = useState(() => createTerminalLatencyProbe({ track: (e) => trackRef.current(e) }));
-  useEffect(() => terminalInputTimer.subscribe((s) => latencyProbe.noteInputSent(s)), [latencyProbe]);
+  useEffect(() => terminalInputTimer.subscribe(sessionId, (s) => latencyProbe.noteInputSent(s)), [latencyProbe, sessionId]);
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();

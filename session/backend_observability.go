@@ -117,18 +117,21 @@ func (o timedBackendOp) begin(ctx context.Context) func() {
 	return func() {
 		stopWatch()
 		o.observe(start)
-		if d := time.Since(start); d >= slowCallThreshold {
-			o.reportSlow(ctx, start, d)
-		}
+		o.reportIfSlow(ctx, start, time.Since(start), slowCallThreshold, slowCallReporter)
 	}
 }
 
-func (o timedBackendOp) reportSlow(ctx context.Context, start time.Time, d time.Duration) {
+// reportIfSlow passes the call to report when d reaches threshold; both are parameters so tests
+// need neither the process-global threshold nor a real sleep.
+func (o timedBackendOp) reportIfSlow(ctx context.Context, start time.Time, d, threshold time.Duration, report func(context.Context, slowCallReport)) {
+	if d < threshold {
+		return
+	}
 	id := ""
 	if o.who != nil {
 		id = o.who.GetSessionIdentifier()
 	}
-	slowCallReporter(ctx, slowCallReport{op: o.op, backend: o.backend, sessionID: id, start: start, duration: d})
+	report(ctx, slowCallReport{op: o.op, backend: o.backend, sessionID: id, start: start, duration: d})
 }
 
 func (o timedBackendOp) observe(start time.Time) {

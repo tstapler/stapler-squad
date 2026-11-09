@@ -13,29 +13,27 @@ type namedSession string
 
 func (n namedSession) GetSessionIdentifier() string { return string(n) }
 
-// Mutates package globals (threshold, reporter), so it is not parallel.
-func TestTimeBackendOp_should_ReportOnlyCallsOverTheSlowThreshold(t *testing.T) {
-	prevThreshold, prevReporter := slowCallThreshold, slowCallReporter
-	t.Cleanup(func() { slowCallThreshold, slowCallReporter = prevThreshold, prevReporter })
-	slowCallThreshold = 20 * time.Millisecond
+func TestTimeBackendOp_should_ReportOnlyCallsAtOrOverTheSlowThreshold(t *testing.T) {
+	t.Parallel()
+	const threshold = 20 * time.Millisecond
 	var got []slowCallReport
-	slowCallReporter = func(_ context.Context, r slowCallReport) { got = append(got, r) }
+	report := func(_ context.Context, r slowCallReport) { got = append(got, r) }
 	op := tymuxIOOps.capturePane.with(namedSession("sess-1"))
+	start := time.Unix(100, 0)
 
-	_, err := timeBackendOp(op, func() (string, error) { return "fast", nil })
-	require.NoError(t, err)
-	assert.Empty(t, got, "a fast call must not be reported")
+	op.reportIfSlow(context.Background(), start, threshold-1, threshold, report)
+	assert.Empty(t, got, "a call under the threshold must not be reported")
 
-	_, err = timeBackendOp(op, func() (string, error) {
-		time.Sleep(40 * time.Millisecond) //nolint:notimesleeptest the op must really exceed the slow threshold measured by wall clock
-		return "slow", nil
-	})
-	require.NoError(t, err)
+	op.reportIfSlow(context.Background(), start, 40*time.Millisecond, threshold, report)
 	require.Len(t, got, 1)
 	assert.Equal(t, opCapturePane, got[0].op)
 	assert.Equal(t, backendLabelTymux, got[0].backend)
 	assert.Equal(t, "sess-1", got[0].sessionID)
-	assert.GreaterOrEqual(t, got[0].duration, 40*time.Millisecond)
+	assert.Equal(t, start, got[0].start)
+	assert.Equal(t, 40*time.Millisecond, got[0].duration)
+
+	op.reportIfSlow(context.Background(), start, threshold, threshold, report)
+	assert.Len(t, got, 2, "a call exactly at the threshold is slow")
 }
 
 func TestSlowCallSessionLabel_should_StayBoundedUnderManySessions(t *testing.T) {

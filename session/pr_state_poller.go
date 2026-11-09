@@ -92,6 +92,7 @@ func (p *PRStatusPoller) pollPullRequestStates(ctx context.Context, fanOut bool)
 		return nil
 	}
 	prMetrics.setUnverified(countUnverified(views))
+	p.pruneStateBackoffs(views)
 	due := p.selectDueStates(views, p.nowTime())
 	if len(due) == 0 {
 		return nil
@@ -178,6 +179,21 @@ func (p *PRStatusPoller) noteNonCountedFailure(stateID int, now time.Time) {
 	b.failures++
 	b.nextAt = now.Add(pollBackoffDelay(p.config.PollInterval, b.failures))
 	p.stateBackoffs[stateID] = b
+}
+
+// pruneStateBackoffs drops retry gates of state rows no longer pollable (GC'd or terminal).
+func (p *PRStatusPoller) pruneStateBackoffs(views []PRView) {
+	live := make(map[int]struct{}, len(views))
+	for _, v := range views {
+		live[v.StateID] = struct{}{}
+	}
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	for id := range p.stateBackoffs {
+		if _, ok := live[id]; !ok {
+			delete(p.stateBackoffs, id)
+		}
+	}
 }
 
 func (p *PRStatusPoller) clearStateBackoff(stateID int) {
@@ -308,7 +324,7 @@ func (p *PRStatusPoller) mirrorToSession(inst *Instance, ref PRRef, obs PRObserv
 	}
 	if after := inst.Snapshot().GitHub.GitHubPRStatusTerminal; after != before && p.storage != nil {
 		if err := p.storage.UpdateGitHubPRStatusTerminal(inst.Snapshot().Title, after); err != nil {
-			log.Warn("PR status poller: persisting session terminal flag failed", "session", inst.Title, "err", err)
+			log.Warn("PR status poller: persisting session terminal flag failed", "session", inst.Snapshot().Title, "err", err)
 		}
 	}
 	if changed {

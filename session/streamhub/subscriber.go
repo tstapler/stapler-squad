@@ -157,7 +157,10 @@ func (s *subscriber) latencyLabels() termlat.Labels {
 // stalled is true when the frame was accepted into the replay backlog but the backlog is past
 // drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
 func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
-	delivered, stalled, queueDepth := s.enqueueLocked(data)
+	delivered, stalled, queueDepth, fullDrop := s.enqueueLocked(data)
+	if fullDrop {
+		termlat.Default.CountDrop(termlat.DropHubQueueFull, s.latencyLabels().Backend)
+	}
 	if queueDepth >= 0 {
 		// Recorded after s.mu is released: telemetry must not extend the hub's per-frame lock hold.
 		termlat.Default.RecordValue(termlat.StageOutputQueue, s.latencyLabels(), float64(queueDepth))
@@ -165,18 +168,19 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	return delivered, stalled
 }
 
-// enqueueLocked does trySend's work under s.mu; queueDepth is -1 unless a frame went onto outbound.
-func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueDepth int) {
+// enqueueLocked does trySend's work under s.mu; queueDepth is -1 unless a frame went onto outbound,
+// and fullDrop reports that the frame was dropped on a full queue (for the caller to count unlocked).
+func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueDepth int, fullDrop bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false, false, -1
+		return false, false, -1, false
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true, false, -1
+		return true, false, -1, false
 	}
 	if s.painting {
 		stalled = s.paintDone && len(s.pending) >= s.drainLimit
@@ -186,7 +190,7 @@ func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueD
 			s.pending = append(s.pending, data)
 			s.pendingBytes += len(data)
 		}
-		return true, stalled, -1
+		return true, stalled, -1, false
 	}
 	if s.resyncing {
 		if len(s.held) < cap(s.outbound)-1 {
@@ -194,19 +198,18 @@ func (s *subscriber) enqueueLocked(data []byte) (delivered, stalled bool, queueD
 		} else {
 			s.heldLost = true
 		}
-		return true, false, -1
+		return true, false, -1, false
 	}
 	select {
 	case s.outbound <- queuedFrame{data: data, at: time.Now()}:
 		s.slowSince = time.Time{}
-		return true, false, len(s.outbound)
+		return true, false, len(s.outbound), false
 	default:
 		if !s.dropped {
 			s.droppedAtSent = s.sentFrames.Load()
 		}
 		s.dropped = true
-		termlat.Default.CountDrop(termlat.DropHubQueueFull, s.latencyLabels().Backend)
-		return false, false, -1
+		return false, false, -1, true
 	}
 }
 

@@ -1,4 +1,4 @@
-import { createInputSendTimer } from "../terminalInputTiming";
+import { createInputSendTimer, createKeyedInputSendTimers } from "../terminalInputTiming";
 
 describe("input send timer", () => {
   it("reports how long the oldest queued keystroke waited and the socket backlog at send", () => {
@@ -55,6 +55,38 @@ describe("input send timer", () => {
     off();
     timer.markQueued();
     timer.markSent(1);
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("keyed input send timers", () => {
+  it("keeps each terminal's queue separate so one reset or send never touches another", () => {
+    let t = 0;
+    const timers = createKeyedInputSendTimers(() => t);
+    const a: number[] = [];
+    const b: number[] = [];
+    timers.subscribe("a", (s) => a.push(s.queuedMs));
+    timers.subscribe("b", (s) => b.push(s.queuedMs));
+
+    timers.markQueued("a");
+    t = 5;
+    timers.markQueued("b");
+    timers.reset("a"); // a's queue closed; b's pending input must survive
+    t = 20;
+    timers.markSent("b", 0);
+    timers.markSent("a", 0); // nothing queued for a any more
+
+    expect(a).toEqual([]);
+    expect(b).toEqual([15]);
+  });
+
+  it("forgets a key once it has no listeners and nothing queued", () => {
+    const timers = createKeyedInputSendTimers(() => 0);
+    const off = timers.subscribe("a", () => {});
+    off();
+    const seen: unknown[] = [];
+    timers.subscribe("a", (s) => seen.push(s));
+    timers.markSent("a", 1); // fresh entry: no stale queue
     expect(seen).toEqual([]);
   });
 });

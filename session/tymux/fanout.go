@@ -47,6 +47,9 @@ type ClientFanout struct {
 	nextID      uint64
 	onDrop      func()
 	rec         *termlat.Recorder
+	// stamps maps a timed subscriber's id to its stamp queue so Dequeued, called once per frame,
+	// never takes f.mu.
+	stamps sync.Map
 }
 
 // sendLocked queues data without blocking and reports whether it fit. A timed subscriber also
@@ -101,6 +104,7 @@ func (f *ClientFanout) subscribe(timed bool) (string, chan []byte) {
 		// A consumer is between receive and Dequeued for at most one frame, so the stamps can
 		// outnumber the queue by one; the slack keeps Broadcast from ever blocking on a stamp.
 		sub.stamps = make(chan time.Time, subscriberBufferSize+2)
+		f.stamps.Store(id, sub.stamps)
 	}
 	f.subscribers[id] = sub
 	return id, sub.ch
@@ -109,14 +113,12 @@ func (f *ClientFanout) subscribe(timed bool) (string, chan []byte) {
 // Dequeued records the queue wait of the oldest frame a timed subscriber has not yet accounted
 // for. Call it once per frame received from the channel; extra calls record nothing.
 func (f *ClientFanout) Dequeued(id string) {
-	f.mu.Lock()
-	sub := f.subscribers[id]
-	f.mu.Unlock()
-	if sub == nil || sub.stamps == nil {
+	v, ok := f.stamps.Load(id)
+	if !ok {
 		return
 	}
 	select {
-	case at := <-sub.stamps:
+	case at := <-v.(chan time.Time):
 		f.rec.Record(termlat.StageFanoutWait, tymuxLabels, time.Since(at))
 	default:
 	}
@@ -129,6 +131,7 @@ func (f *ClientFanout) Unsubscribe(id string) {
 	defer f.mu.Unlock()
 	if sub, ok := f.subscribers[id]; ok {
 		delete(f.subscribers, id)
+		f.stamps.Delete(id)
 		close(sub.ch)
 	}
 }
@@ -140,6 +143,9 @@ func (f *ClientFanout) Unsubscribe(id string) {
 func (f *ClientFanout) Broadcast(data []byte) {
 	f.mu.Lock()
 	dropped := false
+	// Telemetry is recorded after Unlock so it never extends the per-frame lock hold.
+	var depths [8]float64
+	depthSamples, drops := depths[:0], 0
 	for _, sub := range f.subscribers {
 		if sub.resyncing {
 			if len(sub.held) < cap(sub.ch)-1 {
@@ -149,15 +155,21 @@ func (f *ClientFanout) Broadcast(data []byte) {
 			}
 			continue
 		}
-		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, float64(len(sub.ch)))
+		depthSamples = append(depthSamples, float64(len(sub.ch)))
 		if !sub.sendLocked(data) {
-			f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
+			drops++
 			sub.dropped = true
 			dropped = true
 		}
 	}
 	onDrop := f.onDrop
 	f.mu.Unlock()
+	for _, d := range depthSamples {
+		f.rec.RecordValue(termlat.StageFanoutDepth, tymuxLabels, d)
+	}
+	for range drops {
+		f.rec.CountDrop(termlat.DropFanoutFull, tymuxLabels.Backend)
+	}
 	if dropped && onDrop != nil {
 		onDrop()
 	}

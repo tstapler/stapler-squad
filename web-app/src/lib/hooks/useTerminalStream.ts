@@ -307,7 +307,7 @@ export function useTerminalStream({
       const queue = messageQueueRef.current;
       if (!queue) return;
       // Only a message that is really queued can later be sent, or the FIFO pairing drifts.
-      if (msg.data.case === "input") terminalInputTimer.markQueued();
+      if (msg.data.case === "input") terminalInputTimer.markQueued(msg.sessionId);
       queue.push(msg);
     };
     return () => { pushMessageRef.current = null; };
@@ -407,7 +407,7 @@ export function useTerminalStream({
       // itself always close/abort what it's about to replace.
       if (messageQueueRef.current) {
         const dropped = messageQueueRef.current.close();
-        terminalInputTimer.reset(); // the dropped inputs will never be sent
+        terminalInputTimer.reset(sessionId); // the dropped inputs will never be sent
         if (dropped > 0) {
           onInputDropped?.(dropped);
         }
@@ -832,7 +832,7 @@ export function useTerminalStream({
 
     if (messageQueueRef.current) {
       const dropped = messageQueueRef.current.close();
-      terminalInputTimer.reset();
+      terminalInputTimer.reset(sessionId);
       if (dropped > 0) {
         onInputDropped?.(dropped);
       }
