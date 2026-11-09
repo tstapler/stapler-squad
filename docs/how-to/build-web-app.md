@@ -59,7 +59,7 @@ Initial JS (what blocks first paint) is the metric that matters, not total JS: l
 
 | Check | Where | Fails when |
 |---|---|---|
-| Growth vs main | CI step "Bundle growth vs main" (`build/compare-stats-cli.ts`) | Total, Initial, Largest chunk or Largest lazy chunk grew past `growthToleranceBytes` (Initial and Largest chunk 1 KB, Largest lazy chunk 4 KB, Total 10 KB) versus the `web-build-bun-stats` artifact of main's successful push run at the PR's base commit (else the latest one; the log prints which). No artifact: the step skips. |
+| Growth vs main | CI step "Bundle growth vs main" (`build/compare-stats-cli.ts`) | Total, Initial, Largest chunk or Largest lazy chunk grew past `growthToleranceBytes` (Initial and Largest chunk 1 KB, Largest lazy chunk 4 KB, Total 10 KB) versus the `web-build-bun-stats` artifact of main's push run at the first parent of the PR's merge commit (main's tip when the merge ref was built). The run must have succeeded overall; with none at that exact SHA (path-filtered, red, expired) the step logs why and skips. It never falls back to an older main. |
 | Absolute ceilings | `verify` stage, `budgets.json` | Initial JS or any file over 1.6 MB, any lazy chunk over 1 MB, Total JS over the 8 MB tripwire. Generous on purpose, so main drifting never blocks an unrelated PR. |
 | Heavy modules out of the entry | `verify` stage, `build/heavy-modules.json` | A registered package is bundled into a file of the initial closure (read from the `.js.map` `sources`). |
 

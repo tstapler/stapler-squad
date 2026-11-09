@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { computeOutputStats, initialJsFiles } from "../stats";
@@ -173,7 +173,7 @@ describe("heavy modules in the initial closure", () => {
 describe("stats", () => {
   it("reports the largest lazy chunk apart from the initial closure", () => {
     const { out } = tree((o) => write(o, "_next/static/chunks/lazy.js", "0123456789"));
-    expect(computeOutputStats(out)).toMatchObject({ largestLazyChunkBytes: 10, largestChunkBytes: computeOutputStats(out).largestChunkBytes });
+    expect(computeOutputStats(out)).toMatchObject({ largestLazyChunkBytes: 10, largestChunkBytes: statSync(path.join(out, "_next/static/chunks/a.js")).size });
   });
 
   it("counts the static import closure of index.html as Initial JS and excludes dynamic imports", () => {
