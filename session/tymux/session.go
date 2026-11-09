@@ -16,6 +16,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -1341,8 +1342,12 @@ func (s *tymuxGRPCSession) capturePaneWith(ctx context.Context, scrollbackOffset
 	callStart := time.Now()
 	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
 	observeCapturePaneRPC(callStart)
-	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
-		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		reviveStart := time.Now()
+		if s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
+			resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+		}
+		termlat.Default.Record(termlat.StageCaptureRevive, tymuxLabels, time.Since(reviveStart))
 	}
 	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
 		return nil, fmt.Errorf("%w: %w", ErrPaneNotRunning, classifyRPCError("CapturePane", err))
@@ -1419,6 +1424,7 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 		exited.RestartPending = s.restartPending(context.Background(), paneID)
 		return "", exited
 	}
+	defer observeCaptureRender(time.Now())
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
@@ -1431,6 +1437,7 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer observeCaptureRender(time.Now())
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
@@ -1447,7 +1454,9 @@ func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, 
 	if snap.GetModes() == nil {
 		return "", false, false, nil
 	}
+	renderStart := time.Now()
 	data, err = RenderSnapshotRedraw(snap)
+	observeCaptureRender(renderStart)
 	if err != nil {
 		return "", false, false, err
 	}

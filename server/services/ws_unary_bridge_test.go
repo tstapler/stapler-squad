@@ -215,7 +215,8 @@ func TestUnaryWsBridge_should_DispatchAllowedRead_with_UpgradeIdentity(t *testin
 	assert.Equal(t, "application/proto", seen.contentType)
 	assert.Equal(t, "1", seen.protoVersion)
 	assert.Equal(t, "30000", seen.timeoutMs)
-	assert.EqualValues(t, 1, h.bridge.Metrics().Calls(listFilesMethod, "ok"))
+	// The counter is recorded after the reply is queued, so the client can read first.
+	require.Eventually(t, func() bool { return h.bridge.Metrics().Calls(listFilesMethod, "ok") == 1 }, readWait, time.Millisecond)
 }
 
 func TestUnaryWsBridge_should_AnswerOutOfOrder_When_FirstCallIsSlow(t *testing.T) {

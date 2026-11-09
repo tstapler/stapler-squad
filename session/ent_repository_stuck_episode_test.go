@@ -361,3 +361,20 @@ func TestMarkStuck_should_TreatErrNoRowsAndConstraintErrorAsAlreadyOpen_When_Epi
 	_, err = open()
 	require.Error(t, err, "other errors surface to the non-fatal logging caller")
 }
+
+func TestResolveStuck_should_OpenNoTransaction_When_NothingToResolve(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	drv := &flowMarkerCountingDriver{Driver: repo.driver}
+	repo.client = ent.NewClient(ent.Driver(drv))
+
+	resolved, err := repo.ResolveStuck(ctx, itemID, episodeReason)
+	require.NoError(t, err)
+	assert.False(t, resolved)
+	txs, queries := drv.snapshot()
+	assert.Zero(t, txs, "no-op resolve must not BEGIN")
+	assert.Len(t, queries, 1, "single cheap existence check")
+}

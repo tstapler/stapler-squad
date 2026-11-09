@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/qos"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -332,7 +333,11 @@ func AutoApproveSupported(program string) bool {
 // NewProcessManager's error directly instead of going through this
 // fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
-	i.pmMu.Lock()
+	if !i.pmMu.TryLock() {
+		waitStart := time.Now()
+		i.pmMu.Lock()
+		termlat.Default.Record(termlat.StagePMLockWait, termlat.Labels{}, time.Since(waitStart))
+	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
 		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})

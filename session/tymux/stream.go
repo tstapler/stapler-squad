@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/lifecycle"
 )
@@ -204,7 +205,9 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		s.restartIsPending = false
 		s.mu.Unlock()
 	case *v1.AttachEvent_Output:
+		handleStart := time.Now()
 		s.fanout.Broadcast(p.Output)
+		termlat.Default.Record(termlat.StageFrameHandle, tymuxLabels, time.Since(handleStart))
 	case *v1.AttachEvent_Exited:
 		s.mu.Lock()
 		s.liveness = v1.Liveness_LIVENESS_DEAD

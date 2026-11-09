@@ -9,7 +9,7 @@ import (
 func queued(s *subscriber) []string {
 	var out []string
 	for len(s.outbound) > 0 {
-		out = append(out, string(<-s.outbound))
+		out = append(out, string((<-s.outbound).data))
 	}
 	return out
 }

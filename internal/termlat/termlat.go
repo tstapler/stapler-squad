@@ -44,6 +44,26 @@ const (
 	StageAttachOpen     = "attach_open"      // server: backend alive/adopt/restore for one terminal attach
 )
 
+// Decomposition stages: where one slow capture_pane / send / frame spent its time. Backend is
+// tymux for the tymux_* and stream_* stages; the rest are labelled by the stream's backend.
+const (
+	StageOutputQueueWait = "output_queue_wait" // hub subscriber queue: enqueued -> writer picked it up
+	StageFanoutWait      = "tymux_fanout_wait" // tymux ClientFanout queue: broadcast -> adapter read it
+	StageFanoutDepth     = "tymux_fanout_depth"
+	StageFrameHandle     = "tymux_frame_handle" // daemon frame received -> fanout broadcast done
+	StagePTYWrite        = "tymux_pty_write"    // adapter write of one frame into the PTY socketpair
+	StageCaptureRender   = "capture_render"     // CellsToSGR / RenderSnapshotRedraw after the RPC returned
+	StageCaptureRevive   = "capture_revive"     // dead-pane revive plus the retried capture
+	StageStreamLockWait  = "stream_lock_wait"   // waiting for the Attach stream's input/frame lock
+	StageStreamSend      = "stream_send"        // one Attach stream Send (gRPC flow control shows here)
+	StagePMLockWait      = "pm_lock_wait"       // contended wait for Instance.pmMu (uncontended calls record nothing)
+	// Browser-measured.
+	StageInputQueue    = "input_queue"     // keystroke enqueued -> handed to the socket
+	StageEchoRender    = "echo_render"     // echo frame arrived -> painted
+	StageWSBufferedKiB = "ws_buffered_kib" // WebSocket bufferedAmount (KiB) when a keystroke was sent
+	StageEventLoopLag  = "eventloop_lag"   // worst timer drift in a 5 s window
+)
+
 const unknown = "unknown"
 
 // NormalizeStage returns s if it is a known stage, else "unknown".
@@ -51,7 +71,10 @@ func NormalizeStage(s string) string {
 	switch s {
 	case StageInputTotal, StageInputSend, StageInputBookkeep, StageBookkeepFlush, StageOutputSend,
 		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint,
-		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint, StageAttachQueue, StageAttachOpen:
+		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint, StageAttachQueue, StageAttachOpen,
+		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
+		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
+		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag:
 		return s
 	}
 	return unknown
@@ -90,6 +113,7 @@ type sample struct {
 }
 
 type window struct {
+	attrs metric.MeasurementOption // built once: the key's three labels never change
 	mu    sync.Mutex
 	buf   [windowSize]sample
 	next  int
@@ -161,7 +185,8 @@ type Recorder struct {
 	windows map[key]*window
 	hist    metric.Float64Histogram
 	alerts  alerter
-	resync  resyncCounters
+	resync  pairCounter
+	drops   pairCounter
 }
 
 // New returns a Recorder reading time from now (time.Now when nil).
@@ -203,8 +228,7 @@ func (r *Recorder) RecordValue(stage string, l Labels, v float64) {
 	w := r.window(k)
 	w.add(v, r.now())
 	if r.hist != nil {
-		r.hist.Record(context.Background(), v, metric.WithAttributes(
-			attribute.String("stage", k.stage), attribute.String("backend", k.backend), attribute.String("listener", k.listener)))
+		r.hist.Record(context.Background(), v, w.attrs)
 	}
 	r.alerts.observe(k, w)
 }
@@ -219,7 +243,8 @@ func (r *Recorder) window(k key) *window {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if w = r.windows[k]; w == nil {
-		w = &window{}
+		w = &window{attrs: metric.WithAttributeSet(attribute.NewSet(
+			attribute.String("stage", k.stage), attribute.String("backend", k.backend), attribute.String("listener", k.listener)))}
 		r.windows[k] = w
 	}
 	return w

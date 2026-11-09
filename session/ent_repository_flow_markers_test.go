@@ -2,8 +2,14 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"entgo.io/ent/dialect"
+	"github.com/tstapler/stapler-squad/session/ent"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -108,4 +114,110 @@ func TestEntFlowReader_should_ReadOnlySystemWrittenMarkers_When_AgentNoteCarries
 	assert.Equal(t, o0, o1)
 	assert.Equal(t, t0, t1)
 	assert.Equal(t, 1, o1)
+}
+
+// flowMarkerCountingDriver records transaction begins and queries by SQL text.
+type flowMarkerCountingDriver struct {
+	dialect.Driver
+	mu      sync.Mutex
+	txs     int
+	queries []string
+}
+
+func (d *flowMarkerCountingDriver) Tx(ctx context.Context) (dialect.Tx, error) {
+	d.mu.Lock()
+	d.txs++
+	d.mu.Unlock()
+	return d.Driver.Tx(ctx)
+}
+
+func (d *flowMarkerCountingDriver) Query(ctx context.Context, query string, args, v any) error {
+	d.mu.Lock()
+	d.queries = append(d.queries, query)
+	d.mu.Unlock()
+	return d.Driver.Query(ctx, query, args, v)
+}
+
+func (d *flowMarkerCountingDriver) reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.txs, d.queries = 0, nil
+}
+
+func (d *flowMarkerCountingDriver) snapshot() (int, []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.txs, append([]string(nil), d.queries...)
+}
+
+func newCountingRepo(t *testing.T) (*EntRepository, *flowMarkerCountingDriver) {
+	t.Helper()
+	repo, clk := newMarkerTestRepo(t)
+	_ = clk
+	drv := &flowMarkerCountingDriver{Driver: repo.driver}
+	repo.client = ent.NewClient(ent.Driver(drv))
+	return repo, drv
+}
+
+func TestRecordFlowMarkerForItemPR_should_DoNoItemRead_When_DecisionDeduped(t *testing.T) {
+	t.Parallel()
+	repo, drv := newCountingRepo(t)
+	ctx := context.Background()
+	item := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+
+	repo.RecordFlowMarkerForItemPR(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered)
+	_, first := drv.snapshot()
+	require.NotEmpty(t, first, "admitted marker reads pr_number")
+
+	drv.reset()
+	repo.RecordFlowMarkerForItemPR(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered)
+	txs, queries := drv.snapshot()
+	assert.Zero(t, txs)
+	assert.Empty(t, queries, "deduped decision issues no read")
+}
+
+func TestRecordFlowMarkerForItemPR_should_DropMarkerAndReleaseLimiter_When_PRReadFails(t *testing.T) {
+	t.Parallel()
+	repo, clk := newMarkerTestRepo(t)
+	ctx := context.Background()
+	item := uuid.NewString() // no such backlog item: the pr_number read returns NotFound
+	t0 := clk.Now()
+
+	repo.RecordFlowMarkerForItemPR(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered)
+
+	got, err := repo.ListFlowMarkersForItem(ctx, item, FlowMarkerPRFixOutcome, t0, t0.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Empty(t, got, "a failed pr_number read must not write a marker with pr_number=0")
+	key := fmt.Sprintf("%s|%s|item", FlowMarkerPRFixOutcome, item)
+	assert.True(t, repo.markerLimiterFor().Allow(key, PRFixOutcomeSteered), "the failed read must release the limiter so the marker can retry")
+}
+
+func TestRecordFlowMarker_should_RetryAfterFailure_When_InsertFailsOnce(t *testing.T) {
+	t.Parallel()
+	repo, clk := newMarkerTestRepo(t)
+	ctx := context.Background()
+	item := uuid.NewString()
+	t0 := clk.Now()
+
+	repo.client.BacklogFlowMarker.Use(failOnceHook())
+	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
+	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
+
+	got, err := repo.ListFlowMarkersForItem(ctx, item, FlowMarkerPRFixOutcome, t0, t0.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Len(t, got, 1, "second attempt must not be deduped by the failed first")
+}
+
+func failOnceHook() ent.Hook {
+	var once sync.Once
+	return func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			fail := false
+			once.Do(func() { fail = true })
+			if fail {
+				return nil, errors.New("injected insert failure")
+			}
+			return next.Mutate(ctx, m)
+		})
+	}
 }

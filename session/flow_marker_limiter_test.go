@@ -134,3 +134,15 @@ func TestPrFixTrigger_should_ClassifyTotalTable_When_FlagCombinations(t *testing
 			PRFixTriggerReview, PRFixTriggerFeedback, PRFixTriggerUnknown}, got)
 	}
 }
+
+func TestMarkerLimiter_should_AllowRetry_When_ForgetAfterFailedWrite(t *testing.T) {
+	t.Parallel()
+	clk := newFakeMarkerClock()
+	l := NewMarkerLimiter(clk.Now)
+	assert.True(t, l.Allow("k", "ci"))
+	assert.False(t, l.Allow("k", "ci"))
+	l.Forget("k", "ci")
+	assert.True(t, l.Allow("k", "ci"), "forgotten marker is not deduped")
+	l.Forget("k", "other")
+	assert.False(t, l.Allow("k", "ci"), "Forget of a different value is a no-op")
+}
