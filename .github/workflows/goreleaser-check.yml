@@ -140,8 +140,9 @@ jobs:
             echo "::error::--mcp exited with status $STATUS on a CGO_ENABLED=0 release binary"
             exit 1
           fi
-          INIT_RESPONSE=$(echo "$RESPONSE" | sed -n '1p')
-          LIST_RESPONSE=$(echo "$RESPONSE" | sed -n '2p')
+          # The otelc-woven binary writes slog JSON startup lines to stdout ahead of the replies; pick replies by id.
+          INIT_RESPONSE=$(echo "$RESPONSE" | grep -m1 '^{"jsonrpc":"2.0","id":1,') || true
+          LIST_RESPONSE=$(echo "$RESPONSE" | grep -m1 '^{"jsonrpc":"2.0","id":2,') || true
           echo "$INIT_RESPONSE" | grep -q '"result"' || {
             echo "::error::initialize did not return a JSON-RPC result on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
             exit 1
