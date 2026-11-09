@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm fetch-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks ensure-otelc otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -254,8 +254,11 @@ WEB_MINIFY ?= 0
 
 BUN_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
 
+# Stamp for the own ghostty wasm fetch; see fetch-ghostty-wasm below.
+GHOSTTY_WASM_STAMP := web-app/build/ghostty-own/.fetched
+
 # Build the web UI to web-app/out with Bun (web-app/build/, ADR-006)
-web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS)
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS) $(GHOSTTY_WASM_STAMP)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/@vanilla-extract/integration || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
@@ -391,6 +394,16 @@ test-ghostty-wasm: ## Run the Zig unit tests for our Ghostty patches, then build
 
 verify-ghostty-wasm: ## Build and fail unless the wasm sha256 matches scripts/ghostty-wasm.sha256
 	@./scripts/build-ghostty-wasm.sh --verify
+
+fetch-ghostty-wasm: ## Download the CI-built, sha256-verified wasm for the pin (the macOS path; fails if unavailable)
+	@./scripts/fetch-ghostty-wasm.sh
+
+# Stamp for the web build: re-fetches when the pin or record changes. A failed fetch only warns (the web
+# build then ships the stock wasm, loudly) and leaves no stamp, so the next make tries again.
+$(GHOSTTY_WASM_STAMP): MODULE.bazel scripts/ghostty-wasm.sha256 scripts/fetch-ghostty-wasm.sh
+	@if [ "$(GHOSTTY_WASM_REQUIRE_OWN)" = 1 ]; then ./scripts/fetch-ghostty-wasm.sh && touch $@; \
+	elif ./scripts/fetch-ghostty-wasm.sh; then touch $@; \
+	else echo "⚠️  Continuing with ghostty-web's stock wasm (see the warning above)"; fi
 
 # ── Pinned tymuxd binary (fetched, not compiled — see ADR-001) ─────────────
 # Fetches a prebuilt tymuxd release binary from github.com/tstapler/tymux
