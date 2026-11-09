@@ -57,6 +57,7 @@ bun_dist(
 )
 
 # Task 0.6b probe: the same action under strace (log at bazel-bin/web-app/dist_trace.strace).
+# manual: it hardcodes a Linuxbrew strace path that CI runners lack, so //... must not build it.
 bun_dist(
     name = "dist_trace",
     srcs = [":dist_srcs"],
@@ -65,6 +66,7 @@ bun_dist(
     gen = "//proto/session/v1:session_ts",
     node = "@node_host//:node",
     node_modules = "@web_node_modules//:node_modules",
+    tags = ["manual"],
     trace = True,
 )
 
