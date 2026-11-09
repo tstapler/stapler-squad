@@ -46,10 +46,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -66,7 +65,7 @@ jobs:
         run: go build -o stapler-squad .
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}

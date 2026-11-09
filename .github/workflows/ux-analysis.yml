@@ -54,10 +54,9 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       # make stapler-squad's ensure-tools prerequisite hard-requires buf on PATH
       # (Makefile's ASDF_STAMP check), even when proto-gen itself is a cached
@@ -92,7 +91,7 @@ jobs:
         run: go build -o stapler-squad .
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
