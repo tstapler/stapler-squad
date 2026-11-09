@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
+	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
@@ -20,11 +21,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
-// highGoroutineCountThreshold mirrors profiling.MonitorGoroutines' existing
-// alert threshold — reused here as a health signal rather than invented
-// fresh, so "degraded" in /actuator/health means the same thing an operator
-// already sees logged as a warning.
-const highGoroutineCountThreshold = 100
+// highGoroutineCountThreshold shares profiling.MonitorGoroutines' alert threshold, so "degraded"
+// in /actuator/health means the same thing an operator sees logged.
+const highGoroutineCountThreshold = profiling.HighGoroutineThreshold
 
 // registerActuatorRoutes wires a small actuator-style surface (inspired by
 // Spring Boot's /actuator/health, /actuator/metrics): a machine-checkable

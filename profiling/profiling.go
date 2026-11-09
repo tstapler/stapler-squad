@@ -230,6 +230,12 @@ func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
 	return func() { _ = profiler.Stop() }, nil
 }
 
+// HighGoroutineThreshold is the goroutine count above which MonitorGoroutines logs and
+// /actuator/health reports degraded. Steady state is ~20 goroutines per live session plus a
+// fixed base (pprof dump: 615 with ~30 sessions, bounded 400-700 over a day, no growth), so the
+// old threshold of 100 fired permanently; this leaves ~3x headroom over that.
+const HighGoroutineThreshold = 2000
+
 // MonitorGoroutines periodically logs goroutine counts
 func MonitorGoroutines(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -243,7 +249,7 @@ func MonitorGoroutines(ctx context.Context, interval time.Duration) {
 			count := runtime.NumGoroutine()
 
 			// Alert on goroutine leak
-			if count > 100 {
+			if count > HighGoroutineThreshold {
 				log.Error("high goroutine count detected", "count", count)
 			}
 		}
