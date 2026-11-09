@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compareToBaseline, findStatsFile, type GrowthTolerances } from "../compare-stats";
+import { compareToBaseline, findStatsFile, selectBaselineArtifactId, type GrowthTolerances } from "../compare-stats";
 
 const TOL: GrowthTolerances = { jsBytes: 100, initialJsBytes: 10, largestChunkBytes: 10, largestLazyChunkBytes: 50 };
 const base = { jsBytes: 1000, initialJsBytes: 500, largestChunkBytes: 500, largestLazyChunkBytes: 300 };
@@ -35,5 +35,17 @@ describe("findStatsFile", () => {
     expect(findStatsFile(d, "s.json")).toBe(path.join(d, "x/y/s.json"));
     expect(findStatsFile(d, "nope.json")).toBeUndefined();
     expect(findStatsFile(path.join(d, "missing"), "s.json")).toBeUndefined();
+  });
+});
+
+describe("selectBaselineArtifactId", () => {
+  const art = (id: number, sha: string, branch = "main", expired = false) => ({ id, expired, workflow_run: { head_sha: sha, head_branch: branch } });
+
+  it("picks only the main-branch artifact at the exact base sha", () => {
+    expect(selectBaselineArtifactId([art(1, "aaa", "feature"), art(2, "bbb"), art(3, "aaa")], "aaa")).toBe(3);
+  });
+
+  it("never falls back to an older commit, an expired artifact or a PR branch", () => {
+    expect(selectBaselineArtifactId([art(1, "old"), art(2, "aaa", "main", true), art(3, "aaa", "pr")], "aaa")).toBeUndefined();
   });
 });

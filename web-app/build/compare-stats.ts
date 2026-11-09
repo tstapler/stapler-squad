@@ -41,3 +41,14 @@ export function findStatsFile(dir: string, name: string): string | undefined {
   }
   return undefined;
 }
+
+export interface ArtifactRecord {
+  id: number;
+  expired?: boolean;
+  workflow_run?: { head_sha?: string; head_branch?: string };
+}
+
+/** Id of the live main-branch artifact built from exactly `baseSha`; undefined when none (never an older commit's). */
+export function selectBaselineArtifactId(artifacts: ArtifactRecord[], baseSha: string): number | undefined {
+  return artifacts.find((a) => !a.expired && a.workflow_run?.head_sha === baseSha && a.workflow_run?.head_branch === "main")?.id;
+}

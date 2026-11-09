@@ -223,6 +223,7 @@ jobs:
       # Byte budgets apply to the minified build (ADR-004); it is written outside web-app/out, so
       # it never reaches the embedded server/web/dist. build.ts runs verify-output itself.
       - name: Minified size build and budget check
+        id: min-build
         if: ${{ !cancelled() }}
         working-directory: web-app
         run: |
@@ -233,24 +234,25 @@ jobs:
       # drifting over an absolute cap never blocks an unrelated PR. No baseline (first run, expired
       # artifact, push to main) skips the gate; the absolute ceilings in budgets.json still applied above.
       - name: Download main's build stats (baseline)
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.min-build.outcome == 'success' }}
         continue-on-error: true
+        working-directory: web-app
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # Prefer main's run at the commit this PR was based on; fall back to the latest successful one.
-          list() { gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main --event push \
-            --status success --limit 1 "$@" --json databaseId,headSha,createdAt --jq '.[0] // empty'; }
-          run=$(list --commit "$BASE_SHA")
-          [ -n "$run" ] || run=$(list)
-          if [ -z "$run" ]; then echo "no baseline run found; growth gate will skip"; exit 0; fi
-          echo "baseline run: $run"
-          gh run download "$(echo "$run" | jq -r .databaseId)" --repo "$GITHUB_REPOSITORY" \
-            --name web-build-bun-stats --dir web-app/.build/baseline
+          # Exact base commit only: an older or newer main would mis-measure growth, so no fallback.
+          for page in 1 2 3 4 5; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=web-build-bun-stats&per_page=100&page=$page" --jq '.artifacts[]'
+          done > .build/artifacts.jsonl
+          id=$(bun build/select-baseline-cli.ts "$BASE_SHA" < .build/artifacts.jsonl)
+          if [ -z "$id" ]; then echo "no main artifact for base $BASE_SHA; growth gate will skip"; exit 0; fi
+          echo "baseline artifact $id (main @ $BASE_SHA)"
+          gh run download --repo "$GITHUB_REPOSITORY" --name web-build-bun-stats --dir .build/baseline \
+            "$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" --jq .workflow_run.id)"
 
       - name: Bundle growth vs main
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.min-build.outcome == 'success' }}
         working-directory: web-app
         run: bun build/compare-stats-cli.ts .build/stats-minified.json .build/baseline
 
