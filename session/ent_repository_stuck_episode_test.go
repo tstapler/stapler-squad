@@ -368,7 +368,7 @@ func TestResolveStuck_should_OpenNoTransaction_When_NothingToResolve(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	drv := &countingDriver{Driver: repo.driver}
+	drv := &flowMarkerCountingDriver{Driver: repo.driver}
 	repo.client = ent.NewClient(ent.Driver(drv))
 
 	resolved, err := repo.ResolveStuck(ctx, itemID, episodeReason)

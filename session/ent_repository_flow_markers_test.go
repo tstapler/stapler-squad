@@ -115,45 +115,45 @@ func TestEntFlowReader_should_ReadOnlySystemWrittenMarkers_When_AgentNoteCarries
 	assert.Equal(t, 1, o1)
 }
 
-// countingDriver records transaction begins and queries by SQL text.
-type countingDriver struct {
+// flowMarkerCountingDriver records transaction begins and queries by SQL text.
+type flowMarkerCountingDriver struct {
 	dialect.Driver
 	mu      sync.Mutex
 	txs     int
 	queries []string
 }
 
-func (d *countingDriver) Tx(ctx context.Context) (dialect.Tx, error) {
+func (d *flowMarkerCountingDriver) Tx(ctx context.Context) (dialect.Tx, error) {
 	d.mu.Lock()
 	d.txs++
 	d.mu.Unlock()
 	return d.Driver.Tx(ctx)
 }
 
-func (d *countingDriver) Query(ctx context.Context, query string, args, v any) error {
+func (d *flowMarkerCountingDriver) Query(ctx context.Context, query string, args, v any) error {
 	d.mu.Lock()
 	d.queries = append(d.queries, query)
 	d.mu.Unlock()
 	return d.Driver.Query(ctx, query, args, v)
 }
 
-func (d *countingDriver) reset() {
+func (d *flowMarkerCountingDriver) reset() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.txs, d.queries = 0, nil
 }
 
-func (d *countingDriver) snapshot() (int, []string) {
+func (d *flowMarkerCountingDriver) snapshot() (int, []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.txs, append([]string(nil), d.queries...)
 }
 
-func newCountingRepo(t *testing.T) (*EntRepository, *countingDriver) {
+func newCountingRepo(t *testing.T) (*EntRepository, *flowMarkerCountingDriver) {
 	t.Helper()
 	repo, clk := newMarkerTestRepo(t)
 	_ = clk
-	drv := &countingDriver{Driver: repo.driver}
+	drv := &flowMarkerCountingDriver{Driver: repo.driver}
 	repo.client = ent.NewClient(ent.Driver(drv))
 	return repo, drv
 }
