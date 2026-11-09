@@ -166,7 +166,7 @@ func TestRework_should_PartitionReviewFailAndBounce_When_398ReopenNoteAnd28Other
 		if i >= 398 {
 			note = []string{"request_review recovering stale/blocked review", ""}[i%2]
 		}
-		spans = append(spans, s12RealNote(t, s12Item(i%40), stReview, stProg, s12Base.Add(time.Duration(i)*time.Minute), note))
+		spans = append(spans, s12RealNote(t, s12Item(i%40), stReview, stProg, s12Base.Add(time.Duration(i)*time.Minute), note).WithTriggeredBy("system"))
 	}
 	order := []domain.BacklogStatus{stReady, stProg, stReview, stPRPend, stDoneStat}
 
@@ -185,4 +185,18 @@ func TestReworkCause_should_NameEveryValue_When_Stringified(t *testing.T) {
 		assert.NotEqual(t, "unknown", c.String())
 	}
 	assert.Equal(t, "unknown", ReworkCause(99).String())
+}
+
+func TestClassifyReworkSpan_should_RequireSystemActor_When_NoteLooksLikeReviewFail(t *testing.T) {
+	t.Parallel()
+	note := "auto-reopened after failed review verdict (attempt 2)"
+	span := s12RealNote(t, "i", stReview, stProg, s12Base, note)
+
+	forged, ok := classifyReworkSpan(span.WithTriggeredBy("agent"))
+	assert.True(t, ok)
+	assert.Equal(t, ReworkBounce, forged, "an agent-authored note must not forge a review-fail reopen")
+
+	genuine, ok := classifyReworkSpan(span.WithTriggeredBy("system"))
+	assert.True(t, ok)
+	assert.Equal(t, ReworkReviewFail, genuine)
 }

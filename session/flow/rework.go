@@ -219,7 +219,8 @@ func countRealRework(item *ItemRework, rs RealSpan, preMerge bool, res *ReworkRe
 func classifyReworkSpan(rs RealSpan) (ReworkCause, bool) {
 	switch {
 	case rs.From() == domain.BacklogStatusReview && rs.To() == domain.BacklogStatusInProgress:
-		if ClassifyNote(rs.Note()) == CauseReviewReopen {
+		// System-only: agents can write notes, so the prefix alone is forgeable.
+		if rs.TriggeredBy() == "system" && ClassifyNote(rs.Note()) == CauseReviewReopen {
 			return ReworkReviewFail, true
 		}
 		return ReworkBounce, true
