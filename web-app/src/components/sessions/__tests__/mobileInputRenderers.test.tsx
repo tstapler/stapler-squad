@@ -118,6 +118,36 @@ describe.each(Object.keys(RENDERERS) as Array<keyof typeof RENDERERS>)("%s rende
     });
   });
 
+  describe("when the layer cannot attach (no beforeinput support)", () => {
+    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onbeforeinput");
+    beforeEach(() => {
+      useAndroidLayerEnv();
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).onbeforeinput;
+    });
+    afterEach(() => {
+      if (desc) Object.defineProperty(HTMLElement.prototype, "onbeforeinput", desc);
+    });
+
+    it("renderers_should_LeaveOwnTextareaUntouched_When_AttachReturnsNull", async () => {
+      mount(kind);
+      await waitFor(async () => expect((await RENDERERS[kind].fake()).instances.at(-1)?.textarea).toBeDefined());
+      await act(async () => {});
+      const own = await ownTextarea();
+      expect(screen.queryByTestId("mobile-input-textarea")).toBeNull();
+      expect(own.hasAttribute("inputmode")).toBe(false);
+      expect(own.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("handle_should_FallBackToRendererFocus_When_AttachReturnsNull", async () => {
+      const { handle } = mount(kind);
+      await waitFor(async () => expect((await RENDERERS[kind].fake()).instances.at(-1)?.textarea).toBeDefined());
+      await act(async () => {});
+      const own = await ownTextarea();
+      act(() => must(handle.current, "handle").focus());
+      expect(document.activeElement).toBe(own);
+    });
+  });
+
   describe("without the layer", () => {
     it("mount_should_CreateNoMobileInputTextarea_When_NonAndroidDevice", async () => {
       useDesktopEnv();

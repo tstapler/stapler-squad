@@ -48,6 +48,7 @@ export function useRendererMobileInput(args: RendererMobileInputArgs): RendererM
   const layerContainerRef = useRef<HTMLDivElement>(null);
   const argsRef = useRef(args);
   argsRef.current = args;
+  const handleRef = useRef<MobileInputHandle | null>(null);
   const host = mobileInput ? { ...mobileInput.host, onData: (bytes: Parameters<MobileInputHost["onData"]>[0]) => onDataRef.current?.(bytes) ?? "dropped" } : INERT_HOST;
   const visible = layerActive && (mobileInput?.visible ?? false);
 
@@ -64,9 +65,12 @@ export function useRendererMobileInput(args: RendererMobileInputArgs): RendererM
     onAttached: () => suppressHelperTextarea(argsRef.current.getHelperTextarea()),
   });
 
+  handleRef.current = handle;
+
   // An asynchronously opened renderer may create its own textarea after the layer attached.
+  // Only while a controller exists: an unattached layer must leave the renderer's own input working.
   useEffect(() => {
-    if (visible && rendererReady) return suppressHelperTextarea(argsRef.current.getHelperTextarea());
+    if (visible && rendererReady && handleRef.current?.controller != null) return suppressHelperTextarea(argsRef.current.getHelperTextarea());
   }, [visible, rendererReady]);
 
   return { handle, layerActive, layerContainerRef };
