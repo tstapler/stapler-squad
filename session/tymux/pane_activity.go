@@ -16,11 +16,8 @@ import (
 // capPaneActivityHint is the GetServerInfo capability for tymuxd's SetPaneActivity RPC.
 const capPaneActivityHint = "pane.activity_hint"
 
-// paneActivitySender performs the SetPaneActivity RPC. It exists as a seam because the generated
-// client pinned in go.mod predates the RPC (tymux#86): the real sender lives in
-// pane_activity_adapter.go behind the tymux_pane_activity build tag, to be made unconditional
-// when the pin moves to a release that has the RPC on selecting.Transport. Until then
-// newPaneActivitySender stays nil and SetPaneActivity is a logged-once no-op.
+// paneActivitySender performs the SetPaneActivity RPC. It is a seam so tests can fake the wire;
+// the real sender is built from the session transport in pane_activity_adapter.go.
 type paneActivitySender interface {
 	sendPaneActivity(ctx context.Context, paneID string, activity qos.Activity) error
 }
@@ -110,7 +107,7 @@ func (s *tymuxGRPCSession) activityHintAvailable(ctx context.Context) bool {
 	}
 	if sender == nil {
 		s.activity.capability.Store(capUnsupported)
-		s.logActivityHintOnce("tymux client has no SetPaneActivity (pin predates tymux#86)")
+		s.logActivityHintOnce("transport cannot send SetPaneActivity")
 		return false
 	}
 	info, err := s.transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{}))

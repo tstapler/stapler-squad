@@ -1,5 +1,3 @@
-//go:build tymux_pane_activity
-
 package tymux
 
 import (
@@ -7,19 +5,21 @@ import (
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+	"github.com/tstapler/tymux/clients/go/selecting"
 
 	"github.com/tstapler/stapler-squad/internal/qos"
 )
 
-// This file is the real SetPaneActivity sender. It needs a tymux client whose generated code has
-// the RPC (tymux#86) AND whose selecting.Transport/Client forwards it; the pinned client has
-// neither, so the file is excluded from default builds. When the pin moves, drop the build tag
-// (and this paragraph): nothing else changes.
+// Real SetPaneActivity sender. It stays inert unless the transport (a selecting client) carries
+// the RPC; the daemon capability is checked separately in activityHintAvailable.
 
 // paneActivityTransport is the optional method rpcTransport gains with a newer client.
 type paneActivityTransport interface {
 	SetPaneActivity(context.Context, *connect.Request[v1.SetPaneActivityRequest]) (*connect.Response[v1.SetPaneActivityResponse], error)
 }
+
+// The production transport must carry the RPC, else the hint is silently never sent.
+var _ paneActivityTransport = (*selecting.Client)(nil)
 
 type connectActivitySender struct{ t paneActivityTransport }
 
@@ -35,7 +35,7 @@ func toWireActivity(a qos.Activity) v1.PaneActivity {
 	case qos.ActivityBackground:
 		return v1.PaneActivity_PANE_ACTIVITY_BACKGROUND
 	default:
-		return v1.PaneActivity_PANE_ACTIVITY_NORMAL
+		return v1.PaneActivity_PANE_ACTIVITY_UNSPECIFIED
 	}
 }
 

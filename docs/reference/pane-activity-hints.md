@@ -28,14 +28,6 @@ pane" means "typed into recently".
 capability or the client cannot send the RPC. Panes are reset to normal when adopted and on
 `Server.Shutdown` (`tymux.ResetPaneActivities`), because the daemon keeps hints until it restarts.
 
-The pinned tymux Go client predates the RPC, so the real sender
-(`pane_activity_adapter.go`) sits behind the `tymux_pane_activity` build tag. To enable it:
-
-1. tymux must expose `SetPaneActivity` on `selecting.Transport` and `selecting.Client`
-   (tymux#86 regenerates the connect client but does not touch `selecting`).
-2. Bump the `github.com/tstapler/tymux/clients/go` pin, then delete the build tag line from
-   `pane_activity_adapter.go`.
-
-To compile-check the adapter before the pin moves, build with a local `-modfile` whose `replace`
-points `github.com/tstapler/tymux/clients/go` at a checkout of the tymux branch, plus
-`-tags tymux_pane_activity`. Never commit that replace.
+The real sender (`pane_activity_adapter.go`) is compiled in unconditionally; the pinned tymux client carries
+the RPC on `selecting.Client` (compile-time asserted). It only fires when the live daemon advertises
+`pane.activity_hint` (tymuxd >= v1.17.0).
