@@ -55,6 +55,7 @@ var exemptPackageSuffixes = []string{
 var exemptPackageFragments = []string{
 	"/tools/bzl/",
 	"/tools/ci/",
+	"/scripts/edr-experiment/",
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
