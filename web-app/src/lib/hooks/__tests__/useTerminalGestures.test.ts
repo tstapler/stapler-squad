@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- pre-existing fixture style; the changed-file lint gate fails on any warning */
 /**
  * Tests for useTerminalGestures — 5-state gesture machine.
  *
@@ -6,7 +7,7 @@
  */
 
 import { renderHook } from '@testing-library/react';
-import { RefObject } from 'react';
+import type { RefObject } from 'react';
 
 // Mock cellDimensions before importing the hook so the module resolves cleanly.
 jest.mock('@/lib/terminal/cellDimensions', () => ({
