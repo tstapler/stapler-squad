@@ -45,21 +45,6 @@ func sumWithReason(t *testing.T, name, reason string) int64 {
 	return n
 }
 
-func sumAll(t *testing.T, name string) int64 {
-	t.Helper()
-	m := collectMetric(t, name)
-	if m == nil {
-		return 0
-	}
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok, "unexpected data type %T for %s", m.Data, name)
-	var n int64
-	for _, dp := range sum.DataPoints {
-		n += dp.Value
-	}
-	return n
-}
-
 func TestUnaryWsBridge_should_RecordCallDuration(t *testing.T) {
 	before := histogramCount(t, "ws_unary_call_duration")
 	h := newBridgeHarness(t, services.ListenerLocal)
