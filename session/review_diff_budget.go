@@ -3,46 +3,45 @@ package session
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
 	diffManifestReserve = 1500
 	diffPerFileCap      = 8000
+	diffMinCutBytes     = 200
+	diffHeaderPrefix    = "diff --git "
 )
 
-// lowSignalDiffPrefixes/Suffixes mark files that crowd out the item's real
-// change when a byte-prefix cut fills the budget (CI, agent settings, lockfiles).
+// Files that crowd out the item's real change when a byte-prefix cut fills the
+// budget (CI, agent settings, lockfiles) are ranked last.
 var (
 	lowSignalDiffPrefixes = []string{".github/", ".claude/", ".actrc"}
-	lowSignalDiffSuffixes = []string{".lock", "go.sum", "package-lock.json", "bun.lock", "bun.lockb"}
+	lowSignalDiffSuffixes = []string{".lock", "go.sum", "package-lock.json", "bun.lockb"}
 )
 
 type diffFile struct {
-	idx   int
 	path  string
 	text  string
 	noise bool
 }
 
+// splitDiffFiles splits at lines starting "diff --git "; any preamble becomes a
+// pathless first entry.
 func splitDiffFiles(raw string) []diffFile {
 	var files []diffFile
 	start := 0
 	flush := func(end int) {
-		if end <= start {
-			return
+		if end > start {
+			text := raw[start:end]
+			path := diffHeaderPath(text)
+			files = append(files, diffFile{path: path, text: text, noise: isLowSignalDiffPath(path)})
 		}
-		text := raw[start:end]
-		path := ""
-		if nl := strings.IndexByte(text, '\n'); nl > 0 {
-			if i := strings.LastIndex(text[:nl], " b/"); i >= 0 {
-				path = text[i+3 : nl]
-			}
-		}
-		files = append(files, diffFile{idx: len(files), path: path, text: text, noise: isLowSignalDiffPath(path)})
 	}
 	for i := 0; i < len(raw); {
-		if strings.HasPrefix(raw[i:], "diff --git ") && i > start {
+		if i > start && strings.HasPrefix(raw[i:], diffHeaderPrefix) {
 			flush(i)
 			start = i
 		}
@@ -54,6 +53,21 @@ func splitDiffFiles(raw string) []diffFile {
 	}
 	flush(len(raw))
 	return files
+}
+
+// diffHeaderPath returns the b-side path of the "diff --git" header line,
+// handling git's quoted form (`"b/x y"`); "" when it can't be parsed.
+func diffHeaderPath(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	if i := strings.LastIndex(line, ` "b/`); i >= 0 {
+		if p, err := strconv.Unquote(line[i+1:]); err == nil {
+			return strings.TrimPrefix(p, "b/")
+		}
+	}
+	if i := strings.LastIndex(line, " b/"); i >= 0 {
+		return line[i+3:]
+	}
+	return ""
 }
 
 func isLowSignalDiffPath(p string) bool {
@@ -70,18 +84,33 @@ func isLowSignalDiffPath(p string) bool {
 	return false
 }
 
-// TruncateDiffByFile fits raw into max bytes without letting early or
-// low-signal files starve the rest: every file is considered in priority
-// order (real code first), each capped at diffPerFileCap, and a manifest names
-// files that were cut or dropped so the reviewer knows what it did not see.
-// Output keeps the original file order. Returns truncated=false when raw fits.
-func TruncateDiffByFile(raw string, max int) (string, bool) {
-	if len(raw) <= max {
+// cutAtLine returns at most n bytes of s ending on a line boundary (falling
+// back to a rune boundary when the first line alone is longer than n).
+func cutAtLine(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	if i := strings.LastIndexByte(s[:n], '\n'); i >= 0 {
+		return s[:i+1]
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// TruncateDiffByFile fits raw into limit bytes without letting early or
+// low-signal files starve the rest: files are considered real-code-first, each
+// kept whole only if it fits under diffPerFileCap, otherwise cut at a line
+// boundary. A trailing manifest names cut and omitted files. Output keeps the
+// original file order and never exceeds limit. truncated=false means raw fit.
+func TruncateDiffByFile(raw string, limit int) (string, bool) {
+	if len(raw) <= limit {
 		return raw, false
 	}
 	files := splitDiffFiles(raw)
-	if len(files) <= 1 {
-		return raw[:max], true
+	if len(files) <= 1 || limit < 2*diffManifestReserve {
+		return cutAtLine(raw, limit), true
 	}
 	order := make([]int, len(files))
 	for i := range order {
@@ -89,22 +118,23 @@ func TruncateDiffByFile(raw string, max int) (string, bool) {
 	}
 	sort.SliceStable(order, func(a, b int) bool { return !files[order[a]].noise && files[order[b]].noise })
 
-	kept, cut, dropped := selectDiffFiles(files, order, max-diffManifestReserve, max/2)
+	kept, cut, dropped := selectDiffFiles(files, order, limit-diffManifestReserve)
 	return renderTruncatedDiff(files, kept, cut, dropped), true
 }
 
-func selectDiffFiles(files []diffFile, order []int, remaining, wholeFileMax int) (kept map[int]string, cut, dropped []string) {
+func selectDiffFiles(files []diffFile, order []int, remaining int) (kept map[int]string, cut, dropped []string) {
 	kept = make(map[int]string, len(files))
 	for _, i := range order {
 		f := files[i]
 		budget := min(remaining, diffPerFileCap)
 		switch {
-		case len(f.text) <= remaining && len(f.text) <= wholeFileMax:
+		case len(f.text) <= budget:
 			kept[i] = f.text
 			remaining -= len(f.text)
-		case budget > 200:
-			kept[i] = f.text[:budget]
-			remaining -= budget
+		case budget > diffMinCutBytes:
+			part := cutAtLine(f.text, budget)
+			kept[i] = part
+			remaining -= len(part)
 			cut = append(cut, f.path)
 		default:
 			dropped = append(dropped, f.path)
@@ -116,18 +146,23 @@ func selectDiffFiles(files []diffFile, order []int, remaining, wholeFileMax int)
 func renderTruncatedDiff(files []diffFile, kept map[int]string, cut, dropped []string) string {
 	var b strings.Builder
 	for i := range files {
-		if t, ok := kept[i]; ok {
-			b.WriteString(t)
-			if !strings.HasSuffix(t, "\n") {
-				b.WriteByte('\n')
-			}
-		}
+		b.WriteString(kept[i])
 	}
-	manifest := fmt.Sprintf("\n[diff truncated to fit review budget: %d of %d files shown in full or in part; cut: %s; omitted: %s]\n",
-		len(files)-len(dropped), len(files), strings.Join(cut, ", "), strings.Join(dropped, ", "))
-	if len(manifest) > diffManifestReserve {
-		manifest = manifest[:diffManifestReserve-1] + "]\n"
+	manifest := "[diff truncated to fit review budget: " + strconv.Itoa(len(files)-len(dropped)) + " of " + strconv.Itoa(len(files)) + " files shown"
+	if len(cut) > 0 {
+		manifest += "; cut: " + strings.Join(cut, ", ")
 	}
-	b.WriteString(manifest)
+	if len(dropped) > 0 {
+		manifest += "; omitted: " + strings.Join(dropped, ", ")
+	}
+	manifest += "]\n"
+	// Reserve leaves room for the manifest plus up to two separator newlines.
+	if maxLen := diffManifestReserve - 2; len(manifest) > maxLen {
+		manifest = cutAtLine(manifest, maxLen-len("...]\n")) + "...]\n"
+	}
+	if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+		b.WriteByte('\n')
+	}
+	fmt.Fprint(&b, "\n"+manifest)
 	return b.String()
 }
