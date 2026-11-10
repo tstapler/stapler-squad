@@ -1,0 +1,104 @@
+{
+  "id": "gboard-enter-strips-trailing-space",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Gboard strips the trailing space before Enter at line end: deleteContentBackward then insertLineBreak; the layer forwards both faithfully. Source: https://github.com/codemirror/view/releases/tag/6.25.0",
+  "events": [
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "l",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "input",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 40
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "s",
+      "value": "s",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "s",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 70
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": " ",
+      "value": " ",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "input",
+      "value": " ",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 90
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 100
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertLineBreak",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 110
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 120
+    }
+  ],
+  "expectedBytes": "ls \r",
+  "finalText": "ls\r"
+}

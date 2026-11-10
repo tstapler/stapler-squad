@@ -22,6 +22,7 @@ import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
 import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
 
 /** A stream that lived this long counts as healthy and resets the clean-end streak. */
 const STABLE_STREAM_MS = 10_000;
@@ -115,7 +116,7 @@ interface TerminalStreamResult {
   output: string; // Deprecated: Use onOutput callback for better performance
   isConnected: boolean;
   error: Error | null;
-  sendInput: (input: string) => void;
+  sendInput: (input: string) => SendResult;
   /** True while a chunked paste is in flight (see useTerminalFlowControl). */
   isInputChunking: () => boolean;
   resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;

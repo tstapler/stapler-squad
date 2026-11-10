@@ -370,6 +370,29 @@ var knownFeatureFlags = []struct {
 		description: "Render terminals with ghostty-web (Ghostty's VT parser compiled to WASM, drawn on a canvas) instead of xterm.js, for better VT conformance (synchronized output, REP, DECALN, Kitty keyboard). Kill switch: turn off to fall back to xterm.js. Read by the web client; applies on next page load, no rebuild. Default: off.",
 	},
 	{
+		name: "mobile_input_layer",
+		// Task 5.1.4c (project_plans/mobile-input-layer) can flip this to false before merge if the phone gate fails;
+		// web-app MOBILE_INPUT_LAYER_DEFAULT must change with it (a jest test asserts they match).
+		defaultValue: true,
+		description:  "Phone keyboard input layer: a hidden textarea feeds the terminal so Android soft-keyboard typing, autocorrect and suggestions work. Affects only Android touch-primary devices; desktop and iOS are unchanged whatever this says. Kill switch: turn off to fall back to the plain terminal (ghostty is then not used on Android phones). Read by the web client; the off value is saved on one page load and applies on the next, or open the app with ?mobile_input=0 to apply at once. Default: on.",
+	},
+	{
+		name:        "mobile_input_queue",
+		description: "Mobile input layer sub-feature: queue phone keystrokes while the connection is down and send them on reconnect. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_diagnostics",
+		description: "Mobile input layer sub-feature: the full input diagnostics sheet. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_compose",
+		description: "Mobile input layer sub-feature: the compose box for longer phone input. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_edit_context",
+		description: "Mobile input layer sub-feature: use the EditContext API instead of the hidden textarea where the browser supports it. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:        "window_keep_alive",
 		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
 	},

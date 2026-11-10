@@ -2064,11 +2064,12 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 
 	var mu sync.Mutex
 	var recordedInput [][]byte
-	onInput := func(data []byte) {
+	onInput := func(data []byte) bool {
 		mu.Lock()
 		defer mu.Unlock()
 		cp := append([]byte(nil), data...)
 		recordedInput = append(recordedInput, cp)
+		return true
 	}
 	onResize := func(cols, rows int) {}
 	onScrollbackRequest := func(startLine, endLine string) (ScrollbackResult, error) {
@@ -2498,7 +2499,7 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 		lastReq = req
 		return &sessionv1.TerminalOutput{ResyncId: req.GetResyncId(), Data: []byte("snapshot")}, nil
 	}
-	onInput := func(data []byte) {}
+	onInput := func(data []byte) bool { return true }
 	onResize := func(cols, rows int) {}
 	onScrollbackRequest := func(startLine, endLine string) (ScrollbackResult, error) { return ScrollbackResult{}, nil }
 

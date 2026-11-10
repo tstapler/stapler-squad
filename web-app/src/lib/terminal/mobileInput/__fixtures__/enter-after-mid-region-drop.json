@@ -1,0 +1,48 @@
+{
+  "id": "enter-after-mid-region-drop",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "\"l\" delivered, \"s\" refused, the link returns, then Enter: the pending region flushes its insert-only tail \"s\" before the CR. Story 1.2.4 / ADR-004 in project_plans/mobile-input-layer/implementation/plan.md.",
+  "events": [
+    {
+      "kind": "compositionstart",
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "l",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "dropNext"
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "ls",
+      "value": "ls",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 30
+    },
+    {
+      "kind": "linkDown"
+    },
+    {
+      "kind": "linkUp"
+    },
+    {
+      "kind": "keydown",
+      "key": "Enter",
+      "keyCode": 13,
+      "isComposing": false,
+      "t": 60
+    }
+  ],
+  "expectedBytes": "ls\r",
+  "finalText": "ls\r"
+}

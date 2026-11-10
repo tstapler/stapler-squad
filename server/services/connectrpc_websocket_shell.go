@@ -299,16 +299,27 @@ func readShellWebSocketMessage(p shellStreamParams) (message []byte, stop bool) 
 	return nil, true
 }
 
-// handleShellInput forwards one input frame to the shell's tmux session via
-// control mode, falling back to a subprocess send-keys on failure.
+// handleShellInput counts one shell input frame (path "shell") and forwards it; forwarded is
+// recorded only when the gates passed and the write was issued.
 func handleShellInput(p shellStreamParams, data []byte) {
+	src := p.stream.inputSource(PathShell, p.sessionID)
+	recordTerminalInput(src, data, StageReceived)
+	if forwardShellInput(p, data) {
+		recordTerminalInput(src, data, StageForwarded)
+	}
+}
+
+// forwardShellInput forwards one input frame to the shell's tmux session via
+// control mode, falling back to a subprocess send-keys on failure. It reports
+// whether the write was issued (false: read-only attach or permission denied).
+func forwardShellInput(p shellStreamParams, data []byte) bool {
 	if p.writer == nil {
 		log.Debug("[streamShellViaControlMode] read-only attach: input frame dropped", "session", p.sessionID, "shell", p.shellID, "bytes", len(data))
-		return
+		return false
 	}
 	if !p.instance.Permissions.CanSendCommand {
 		log.Warn("[streamShellViaControlMode] send permission denied", "session", p.sessionID, "shell", p.shellID)
-		return
+		return false
 	}
 	p.instance.UpdateTerminalTimestamps(string(data), true)
 
@@ -321,6 +332,7 @@ func handleShellInput(p shellStreamParams, data []byte) {
 		Data:        data,
 	})
 	sendCancel()
+	return true
 }
 
 // dispatchShellResize pushes a resize request to the coalescing worker, so

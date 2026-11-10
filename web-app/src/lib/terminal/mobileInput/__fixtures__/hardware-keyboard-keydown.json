@@ -1,0 +1,129 @@
+{
+  "id": "hardware-keyboard-keydown",
+  "source": "synthetic",
+  "keyboard": "bluetooth-keyboard",
+  "notes": "Pre-mortem P3-11: real keyCodes with isComposing false; the beforeinput that follows each keydown must not double-send. Spike: project_plans/mobile-input-layer/implementation/spike-0.1.1-0.1.2.md",
+  "events": [
+    {
+      "kind": "keydown",
+      "key": "h",
+      "keyCode": 72,
+      "isComposing": false,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "h",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "input",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "keydown",
+      "key": "i",
+      "keyCode": 73,
+      "isComposing": false,
+      "t": 40
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "i",
+      "value": "i",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "i",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "keydown",
+      "key": "x",
+      "keyCode": 88,
+      "isComposing": false,
+      "t": 70
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "x",
+      "value": "x",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "input",
+      "value": "x",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 90
+    },
+    {
+      "kind": "keydown",
+      "key": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "t": 100
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 110
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 120
+    },
+    {
+      "kind": "keydown",
+      "key": "Enter",
+      "keyCode": 13,
+      "isComposing": false,
+      "t": 130
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertLineBreak",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 140
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 150
+    }
+  ],
+  "expectedBytes": "hix\r",
+  "finalText": "hi\r",
+  "expectedAnomalies": [
+    "duplicate_suppressed",
+    "duplicate_suppressed"
+  ]
+}
