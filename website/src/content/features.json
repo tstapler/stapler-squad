@@ -4,7 +4,11 @@
 		"description": "See all your AI agents at a glance. Status badges, diff stats, tags, and categories give you a complete picture without opening a single terminal.",
 		"category": "Visibility",
 		"screenshot": "/features/01-dashboard.png",
-		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance"
+		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance",
+		"demoClip": {
+			"name": "session-dashboard",
+			"ext": "webm"
+		}
 	},
 	{
 		"heading": "Live Terminal Streaming",
@@ -69,7 +73,11 @@
 		"description": "100+ built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.",
 		"category": "Review & Approval",
 		"screenshot": "/features/06-rules.png",
-		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks",
+		"demoClip": {
+			"name": "auto-approval-rules",
+			"ext": "webm"
+		}
 	},
 	{
 		"heading": "Custom Rules",

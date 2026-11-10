@@ -1,0 +1,36 @@
+{
+	"Dashboard": {
+		"clip": "session-dashboard",
+		"shot": "01-dashboard",
+		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance"
+	},
+	"Instant Search": {
+		"shot": "02-search-payment",
+		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed"
+	},
+	"Status Filtering": {
+		"shot": "03-needs-approval",
+		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden"
+	},
+	"Tag-Based Grouping": {
+		"shot": "04-group-by-tag",
+		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group"
+	},
+	"Review Queue": {
+		"shot": "05-review-queue",
+		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase"
+	},
+	"Auto-Approval Rules": {
+		"clip": "auto-approval-rules",
+		"shot": "06-rules",
+		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+	},
+	"Custom Rules": {
+		"shot": "07-add-rule",
+		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again"
+	},
+	"Isolated Git Workspaces": {
+		"shot": "08-final",
+		"alt": "Each agent session running in its own isolated git worktree with no branch conflicts between sessions"
+	}
+}

@@ -18,11 +18,11 @@ describe('buildFeaturesJson against real on-disk content', () => {
 		const cards = buildFeaturesJson({
 			readmePath: join(REPO_ROOT, 'README.md'),
 			featuresMdPath: join(REPO_ROOT, 'docs', 'features.md'),
-			// committed features.json never has clips; they exist only in the deploy build
-			clipsDir: join(WEBSITE_DIR, 'no-clips-committed'),
+			mediaPath: join(WEBSITE_DIR, 'src', 'content', 'feature-media.json'),
 		});
 
-		// features.json is committed generated output; fail on any drift from its sources.
+		// features.json is committed generated output and now identical in git and
+		// in the deployed build (media is declared by name); fail on any drift.
 		const committed = JSON.parse(readFileSync(join(WEBSITE_DIR, 'src', 'content', 'features.json'), 'utf8'));
 		expect(cards).toEqual(committed);
 

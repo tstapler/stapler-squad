@@ -6,6 +6,16 @@
 import FeatureCard from './FeatureCard.astro';
 import features from '../content/features.json';
 import { CATEGORY_ORDER } from '../../scripts/build-features.mjs';
+import { existsSync } from 'node:fs';
+
+// features.json declares clips by name (Story 3.1.2), so it is identical in git
+// and in the deployed build. Rendering is where file presence matters: a card
+// whose clip file is not in public/clips (a PR smoke build, a local build) shows
+// its screenshot instead of a dead <video>. A missing clip in a deploy is caught
+// by the freshness gate (mediatool fresh), not here.
+const CLIPS_DIR = new URL('../../public/clips/', import.meta.url);
+const clipPresent = (clip?: { name: string; ext: string }) =>
+	clip ? existsSync(new URL(`${clip.name}.${clip.ext}`, CLIPS_DIR)) : false;
 
 const groups = CATEGORY_ORDER.map((category) => ({
 	category,
@@ -26,7 +36,7 @@ const groups = CATEGORY_ORDER.map((category) => ({
 							category={card.category}
 							screenshot={card.screenshot}
 							alt={card.alt}
-							demoClip={card.demoClip}
+							demoClip={clipPresent(card.demoClip) ? card.demoClip : undefined}
 						/>
 					))}
 				</div>

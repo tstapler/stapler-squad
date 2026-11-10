@@ -3,7 +3,7 @@
 // docs/features.md's flat section detail into website/src/content/features.json
 // -- see project_plans/stapler-squad-website/research/features.md §4.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,9 +13,8 @@ const WEBSITE_ROOT = join(SCRIPT_DIR, '..');
 const REPO_ROOT = join(WEBSITE_ROOT, '..');
 const DEFAULT_README_PATH = join(REPO_ROOT, 'README.md');
 const DEFAULT_FEATURES_MD_PATH = join(REPO_ROOT, 'docs', 'features.md');
-const DEFAULT_CLIPS_DIR = join(WEBSITE_ROOT, 'public', 'clips');
+const DEFAULT_MEDIA_PATH = join(WEBSITE_ROOT, 'src', 'content', 'feature-media.json');
 const DEFAULT_OUTPUT_PATH = join(WEBSITE_ROOT, 'src', 'content', 'features.json');
-const PUBLIC_FEATURES_DIR = join(WEBSITE_ROOT, 'public', 'features');
 const ENCODING = 'utf8';
 
 // README.md's 5 Highlights category names, named once here so
@@ -63,51 +62,37 @@ const CATEGORY_BY_HEADING = {
 	'Isolated Git Workspaces': CATEGORY.INFRASTRUCTURE,
 };
 
-/**
- * Descriptive alt-text sentences for the 8 sections with a real screenshot,
- * reusing docs/features.md's own prose (per research/ux.md §3) rather than
- * the screenshot's filename or its short Markdown image alt text.
- *
- * @type {Record<string, string>}
- */
-const ALT_TEXT_BY_HEADING = {
-	Dashboard:
-		'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance',
-	'Instant Search':
-		'Instant search narrowing the session list from 6 agents down to 2 as the query "payment" is typed',
-	'Status Filtering':
-		'Status filter showing every session with a Needs Approval gate, with other statuses hidden',
-	'Tag-Based Grouping':
-		'Sessions grouped by tag, with a single session appearing under more than one tag group',
-	'Review Queue':
-		'Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase',
-	'Auto-Approval Rules':
-		'List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks',
-	'Custom Rules':
-		'Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again',
-	'Isolated Git Workspaces':
-		'Each agent session running in its own isolated git worktree with no branch conflicts between sessions',
-};
-
-/**
- * Headings whose card plays a demo clip. Clips are recorded during the deploy
- * (tests/e2e/website-demos/clips.ts via scripts/record-website-demos.sh) into
- * website/public/clips/ and ship inside the Pages artifact, so nothing is
- * committed. A card gets its clip only when the file is present at build time,
- * so a failed recording just leaves the card on its screenshot. The screenshot,
- * if any, becomes the video poster.
- *
- * @type {Record<string, string>} heading -> clip name (<name>.webm)
- */
-const DEMO_CLIP_BY_HEADING = {
-	Dashboard: 'session-dashboard',
-	'Auto-Approval Rules': 'auto-approval-rules',
-};
 const CLIP_EXT = 'webm';
 
 /**
+ * Card media is declared by NAME in src/content/feature-media.json
+ * (heading -> {clip?, shot, alt}), never discovered from files on disk, so
+ * features.json is identical in git and in the deployed build. Whether the named
+ * files exist is the freshness gate's job (tools/promo mediatool fresh), not this
+ * script's.
+ *
+ * @typedef {{clip?: string, shot: string, alt: string}} FeatureMedia
  * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {name: string, ext: string}}} FeatureCard
  */
+
+// Until the recorder emits shots/ (Epic 2), a shot name is the basename of a
+// committed screenshot under website/public/features/. This is the one place
+// that mapping lives.
+const shotPath = (/** @type {string} */ shot) => `/features/${shot}.png`;
+
+/**
+ * @param {string} path
+ * @returns {Record<string, FeatureMedia>}
+ */
+export function readFeatureMedia(path) {
+	const media = JSON.parse(readFileSync(path, ENCODING));
+	for (const [heading, entry] of Object.entries(media)) {
+		if (typeof entry?.shot !== 'string' || typeof entry?.alt !== 'string' || !entry.shot || !entry.alt) {
+			throw new Error(`feature-media.json entry "${heading}" needs a non-empty "shot" and "alt"`);
+		}
+	}
+	return media;
+}
 
 /**
  * Splits docs/features.md into its `## ` sections.
@@ -187,31 +172,6 @@ function truncateAtSentence(text) {
 }
 
 /**
- * Extracts a section's screenshot reference (if any), rewritten from the
- * source's `../assets/demo-recording/0N-*.png` relative path to the
- * `/features/0N-*.png` path it's copied to under website/public/features/.
- * Throws if the rewritten path's target file is missing from
- * website/public/features/, so a stale/typo'd filename in docs/features.md
- * fails the build instead of producing a silently dead <img> on the live site.
- *
- * @param {string} body
- * @param {string} heading
- * @returns {string | undefined}
- */
-export function extractSectionScreenshot(body, heading) {
-	const match = body.match(/!\[[^\]]*\]\(\.\.\/assets\/demo-recording\/([\w.-]+)\)/);
-	if (!match) return undefined;
-	const filename = match[1];
-	if (!existsSync(join(PUBLIC_FEATURES_DIR, filename))) {
-		throw new Error(
-			`"${heading}" references screenshot "${filename}", which does not exist under ` +
-				`website/public/features/`,
-		);
-	}
-	return `/features/${filename}`;
-}
-
-/**
  * Reads README.md's five Highlights category names (the bold lines directly
  * under `### Highlights`), used only to cross-check CATEGORY_BY_HEADING's
  * values below -- so a renamed/added/removed README category is caught here
@@ -240,19 +200,26 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
  * Builds the full FeatureCard[] data set, reconciling README.md's category
  * names with docs/features.md's sections.
  *
- * @param {{readmePath?: string, featuresMdPath?: string, clipsDir?: string}} [options]
+ * @param {{readmePath?: string, featuresMdPath?: string, mediaPath?: string}} [options]
  * @returns {FeatureCard[]}
  */
 export function buildFeaturesJson(options = {}) {
 	const readmePath = options.readmePath ?? DEFAULT_README_PATH;
 	const featuresMdPath = options.featuresMdPath ?? DEFAULT_FEATURES_MD_PATH;
-	const clipsDir = options.clipsDir ?? DEFAULT_CLIPS_DIR;
+	const media = readFeatureMedia(options.mediaPath ?? DEFAULT_MEDIA_PATH);
 
 	const readmeMarkdown = readFileSync(readmePath, ENCODING);
 	const featuresMarkdown = readFileSync(featuresMdPath, ENCODING);
 
 	const readmeCategories = new Set(extractReadmeCategoryNames(readmeMarkdown));
 	const sections = parseFeaturesMdSections(featuresMarkdown);
+
+	const headings = new Set(sections.map((section) => section.heading));
+	for (const heading of Object.keys(media)) {
+		if (!headings.has(heading)) {
+			throw new Error(`feature-media.json has "${heading}", which is not a section heading in docs/features.md`);
+		}
+	}
 
 	return sections.map(({ heading, body }) => {
 		const category = CATEGORY_BY_HEADING[heading];
@@ -273,17 +240,11 @@ export function buildFeaturesJson(options = {}) {
 			description: extractSectionDescription(body),
 			category,
 		};
-		const screenshot = extractSectionScreenshot(body, heading);
-		if (screenshot) {
-			card.screenshot = screenshot;
-			card.alt = ALT_TEXT_BY_HEADING[heading];
-			if (!card.alt) {
-				throw new Error(`"${heading}" has a screenshot but no ALT_TEXT_BY_HEADING entry`);
-			}
-		}
-		const clipName = DEMO_CLIP_BY_HEADING[heading];
-		if (clipName && existsSync(join(clipsDir, `${clipName}.${CLIP_EXT}`))) {
-			card.demoClip = { name: clipName, ext: CLIP_EXT };
+		const entry = media[heading];
+		if (entry) {
+			card.screenshot = shotPath(entry.shot);
+			card.alt = entry.alt;
+			if (entry.clip) card.demoClip = { name: entry.clip, ext: CLIP_EXT };
 		}
 		return card;
 	});
