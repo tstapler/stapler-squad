@@ -4,20 +4,19 @@
 // persisted: the omnibar is opened and dismissed without creating a session.
 import { caption } from '../recorder';
 import { hold } from '../hold';
+import { ROW as CARD, SEARCH } from '../dashboard';
 import type { Scene } from '../scene';
 
-const SEARCH = 'input[aria-label="Search sessions"]';
-const CARD = '[data-testid="session-card"]';
-const NEW_SESSION = 'button[aria-label="Create new session (⌘K)"]';
+const NEW_SESSION = 'button[aria-label="Create new session"]';
 const OMNIBAR = '[data-testid="omnibar-modal"]';
 const SOURCE_INPUT = '[role="combobox"][aria-label="Session source input"]';
-const SELECTED_TAB = '[role="tab"][aria-selected="true"]';
+const SELECTED_TAB = 'button[role="tab"][aria-selected="true"]';
 
 export const scene: Scene = {
   name: 'dashboard-lifecycle',
   title: 'Every agent, one dashboard',
   landing: { path: '/', landmark: CARD },
-  quotes: ['checkout-retry-logic'],
+  quotes: ['feature/retry-backoff'], // rows show the branch, not the title
   scenes: async (page, clip) => {
     await page.goto('/');
     await page.locator(CARD).first().waitFor({ timeout: 30_000 });
@@ -29,6 +28,7 @@ export const scene: Scene = {
     await page.locator(NEW_SESSION).first().click();
     await page.locator(OMNIBAR).waitFor();
     await caption(page, 'Start a new agent from the omnibar');
+    await page.keyboard.press('Escape'); // creation mode first returns to discovery
     await page.keyboard.press('Escape');
     await page.locator(OMNIBAR).waitFor({ state: 'hidden' });
 
@@ -76,7 +76,7 @@ export const scene: Scene = {
       route: '/',
       landmark: CARD,
       prepare: async (page) => {
-        await page.locator(CARD).filter({ hasText: 'checkout-retry-logic' }).first().click();
+        await page.locator(CARD).filter({ hasText: 'feature/retry-backoff' }).first().click();
         await page.getByRole('tab', { name: /diff/i }).first().click();
         await page.locator(SELECTED_TAB).first().waitFor();
       },

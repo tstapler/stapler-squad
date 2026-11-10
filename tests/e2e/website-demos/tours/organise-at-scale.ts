@@ -4,11 +4,9 @@
 // two tagging rules). Nothing is persisted.
 import { caption, typeSlowly } from '../recorder';
 import { hold } from '../hold';
+import { GROUP_BY, ROW as CARD, SEARCH, groupBy } from '../dashboard';
 import type { Scene } from '../scene';
 
-const SEARCH = 'input[aria-label="Search sessions"]';
-const GROUP_BY = 'select[aria-label="Group sessions by"]';
-const CARD = '[data-testid="session-card"]';
 const VIEW_BOARD = '[data-testid="session-view-mode-board"]';
 const VIEW_LIST = '[data-testid="session-view-mode-list"]';
 const BOARD_GROUPING = '[data-testid="board-grouping-select"]';
@@ -28,8 +26,7 @@ export const scene: Scene = {
     await caption(page, 'Search narrows the list as you type');
     await page.locator(SEARCH).first().clear();
 
-    const groupBy = page.locator(GROUP_BY).first();
-    await groupBy.selectOption('tag');
+    await groupBy(page, 'tag');
     await caption(page, 'Group by tag; a session shows under each of its tags');
 
     await page.locator(VIEW_BOARD).first().click();
@@ -57,7 +54,7 @@ export const scene: Scene = {
       route: '/',
       landmark: CARD,
       prepare: async (page) => {
-        await page.locator(GROUP_BY).first().selectOption('tag');
+        await groupBy(page, 'tag');
       },
       annotations: [{ selector: GROUP_BY, n: 1 }],
     },

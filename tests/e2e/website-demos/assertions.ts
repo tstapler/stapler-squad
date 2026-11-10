@@ -34,7 +34,7 @@ export class SceneAssertionError extends Error {
 export interface ThemeFacts {
   /** localStorage['stapler-theme'] as the page sees it. */
   stored: string | null;
-  /** Computed body background (falls back to <html> when body is transparent). */
+  /** Computed background of the app's themed surface (falls back to <body>, then <html>). */
   background: string;
 }
 
@@ -52,14 +52,22 @@ export function themeVerdict(facts: ThemeFacts): string | null {
 export async function readThemeFacts(page: Page): Promise<ThemeFacts> {
   return page.evaluate(() => {
     const transparent = (c: string) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
-    const body = getComputedStyle(document.body).backgroundColor;
+    // body's own background is the unthemed globals.css --background, so read the first painted ancestor of <main>.
+    let background = getComputedStyle(document.body).backgroundColor;
+    for (let el: Element | null = document.querySelector('main'); el && el !== document.body; el = el.parentElement) {
+      const c = getComputedStyle(el).backgroundColor;
+      if (!transparent(c)) {
+        background = c;
+        break;
+      }
+    }
     let stored: string | null = null;
     try {
       stored = localStorage.getItem('stapler-theme');
     } catch {
       // storage blocked
     }
-    return { stored, background: transparent(body) ? getComputedStyle(document.documentElement).backgroundColor : body };
+    return { stored, background: transparent(background) ? getComputedStyle(document.documentElement).backgroundColor : background };
   });
 }
 

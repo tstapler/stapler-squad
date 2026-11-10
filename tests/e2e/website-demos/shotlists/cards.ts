@@ -4,19 +4,16 @@
 // step). A new card needs one entry here and one in feature-media.json, nothing else. Needs
 // every tour scenario seeded (record-website-demos.sh --scenario all). Nothing is persisted.
 import type { Page } from '@playwright/test';
+import { RULE_NAME, openNewRuleBuilder } from '../rules';
+import { ROW as CARD, SEARCH, groupBy, openFilters } from '../dashboard';
 import type { ShotListSpec, ShotSpec } from '../scene';
 
-const SEARCH = 'input[aria-label="Search sessions"]';
-const CARD = '[data-testid="session-card"]';
-const GROUP_BY = 'select[aria-label="Group sessions by"]';
 const QUEUE = '[data-testid="review-queue"]';
-const ADD_RULE = '[data-testid="add-rule-button"]';
-const RULE_NAME = '[data-testid="form-name-input"]';
 const RULES_PAGE = 'text=Approval Rules';
 const ANALYTICS = 'h2:has-text("Approval Analytics")';
 const NOTIFICATIONS = '[data-testid="notifications-content"]';
 const FANOUT = '[data-testid="fanout-comparison"]';
-const SELECTED_TAB = '[role="tab"][aria-selected="true"]';
+const SELECTED_TAB = 'button[role="tab"][aria-selected="true"]';
 const REFACTOR = 'refactor-session-store';
 
 /** Opens a seeded session and one of its tabs (terminal, diff, browser). */
@@ -56,6 +53,7 @@ export const CARD_SHOTS: readonly CardShot[] = [
       route: '/',
       landmark: CARD,
       prepare: async (page) => {
+        await openFilters(page);
         await page.getByRole('checkbox', { name: 'Show only sessions needing approval' }).check();
       },
     },
@@ -67,7 +65,7 @@ export const CARD_SHOTS: readonly CardShot[] = [
       route: '/',
       landmark: CARD,
       prepare: async (page) => {
-        await page.locator(GROUP_BY).first().selectOption('tag');
+        await groupBy(page, 'tag');
       },
     },
   },
@@ -104,7 +102,7 @@ export const CARD_SHOTS: readonly CardShot[] = [
       route: '/rules',
       landmark: RULES_PAGE,
       prepare: async (page) => {
-        await page.locator(ADD_RULE).first().click();
+        await openNewRuleBuilder(page);
         await page.locator(RULE_NAME).first().fill('Allow git log');
       },
     },
@@ -122,7 +120,7 @@ export const CARD_SHOTS: readonly CardShot[] = [
   },
   { heading: 'History Search', spec: { name: 'history-search', route: '/history', landmark: 'h1:has-text("History")' } },
   { heading: 'Logs Viewer', spec: { name: 'logs-viewer', route: '/logs', landmark: 'h1:has-text("Application Logs")' } },
-  { heading: 'Config Viewer', spec: { name: 'config-viewer', route: '/config', landmark: 'h2' } },
+  { heading: 'Config Viewer', spec: { name: 'config-viewer', route: '/settings?tab=config-files', landmark: 'h2:has-text("Config Files")' } },
   { heading: 'Parallel Fan-Out', spec: { name: 'parallel-fan-out', route: '/fanout?groupId=demo-pricing', landmark: FANOUT } },
   {
     // Each seeded session sits on its own branch in its own worktree; grouping by branch shows that.
@@ -132,7 +130,7 @@ export const CARD_SHOTS: readonly CardShot[] = [
       route: '/',
       landmark: CARD,
       prepare: async (page) => {
-        await page.locator(GROUP_BY).first().selectOption('branch');
+        await groupBy(page, 'branch');
       },
     },
   },

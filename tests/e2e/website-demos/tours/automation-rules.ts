@@ -13,7 +13,7 @@ export const scene: Scene = {
   name: 'automation-rules',
   title: 'Let rules do the routine work',
   landing: { path: '/triggers', landmark: TRIGGERS },
-  quotes: ['Triggers', 'Workflows', 'Tagging Rules'],
+  quotes: ['Tag payments work', 'Tag infra work'], // quotes are checked on the final page only
   seeded: 'route',
   scenes: async (page, clip) => {
     await page.goto('/triggers');

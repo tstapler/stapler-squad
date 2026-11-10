@@ -27,7 +27,7 @@ export const scene: Scene = {
     await caption(page, 'Flow shows how work moves through the pipeline');
 
     await page.locator(VIEWS_NAV).getByRole('link', { name: 'Board' }).click();
-    await page.getByRole('heading', { name: /backlog/i }).first().waitFor();
+    await page.locator('[data-testid="backlog-board"]').waitFor();
     await caption(page, 'The board groups items by stage, from idea to done');
 
     await page.locator(VIEWS_NAV).getByRole('link', { name: 'List' }).click();
